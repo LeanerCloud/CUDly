@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/search/armsearch"
+	"github.com/google/uuid"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -244,7 +245,11 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		Timestamp:      time.Now(),
 	}
 
-	reservationOrderID := fmt.Sprintf("search-reservation-%d", time.Now().Unix())
+	// Derive a deterministic reservationOrderID from the idempotency token (issue
+	// #641) so a re-drive re-PUTs the same idempotent Azure reservation order
+	// instead of creating a second; fall back to the prior timestamped ID
+	// otherwise.
+	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
 	apiVersion := "2022-11-01"
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=%s",
 		reservationOrderID, apiVersion)

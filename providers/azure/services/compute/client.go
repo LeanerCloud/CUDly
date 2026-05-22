@@ -457,7 +457,12 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	reservationOrderID := uuid.New().String()
+	// When an idempotency token is supplied (issue #641) the reservationOrderID is
+	// derived deterministically from it. The Azure Reservations API PUTs to
+	// reservationOrders/{id} and is idempotent on a stable order ID, so a re-drive
+	// re-PUTs the same order and returns the existing reservation rather than
+	// creating a second. Otherwise mint a random GUID (prior behaviour).
+	reservationOrderID := common.ReservationOrderID(opts.IdempotencyToken, uuid.New().String())
 	purchaseURL := fmt.Sprintf("https://management.azure.com/providers/Microsoft.Capacity/reservationOrders/%s?api-version=2022-11-01",
 		reservationOrderID)
 

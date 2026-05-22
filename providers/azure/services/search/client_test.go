@@ -804,3 +804,60 @@ func TestSearchClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Azure Search SKU")
 }
+
+// searchPurchaseURLFromMock returns the reservation PUT URL captured by the mock
+// HTTP client for the last PurchaseCommitment call. The {id} segment of
+// .../reservationOrders/{id} is the order ID that makes the request idempotent.
+func searchPurchaseURLFromMock(t *testing.T, m *MockHTTPClient) string {
+	t.Helper()
+	for i := len(m.Calls) - 1; i >= 0; i-- {
+		req, ok := m.Calls[i].Arguments.Get(0).(*http.Request)
+		if ok && req != nil {
+			return req.URL.String()
+		}
+	}
+	t.Fatalf("no HTTP request captured by mock")
+	return ""
+}
+
+// TestSearchClient_PurchaseCommitment_IdempotentReDrive is the issue #641
+// regression test for the search executor, whose prior reservationOrderID was a
+// non-idempotent timestamp ("search-reservation-<unix>"). A re-drive with the
+// same IdempotencyToken must now PUT to the same reservationOrders/{id} URL so
+// Azure re-PUTs the existing order rather than creating a second reservation.
+func TestSearchClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) {
+	ctx := context.Background()
+	rec := common.Recommendation{
+		ResourceType:   "standard",
+		Term:           "1yr",
+		Count:          1,
+		CommitmentCost: 3000.0,
+	}
+	token := common.DeriveIdempotencyToken("exec-641", 0)
+
+	purchase := func(tok string) (common.PurchaseResult, string) {
+		mockHTTP := &MockHTTPClient{}
+		mockCred := &MockTokenCredential{token: "test-token"}
+		client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+		mockHTTP.On("Do", mock.Anything).Return(
+			createMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`), nil)
+		result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{IdempotencyToken: tok})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		return result, searchPurchaseURLFromMock(t, mockHTTP)
+	}
+
+	first, firstURL := purchase(token)
+	second, secondURL := purchase(token)
+
+	assert.Equal(t, first.CommitmentID, second.CommitmentID,
+		"same idempotency token must reuse the same reservationOrderID")
+	assert.Equal(t, firstURL, secondURL,
+		"re-drive must PUT to the same reservationOrders/{id} URL")
+	assert.Contains(t, firstURL, common.IdempotencyGUID(token),
+		"order ID must be derived deterministically from the token, not a timestamp")
+
+	other, otherURL := purchase(common.DeriveIdempotencyToken("exec-641", 1))
+	assert.NotEqual(t, first.CommitmentID, other.CommitmentID)
+	assert.NotEqual(t, firstURL, otherURL)
+}
