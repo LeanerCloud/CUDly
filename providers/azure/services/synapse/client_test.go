@@ -409,6 +409,21 @@ func TestValidateOffering_invalid(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestValidateOffering_caseInsensitive(t *testing.T) {
+	c := newTestClient()
+	// Lowercase variant of DW1000c should validate.
+	rec := common.Recommendation{ResourceType: "dw1000c"}
+	err := c.ValidateOffering(context.Background(), rec)
+	assert.NoError(t, err)
+}
+
+func TestValidateOffering_trimsWhitespace(t *testing.T) {
+	c := newTestClient()
+	rec := common.Recommendation{ResourceType: "  DW1000c  "}
+	err := c.ValidateOffering(context.Background(), rec)
+	assert.NoError(t, err)
+}
+
 // ---- GetOfferingDetails ---------------------------------------------------
 
 const sampleSynapsePricingJSON = `{
@@ -579,6 +594,32 @@ func TestConvertSynapseReservation_dwSKU(t *testing.T) {
 	assert.Equal(t, "DW3000c", commitment.ResourceType)
 	assert.Equal(t, "res-abc", commitment.CommitmentID)
 	assert.Equal(t, common.ServiceDataWarehouse, commitment.Service)
+}
+
+func TestConvertSynapseReservation_scuPrefix(t *testing.T) {
+	c := newTestClient()
+	// SCU prefix (Spark Compute Units) should be classified as Synapse.
+	sku := "SCU_Standard"
+	resID := "res-scu"
+	commitment := c.convertSynapseReservation(&armconsumption.ReservationDetail{
+		Properties: &armconsumption.ReservationDetailProperties{
+			SKUName:       &sku,
+			ReservationID: &resID,
+		},
+	})
+	require.NotNil(t, commitment)
+	assert.Equal(t, "SCU_Standard", commitment.ResourceType)
+}
+
+func TestConvertSynapseReservation_scuSubstringNotMatched(t *testing.T) {
+	c := newTestClient()
+	// Non-Synapse SKU that merely contains "scu" as a substring must not
+	// be misclassified as a Synapse reservation. Guards against the prior
+	// substring-match false-positive.
+	sku := "rescue_premium"
+	assert.Nil(t, c.convertSynapseReservation(&armconsumption.ReservationDetail{
+		Properties: &armconsumption.ReservationDetailProperties{SKUName: &sku},
+	}))
 }
 
 func TestConvertSynapseReservation_nilSKUName(t *testing.T) {

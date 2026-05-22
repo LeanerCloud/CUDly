@@ -206,7 +206,9 @@ func (c *SynapseClient) convertSynapseReservation(detail *armconsumption.Reserva
 		return nil
 	}
 	skuLower := strings.ToLower(*props.SKUName)
-	if !strings.HasPrefix(skuLower, "dw") && !strings.Contains(skuLower, "scu") && !strings.Contains(skuLower, "synapse") {
+	if !strings.HasPrefix(skuLower, "dw") &&
+		!strings.HasPrefix(skuLower, "scu") &&
+		!strings.Contains(skuLower, "synapse") {
 		return nil
 	}
 
@@ -346,8 +348,9 @@ func (c *SynapseClient) ValidateOffering(ctx context.Context, rec common.Recomme
 	if err != nil {
 		return fmt.Errorf("failed to get valid SKUs: %w", err)
 	}
+	resourceType := strings.TrimSpace(rec.ResourceType)
 	for _, sku := range validSKUs {
-		if sku == rec.ResourceType {
+		if strings.EqualFold(sku, resourceType) {
 			return nil
 		}
 	}
