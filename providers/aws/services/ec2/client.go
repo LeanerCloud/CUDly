@@ -16,6 +16,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/retry"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
 // EC2API defines the interface for EC2 operations (enables mocking)
@@ -35,10 +36,13 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new EC2 client
+// NewClient creates a new EC2 client with purchase-path retry/timeout settings.
+// The tightened config (2 retries, 15s HTTP timeout) bounds worst-case wall
+// clock to 30s, preventing Lambda budget exhaustion on transient API slowness.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: ec2.NewFromConfig(cfg),
+		client: ec2.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }

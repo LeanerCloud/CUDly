@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
@@ -32,10 +33,12 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new RDS client
+// NewClient creates a new RDS client with purchase-path retry/timeout settings.
+// See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: rds.NewFromConfig(cfg),
+		client: rds.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }

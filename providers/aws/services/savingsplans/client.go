@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
 // SavingsPlansAPI defines the interface for Savings Plans operations (enables mocking)
@@ -33,13 +34,14 @@ type Client struct {
 	planType types.SavingsPlanType
 }
 
-// NewClient creates a new Savings Plans client scoped to one plan type.
-// The plan type determines which slug GetServiceType returns and which
-// commitments GetExistingCommitments includes — both critical for the
-// per-plan-type ServiceConfig dispatch added in the AWS provider.
+// NewClient creates a new Savings Plans client scoped to one plan type with
+// purchase-path retry/timeout settings. The plan type determines which slug
+// GetServiceType returns and which commitments GetExistingCommitments includes.
+// See purchasecfg for retry rationale.
 func NewClient(cfg aws.Config, planType types.SavingsPlanType) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client:   savingsplans.NewFromConfig(cfg),
+		client:   savingsplans.NewFromConfig(pcfg),
 		region:   cfg.Region,
 		planType: planType,
 	}

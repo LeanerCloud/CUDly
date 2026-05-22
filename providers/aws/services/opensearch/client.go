@@ -16,6 +16,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/retry"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
 // OpenSearchAPI defines the interface for OpenSearch operations (enables mocking)
@@ -43,11 +44,13 @@ type Client struct {
 	accountErr  error
 }
 
-// NewClient creates a new OpenSearch client
+// NewClient creates a new OpenSearch client with purchase-path retry/timeout
+// settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client:    opensearch.NewFromConfig(cfg),
-		stsClient: sts.NewFromConfig(cfg),
+		client:    opensearch.NewFromConfig(pcfg),
+		stsClient: sts.NewFromConfig(pcfg),
 		region:    cfg.Region,
 	}
 }
