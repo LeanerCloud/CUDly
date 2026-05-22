@@ -95,6 +95,15 @@ describe('Settings Module', () => {
         <select id="aws-savings-plans-ec2instance-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-savings-plans-sagemaker-term"><option value="1">1</option><option value="3">3</option></select>
         <select id="aws-savings-plans-database-term"><option value="1">1</option><option value="3">3</option></select>
+        <!-- Issue #136: per-product SP coverage and enabled controls -->
+        <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80">
+        <input type="checkbox" id="aws-savings-plans-compute-enabled" checked>
+        <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80">
+        <input type="checkbox" id="aws-savings-plans-ec2instance-enabled" checked>
+        <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80">
+        <input type="checkbox" id="aws-savings-plans-sagemaker-enabled" checked>
+        <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80">
+        <input type="checkbox" id="aws-savings-plans-database-enabled" checked>
         <select id="aws-ec2-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-rds-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
         <select id="aws-elasticache-payment"><option value="no-upfront">No</option><option value="partial-upfront">Partial</option><option value="all-upfront">All</option></select>
@@ -590,6 +599,9 @@ describe('Settings Module', () => {
       for (const planType of ['compute', 'ec2instance', 'sagemaker', 'database']) {
         expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-term"`));
         expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-payment"`));
+        // Issue #136: coverage and enabled controls must be present on each card.
+        expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-coverage"`));
+        expect(html).toMatch(new RegExp(`id="aws-savings-plans-${planType}-enabled"`));
       }
     });
 
@@ -624,6 +636,86 @@ describe('Settings Module', () => {
       const cfg = call![2];
       expect(cfg.term).toBe(1);
       expect(cfg.payment).toBe('no-upfront');
+    });
+
+    test('saveGlobalSettings sends per-card coverage from SP coverage input (issue #136)', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
+      window.alert = jest.fn();
+
+      // Pin compute SP to 60% coverage, leave others at default 80%.
+      (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '60';
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      const computeCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'aws' && service === 'savings-plans-compute',
+      );
+      expect(computeCall).toBeDefined();
+      expect(computeCall![2].coverage).toBe(60);
+
+      // Other SP cards keep their default value.
+      const ec2Call = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'aws' && service === 'savings-plans-ec2instance',
+      );
+      expect(ec2Call).toBeDefined();
+      expect(ec2Call![2].coverage).toBe(80);
+    });
+
+    test('saveGlobalSettings sends per-card enabled=false when SP enabled checkbox unchecked (issue #136)', async () => {
+      (api.updateConfig as jest.Mock).mockResolvedValue({});
+      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
+      window.alert = jest.fn();
+
+      // Disable the database SP card.
+      (document.getElementById('aws-savings-plans-database-enabled') as HTMLInputElement).checked = false;
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await saveGlobalSettings(event);
+
+      const dbCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'aws' && service === 'savings-plans-database',
+      );
+      expect(dbCall).toBeDefined();
+      expect(dbCall![2].enabled).toBe(false);
+
+      // Other SP cards remain enabled.
+      const computeCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
+        ([provider, service]) => provider === 'aws' && service === 'savings-plans-compute',
+      );
+      expect(computeCall).toBeDefined();
+      expect(computeCall![2].enabled).toBe(true);
+    });
+
+    test('loadGlobalSettings populates SP coverage and enabled from service config (issue #136)', async () => {
+      // Seed a non-default initial DOM state on the fallback card so the test
+      // fails if the fallback assignment is skipped (it would otherwise pass on
+      // the HTML defaults, which happen to equal the asserted values).
+      (document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement).value = '12';
+      (document.getElementById('aws-savings-plans-ec2instance-enabled') as HTMLInputElement).checked = false;
+
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        // Non-80 global default so the fallback writes an observably different value.
+        global: { enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 67 },
+        services: [
+          { provider: 'aws', service: 'savings-plans-compute', term: 1, payment: 'no-upfront', coverage: 65, enabled: false },
+        ],
+      });
+      setupSettingsHandlers();
+      await loadGlobalSettings();
+
+      const coverageEl = document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement;
+      const enabledEl = document.getElementById('aws-savings-plans-compute-enabled') as HTMLInputElement;
+      expect(coverageEl.value).toBe('65');
+      expect(enabledEl.checked).toBe(false);
+
+      // Cards without an explicit service row fall back to the global default
+      // (67, not the HTML default 80) and re-enable from the seeded false state.
+      const ec2Coverage = document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement;
+      const ec2Enabled = document.getElementById('aws-savings-plans-ec2instance-enabled') as HTMLInputElement;
+      expect(ec2Coverage.value).toBe('67');
+      expect(ec2Enabled.checked).toBe(true);
     });
 
     test('calls updateServiceConfig once per service field (18 calls)', async () => {
