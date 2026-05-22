@@ -289,34 +289,57 @@ func (e *partialPurchaseError) Error() string {
 }
 
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
-// for the given account. Returns an error if credential resolution fails — callers
+// for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
 func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAccountProvider]: resolving credentials for provider=%s account=%s",
+		account.Provider, account.ID)
+	var cfg *provider.ProviderConfig
+	var err error
 	switch account.Provider {
 	case "aws":
-		return m.resolveAWSProvider(ctx, account)
+		cfg, err = m.resolveAWSProvider(ctx, account)
 	case "azure":
-		return m.resolveAzureProvider(ctx, account)
+		cfg, err = m.resolveAzureProvider(ctx, account)
 	case "gcp":
-		return m.resolveGCPProvider(ctx, account)
+		cfg, err = m.resolveGCPProvider(ctx, account)
 	default:
 		return nil, fmt.Errorf("credentials: unknown cloud provider %q for account %s", account.Provider, account.ID)
 	}
+	if err != nil {
+		logging.Errorf("purchase[resolveAccountProvider]: credential resolution failed for provider=%s account=%s after %s: %v",
+			account.Provider, account.ID, time.Since(t0), err)
+		return nil, err
+	}
+	logging.Infof("purchase[resolveAccountProvider]: credentials resolved for provider=%s account=%s in %s",
+		account.Provider, account.ID, time.Since(t0))
+	return cfg, nil
 }
 
 func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAWSProvider]: resolving AWS credentials for account=%s authMode=%s",
+		account.ID, account.AWSAuthMode)
 	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
 		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &account, m.credStore, m.assumeRoleSTS,
 		credentials.AWSResolveOptions{AmbientProvider: m.ambientAWSCreds})
 	if err != nil {
+		logging.Errorf("purchase[resolveAWSProvider]: failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve AWS for account %s (%s): %w", account.ID, account.Name, err)
 	}
+	logging.Infof("purchase[resolveAWSProvider]: AWS credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
 func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAzureProvider]: resolving Azure credentials for account=%s authMode=%s",
+		account.ID, account.AzureAuthMode)
 	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-managed_identity Azure account %s", account.ID)
 	}
@@ -325,17 +348,26 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 		IssuerURL: m.oidcIssuerURL,
 	})
 	if err != nil {
+		logging.Errorf("purchase[resolveAzureProvider]: token credential resolution failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
 	if err != nil {
+		logging.Errorf("purchase[resolveAzureProvider]: Azure provider construction failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: create Azure provider for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv.SetCredential(azCred)
+	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
 }
 
 func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveGCPProvider]: resolving GCP credentials for account=%s authMode=%s",
+		account.ID, account.GCPAuthMode)
 	if account.GCPAuthMode != "application_default" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-ADC GCP account %s", account.ID)
 	}
@@ -344,13 +376,19 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 		IssuerURL: m.oidcIssuerURL,
 	})
 	if err != nil {
+		logging.Errorf("purchase[resolveGCPProvider]: token source resolution failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve GCP for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	if gcpTS == nil {
-		// ADC mode: no explicit token source — use ambient credentials
+		// ADC mode: no explicit token source -- use ambient credentials.
+		logging.Infof("purchase[resolveGCPProvider]: GCP ADC mode for account=%s (ambient credentials) in %s",
+			account.ID, time.Since(t0))
 		return nil, nil
 	}
 	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
+	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
 }
 
