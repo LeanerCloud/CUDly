@@ -2,6 +2,7 @@ package recommendations
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -519,9 +520,13 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 
 	recs, err := client.GetRecommendations(ctx, params)
 
+	// With the pagination loop added (issue #692), ctx.Err() is checked at
+	// the top of the first page iteration before the rate-limiter runs. A
+	// pre-cancelled context therefore returns context.Canceled directly, which
+	// is the correct behavior per feedback_ctx_cancel_terminal.md.
 	assert.Error(t, err)
 	assert.Nil(t, recs)
-	assert.Contains(t, err.Error(), "rate limiter wait failed")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // TestGetAllRecommendations_PropagatesContextCancellation pins the contract
@@ -558,4 +563,196 @@ func TestGetAllRecommendations_PropagatesContextCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled,
 		"GetAllRecommendations must propagate the parent ctx error after g.Wait()")
 	assert.Nil(t, recs)
+}
+
+// multiPageRIMock returns distinct pages for GetReservationPurchaseRecommendation
+// based on the NextPageToken in the incoming request. Implements CostExplorerAPI.
+type multiPageRIMock struct {
+	// pages is an ordered list of outputs to return. The first call (token=="")
+	// returns pages[0], the call with token "tok1" returns pages[1], etc.
+	// tokens[i] is the NextPageToken value that triggers pages[i+1].
+	pages  []*costexplorer.GetReservationPurchaseRecommendationOutput
+	tokens []string // len == len(pages)-1; pages[last] has nil token
+	calls  int
+}
+
+func (m *multiPageRIMock) GetReservationPurchaseRecommendation(
+	ctx context.Context,
+	params *costexplorer.GetReservationPurchaseRecommendationInput,
+	_ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	idx := 0
+	incoming := aws.ToString(params.NextPageToken)
+	for i, tok := range m.tokens {
+		if tok == incoming {
+			idx = i + 1
+			break
+		}
+	}
+	// First call has empty/nil token
+	if incoming == "" {
+		idx = 0
+	}
+	m.calls++
+	if idx >= len(m.pages) {
+		return nil, fmt.Errorf("unexpected page token %q", incoming)
+	}
+	return m.pages[idx], nil
+}
+
+func (m *multiPageRIMock) GetSavingsPlansPurchaseRecommendation(
+	_ context.Context, _ *costexplorer.GetSavingsPlansPurchaseRecommendationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	return &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{}, nil
+}
+
+func (m *multiPageRIMock) GetReservationUtilization(
+	_ context.Context, _ *costexplorer.GetReservationUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
+func (m *multiPageRIMock) GetReservationCoverage(
+	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationCoverageOutput, error) {
+	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+// riDetail returns a minimal ReservationPurchaseRecommendation with n EC2 details.
+func riDetail(n int) types.ReservationPurchaseRecommendation {
+	details := make([]types.ReservationPurchaseRecommendationDetail, n)
+	for i := range details {
+		details[i] = types.ReservationPurchaseRecommendationDetail{
+			RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+			EstimatedMonthlySavingsAmount:          aws.String("10.00"),
+			EstimatedMonthlySavingsPercentage:      aws.String("10.0"),
+			InstanceDetails: &types.InstanceDetails{
+				EC2InstanceDetails: &types.EC2InstanceDetails{
+					InstanceType: aws.String("m5.large"),
+					Platform:     aws.String("Linux/UNIX"),
+					Region:       aws.String("us-east-1"),
+				},
+			},
+		}
+	}
+	return types.ReservationPurchaseRecommendation{RecommendationDetails: details}
+}
+
+// TestGetRecommendations_RI_Paginates asserts that GetRecommendations accumulates
+// items across all pages (issue #692 regression test).
+func TestGetRecommendations_RI_Paginates(t *testing.T) {
+	mock := &multiPageRIMock{
+		pages: []*costexplorer.GetReservationPurchaseRecommendationOutput{
+			{
+				Recommendations: []types.ReservationPurchaseRecommendation{riDetail(2)},
+				NextPageToken:   aws.String("tok1"),
+			},
+			{
+				Recommendations: []types.ReservationPurchaseRecommendation{riDetail(3)},
+				NextPageToken:   aws.String("tok2"),
+			},
+			{
+				Recommendations: []types.ReservationPurchaseRecommendation{riDetail(4)},
+				NextPageToken:   nil,
+			},
+		},
+		tokens: []string{"tok1", "tok2"},
+	}
+
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+	require.NoError(t, err)
+	// 2 + 3 + 4 = 9 recommendation details, each yielding one rec
+	assert.Len(t, recs, 9, "must accumulate recs across all 3 pages")
+	assert.Equal(t, 3, mock.calls, "must call CE exactly once per page")
+}
+
+// TestGetRecommendations_RI_EmptyTokenTerminates asserts that an empty-string
+// NextPageToken is treated as terminal (no extra call). Parity with PR #690
+// CR category-A fix.
+func TestGetRecommendations_RI_EmptyTokenTerminates(t *testing.T) {
+	mock := &multiPageRIMock{
+		pages: []*costexplorer.GetReservationPurchaseRecommendationOutput{
+			{
+				Recommendations: []types.ReservationPurchaseRecommendation{riDetail(1)},
+				NextPageToken:   aws.String(""), // empty string -- must terminate
+			},
+		},
+		tokens: []string{},
+	}
+
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	recs, err := client.GetRecommendations(context.Background(), params)
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+	assert.Equal(t, 1, mock.calls, "empty-string token must terminate pagination after page 1")
+}
+
+// alwaysNextPageRIMock returns pages each carrying a non-empty NextPageToken,
+// used to exercise the maxRecommendationPages cap.
+type alwaysNextPageRIMock struct {
+	calls int
+}
+
+func (m *alwaysNextPageRIMock) GetReservationPurchaseRecommendation(
+	_ context.Context,
+	_ *costexplorer.GetReservationPurchaseRecommendationInput,
+	_ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	m.calls++
+	return &costexplorer.GetReservationPurchaseRecommendationOutput{
+		Recommendations: []types.ReservationPurchaseRecommendation{riDetail(1)},
+		NextPageToken:   aws.String(fmt.Sprintf("tok%d", m.calls)),
+	}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetSavingsPlansPurchaseRecommendation(
+	_ context.Context, _ *costexplorer.GetSavingsPlansPurchaseRecommendationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	return &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetReservationUtilization(
+	_ context.Context, _ *costexplorer.GetReservationUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationUtilizationOutput, error) {
+	return &costexplorer.GetReservationUtilizationOutput{}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetReservationCoverage(
+	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetReservationCoverageOutput, error) {
+	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+// TestGetRecommendations_RI_PaginationCapError asserts that exceeding
+// maxRecommendationPages returns a diagnostic error (issue #692).
+func TestGetRecommendations_RI_PaginationCapError(t *testing.T) {
+	mock := &alwaysNextPageRIMock{}
+	client := NewClientWithAPI(mock, "us-east-1")
+	params := common.RecommendationParams{
+		Service:        common.ServiceEC2,
+		PaymentOption:  "partial-upfront",
+		Term:           "1yr",
+		LookbackPeriod: "7d",
+	}
+
+	_, err := client.GetRecommendations(context.Background(), params)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pagination cap reached")
+	assert.Equal(t, maxRecommendationPages, mock.calls,
+		"must stop exactly at the cap, not one page later")
 }

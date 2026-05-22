@@ -45,32 +45,11 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 			AccountScope:         types.AccountScopeLinked,
 		}
 
-		// Acquire/Release the shared semaphore (if any on ctx) around each
-		// individual SDK call so rate-limiter backoff waits don't tie up a
-		// permit while no request is actually in flight. See pkg/concurrency.
-		c.rateLimiter.Reset()
-		var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
-		var err error
-
-		for {
-			if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
-				return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
-			}
-
-			if acqErr := concurrency.Acquire(ctx); acqErr != nil {
-				return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
-			}
-			result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
-			concurrency.Release(ctx)
-			if !c.rateLimiter.ShouldRetry(err) {
-				break
-			}
-		}
-
+		recs, err := c.fetchSPAllPages(ctx, input, params, planType)
 		if err != nil {
 			// When the caller scoped the request to one plan type
 			// (post-issue-#22 split), a Cost Explorer failure means an
-			// entire SP service collection returns nothing — silently
+			// entire SP service collection returns nothing -- silently
 			// dropping that as "0 recommendations" hides real outages.
 			// Propagate. The umbrella iterate-all path keeps logging
 			// and continuing so a transient failure on one plan type
@@ -82,13 +61,86 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 			continue
 		}
 
-		if result.SavingsPlansPurchaseRecommendation != nil {
-			recs := c.parseSavingsPlansRecommendations(result.SavingsPlansPurchaseRecommendation, params, planType)
-			allRecommendations = append(allRecommendations, recs...)
-		}
+		allRecommendations = append(allRecommendations, recs...)
 	}
 
 	return allRecommendations, nil
+}
+
+// fetchSPAllPages paginates over all pages of SP recommendations for a single
+// plan type. ctx.Err() is checked at the top of each iteration so cancellation
+// is terminal (per feedback_ctx_cancel_terminal.md, issue #692).
+func (c *Client) fetchSPAllPages(
+	ctx context.Context,
+	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
+	params common.RecommendationParams,
+	planType types.SupportedSavingsPlansType,
+) ([]common.Recommendation, error) {
+	var allRecs []common.Recommendation
+	var nextPageToken *string
+
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if pageIdx >= maxRecommendationPages {
+			return nil, fmt.Errorf(
+				"pagination cap reached after %d pages for SP %s (issue #692)",
+				maxRecommendationPages, planType,
+			)
+		}
+		input.NextPageToken = nextPageToken
+
+		result, err := c.fetchSPPageWithRetry(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		if result.SavingsPlansPurchaseRecommendation != nil {
+			recs := c.parseSavingsPlansRecommendations(result.SavingsPlansPurchaseRecommendation, params, planType)
+			allRecs = append(allRecs, recs...)
+		}
+
+		if result.NextPageToken == nil || aws.ToString(result.NextPageToken) == "" {
+			break
+		}
+		nextPageToken = result.NextPageToken
+	}
+
+	return allRecs, nil
+}
+
+// fetchSPPageWithRetry executes a single GetSavingsPlansPurchaseRecommendation
+// call with rate-limiter exponential back-off. Extracted so the pagination loop
+// in fetchSPAllPages stays below the gocyclo cap.
+func (c *Client) fetchSPPageWithRetry(
+	ctx context.Context,
+	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
+) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	c.rateLimiter.Reset()
+	var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
+	var err error
+
+	for {
+		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
+		}
+
+		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+			return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+		}
+		result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
+		concurrency.Release(ctx)
+		if !c.rateLimiter.ShouldRetry(err) {
+			break
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // parseSavingsPlansRecommendations converts Savings Plans recommendations
