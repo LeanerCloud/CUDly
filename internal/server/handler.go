@@ -27,6 +27,13 @@ const (
 	TaskCleanupExpiredRecords     ScheduledTaskType = "cleanup"
 	TaskRefreshAnalytics          ScheduledTaskType = "analytics_refresh"
 	TaskRIExchangeReshape         ScheduledTaskType = "ri_exchange_reshape"
+	// TaskReapStuckPurchases sweeps purchase_executions stuck in
+	// approved/running longer than PURCHASE_APPROVED_REAP_AFTER and flips
+	// them to "failed" via the existing TransitionExecutionStatus CAS.
+	// Backstop for synchronous-executor crashes (Lambda timeout, OOM,
+	// network hang) that leave rows orphaned in an in-flight state.
+	// See internal/purchase/reaper.go + issue #678.
+	TaskReapStuckPurchases ScheduledTaskType = "reap_stuck_purchases"
 )
 
 // HandleScheduledTask processes a scheduled task by type.
@@ -70,6 +77,8 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		return app.handleRefreshAnalytics(ctx)
 	case TaskRIExchangeReshape:
 		return app.handleRIExchangeReshape(ctx)
+	case TaskReapStuckPurchases:
+		return app.handleReapStuckPurchases(ctx)
 	default:
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
@@ -163,6 +172,29 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 	return result, nil
 }
 
+// handleReapStuckPurchases sweeps purchase_executions stuck in
+// approved/running longer than the configured threshold and flips them
+// to "failed" via the existing TransitionExecutionStatus CAS. See
+// internal/purchase/reaper.go + issue #678 for the full rationale and
+// safety properties.
+//
+// The threshold is read fresh from the PURCHASE_APPROVED_REAP_AFTER env
+// var on every invocation (not cached at startup) so an ops tune via
+// Lambda env-var rotation takes effect on the next sweep without a
+// redeploy.
+func (app *Application) handleReapStuckPurchases(ctx context.Context) (*purchase.ReapResult, error) {
+	reapAfter := purchase.ParseReapAfterFromEnv()
+	log.Printf("Reaping stuck purchase executions (threshold: %s)...", reapAfter)
+	result, err := app.Purchase.ReapStuckExecutions(ctx, reapAfter)
+	if err != nil {
+		log.Printf("Failed to reap stuck purchase executions: %v", err)
+		return nil, err
+	}
+	log.Printf("Reap sweep complete: found=%d reaped=%d race_lost=%d errored=%d",
+		result.Found, result.Reaped, result.RaceLost, result.Errored)
+	return result, nil
+}
+
 // handleRefreshAnalytics refreshes materialized views and analytics data
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
@@ -231,6 +263,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 		return TaskRefreshAnalytics, nil
 	case "ri_exchange_reshape":
 		return TaskRIExchangeReshape, nil
+	case "reap_stuck_purchases":
+		return TaskReapStuckPurchases, nil
 	default:
 		return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
 	}

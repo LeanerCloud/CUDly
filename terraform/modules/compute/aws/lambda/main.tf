@@ -83,6 +83,13 @@ resource "aws_lambda_function" "main" {
         # that aws_lambda_function.main.arn would create here.
         SCHEDULER_LAMBDA_ARN = "arn:${data.aws_partition.current.partition}:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-api"
       },
+      # Stuck-purchase reaper threshold (#678). Only set when the
+      # operator overrides the default — empty string means "use the
+      # in-code DefaultReapAfter (10m)" so we don't pin a Lambda env
+      # value when ops hasn't taken a position.
+      var.purchase_approved_reap_after != "" ? {
+        PURCHASE_APPROVED_REAP_AFTER = var.purchase_approved_reap_after
+      } : {},
       var.additional_env_vars
     )
   }
@@ -525,4 +532,51 @@ resource "aws_lambda_permission" "eventbridge_ri_exchange" {
   function_name = aws_lambda_function.main.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ri_exchange[0].arn
+}
+
+# ==============================================
+# EventBridge Rule for Stuck-Purchase Reaper (#678)
+# ==============================================
+#
+# Periodic sweep that flips purchase_executions stuck in approved/running
+# (longer than PURCHASE_APPROVED_REAP_AFTER, default 10m) to "failed" via
+# the existing TransitionExecutionStatus CAS. Backstop for synchronous-
+# executor crashes (Lambda timeout, OOM, network hang) that orphan rows
+# in an in-flight state with no automatic recovery.
+#
+# Schedule cadence must be more frequent than the reap-after threshold so
+# a stuck row is reaped within ~1 threshold-window — default rate(5m)
+# vs. 10m threshold gives ~2 sweeps of headroom. The reaper itself is
+# CAS-protected so over-running is safe (real executor wins the race).
+
+resource "aws_cloudwatch_event_rule" "reap_stuck_purchases" {
+  count = var.enable_reap_stuck_purchases_schedule ? 1 : 0
+
+  name                = "${var.stack_name}-reap-stuck-purchases"
+  description         = "Trigger stuck-purchase reaper sweep (issue #678)"
+  schedule_expression = var.reap_stuck_purchases_schedule
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "reap_stuck_purchases" {
+  count = var.enable_reap_stuck_purchases_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.reap_stuck_purchases[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.main.arn
+
+  input = jsonencode({
+    action = "reap_stuck_purchases"
+  })
+}
+
+resource "aws_lambda_permission" "eventbridge_reap_stuck_purchases" {
+  count = var.enable_reap_stuck_purchases_schedule ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeReapStuckPurchases"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.main.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.reap_stuck_purchases[0].arn
 }

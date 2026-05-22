@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
@@ -22,6 +23,11 @@ type PurchaseManagerInterface interface {
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
 	ApproveAndExecute(ctx context.Context, execID, actor string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
+	// ReapStuckExecutions sweeps purchase_executions stuck in
+	// approved/running longer than reapAfter and flips them to "failed"
+	// via the existing TransitionExecutionStatus CAS. Wired into the
+	// "reap_stuck_purchases" scheduled task. See issue #678.
+	ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
 }
 
 // AnalyticsStoreInterface defines the methods required for analytics storage
