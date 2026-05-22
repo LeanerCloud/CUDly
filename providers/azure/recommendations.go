@@ -234,7 +234,17 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 			// Convert Azure Advisor recommendation to our common format
 			rec := r.convertAdvisorRecommendation(advisorRec)
 			if rec != nil && shouldIncludeService(params, rec.Service) {
-				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*rec)...)
+				// Preserve Advisor-provided EstimatedSavings when both OnDemandCost
+				// and CommitmentCost are unset (zero), since ExpandPaymentVariants
+				// would otherwise overwrite it with zero (OnDemandCost - CommitmentCost).
+				advisorSavings := rec.EstimatedSavings
+				variants := azrecs.ExpandPaymentVariants(*rec)
+				if rec.OnDemandCost == 0 && rec.CommitmentCost == 0 && advisorSavings != 0 {
+					for i := range variants {
+						variants[i].EstimatedSavings = advisorSavings
+					}
+				}
+				recommendations = append(recommendations, variants...)
 			}
 		}
 	}

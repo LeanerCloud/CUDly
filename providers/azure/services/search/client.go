@@ -540,15 +540,33 @@ func calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPri
 
 // convertAzureSearchRecommendation converts Azure Search reservation recommendation to common format
 func (c *SearchClient) convertAzureSearchRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+	// Extract fields from Azure recommendation using the shared converter
+	extracted := azrecs.Extract(azureRec)
+	if extracted == nil {
+		return nil
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderAzure,
 		Service:        common.ServiceOther,
 		Account:        c.subscriptionID,
-		Region:         c.region,
 		CommitmentType: common.CommitmentReservedInstance,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "all-upfront",
+		// Populate fields from Azure API response
+		Region:               extracted.Region,
+		ResourceType:         extracted.ResourceType,
+		Count:                extracted.Count,
+		OnDemandCost:         extracted.OnDemandCost,
+		CommitmentCost:       extracted.CommitmentCost,
+		EstimatedSavings:     extracted.EstimatedSavings,
+		Term:                 extracted.Term,
+		RecurringMonthlyCost: extracted.RecurringMonthlyCost,
+		PaymentOption:        "all-upfront", // Default, will be expanded by ExpandPaymentVariants
+	}
+
+	// Override region with client region if extraction didn't find one
+	if rec.Region == "" {
+		rec.Region = c.region
 	}
 
 	return rec
