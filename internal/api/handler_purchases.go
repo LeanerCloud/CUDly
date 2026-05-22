@@ -509,7 +509,7 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	if execution.Status != "pending" && execution.Status != "notified" {
+	if !execution.IsCancelable() {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled (status=%s)", execution.ExecutionID, execution.Status))
 	}
 

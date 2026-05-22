@@ -266,6 +266,18 @@ type PurchaseExecution struct {
 	ApprovalTokenExpiresAt *time.Time `json:"approval_token_expires_at,omitempty" dynamodbav:"approval_token_expires_at,omitempty"`
 }
 
+// IsCancelable reports whether an execution may still be cancelled. Only the
+// pre-purchase states ("pending"/"notified") qualify: once a row reaches
+// "approved" or "running" the AWS commitment is being or has been created, so
+// cancelling would leave the DB and the cloud out of sync; "cancelled",
+// "completed", "failed", "expired", and "paused" are likewise non-cancelable.
+// Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
+// and the session-authed cancelPurchaseViaSession) call this single predicate
+// so the policy can never drift between them (issue #645).
+func (e *PurchaseExecution) IsCancelable() bool {
+	return e.Status == "pending" || e.Status == "notified"
+}
+
 // RecommendationRecord stores a recommendation with purchase status
 type RecommendationRecord struct {
 	ID           string `json:"id" dynamodbav:"id"`
