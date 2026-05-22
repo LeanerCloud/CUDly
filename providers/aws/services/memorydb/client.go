@@ -119,7 +119,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -279,13 +279,23 @@ func convertMemoryDBPaymentOption(option string) (string, error) {
 // findOfferingID finds the appropriate Reserved Node offering ID.
 // All supported narrow filters (NodeType, OfferingType, Duration) are set
 // directly on the request to minimize the result set (issue #688).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+//
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	wantOfferingType, err := convertMemoryDBPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", err
 	}
 
 	duration := c.getDurationStringForAPI(rec.Term)
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: MemoryDB findOfferingID starting (nodeType=%s term=%s payment=%s)",
+		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
 
 	var nextToken *string
 	page := 0
@@ -311,10 +321,12 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: MemoryDB findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("MemoryDB findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedNodesOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: MemoryDB findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedNodesOfferings), time.Since(pageStart))
 
 		for _, o := range result.ReservedNodesOfferings {
 			got := aws.ToString(o.OfferingType)
@@ -323,6 +335,8 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 					aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
 					rec.ResourceType, rec.PaymentOption)
 			}
+			log.Printf("purchase[%s]: MemoryDB findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return aws.ToString(o.ReservedNodesOfferingId), nil
 		}
 
@@ -332,6 +346,8 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		nextToken = result.NextToken
 	}
 
+	log.Printf("purchase[%s]: MemoryDB findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for MemoryDB %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, rec.PaymentOption, page)
 }
@@ -348,13 +364,13 @@ func (c *Client) getDurationStringForAPI(term string) string {
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

@@ -142,7 +142,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -403,7 +403,10 @@ func describeInputFromQuery(q ec2OfferingQuery, nextToken *string) *ec2.Describe
 // Filter[]-heavy shape caused AWS to return empty pages with NextToken on
 // sparse offering sets, walking until the Lambda budget expired (issue #688).
 // Only scope has no typed equivalent on the input struct, so it stays in Filters[].
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+//
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	details, ok := rec.Details.(*common.ComputeDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for EC2")
@@ -414,6 +417,14 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	}
 	q := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
 	q.wantOfferingType = wantOfferingType
+
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: EC2 findOfferingID starting (instance=%s platform=%s tenancy=%s term=%s payment=%s)",
+		tag, rec.ResourceType, details.Platform, details.Tenancy, rec.Term, rec.PaymentOption)
 
 	var nextToken *string
 	page := 0
@@ -429,11 +440,15 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedInstancesOfferings(ctx, describeInputFromQuery(q, nextToken))
 		if err != nil {
+			log.Printf("purchase[%s]: EC2 findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("EC2 findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedInstancesOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: EC2 findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedInstancesOfferings), time.Since(pageStart))
 		if id := scanEC2OfferingPage(result.ReservedInstancesOfferings, wantOfferingType); id != "" {
+			log.Printf("purchase[%s]: EC2 findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return id, nil
 		}
 		if isLastEC2Page(result.NextToken) {
@@ -441,6 +456,8 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		}
 		nextToken = result.NextToken
 	}
+	log.Printf("purchase[%s]: EC2 findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for EC2 %s %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, details.Platform, rec.PaymentOption, page)
 }
@@ -473,13 +490,13 @@ func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, wantType t
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

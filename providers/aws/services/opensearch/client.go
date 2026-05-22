@@ -147,7 +147,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -364,7 +364,17 @@ const maxOfferingPages = 5
 // findOfferingID finds the appropriate Reserved Instance offering ID.
 // The OpenSearch API does not support server-side filters on the offerings list,
 // so all matching is done client-side (issue #688).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: OpenSearch findOfferingID starting (instanceType=%s term=%s payment=%s)",
+		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
+
 	var nextToken *string
 	page := 0
 	for {
@@ -386,14 +396,18 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedInstanceOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: OpenSearch findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("OpenSearch findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedInstanceOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: OpenSearch findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedInstanceOfferings), time.Since(pageStart))
 
 		if id, scanErr := c.scanOpenSearchOfferingPage(result.ReservedInstanceOfferings, rec); scanErr != nil {
 			return "", scanErr
 		} else if id != "" {
+			log.Printf("purchase[%s]: OpenSearch findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return id, nil
 		}
 
@@ -403,6 +417,8 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		nextToken = result.NextToken
 	}
 
+	log.Printf("purchase[%s]: OpenSearch findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for OpenSearch %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, rec.PaymentOption, page)
 }
@@ -472,13 +488,13 @@ func (c *Client) matchesDuration(offeringDuration int32, term string) bool {
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}
