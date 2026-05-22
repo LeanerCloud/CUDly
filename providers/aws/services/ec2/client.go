@@ -313,6 +313,27 @@ func canonicalizeEC2Scope(s string) string {
 	}
 }
 
+// maxOfferingPages is the maximum number of DescribeReservedInstancesOfferings
+// pages to walk before giving up. At MaxResults=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
+
+// convertEC2PaymentOption maps a rec payment-option slug to the AWS
+// DescribeReservedInstancesOfferings OfferingType enum value.
+func convertEC2PaymentOption(option string) (types.OfferingTypeValues, error) {
+	switch option {
+	case "all-upfront":
+		return types.OfferingTypeValuesAllUpfront, nil
+	case "partial-upfront":
+		return types.OfferingTypeValuesPartialUpfront, nil
+	case "no-upfront":
+		return types.OfferingTypeValuesNoUpfront, nil
+	default:
+		return "", fmt.Errorf("unsupported EC2 payment option: %s", option)
+	}
+}
+
 // buildOfferingFilters constructs the EC2 API filters for finding an RI offering.
 func (c *Client) buildOfferingFilters(rec common.Recommendation, details *common.ComputeDetails) []types.Filter {
 	platform := details.Platform
@@ -347,34 +368,68 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for EC2")
 	}
+	wantOfferingType, err := convertEC2PaymentOption(rec.PaymentOption)
+	if err != nil {
+		return "", err
+	}
+	return c.paginateEC2Offerings(ctx, rec, details, c.buildOfferingFilters(rec, details), wantOfferingType)
+}
 
-	filters := c.buildOfferingFilters(rec, details)
-
+// paginateEC2Offerings walks DescribeReservedInstancesOfferings pages and returns
+// the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
+// timeout exhaustion (issue #688).
+func (c *Client) paginateEC2Offerings(ctx context.Context, rec common.Recommendation, details *common.ComputeDetails, filters []types.Filter, wantType types.OfferingTypeValues) (string, error) {
 	var nextToken *string
+	page := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for EC2 %s %s %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, details.Platform, rec.PaymentOption)
+		}
 		input := &ec2.DescribeReservedInstancesOfferingsInput{
 			Filters:            filters,
+			OfferingType:       wantType,
 			IncludeMarketplace: aws.Bool(false),
 			MaxResults:         aws.Int32(100),
 			NextToken:          nextToken,
 		}
-
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-
-		if len(result.ReservedInstancesOfferings) > 0 {
-			return aws.ToString(result.ReservedInstancesOfferings[0].ReservedInstancesOfferingId), nil
+		log.Printf("EC2 findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedInstancesOfferings), time.Since(pageStart))
+		if id, scanErr := scanEC2OfferingPage(result.ReservedInstancesOfferings, rec, wantType); scanErr != nil {
+			return "", scanErr
+		} else if id != "" {
+			return id, nil
 		}
-
-		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+		if result.NextToken == nil {
 			break
 		}
 		nextToken = result.NextToken
 	}
+	return "", fmt.Errorf("no offerings found for EC2 %s %s %s after %d page(s) (issue #688)",
+		rec.ResourceType, details.Platform, rec.PaymentOption, page)
+}
 
-	return "", fmt.Errorf("no offerings found for %s %s %s", rec.ResourceType, details.Platform, details.Tenancy)
+// scanEC2OfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, rec common.Recommendation, wantType types.OfferingTypeValues) (string, error) {
+	for _, o := range offerings {
+		if o.OfferingType != wantType {
+			return "", fmt.Errorf("EC2 offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedInstancesOfferingId), o.OfferingType, wantType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		return aws.ToString(o.ReservedInstancesOfferingId), nil
+	}
+	return "", nil
 }
 
 // ValidateOffering checks if an offering exists without purchasing

@@ -278,75 +278,109 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	mockMDB.AssertExpectations(t)
 }
 
-func TestClient_MatchesDuration(t *testing.T) {
-	client := &Client{}
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th API call (issue #688).
+//
+// The loop checks `page > maxOfferingPages` at the top of each iteration, so
+// the cap fires on iteration maxOfferingPages+1. We set up exactly
+// maxOfferingPages mock pages (each returning a NextToken pointing to the next),
+// so the loop makes exactly maxOfferingPages calls and then hits the cap.
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	t.Cleanup(func() { mockMDB.AssertExpectations(t) })
+	client := &Client{client: mockMDB, region: "us-east-1"}
 
-	tests := []struct {
-		name             string
-		offeringDuration int32
-		requiredMonths   int
-		expected         bool
-	}{
-		{"1 year match", 31536000, 12, true},
-		{"3 years match", 94608000, 36, true},
-		{"no match", 31536000, 36, false},
-		{"zero duration", 0, 12, false},
+	rec := common.Recommendation{
+		ResourceType:  "db.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.matchesDuration(tt.offeringDuration, tt.requiredMonths)
-			assert.Equal(t, tt.expected, result)
-		})
+	// Each of the maxOfferingPages calls returns empty results + a NextToken,
+	// so the loop always has "more pages" and hits the cap on the next iteration.
+	for i := range maxOfferingPages {
+		mockMDB.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
+			Return(&memorydb.DescribeReservedNodesOfferingsOutput{
+				ReservedNodesOfferings: []types.ReservedNodesOffering{},
+				NextToken:              aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	// Verify exactly maxOfferingPages calls were made (not maxOfferingPages+1).
+	mockMDB.AssertNumberOfCalls(t, "DescribeReservedNodesOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID returns an
+// error when the API returns an offering whose OfferingType does not match the
+// requested payment option (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	t.Cleanup(func() { mockMDB.AssertExpectations(t) })
+	client := &Client{client: mockMDB, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "db.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	// Return a single offering but with the wrong payment option ("All Upfront"
+	// instead of "No Upfront"). This simulates an API filter bypass.
+	mockMDB.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
+		Return(&memorydb.DescribeReservedNodesOfferingsOutput{
+			ReservedNodesOfferings: []types.ReservedNodesOffering{
+				{
+					ReservedNodesOfferingId: aws.String("wrong-offering"),
+					NodeType:                aws.String("db.r6g.large"),
+					Duration:                31536000,
+					OfferingType:            aws.String("All Upfront"), // mismatch
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "payment option")
+		assert.Contains(t, err.Error(), "mismatch")
 	}
 }
 
-func TestClient_MatchesOfferingType(t *testing.T) {
-	client := &Client{}
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the offering
+// ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	t.Cleanup(func() { mockMDB.AssertExpectations(t) })
+	client := &Client{client: mockMDB, region: "us-east-1"}
 
-	tests := []struct {
-		name          string
-		offeringType  *string
-		paymentOption string
-		expected      bool
-	}{
-		{"all upfront match", aws.String("All Upfront"), "all-upfront", true},
-		{"partial upfront match", aws.String("Partial Upfront"), "partial-upfront", true},
-		{"no upfront match", aws.String("No Upfront"), "no-upfront", true},
-		{"no match", aws.String("All Upfront"), "no-upfront", false},
-		{"nil offering type", nil, "all-upfront", false},
+	rec := common.Recommendation{
+		ResourceType:  "db.r6g.large",
+		PaymentOption: "partial-upfront",
+		Term:          "1yr",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.matchesOfferingType(tt.offeringType, tt.paymentOption)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
+	mockMDB.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
+		Return(&memorydb.DescribeReservedNodesOfferingsOutput{
+			ReservedNodesOfferings: []types.ReservedNodesOffering{
+				{
+					ReservedNodesOfferingId: aws.String("offering-ok"),
+					NodeType:                aws.String("db.r6g.large"),
+					Duration:                31536000,
+					OfferingType:            aws.String("Partial Upfront"),
+				},
+			},
+		}, nil).Once()
 
-func TestClient_GetTermMonthsFromString(t *testing.T) {
-	client := &Client{}
+	id, err := client.findOfferingID(context.Background(), rec)
 
-	tests := []struct {
-		name     string
-		term     string
-		expected int
-	}{
-		{"1 year string", "1yr", 12},
-		{"3 years string", "3yr", 36},
-		{"3 numeric", "3", 36},
-		{"36 numeric", "36", 36},
-		{"default for invalid", "invalid", 12},
-		{"empty string defaults to 1 year", "", 12},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.getTermMonthsFromString(tt.term)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
 }
 
 func TestClient_SetMemoryDBAPI(t *testing.T) {

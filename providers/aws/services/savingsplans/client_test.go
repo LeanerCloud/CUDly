@@ -959,3 +959,60 @@ func TestBuildSavingsPlanTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.
 	assert.False(t, present, "purchase-automation tag must be skipped when source is empty")
 	assert.Equal(t, "CUDly", tags["Tool"])
 }
+
+func spRec() common.Recommendation {
+	return common.Recommendation{
+		ResourceType:  "Compute",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.SavingsPlanDetails{
+			PlanType:         "Compute",
+			HourlyCommitment: 1.0,
+		},
+	}
+}
+
+// TestLookupOfferingID_PaginationCapFires asserts that lookupOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestLookupOfferingID_PaginationCapFires(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	for i := range maxOfferingPages {
+		mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+			Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+				SearchResults: []types.SavingsPlanOffering{},
+				NextToken:     aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), spRec())
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockSP.AssertNumberOfCalls(t, "DescribeSavingsPlansOfferings", maxOfferingPages)
+}
+
+// TestLookupOfferingID_HappyPath asserts that lookupOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestLookupOfferingID_HappyPath(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	offeringID := aws.String("offering-ok")
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: offeringID},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), spRec())
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}

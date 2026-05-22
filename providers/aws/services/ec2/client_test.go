@@ -578,6 +578,117 @@ func TestCanonicalizeEC2Scope(t *testing.T) {
 	}
 }
 
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	for i := range maxOfferingPages {
+		mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+			Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+				ReservedInstancesOfferings: []types.ReservedInstancesOffering{},
+				NextToken:                  aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockEC2.AssertNumberOfCalls(t, "DescribeReservedInstancesOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
+// offering whose OfferingType does not match the requested payment option
+// (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("wrong-offering"),
+					InstanceType:                types.InstanceTypeT4gNano,
+					OfferingType:                types.OfferingTypeValuesAllUpfront, // mismatch
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "payment option")
+		assert.Contains(t, err.Error(), "mismatch")
+	}
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID on the first page when a matching offering is present (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("offering-ok"),
+					InstanceType:                types.InstanceTypeT4gNano,
+					OfferingType:                types.OfferingTypeValuesNoUpfront,
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}
+
 // TestBuildOfferingFilters_LegacyCanonicalization verifies that buildOfferingFilters
 // canonicalizes legacy tenancy and scope values from pre-fix/598 persisted recs
 // so that DescribeReservedInstancesOfferings returns matches instead of zero results.

@@ -242,30 +242,75 @@ func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationID 
 	return "", false
 }
 
-// findOfferingID finds the appropriate Reserved Node offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
-	requiredMonths := c.getTermMonthsFromString(rec.Term)
-	var nextToken *string
+// maxOfferingPages is the maximum number of DescribeReservedNodesOfferings
+// pages to walk before giving up. At MaxResults=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
 
+// convertMemoryDBPaymentOption maps a rec payment-option slug to the AWS
+// DescribeReservedNodesOfferings OfferingType string value.
+func convertMemoryDBPaymentOption(option string) (string, error) {
+	switch option {
+	case "all-upfront":
+		return "All Upfront", nil
+	case "partial-upfront":
+		return "Partial Upfront", nil
+	case "no-upfront":
+		return "No Upfront", nil
+	default:
+		return "", fmt.Errorf("unsupported MemoryDB payment option: %s", option)
+	}
+}
+
+// findOfferingID finds the appropriate Reserved Node offering ID.
+// All supported narrow filters (NodeType, OfferingType, Duration) are set
+// directly on the request to minimize the result set (issue #688).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+	wantOfferingType, err := convertMemoryDBPaymentOption(rec.PaymentOption)
+	if err != nil {
+		return "", err
+	}
+
+	duration := c.getDurationStringForAPI(rec.Term)
+
+	var nextToken *string
+	page := 0
 	for {
-		input := &memorydb.DescribeReservedNodesOfferingsInput{
-			NodeType:   aws.String(rec.ResourceType),
-			MaxResults: aws.Int32(100),
-			NextToken:  nextToken,
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for MemoryDB %s %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, rec.PaymentOption)
+		}
+
+		input := &memorydb.DescribeReservedNodesOfferingsInput{
+			NodeType:     aws.String(rec.ResourceType),
+			OfferingType: aws.String(wantOfferingType),
+			Duration:     aws.String(duration),
+			MaxResults:   aws.Int32(100),
+			NextToken:    nextToken,
+		}
+
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
+		log.Printf("MemoryDB findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedNodesOfferings), time.Since(pageStart))
 
-		for _, offering := range result.ReservedNodesOfferings {
-			if offering.NodeType != nil && *offering.NodeType == rec.ResourceType {
-				if c.matchesDuration(offering.Duration, requiredMonths) &&
-					c.matchesOfferingType(offering.OfferingType, rec.PaymentOption) {
-					return aws.ToString(offering.ReservedNodesOfferingId), nil
-				}
+		for _, o := range result.ReservedNodesOfferings {
+			got := aws.ToString(o.OfferingType)
+			if got != wantOfferingType {
+				return "", fmt.Errorf("MemoryDB offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+					aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
+					rec.ResourceType, rec.PaymentOption)
 			}
+			return aws.ToString(o.ReservedNodesOfferingId), nil
 		}
 
 		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
@@ -274,31 +319,18 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		nextToken = result.NextToken
 	}
 
-	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)
+	return "", fmt.Errorf("no offerings found for MemoryDB %s %s after %d page(s) (issue #688)",
+		rec.ResourceType, rec.PaymentOption, page)
 }
 
-// matchesDuration checks if the offering duration matches
-func (c *Client) matchesDuration(offeringDuration int32, requiredMonths int) bool {
-	offeringMonths := offeringDuration / 2592000
-	return int(offeringMonths) >= requiredMonths-1 && int(offeringMonths) <= requiredMonths+1
-}
-
-// matchesOfferingType checks if the offering type matches
-func (c *Client) matchesOfferingType(offeringType *string, paymentOption string) bool {
-	if offeringType == nil {
-		return false
+// getDurationStringForAPI converts the term string to a duration value accepted
+// by DescribeReservedNodesOfferings (seconds as a string or "1yr"/"3yr").
+// The MemoryDB API accepts both numeric-seconds strings and year strings.
+func (c *Client) getDurationStringForAPI(term string) string {
+	if term == "3yr" || term == "3" || term == "36" {
+		return "3yr"
 	}
-
-	switch paymentOption {
-	case "all-upfront":
-		return *offeringType == "All Upfront"
-	case "partial-upfront":
-		return *offeringType == "Partial Upfront"
-	case "no-upfront":
-		return *offeringType == "No Upfront"
-	default:
-		return false
-	}
+	return "1yr"
 }
 
 // ValidateOffering checks if an offering exists without purchasing
@@ -407,14 +439,4 @@ func getTermMonthsFromDuration(duration int32) int {
 		return 36
 	}
 	return 12
-}
-
-// getTermMonthsFromString converts term string to months
-func (c *Client) getTermMonthsFromString(term string) int {
-	switch term {
-	case "3yr", "3", "36":
-		return 36
-	default:
-		return 12
-	}
 }

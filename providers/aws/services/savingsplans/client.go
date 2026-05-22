@@ -303,23 +303,47 @@ func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
 	}
 }
 
-// lookupOfferingID performs the actual API call to find the offering ID
+// maxOfferingPages is the maximum number of DescribeSavingsPlansOfferings
+// pages to walk before giving up. Exceeding the cap returns a diagnostic error
+// instead of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
+
+// lookupOfferingID performs the API call(s) to find the offering ID.
+// DescribeSavingsPlansOfferings already accepts PlanTypes/Durations/PaymentOptions
+// filters that narrow the result set, so only a handful of results are expected
+// on the first page. Pagination with a cap is added as a safety net.
 func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
-	result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
+	page := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for Savings Plans offering lookup (issue #688)",
+				maxOfferingPages)
+		}
+
+		result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
+		}
+
+		for _, offering := range result.SearchResults {
+			if offering.OfferingId == nil {
+				continue
+			}
+			return *offering.OfferingId, nil
+		}
+
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		input.NextToken = result.NextToken
 	}
 
-	if len(result.SearchResults) == 0 {
-		return "", fmt.Errorf("no Savings Plans offerings found matching criteria")
-	}
-
-	firstResult := result.SearchResults[0]
-	if firstResult.OfferingId == nil {
-		return "", fmt.Errorf("Savings Plans offering has nil ID")
-	}
-
-	return *firstResult.OfferingId, nil
+	return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
 }
 
 // ValidateOffering checks if a Savings Plans offering exists

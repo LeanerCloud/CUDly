@@ -714,3 +714,85 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	assert.Contains(t, err.Error(), "refusing to purchase")
 	mockRDS.AssertNotCalled(t, "PurchaseReservedDBInstancesOffering", mock.Anything, mock.Anything)
 }
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := idempotencyTestRec()
+	for i := range maxOfferingPages {
+		mockRDS.On("DescribeReservedDBInstancesOfferings", mock.Anything, mock.Anything).
+			Return(&rds.DescribeReservedDBInstancesOfferingsOutput{
+				ReservedDBInstancesOfferings: []types.ReservedDBInstancesOffering{},
+				Marker:                       aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockRDS.AssertNumberOfCalls(t, "DescribeReservedDBInstancesOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
+// offering whose OfferingType does not match the requested payment option
+// (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := idempotencyTestRec() // requests "all-upfront"
+
+	mockRDS.On("DescribeReservedDBInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&rds.DescribeReservedDBInstancesOfferingsOutput{
+			ReservedDBInstancesOfferings: []types.ReservedDBInstancesOffering{
+				{
+					ReservedDBInstancesOfferingId: aws.String("wrong-offering"),
+					DBInstanceClass:               aws.String("db.r6g.large"),
+					OfferingType:                  aws.String("No Upfront"), // mismatch
+					Duration:                      aws.Int32(31536000),
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "payment option")
+		assert.Contains(t, err.Error(), "mismatch")
+	}
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := idempotencyTestRec() // requests "all-upfront", "1yr", "db.r6g.large"
+
+	mockRDS.On("DescribeReservedDBInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&rds.DescribeReservedDBInstancesOfferingsOutput{
+			ReservedDBInstancesOfferings: []types.ReservedDBInstancesOffering{
+				{
+					ReservedDBInstancesOfferingId: aws.String("offering-ok"),
+					DBInstanceClass:               aws.String("db.r6g.large"),
+					OfferingType:                  aws.String("All Upfront"),
+					Duration:                      aws.Int32(31536000),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}

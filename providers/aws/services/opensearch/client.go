@@ -338,36 +338,102 @@ func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec commo
 	})
 }
 
-// findOfferingID finds the appropriate Reserved Instance offering ID
+// maxOfferingPages is the maximum number of DescribeReservedInstanceOfferings
+// pages to walk before giving up. At MaxResults=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+//
+// NOTE: DescribeReservedInstanceOfferings has no filter fields -- instance type,
+// payment option, and duration must be matched client-side. The cap is therefore
+// the primary guard against indefinite pagination on sparse offerings.
+const maxOfferingPages = 5
+
+// findOfferingID finds the appropriate Reserved Instance offering ID.
+// The OpenSearch API does not support server-side filters on the offerings list,
+// so all matching is done client-side (issue #688).
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
 	var nextToken *string
+	page := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for OpenSearch %s %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, rec.PaymentOption)
+		}
+
 		input := &opensearch.DescribeReservedInstanceOfferingsInput{
 			MaxResults: 100,
 			NextToken:  nextToken,
 		}
 
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedInstanceOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
+		log.Printf("OpenSearch findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedInstanceOfferings), time.Since(pageStart))
 
-		for _, offering := range result.ReservedInstanceOfferings {
-			if string(offering.InstanceType) == rec.ResourceType {
-				if c.matchesPaymentOption(offering.PaymentOption, rec.PaymentOption) &&
-					c.matchesDuration(offering.Duration, rec.Term) {
-					return aws.ToString(offering.ReservedInstanceOfferingId), nil
-				}
-			}
+		if id, scanErr := c.scanOpenSearchOfferingPage(result.ReservedInstanceOfferings, rec); scanErr != nil {
+			return "", scanErr
+		} else if id != "" {
+			return id, nil
 		}
 
-		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+		if result.NextToken == nil {
 			break
 		}
 		nextToken = result.NextToken
 	}
 
-	return "", fmt.Errorf("no offerings found for %s", rec.ResourceType)
+	return "", fmt.Errorf("no offerings found for OpenSearch %s %s after %d page(s) (issue #688)",
+		rec.ResourceType, rec.PaymentOption, page)
+}
+
+// scanOpenSearchOfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+func (c *Client) scanOpenSearchOfferingPage(offerings []types.ReservedInstanceOffering, rec common.Recommendation) (string, error) {
+	for _, offering := range offerings {
+		if string(offering.InstanceType) != rec.ResourceType {
+			continue
+		}
+		if !c.matchesDuration(offering.Duration, rec.Term) {
+			continue
+		}
+		if !c.matchesPaymentOption(offering.PaymentOption, rec.PaymentOption) {
+			continue
+		}
+		// Defense in depth: verify the returned offering's payment option
+		// matches even though we already checked matchesPaymentOption above.
+		wantPayment := normalizeOpenSearchPaymentOption(rec.PaymentOption)
+		gotPayment := string(offering.PaymentOption)
+		if gotPayment != wantPayment {
+			return "", fmt.Errorf("OpenSearch offering %s has payment option %q, want %q (rec: %s %s)",
+				aws.ToString(offering.ReservedInstanceOfferingId), gotPayment, wantPayment,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		return aws.ToString(offering.ReservedInstanceOfferingId), nil
+	}
+	return "", nil
+}
+
+// normalizeOpenSearchPaymentOption converts a rec payment-option slug to the
+// AWS OpenSearch PaymentOption string (matches types.ReservedInstancePaymentOption).
+func normalizeOpenSearchPaymentOption(option string) string {
+	switch option {
+	case "all-upfront":
+		return string(types.ReservedInstancePaymentOptionAllUpfront)
+	case "partial-upfront":
+		return string(types.ReservedInstancePaymentOptionPartialUpfront)
+	case "no-upfront":
+		return string(types.ReservedInstancePaymentOptionNoUpfront)
+	default:
+		return option
+	}
 }
 
 // matchesPaymentOption checks if the offering payment option matches

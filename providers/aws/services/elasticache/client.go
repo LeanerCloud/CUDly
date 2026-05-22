@@ -248,18 +248,39 @@ func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationID 
 	return "", false
 }
 
+// maxOfferingPages is the maximum number of DescribeReservedCacheNodesOfferings
+// pages to walk before giving up. At MaxRecords=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
+
 // findOfferingID finds the appropriate Reserved Cache Node offering ID
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
 	details, ok := rec.Details.(*common.CacheDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for ElastiCache")
 	}
+	return c.paginateElastiCacheOfferings(ctx, rec, details)
+}
 
-	duration := c.getDurationString(rec.Term)
+// paginateElastiCacheOfferings walks DescribeReservedCacheNodesOfferings pages and returns
+// the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
+// timeout exhaustion (issue #688).
+func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Recommendation, details *common.CacheDetails) (string, error) {
 	offeringType := c.convertPaymentOption(rec.PaymentOption)
+	duration := c.getDurationString(rec.Term)
 
 	var marker *string
+	page := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		page++
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for ElastiCache %s %s %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, details.Engine, rec.PaymentOption)
+		}
 		input := &elasticache.DescribeReservedCacheNodesOfferingsInput{
 			CacheNodeType:      aws.String(rec.ResourceType),
 			ProductDescription: aws.String(details.Engine),
@@ -268,24 +289,40 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 			MaxRecords:         aws.Int32(100),
 			Marker:             marker,
 		}
-
+		pageStart := time.Now()
 		result, err := c.client.DescribeReservedCacheNodesOfferings(ctx, input)
 		if err != nil {
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-
-		if len(result.ReservedCacheNodesOfferings) > 0 {
-			return aws.ToString(result.ReservedCacheNodesOfferings[0].ReservedCacheNodesOfferingId), nil
+		log.Printf("ElastiCache findOfferingID page %d: %d offerings in %s",
+			page, len(result.ReservedCacheNodesOfferings), time.Since(pageStart))
+		if id, scanErr := scanElastiCacheOfferingPage(result.ReservedCacheNodesOfferings, rec, offeringType); scanErr != nil {
+			return "", scanErr
+		} else if id != "" {
+			return id, nil
 		}
-
-		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+		if result.Marker == nil {
 			break
 		}
 		marker = result.Marker
 	}
+	return "", fmt.Errorf("no offerings found for ElastiCache %s %s %s after %d page(s) (issue #688)",
+		rec.ResourceType, details.Engine, rec.PaymentOption, page)
+}
 
-	return "", fmt.Errorf("no offerings found for %s %s %s",
-		rec.ResourceType, details.Engine, duration)
+// scanElastiCacheOfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+func scanElastiCacheOfferingPage(offerings []types.ReservedCacheNodesOffering, rec common.Recommendation, wantType string) (string, error) {
+	for _, o := range offerings {
+		got := aws.ToString(o.OfferingType)
+		if got != wantType {
+			return "", fmt.Errorf("ElastiCache offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedCacheNodesOfferingId), got, wantType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		return aws.ToString(o.ReservedCacheNodesOfferingId), nil
+	}
+	return "", nil
 }
 
 // ValidateOffering checks if an offering exists without purchasing

@@ -1056,3 +1056,92 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	assert.Contains(t, err.Error(), "refusing to purchase")
 	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
 }
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	for i := range maxOfferingPages {
+		mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+			Return(&redshift.DescribeReservedNodeOfferingsOutput{
+				ReservedNodeOfferings: []types.ReservedNodeOffering{},
+				Marker:                aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects a
+// Redshift offering whose type is not Regular or Upgradable. The defense-in-depth
+// guard fires only on offerings that pass the matchesOfferingType pre-filter
+// (which also accepts only Regular/Upgradable), so we trigger the guard by
+// using a crafted scenario where the type string passes matchesOfferingType
+// but does not survive the explicit enum check. Because matchesOfferingType and
+// the guard share the same allowlist, the practical test is that an unknown type
+// does NOT return a nil error (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	// An offering whose type is not Regular/Upgradable: matchesOfferingType
+	// pre-filters it, so the loop exhausts and returns "no offerings found".
+	// Both "no offerings found" and an explicit "unexpected type" error satisfy
+	// the contract -- neither is nil and neither is a success.
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("bad-offering"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"),
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	assert.Error(t, err, "unknown offering type must not return success")
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("offering-ok"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}

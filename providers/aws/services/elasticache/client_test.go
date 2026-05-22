@@ -539,3 +539,99 @@ func TestCreatePurchaseTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.T)
 		assert.NotEqual(t, common.PurchaseTagKey, aws.ToString(tag.Key), "tag must be skipped when source is empty")
 	}
 }
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	for i := range maxOfferingPages {
+		mockEC.On("DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything).
+			Return(&elasticache.DescribeReservedCacheNodesOfferingsOutput{
+				ReservedCacheNodesOfferings: []types.ReservedCacheNodesOffering{},
+				Marker:                      aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockEC.AssertNumberOfCalls(t, "DescribeReservedCacheNodesOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
+// offering whose OfferingType does not match the requested payment option
+// (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	mockEC.On("DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything).
+		Return(&elasticache.DescribeReservedCacheNodesOfferingsOutput{
+			ReservedCacheNodesOfferings: []types.ReservedCacheNodesOffering{
+				{
+					ReservedCacheNodesOfferingId: aws.String("wrong-offering"),
+					CacheNodeType:                aws.String("cache.r6g.large"),
+					OfferingType:                 aws.String("All Upfront"), // mismatch
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec)
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "payment option")
+		assert.Contains(t, err.Error(), "mismatch")
+	}
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	mockEC.On("DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything).
+		Return(&elasticache.DescribeReservedCacheNodesOfferingsOutput{
+			ReservedCacheNodesOfferings: []types.ReservedCacheNodesOffering{
+				{
+					ReservedCacheNodesOfferingId: aws.String("offering-ok"),
+					CacheNodeType:                aws.String("cache.r6g.large"),
+					OfferingType:                 aws.String("No Upfront"),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}
