@@ -1,9 +1,11 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -694,6 +696,50 @@ func TestComputeClient_PurchaseCommitment_SessionTimeoutRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "order-second", result.CommitmentID)
+	mockHTTP.AssertExpectations(t)
+}
+
+// TestComputeClient_PurchaseCommitment_TagInjection verifies that the
+// purchase-automation tag carrying opts.Source is present in the
+// calculatePrice request body. Without this regression test the dedupe
+// guard introduced for the Azure two-step flow could regress silently:
+// the call would succeed without the tag and re-driven purchases would
+// duplicate reservations server-side.
+func TestComputeClient_PurchaseCommitment_TagInjection(t *testing.T) {
+	const orderID = "compute-tag-test"
+	const source = common.PurchaseSourceWeb
+
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	mockCapacityProviderCheck(mockHTTP)
+
+	var capturedBody []byte
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		capturedBody, _ = io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+		return true
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, CommitmentCost: 2000.0}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(capturedBody, &body))
+	tags, hasTags := body["tags"].(map[string]interface{})
+	require.True(t, hasTags, "tags field must be present in calculatePrice body when Source is set")
+	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
 	mockHTTP.AssertExpectations(t)
 }
 
