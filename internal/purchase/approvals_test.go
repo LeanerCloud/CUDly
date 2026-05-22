@@ -309,6 +309,8 @@ func TestManager_CancelExecution(t *testing.T) {
 	// WithTx passes nil as the tx sentinel in tests; empty actor -> nil cancelledBy.
 	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
 		Return(true, "cancelled", nil)
+	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
+		Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -440,6 +442,9 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 			// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in tests).
 			mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
 				Return(true, "cancelled", nil)
+			// Suppression cleanup must follow a successful atomic cancel.
+			mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
+				Return(nil)
 
 			manager := &Manager{
 				config:       mockStore,
@@ -450,6 +455,7 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 			err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 			require.NoError(t, err)
 			mockStore.AssertCalled(t, "CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil))
+			mockStore.AssertCalled(t, "DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123")
 			mockStore.AssertExpectations(t)
 		})
 	}
@@ -695,6 +701,8 @@ func TestManager_CancelExecution_RaceWithApprove(t *testing.T) {
 	// CancelExecutionAtomic was called (confirming the guard reached the DB)
 	// and that no further writes landed.
 	store.AssertExpectations(t)
+	// When the CAS misses, suppression cleanup must never fire.
+	store.AssertNotCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestManager_CancelExecution_ExpiredToken is the cancel-path regression

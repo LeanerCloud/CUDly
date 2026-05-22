@@ -393,6 +393,9 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	actor := "owner@example.com"
 	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-cancel", &actor).
 		Return(true, "cancelled", nil)
+	// Suppression cleanup must follow a successful atomic cancel.
+	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-cancel").
+		Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,

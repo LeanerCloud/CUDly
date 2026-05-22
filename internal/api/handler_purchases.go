@@ -544,7 +544,7 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", execution.ExecutionID, err))
+		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, err)
 	}
 	if !cancelled {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))

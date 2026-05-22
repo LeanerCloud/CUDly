@@ -1611,6 +1611,9 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 			}
 		}).
 		Return(true, "cancelled", nil)
+	// When cancel succeeds the transaction must also clean up suppressions.
+	mockConfig.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID).
+		Return(nil)
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.NoError(t, err)
@@ -1618,6 +1621,8 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 	// Verify the atomic cancel was called — this is the primary guard against
 	// regressions that skip the conditional UPDATE.
 	mockConfig.AssertCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything)
+	// Verify suppression cleanup ran within the same transaction.
+	mockConfig.AssertCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID)
 	if session != nil && session.Email != "" {
 		require.NotNil(t, capturedCancelledBy, "cancelledBy must be stamped when session has an email")
 		assert.Equal(t, session.Email, *capturedCancelledBy, "cancelledBy must equal session.Email for audit attribution")
