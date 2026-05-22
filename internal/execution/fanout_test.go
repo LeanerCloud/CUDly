@@ -81,3 +81,37 @@ func TestPartition(t *testing.T) {
 	require.Len(t, failures, 1)
 	assert.Equal(t, "b", failures[0].AccountID)
 }
+
+// TestFanOut_PanicInFn asserts that a panic inside the per-item function is
+// caught by the goroutine's deferred recover, converted to an Err on that
+// item's result slot, and does NOT propagate up and crash the whole process
+// (which would strand the surrounding purchase execution at 'approved' and
+// terminate the Lambda invocation abnormally — see #669).
+func TestFanOut_PanicInFn(t *testing.T) {
+	ids := []string{"a", "panic-me", "c"}
+	results := FanOut(context.Background(), ids, func(ctx context.Context, id string) (string, error) {
+		if id == "panic-me" {
+			panic("synthetic panic for test")
+		}
+		return "ok:" + id, nil
+	})
+
+	require.Len(t, results, 3)
+	// Map by AccountID since FanOut order is non-deterministic.
+	byID := make(map[string]Result[string], len(results))
+	for _, r := range results {
+		byID[r.AccountID] = r
+	}
+
+	// Non-panicking items still succeed.
+	assert.NoError(t, byID["a"].Err)
+	assert.Equal(t, "ok:a", byID["a"].Value)
+	assert.NoError(t, byID["c"].Err)
+	assert.Equal(t, "ok:c", byID["c"].Value)
+
+	// The panicking item is surfaced as an Err containing the panic value.
+	require.Error(t, byID["panic-me"].Err)
+	assert.Contains(t, byID["panic-me"].Err.Error(), "panic during fan-out")
+	assert.Contains(t, byID["panic-me"].Err.Error(), "synthetic panic for test")
+	assert.Contains(t, byID["panic-me"].Err.Error(), "panic-me")
+}

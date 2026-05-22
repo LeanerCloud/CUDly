@@ -3,9 +3,13 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
+
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // ConcurrencyFromEnv reads the CUDLY_MAX_ACCOUNT_PARALLELISM env var and
@@ -69,6 +73,25 @@ func FanOutWithConcurrency[T any](
 		go func(idx int, accountID string) {
 			defer wg.Done()
 			defer func() { <-sem }() // release slot
+			// recover() guard so a panic inside fn (nil deref, type
+			// assertion failure, slice OOB, etc.) doesn't crash the
+			// whole Lambda process and strand the purchase execution
+			// at 'approved' with no way to debug post-mortem (issue
+			// #669). Surface the panic as an Err on the result slot
+			// so the parent aggregator records it on the execution
+			// row exactly like a regular fn-returned error, and log
+			// the goroutine stack at Error level for diagnosis.
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					logging.Errorf("fan-out goroutine panic (account=%s): %v\n%s", accountID, r, buf[:n])
+					results[idx] = Result[T]{
+						AccountID: accountID,
+						Err:       fmt.Errorf("panic during fan-out (account=%s): %v", accountID, r),
+					}
+				}
+			}()
 			val, err := fn(ctx, accountID)
 			results[idx] = Result[T]{AccountID: accountID, Value: val, Err: err}
 		}(i, id)
