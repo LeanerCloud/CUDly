@@ -18,10 +18,11 @@ import (
 
 // MockSQLAdminService mocks the SQLAdminService interface
 type MockSQLAdminService struct {
-	instances *sqladmin.InstancesListResponse
-	tiers     *sqladmin.TiersListResponse
-	operation *sqladmin.Operation
-	err       error
+	instances    *sqladmin.InstancesListResponse
+	tiers        *sqladmin.TiersListResponse
+	operation    *sqladmin.Operation
+	err          error
+	insertCalled bool
 }
 
 func (m *MockSQLAdminService) ListInstances(projectID string) (*sqladmin.InstancesListResponse, error) {
@@ -32,6 +33,7 @@ func (m *MockSQLAdminService) ListInstances(projectID string) (*sqladmin.Instanc
 }
 
 func (m *MockSQLAdminService) InsertInstance(projectID string, instance *sqladmin.DatabaseInstance) (*sqladmin.Operation, error) {
+	m.insertCalled = true
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -453,14 +455,18 @@ func TestCloudSQLClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid Cloud SQL tier")
 }
 
-func TestCloudSQLClient_PurchaseCommitment_WithMock(t *testing.T) {
+// TestCloudSQLClient_PurchaseCommitment_NotSupported is the regression test for
+// issue #640: Cloud SQL CUDs are spend-based and have no programmatic purchase API,
+// so PurchaseCommitment must return ErrCommitmentPurchaseNotSupported and MUST NOT
+// call any resource-creation API (it previously created a new billable SQL instance).
+func TestCloudSQLClient_PurchaseCommitment_NotSupported(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
 	mockService := &MockSQLAdminService{
-		operation: &sqladmin.Operation{
-			Status: "DONE",
-		},
+		// If PurchaseCommitment ever calls InsertInstance, this would report a
+		// completed operation; the assertions below ensure it is never invoked.
+		operation: &sqladmin.Operation{Status: "DONE"},
 	}
 	client.SetSQLAdminService(mockService)
 
@@ -470,50 +476,14 @@ func TestCloudSQLClient_PurchaseCommitment_WithMock(t *testing.T) {
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-	require.NoError(t, err)
-	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
-	assert.Equal(t, 1000.0, result.Cost)
-}
 
-func TestCloudSQLClient_PurchaseCommitment_InProgress(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		operation: &sqladmin.Operation{
-			Status: "RUNNING",
-		},
-	}
-	client.SetSQLAdminService(mockService)
-
-	rec := common.Recommendation{
-		ResourceType: "db-n1-standard-1",
-	}
-
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "instance creation in progress")
-}
-
-func TestCloudSQLClient_PurchaseCommitment_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		err: errors.New("API error"),
-	}
-	client.SetSQLAdminService(mockService)
-
-	rec := common.Recommendation{
-		ResourceType: "db-n1-standard-1",
-	}
-
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
-	assert.Error(t, err)
-	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to create SQL instance")
+	assert.Empty(t, result.CommitmentID)
+	assert.ErrorIs(t, result.Error, common.ErrCommitmentPurchaseNotSupported)
+	// The critical guarantee: a "purchase" must never create infrastructure.
+	assert.False(t, mockService.insertCalled, "PurchaseCommitment must not call InsertInstance")
 }
 
 func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
