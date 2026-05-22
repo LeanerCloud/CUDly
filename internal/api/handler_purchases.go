@@ -360,6 +360,9 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 // invocation drives its own executeAndFinalize, which already fans out
 // per-account in parallel via executeMultiAccount.
 func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[%s]: approvePurchaseViaSession entry (auth=session)", execution.ExecutionID)
+
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
@@ -376,12 +379,16 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, session.Email); err != nil {
 		// ApproveAndExecute returns either a transition error (the row
 		// drifted out of pending/notified between our check and the UPDATE
-		// — race with cancel/expire) or an execution error (AWS API failed,
+		// -- race with cancel/expire) or an execution error (AWS API failed,
 		// status is now "failed" on disk). Both surface as 409 to the
 		// caller; the History view shows the resulting row state.
+		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
+			execution.ExecutionID, time.Since(t0), err)
 		return nil, NewClientError(409, fmt.Sprintf("execution %s could not be approved: %v", execution.ExecutionID, err))
 	}
 
+	logging.Infof("purchase[%s]: approvePurchaseViaSession completed in %s (auth=session)",
+		execution.ExecutionID, time.Since(t0))
 	return map[string]string{"status": "completed"}, nil
 }
 
