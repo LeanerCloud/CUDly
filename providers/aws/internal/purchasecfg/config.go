@@ -38,9 +38,20 @@ const (
 // Applies:
 //   - RetryMaxAttempts = 2 (overrides the SDK default of 3)
 //   - HTTPClient with Timeout = 15s (overrides the SDK default of no timeout)
+//
+// If base.HTTPClient is an *http.Client, it is cloned and its Timeout is set
+// to HTTPTimeout, preserving any custom Transport, Jar, or CheckRedirect the
+// caller installed. If base.HTTPClient is nil or a non-*http.Client
+// implementation, a fresh *http.Client{Timeout: HTTPTimeout} is used instead.
 func NewConfig(base aws.Config) aws.Config {
 	cfg := base.Copy()
 	cfg.RetryMaxAttempts = MaxAttempts
-	cfg.HTTPClient = &http.Client{Timeout: HTTPTimeout}
+	if hc, ok := base.HTTPClient.(*http.Client); ok && hc != nil {
+		clone := *hc // shallow copy preserves Transport, Jar, CheckRedirect
+		clone.Timeout = HTTPTimeout
+		cfg.HTTPClient = &clone
+	} else {
+		cfg.HTTPClient = &http.Client{Timeout: HTTPTimeout}
+	}
 	return cfg
 }

@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -684,6 +685,24 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 	return data
 }
 
+// logRecCtxErr emits a diagnostic log line when a per-recommendation context has
+// been cancelled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
+// budget fired) from Canceled (a parent context stopped the execution) so that
+// CloudWatch filters can tell the two apart without parsing error strings.
+// It is a no-op when recCtxErr is nil.
+func logRecCtxErr(executionID, recTuple string, elapsed time.Duration, recCtxErr error) {
+	if recCtxErr == nil {
+		return
+	}
+	if errors.Is(recCtxErr, context.DeadlineExceeded) {
+		logging.Errorf("purchase[%s]: per-rec deadline exceeded for %s (elapsed=%s)",
+			executionID, recTuple, elapsed)
+	} else if errors.Is(recCtxErr, context.Canceled) {
+		logging.Errorf("purchase[%s]: recommendation context canceled for %s (elapsed=%s)",
+			executionID, recTuple, elapsed)
+	}
+}
+
 // executeSinglePurchase executes a single purchase using the appropriate provider.
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
 // opts carries execution-level metadata (the source surface) that providers stamp
@@ -788,10 +807,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {
-		if recCtx.Err() != nil {
-			logging.Errorf("purchase[%s]: per-rec deadline 30s exceeded for %s (total elapsed %s)",
-				opts.ExecutionID, recTuple, elapsed)
-		}
+		logRecCtxErr(opts.ExecutionID, recTuple, elapsed, recCtx.Err())
 		logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment failed after %s: %v",
 			opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, err)
 		return result, fmt.Errorf("purchase failed: %w", err)

@@ -52,6 +52,29 @@ func TestNewConfig_DoesNotMutateBase(t *testing.T) {
 	assert.Equal(t, 60*time.Second, httpClient.Timeout, "NewConfig must not modify the original config's HTTPClient")
 }
 
+// TestNewConfig_PreservesCustomTransport verifies that a non-nil *http.Client
+// supplied in the base config has its Transport kept intact in the result.
+// NewConfig must not silently drop custom transports, TLS settings, or
+// instrumentation hooks by replacing the whole client unconditionally.
+func TestNewConfig_PreservesCustomTransport(t *testing.T) {
+	t.Helper()
+	customTransport := &http.Transport{MaxIdleConns: 42}
+	base := aws.Config{
+		Region:     "us-east-1",
+		HTTPClient: &http.Client{Transport: customTransport, Timeout: 60 * time.Second},
+	}
+
+	cfg := NewConfig(base)
+
+	require.NotNil(t, cfg.HTTPClient, "HTTPClient must not be nil after NewConfig")
+	httpClient, ok := cfg.HTTPClient.(*http.Client)
+	require.True(t, ok, "HTTPClient must be *http.Client")
+	assert.Equal(t, HTTPTimeout, httpClient.Timeout,
+		"NewConfig must override the Timeout to HTTPTimeout even when cloning a caller-provided client")
+	assert.Same(t, customTransport, httpClient.Transport,
+		"NewConfig must preserve the caller-provided Transport on the cloned client")
+}
+
 func TestNewConfig_PreservesRegion(t *testing.T) {
 	t.Helper()
 	base := aws.Config{Region: "ap-southeast-1"}
