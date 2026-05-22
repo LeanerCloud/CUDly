@@ -254,6 +254,66 @@ func TestGetRecommendations_pagerError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestGetRecommendations_regionFilter(t *testing.T) {
+	c := newTestClient() // region = "eastus"
+
+	// One rec in "eastus", one in "westus"; only the matching one should survive.
+	recMatch := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("DW500c"),
+		mocks.WithQuantity(1),
+	)
+	recOther := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("westus"),
+		mocks.WithNormalizedSize("DW1000c"),
+		mocks.WithQuantity(2),
+	)
+
+	c.SetRecommendationsPager(&fakeRecommendationsPager{
+		pages: []armconsumption.ReservationRecommendationsClientListResponse{
+			{
+				ReservationRecommendationsListResult: armconsumption.ReservationRecommendationsListResult{
+					Value: []armconsumption.ReservationRecommendationClassification{recMatch, recOther},
+				},
+			},
+		},
+	})
+
+	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, "DW500c", recs[0].ResourceType)
+	assert.Equal(t, "eastus", recs[0].Region)
+}
+
+func TestGetRecommendations_modernShape(t *testing.T) {
+	c := newTestClient() // region = "eastus"
+
+	azRec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernRegion("eastus"),
+		mocks.WithModernSKUName("DW2000c"),
+		mocks.WithModernQuantity(3),
+	)
+
+	c.SetRecommendationsPager(&fakeRecommendationsPager{
+		pages: []armconsumption.ReservationRecommendationsClientListResponse{
+			{
+				ReservationRecommendationsListResult: armconsumption.ReservationRecommendationsListResult{
+					Value: []armconsumption.ReservationRecommendationClassification{azRec},
+				},
+			},
+		},
+	})
+
+	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, "DW2000c", recs[0].ResourceType)
+	assert.Equal(t, common.ProviderAzure, recs[0].Provider)
+	assert.Equal(t, common.ServiceDataWarehouse, recs[0].Service)
+	assert.Equal(t, "eastus", recs[0].Region)
+}
+
 // ---- GetExistingCommitments -----------------------------------------------
 
 func TestGetExistingCommitments_empty(t *testing.T) {

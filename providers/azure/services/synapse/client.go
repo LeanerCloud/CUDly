@@ -135,9 +135,13 @@ func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.Re
 
 		for _, rec := range page.Value {
 			converted := c.convertSynapseRecommendation(rec)
-			if converted != nil {
-				recs = append(recs, *converted)
+			if converted == nil {
+				continue
 			}
+			if c.region != "" && !strings.EqualFold(converted.Region, c.region) {
+				continue
+			}
+			recs = append(recs, *converted)
 		}
 	}
 
