@@ -26,6 +26,7 @@
 package reservations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -134,7 +135,7 @@ func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL strin
 // doCalculatePrice calls the calculatePrice endpoint and returns the
 // Azure-minted reservationOrderId from the response.
 func doCalculatePrice(ctx context.Context, httpClient HTTPClient, calcURL string, bodyBytes []byte, bearerToken string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, calcURL, strings.NewReader(string(bodyBytes)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, calcURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("build calculatePrice request: %w", err)
 	}
@@ -167,7 +168,7 @@ func doCalculatePrice(ctx context.Context, httpClient HTTPClient, calcURL string
 // that IsSessionTimeout recognises. All other non-2xx responses are returned
 // as errors verbatim.
 func doPurchase(ctx context.Context, httpClient HTTPClient, purchaseURL string, bodyBytes []byte, bearerToken string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, purchaseURL, strings.NewReader(string(bodyBytes)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, purchaseURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("build purchase request: %w", err)
 	}
