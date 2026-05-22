@@ -119,7 +119,11 @@ func DoPurchaseTwoStep(ctx context.Context, httpClient HTTPClient, calcURL strin
 		if IsSessionTimeout(purchaseErr) && attempt < purchaseMaxAttempts {
 			log.Printf("reservation purchase session timed out (attempt %d/%d), re-running calculatePrice in %s",
 				attempt, purchaseMaxAttempts, purchaseRetryDelay)
-			time.Sleep(purchaseRetryDelay)
+			select {
+			case <-time.After(purchaseRetryDelay):
+			case <-ctx.Done():
+				return "", fmt.Errorf("reservation purchase canceled during retry delay: %w", ctx.Err())
+			}
 			continue
 		}
 		return "", purchaseErr

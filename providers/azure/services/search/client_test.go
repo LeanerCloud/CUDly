@@ -3,6 +3,7 @@ package search
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -857,4 +858,59 @@ func TestSearchClient_PurchaseCommitment_TwoStepFlow(t *testing.T) {
 		"CommitmentID must be the Azure-minted order ID from calculatePrice")
 	mockHTTP.AssertExpectations(t)
 	mockHTTP.AssertNumberOfCalls(t, "Do", 2)
+}
+
+// TestSearchClient_PurchaseCommitment_TagInjection verifies that the
+// purchase-automation tag is present in the calculatePrice request body when
+// opts.Source is set, and absent when opts.Source is empty.
+func TestSearchClient_PurchaseCommitment_TagInjection(t *testing.T) {
+	const orderID = "azure-search-tag-test"
+	const source = "cudly-web"
+
+	for _, tc := range []struct {
+		name      string
+		source    string
+		expectTag bool
+	}{
+		{"tag_present_when_source_set", source, true},
+		{"tag_absent_when_source_empty", "", false},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockHTTP := &MockHTTPClient{}
+			mockCred := &MockTokenCredential{token: "test-token"}
+			client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+			var capturedBody []byte
+			mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+					return false
+				}
+				capturedBody, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+				return true
+			})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+			mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+				return r.Method == http.MethodPost &&
+					r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+			})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+			rec := common.Recommendation{ResourceType: "standard", Term: "1yr", Count: 1, CommitmentCost: 3000.0}
+			result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: tc.source})
+			require.NoError(t, err)
+			assert.True(t, result.Success)
+
+			var body map[string]interface{}
+			require.NoError(t, json.Unmarshal(capturedBody, &body))
+			tags, hasTags := body["tags"].(map[string]interface{})
+			if tc.expectTag {
+				require.True(t, hasTags, "tags field must be present in calculatePrice body when Source is set")
+				assert.Equal(t, tc.source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
+			} else {
+				assert.False(t, hasTags, "tags field must be absent in calculatePrice body when Source is empty")
+			}
+			mockHTTP.AssertExpectations(t)
+		})
+	}
 }
