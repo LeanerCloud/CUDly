@@ -794,9 +794,15 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 	if len(records) == 0 {
 		existing, existErr := s.GetExecutionByID(ctx, executionID)
 		if existErr != nil || existing == nil {
-			return nil, fmt.Errorf("execution not found: %s", executionID)
+			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
+			// use errors.Is to distinguish "row vanished mid-flight" — a
+			// legitimate CAS race-loss — from a hard DB error.
+			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 		}
-		return nil, fmt.Errorf("execution %s cannot transition from %q to %q", executionID, existing.Status, toStatus)
+		// Wrap ErrExecutionNotInExpectedStatus so callers can use
+		// errors.Is to recognise CAS rejection (status changed between
+		// SELECT and UPDATE) as race-lost rather than a real error.
+		return nil, fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 	}
 
 	return &records[0], nil

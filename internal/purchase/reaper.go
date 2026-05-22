@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -154,16 +155,30 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 
 	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, stuckStatuses, failedStatus)
 	if err != nil {
-		// CAS rejection is the "real executor beat us" path. We can't
-		// distinguish it from a hard DB error without inspecting the
-		// error string, which is brittle. Treat both as race_lost: the
-		// row is no longer in approved/running, so there is nothing for
-		// the reaper to do regardless of why. A persistent DB outage
-		// will surface via repeated Errored counts on the canonical-
-		// error save below, which IS treated as a real error.
-		logging.Infof("purchase reaper: CAS race lost for execution %s (status changed from %q before transition): %v",
+		// Distinguish CAS race-loss (the real executor finished between
+		// our SELECT and CAS, so the row is no longer in
+		// approved/running) from a hard DB error (connection dropped,
+		// query syntax error, etc.). The store wraps both legitimate
+		// race outcomes in sentinel errors so we can use errors.Is
+		// rather than brittle string matching:
+		//   - ErrExecutionNotInExpectedStatus: row exists but its
+		//     status moved out of approved/running before the CAS
+		//     (the real executor won the race — expected, log INFO).
+		//   - ErrNotFound: row vanished between SELECT and CAS (very
+		//     rare — e.g. a manual DELETE; still a race outcome the
+		//     reaper has nothing to do about, log INFO).
+		// Anything else is a real ops issue (DB outage, etc.) and
+		// must bump Errored so it surfaces in metrics/alerts instead
+		// of being silently absorbed as "race lost".
+		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
+			logging.Infof("purchase reaper: CAS race lost for execution %s (status changed from %q before transition): %v",
+				exec.ExecutionID, prevStatus, err)
+			result.RaceLost++
+			return
+		}
+		logging.Errorf("purchase reaper: transition failed for execution %s (status=%q): %v",
 			exec.ExecutionID, prevStatus, err)
-		result.RaceLost++
+		result.Errored++
 		return
 	}
 	if transitioned == nil {

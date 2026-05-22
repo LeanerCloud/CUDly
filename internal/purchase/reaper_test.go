@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -150,9 +151,11 @@ func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 
 func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 	// CAS race: the SELECT returns a stuck row, but between SELECT and
-	// CAS, the real executor flips the row to completed. The CAS rejects
-	// with "cannot transition from X". The reaper must log and move on
-	// without erroring the sweep.
+	// CAS, the real executor flips the row to completed. The store wraps
+	// the rejection in ErrExecutionNotInExpectedStatus so the reaper can
+	// use errors.Is to recognise the race outcome and move on without
+	// erroring the sweep — this regression-guards the A1 CR finding
+	// (must not classify all CAS errors as race-lost).
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	reapAfter := 10 * time.Minute
@@ -161,7 +164,8 @@ func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
 		Return([]config.PurchaseExecution{row}, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-race", stuckStatuses, failedStatus).
-		Return(nil, errors.New("execution exec-race cannot transition from \"completed\" to \"failed\""))
+		Return(nil, fmt.Errorf("%w: execution exec-race cannot transition from %q to %q",
+			config.ErrExecutionNotInExpectedStatus, "completed", "failed"))
 	// No SavePurchaseExecution expectation — we lost the race, the real
 	// executor's status flip stands.
 
@@ -171,6 +175,62 @@ func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 	assert.Equal(t, 1, result.Found)
 	assert.Equal(t, 0, result.Reaped)
 	assert.Equal(t, 1, result.RaceLost)
+	assert.Equal(t, 0, result.Errored)
+	store.AssertExpectations(t)
+	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
+func TestReapStuckExecutions_RowVanishedTreatedAsRaceLost(t *testing.T) {
+	// Defensive: between SELECT and CAS the row might be deleted (e.g.
+	// manual DBA intervention). The store wraps that case in
+	// config.ErrNotFound; the reaper must treat it as a race-lost (the
+	// row is no longer in approved/running, nothing for the reaper to do)
+	// rather than as a real DB error. Regression-guards the second half
+	// of the A1 CR finding's sentinel handling.
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	reapAfter := 10 * time.Minute
+
+	row := stuckExec("exec-gone", "approved")
+	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
+		Return([]config.PurchaseExecution{row}, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-gone", stuckStatuses, failedStatus).
+		Return(nil, fmt.Errorf("%w: execution exec-gone", config.ErrNotFound))
+
+	mgr := newReaperManager(store)
+	result, err := mgr.ReapStuckExecutions(ctx, reapAfter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Found)
+	assert.Equal(t, 0, result.Reaped)
+	assert.Equal(t, 1, result.RaceLost)
+	assert.Equal(t, 0, result.Errored)
+	store.AssertExpectations(t)
+	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
+func TestReapStuckExecutions_HardDBErrorClassifiedAsErrored(t *testing.T) {
+	// The A1 fix's whole point: a non-sentinel error from
+	// TransitionExecutionStatus (DB connection dropped, query syntax
+	// error, etc.) is NOT a race-loss — it must bump Errored so the ops
+	// signal is visible. Before A1, this was silently absorbed as
+	// RaceLost; this test is the regression guard.
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	reapAfter := 10 * time.Minute
+
+	row := stuckExec("exec-dbflake", "running")
+	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
+		Return([]config.PurchaseExecution{row}, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-dbflake", stuckStatuses, failedStatus).
+		Return(nil, errors.New("connection refused"))
+
+	mgr := newReaperManager(store)
+	result, err := mgr.ReapStuckExecutions(ctx, reapAfter)
+	require.NoError(t, err) // sweep itself still succeeds; per-row errors don't propagate
+	assert.Equal(t, 1, result.Found)
+	assert.Equal(t, 0, result.Reaped)
+	assert.Equal(t, 0, result.RaceLost, "real DB errors must NOT be classified as race-lost")
+	assert.Equal(t, 1, result.Errored, "real DB errors must bump Errored so ops can see the outage")
 	store.AssertExpectations(t)
 	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
