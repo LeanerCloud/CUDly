@@ -3,6 +3,7 @@ package opensearch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -911,4 +912,40 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
+}
+
+// TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the
+// no-token CLI path (issue #687) composes a self-describing
+// ReservationName carrying the service code, region, SKU, count, and term.
+// The token-based path is exercised by the Idempotent_* tests above.
+func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	client := &Client{client: mockOS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSearch,
+		ResourceType:  "m5.xlarge.search",
+		Region:        "us-east-1",
+		Count:         2,
+		PaymentOption: "all-upfront",
+		Term:          "3yr",
+		Details:       common.SearchDetails{InstanceType: "m5.xlarge.search"},
+	}
+
+	expectOSOffering(mockOS)
+	var capturedName string
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.MatchedBy(func(in *opensearch.PurchaseReservedInstanceOfferingInput) bool {
+		capturedName = aws.ToString(in.ReservationName)
+		return true
+	})).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+		ReservedInstanceId: aws.String("os-x"),
+	}, nil)
+
+	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(capturedName, "opensearch-"), "name must lead with opensearch- service code: %q", capturedName)
+	assert.Contains(t, capturedName, "us-east-1", "region must be embedded: %q", capturedName)
+	assert.Contains(t, capturedName, "m5-xlarge-search", "SKU (dots->hyphens) must be embedded: %q", capturedName)
+	assert.Contains(t, capturedName, "2x-3yr", "count and term must be embedded: %q", capturedName)
+	assert.LessOrEqual(t, len(capturedName), 60, "must fit AWS reservation-ID cap")
 }

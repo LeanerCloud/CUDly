@@ -3,6 +3,7 @@ package elasticache
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -523,6 +524,42 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")
 	mockEC.AssertNotCalled(t, "PurchaseReservedCacheNodesOffering", mock.Anything, mock.Anything)
+}
+
+// TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the
+// no-token CLI path (issue #687) composes a self-describing
+// ReservedCacheNodeId carrying the service code, region, SKU, count, and
+// term. The token-based path is exercised by the Idempotent_* tests above.
+func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCache,
+		ResourceType:  "cache.m6g.large",
+		Region:        "us-east-1",
+		Count:         2,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.CacheDetails{Engine: "redis", NodeType: "cache.m6g.large"},
+	}
+
+	expectECOffering(mockEC)
+	var capturedID string
+	mockEC.On("PurchaseReservedCacheNodesOffering", mock.Anything, mock.MatchedBy(func(in *elasticache.PurchaseReservedCacheNodesOfferingInput) bool {
+		capturedID = aws.ToString(in.ReservedCacheNodeId)
+		return true
+	})).Return(&elasticache.PurchaseReservedCacheNodesOfferingOutput{
+		ReservedCacheNode: &types.ReservedCacheNode{ReservedCacheNodeId: aws.String("ec-x")},
+	}, nil)
+
+	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(capturedID, "cache-"), "name must lead with cache- service code: %q", capturedID)
+	assert.Contains(t, capturedID, "us-east-1", "region must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "cache-m6g-large", "SKU (dots->hyphens) must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "2x-1yr", "count and term must be embedded: %q", capturedID)
+	assert.LessOrEqual(t, len(capturedID), 60, "must fit AWS reservation-ID cap")
 }
 
 func TestCreatePurchaseTags_IncludesPurchaseAutomation(t *testing.T) {

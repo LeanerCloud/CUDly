@@ -340,10 +340,20 @@ func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.
 	}
 
 	arn := fmt.Sprintf("arn:aws:redshift:%s:%s:reservednode:%s", c.region, accountID, nodeID)
+	// Rich self-describing tag set (issue #687): the Redshift purchase API
+	// does not accept a customer-supplied node ID, so the only way to make
+	// the reserved node identifiable from the AWS console alone (without
+	// cross-referencing CUDly) is to encode the same descriptors that the
+	// other AWS service clients embed in their reservation name. Term,
+	// PaymentOption, and Count join the pre-existing NodeType/Region/
+	// PurchaseDate set.
 	tags := []redshifttypes.Tag{
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Node Purchase")},
 		{Key: aws.String("NodeType"), Value: aws.String(rec.ResourceType)},
 		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
+		{Key: aws.String("Count"), Value: aws.String(fmt.Sprintf("%d", rec.Count))},
+		{Key: aws.String("Term"), Value: aws.String(rec.Term)},
+		{Key: aws.String("PaymentOption"), Value: aws.String(rec.PaymentOption)},
 		{Key: aws.String("PurchaseDate"), Value: aws.String(time.Now().Format("2006-01-02"))},
 		{Key: aws.String("Tool"), Value: aws.String("CUDly")},
 	}

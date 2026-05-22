@@ -150,15 +150,25 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	// When an idempotency token is supplied (issue #641) the ReservationName is
-	// derived deterministically from it. ReservationName is unique per
+	// When an idempotency token is supplied (issue #641) the ReservationName
+	// is derived deterministically from it — ReservationName is unique per
 	// account+region, so a re-drive sends the identical name and OpenSearch
-	// rejects the duplicate server-side (ResourceAlreadyExistsException) — it
-	// cannot create a second reservation. Otherwise keep the prior timestamp-based
-	// name (non-idempotent path).
+	// rejects the duplicate server-side (ResourceAlreadyExistsException).
+	// On the no-token CLI path (issue #687) compose a rich, self-describing
+	// identifier matching the Azure DisplayName format so operators can
+	// identify the reservation in the AWS console without cross-referencing
+	// CUDly's purchase audit log.
 	reservationName := common.IdempotentReservationID("opensearch-id-", opts.IdempotencyToken)
 	if reservationName == "" {
-		reservationName = common.SanitizeReservationID(fmt.Sprintf("opensearch-%s-%d", rec.ResourceType, time.Now().Unix()), "opensearch-reserved-")
+		reservationName = common.BuildReservationName(common.ReservationNameFields{
+			Service:      "opensearch",
+			Region:       rec.Region,
+			ResourceType: rec.ResourceType,
+			Count:        rec.Count,
+			Term:         rec.Term,
+			Payment:      rec.PaymentOption,
+			Now:          time.Now(),
+		}, "opensearch-reserved-")
 	}
 
 	// Idempotency dedupe guard (issue #641): short-circuit if a reservation with

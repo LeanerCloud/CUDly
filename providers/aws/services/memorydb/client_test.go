@@ -3,6 +3,7 @@ package memorydb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -839,4 +840,40 @@ func TestCreatePurchaseTags_OmitsPurchaseAutomationWhenSourceEmpty(t *testing.T)
 	for _, tag := range tags {
 		assert.NotEqual(t, common.PurchaseTagKey, aws.ToString(tag.Key), "tag must be skipped when source is empty")
 	}
+}
+
+// TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the
+// no-token CLI path (issue #687) composes a self-describing ReservationId
+// carrying the service code, region, SKU, count, and term. The token-based
+// path is exercised by the Idempotent_* tests above.
+func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	client := &Client{client: mockMDB, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCache,
+		ResourceType:  "db.r6gd.large",
+		Region:        "us-east-1",
+		Count:         3,
+		PaymentOption: "all-upfront", // must match expectMDBOffering's OfferingType
+		Term:          "1yr",
+		Details:       common.CacheDetails{Engine: "redis", NodeType: "db.r6gd.large"},
+	}
+
+	expectMDBOffering(mockMDB)
+	var capturedID string
+	mockMDB.On("PurchaseReservedNodesOffering", mock.Anything, mock.MatchedBy(func(in *memorydb.PurchaseReservedNodesOfferingInput) bool {
+		capturedID = aws.ToString(in.ReservationId)
+		return true
+	})).Return(&memorydb.PurchaseReservedNodesOfferingOutput{
+		ReservedNode: &types.ReservedNode{ReservationId: aws.String("mdb-x")},
+	}, nil)
+
+	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, strings.HasPrefix(capturedID, "memdb-"), "name must lead with memdb- service code: %q", capturedID)
+	assert.Contains(t, capturedID, "us-east-1", "region must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "db-r6gd-large", "SKU (dots->hyphens) must be embedded: %q", capturedID)
+	assert.Contains(t, capturedID, "3x-1yr", "count and term must be embedded: %q", capturedID)
+	assert.LessOrEqual(t, len(capturedID), 60, "must fit AWS reservation-ID cap")
 }
