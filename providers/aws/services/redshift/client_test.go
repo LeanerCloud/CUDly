@@ -1083,14 +1083,11 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", maxOfferingPages)
 }
 
-// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects a
-// Redshift offering whose type is not Regular or Upgradable. The defense-in-depth
-// guard fires only on offerings that pass the matchesOfferingType pre-filter
-// (which also accepts only Regular/Upgradable), so we trigger the guard by
-// using a crafted scenario where the type string passes matchesOfferingType
-// but does not survive the explicit enum check. Because matchesOfferingType and
-// the guard share the same allowlist, the practical test is that an unknown type
-// does NOT return a nil error (issue #688).
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID does not
+// return a Redshift offering whose type is not Regular or Upgradable.
+// matchesOfferingType filters unknown types client-side and the loop exhausts
+// with a "no offerings found" error rather than returning the wrong variant's
+// ID (issue #688).
 func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	mockRS := &MockRedshiftClient{}
 	t.Cleanup(func() { mockRS.AssertExpectations(t) })
@@ -1098,10 +1095,6 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 
 	rec := rsIdemRec()
 
-	// An offering whose type is not Regular/Upgradable: matchesOfferingType
-	// pre-filters it, so the loop exhausts and returns "no offerings found".
-	// Both "no offerings found" and an explicit "unexpected type" error satisfy
-	// the contract -- neither is nil and neither is a success.
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(&redshift.DescribeReservedNodeOfferingsOutput{
 			ReservedNodeOfferings: []types.ReservedNodeOffering{
@@ -1114,9 +1107,10 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 			},
 		}, nil).Once()
 
-	_, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec)
 
 	assert.Error(t, err, "unknown offering type must not return success")
+	assert.Empty(t, id)
 }
 
 // TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct

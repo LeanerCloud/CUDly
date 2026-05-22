@@ -384,7 +384,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 			return id, nil
 		}
 
-		if result.NextToken == nil {
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
 			break
 		}
 		nextToken = result.NextToken
@@ -396,7 +396,10 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 
 // scanOpenSearchOfferingPage finds a matching offering in a single page of results.
 // Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+// Returns an error when an offering matches on instance type and duration but the payment
+// option differs -- this surfaces API filter mismatches rather than silently skipping them.
 func (c *Client) scanOpenSearchOfferingPage(offerings []types.ReservedInstanceOffering, rec common.Recommendation) (string, error) {
+	wantPayment := normalizeOpenSearchPaymentOption(rec.PaymentOption)
 	for _, offering := range offerings {
 		if string(offering.InstanceType) != rec.ResourceType {
 			continue
@@ -404,12 +407,6 @@ func (c *Client) scanOpenSearchOfferingPage(offerings []types.ReservedInstanceOf
 		if !c.matchesDuration(offering.Duration, rec.Term) {
 			continue
 		}
-		if !c.matchesPaymentOption(offering.PaymentOption, rec.PaymentOption) {
-			continue
-		}
-		// Defense in depth: verify the returned offering's payment option
-		// matches even though we already checked matchesPaymentOption above.
-		wantPayment := normalizeOpenSearchPaymentOption(rec.PaymentOption)
 		gotPayment := string(offering.PaymentOption)
 		if gotPayment != wantPayment {
 			return "", fmt.Errorf("OpenSearch offering %s has payment option %q, want %q (rec: %s %s)",

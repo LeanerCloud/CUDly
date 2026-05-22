@@ -432,13 +432,21 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		if id := scanEC2OfferingPage(result.ReservedInstancesOfferings, wantOfferingType); id != "" {
 			return id, nil
 		}
-		if result.NextToken == nil {
+		if isLastEC2Page(result.NextToken) {
 			break
 		}
 		nextToken = result.NextToken
 	}
 	return "", fmt.Errorf("no offerings found for EC2 %s %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, details.Platform, rec.PaymentOption, page)
+}
+
+// isLastEC2Page reports whether a NextToken indicates the terminal page.
+// The AWS SDK may return either nil or a pointer to an empty string for the
+// last page; both must end pagination so the loop does not issue a redundant
+// request (and risk a false page-cap error on borderline page counts).
+func isLastEC2Page(nextToken *string) bool {
+	return nextToken == nil || aws.ToString(nextToken) == ""
 }
 
 // scanEC2OfferingPage returns the first offering whose OfferingType matches

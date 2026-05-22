@@ -420,7 +420,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 			return id, nil
 		}
 
-		if result.Marker == nil {
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
 			break
 		}
 		marker = result.Marker
@@ -442,14 +442,6 @@ func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNode
 		}
 		if !c.matchesOfferingType(string(offering.ReservedNodeOfferingType), rec.PaymentOption) {
 			continue
-		}
-		// Defense in depth: verify the offering type is a known Redshift type
-		// before returning it. Redshift uses Regular/Upgradable, not payment
-		// option strings, so we only verify the type enum is sensible.
-		offeringTypeStr := string(offering.ReservedNodeOfferingType)
-		if offeringTypeStr != "Regular" && offeringTypeStr != "Upgradable" {
-			return "", fmt.Errorf("Redshift offering %s has unexpected type %q (rec: %s)",
-				aws.ToString(offering.ReservedNodeOfferingId), offeringTypeStr, rec.ResourceType)
 		}
 		return aws.ToString(offering.ReservedNodeOfferingId), nil
 	}

@@ -844,9 +844,12 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 	mockOS.AssertNumberOfCalls(t, "DescribeReservedInstanceOfferings", maxOfferingPages)
 }
 
-// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
-// offering whose PaymentOption does not match the requested payment option
-// (issue #688).
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID does not
+// return an offering whose PaymentOption does not match the requested payment
+// option (issue #688). OpenSearch's API has no server-side payment-option
+// filter, so matchesPaymentOption filters mismatches client-side and the loop
+// exhausts with a "no offerings found" error rather than returning the wrong
+// variant's ID.
 func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	mockOS := &MockOpenSearchClient{}
 	t.Cleanup(func() { mockOS.AssertExpectations(t) })
@@ -859,15 +862,9 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	}
 
 	// Return an offering matching the instance type and duration but with a
-	// different payment option. The matchesPaymentOption check will filter it out,
-	// but the variant-verification guard fires only on the first match, so we
-	// craft a scenario where a wrong-variant match slips through the type/duration
-	// check to exercise the defense-in-depth guard.
-	//
-	// NOTE: because matchesPaymentOption pre-filters, a "wrong variant" in
-	// OpenSearch can only reach the defense-in-depth guard if the payment option
-	// string is ambiguous. We test the guard directly by patching the offering with
-	// a type that matches duration/instanceType but has a known mismatched string.
+	// different payment option. matchesPaymentOption filters it out, so the
+	// page contains no matches and findOfferingID returns a "no offerings
+	// found" error.
 	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
 		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
 			ReservedInstanceOfferings: []types.ReservedInstanceOffering{
@@ -875,18 +872,15 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 					ReservedInstanceOfferingId: aws.String("other-offering"),
 					InstanceType:               types.OpenSearchPartitionInstanceTypeM5XlargeSearch,
 					Duration:                   31536000,
-					PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront, // mismatch -- pre-filtered
+					PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront, // mismatch -- filtered out
 				},
 			},
 		}, nil).Once()
 
-	_, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec)
 
-	// matchesPaymentOption pre-filters the mismatch, so the loop exhausts with
-	// "no offerings found" rather than a "payment option mismatch" error.
-	// Either a not-found or a mismatch error is an acceptable outcome; neither
-	// should be a nil error.
 	assert.Error(t, err)
+	assert.Empty(t, id)
 }
 
 // TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct

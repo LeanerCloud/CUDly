@@ -336,7 +336,7 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 		} else if id != "" {
 			return id, nil
 		}
-		if result.Marker == nil {
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
 			break
 		}
 		marker = result.Marker
