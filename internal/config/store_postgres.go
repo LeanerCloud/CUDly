@@ -872,6 +872,33 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 	return s.queryExecutions(ctx, query)
 }
 
+// GetPendingExecutionsTx is the tx-accepting variant of GetPendingExecutions.
+// Running the read inside the same transaction as the subsequent insert makes
+// duplicate-detection and execution creation atomic, closing the TOCTOU race
+// in executePurchase (issue #643).
+func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
+	const query = `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
+		FROM purchase_executions
+		WHERE status IN ('pending', 'notified')
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY scheduled_date ASC
+		LIMIT 1000
+		FOR UPDATE
+	`
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending executions in tx: %w", err)
+	}
+	defer rows.Close()
+	return scanExecutionRows(rows)
+}
+
 // GetExecutionByID retrieves a purchase execution by execution ID
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
 	query := `
@@ -978,7 +1005,13 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 		return nil, fmt.Errorf("failed to query executions: %w", err)
 	}
 	defer rows.Close()
+	return scanExecutionRows(rows)
+}
 
+// scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
+// It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
+// query) so the scan logic lives in one place.
+func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	executions := make([]PurchaseExecution, 0)
 	for rows.Next() {
 		var exec PurchaseExecution

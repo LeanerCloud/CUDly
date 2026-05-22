@@ -519,6 +519,9 @@ func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx,
 	// SavePurchaseExecution still see the write.
 	return m.SavePurchaseExecution(ctx, exec)
 }
+func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
+	return m.GetPendingExecutions(ctx)
+}
 func (m *MockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }

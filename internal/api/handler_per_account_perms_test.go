@@ -632,6 +632,8 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	// #644 idempotency lookup: no prior pending row → proceed to create.
+	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -642,6 +644,8 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 	}
 
 	// Recommendation is tagged to account A — within the scoped user's allowed set.
+	// Carries a valid term/payment/count so the #643 per-rec validation passes;
+	// CreateSuppressionTx is a no-op in the mock when not explicitly expected.
 	body, err := json.Marshal(map[string]interface{}{
 		"recommendations": []map[string]interface{}{
 			{
@@ -649,11 +653,11 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 				"provider":         "aws",
 				"service":          "ec2",
 				"cloud_account_id": permsAccA,
+				"count":            1,
+				"term":             1,
+				"payment":          "all-upfront",
 				"upfront_cost":     100.0,
 				"savings":          10.0,
-				// count intentionally 0 so buildSuppressions skips the row and
-				// CreateSuppressionTx is never called — matches the pattern in
-				// TestHandler_executePurchase_Success.
 			},
 		},
 	})

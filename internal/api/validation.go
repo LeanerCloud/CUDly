@@ -10,6 +10,8 @@ import (
 	"unicode"
 
 	"github.com/aws/aws-lambda-go/events"
+
+	"github.com/LeanerCloud/CUDly/internal/config"
 )
 
 // Security constants
@@ -459,6 +461,100 @@ func parseAccountIDs(raw string) ([]string, error) {
 		ids = append(ids, trimmed)
 	}
 	return ids, nil
+}
+
+// purchasePaymentWhitelist maps a concrete provider to the set of payment
+// options that provider's purchase path accepts. AWS RIs/SPs support the
+// three classic upfront tiers; Azure/GCP reservations additionally accept
+// the "upfront"/"monthly" spellings their SDK clients switch on (see
+// providers/{azure,gcp}/services/*/client.go). Any value outside the set
+// for the rec's provider is rejected at the API boundary so a malformed
+// Payment never reaches the cloud SDK with a silent default substituted
+// (issue #643).
+var purchasePaymentWhitelist = map[string]map[string]bool{
+	"aws": {
+		"all-upfront":     true,
+		"partial-upfront": true,
+		"no-upfront":      true,
+	},
+	"azure": {
+		"all-upfront": true,
+		"upfront":     true,
+		"no-upfront":  true,
+		"monthly":     true,
+	},
+	"gcp": {
+		"all-upfront": true,
+		"upfront":     true,
+		"no-upfront":  true,
+		"monthly":     true,
+	},
+}
+
+// purchaseTermWhitelist maps a concrete provider to the set of commitment
+// terms (in years) that provider accepts. All three clouds offer 1- and
+// 3-year reservations. A rec carrying e.g. Term:7 is rejected before
+// execution rather than failing opaquely deep in the provider call.
+var purchaseTermWhitelist = map[string]map[int]bool{
+	"aws":   {1: true, 3: true},
+	"azure": {1: true, 3: true},
+	"gcp":   {1: true, 3: true},
+}
+
+// validatePurchaseRecommendation validates a single client-supplied
+// recommendation before it reaches the cloud purchase SDK. Unlike the
+// query-time validateProvider (which permits ""/"all"), the execute path
+// requires a concrete provider because each rec triggers a real provider
+// call. idx is the rec's position in the request slice, surfaced in the
+// error so the caller can point at the offending row. Closes issue #643.
+func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) error {
+	provider := strings.ToLower(strings.TrimSpace(rec.Provider))
+	payments, providerOK := purchasePaymentWhitelist[provider]
+	if !providerOK {
+		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid provider %q: must be one of aws, azure, gcp", idx, rec.Provider))
+	}
+	rec.Provider = provider
+	rec.Service = strings.TrimSpace(rec.Service)
+	if rec.Service == "" {
+		return NewClientError(400, fmt.Sprintf("recommendation %d is missing a service", idx))
+	}
+	if rec.Count <= 0 {
+		return NewClientError(400, fmt.Sprintf("recommendation %d has non-positive count: %d", idx, rec.Count))
+	}
+	if !purchaseTermWhitelist[provider][rec.Term] {
+		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid term %d for provider %s: must be 1 or 3", idx, rec.Term, provider))
+	}
+	payment := strings.ToLower(strings.TrimSpace(rec.Payment))
+	if !payments[payment] {
+		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid payment %q for provider %s", idx, rec.Payment, provider))
+	}
+	rec.Payment = payment
+	return nil
+}
+
+// validateCapacityConsistency cross-checks the client-supplied capacity_percent
+// against the scaled rec counts so the audit record can't claim a capacity that
+// disagrees with what was actually purchased (#647). The frontend scales each
+// rec as floor(RecommendedCount * pct / 100); this recomputes that and rejects
+// any rec where the scaled Count doesn't match. Recs that don't carry a
+// RecommendedCount (0 / absent: legacy callers, single-rec full-capacity
+// purchases, retry replays) are skipped — the field is opt-in, so its absence
+// means "no claim to verify" rather than a failure. capacityPercent is the
+// already-defaulted/bounded value (1..100) from validateExecutePurchaseRequest.
+func validateCapacityConsistency(recs []config.RecommendationRecord, capacityPercent int) error {
+	for i := range recs {
+		rec := recs[i]
+		if rec.RecommendedCount <= 0 {
+			continue
+		}
+		expected := rec.RecommendedCount * capacityPercent / 100
+		if expected != rec.Count {
+			return NewClientError(400, fmt.Sprintf(
+				"recommendation %d: count %d is inconsistent with capacity_percent %d%% of recommended_count %d (expected %d)",
+				i, rec.Count, capacityPercent, rec.RecommendedCount, expected))
+		}
+	}
+	return nil
 }
 
 // decodeBase64Password decodes a base64-encoded password.

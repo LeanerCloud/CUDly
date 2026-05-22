@@ -696,6 +696,21 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 	return args.Get(0).([]config.PurchaseSuppression), args.Error(1)
 }
 
+// GetPendingExecutionsTx mocks the GetPendingExecutionsTx operation.
+// Falls back to GetPendingExecutions when no explicit expectation is registered
+// (same pattern as SavePurchaseExecutionTx) so existing tests that exercise
+// the WithTx path transparently get the same pending-execution list.
+func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]config.PurchaseExecution, error) {
+	if !isExpected(&m.Mock, "GetPendingExecutionsTx") {
+		return m.GetPendingExecutions(ctx)
+	}
+	args := m.Called(ctx, tx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
 	if !isExpected(&m.Mock, "SavePurchaseExecutionTx") {
 		return m.SavePurchaseExecution(ctx, execution)

@@ -3118,6 +3118,9 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
     scaled.push({
       ...r,
       count: newCount,
+      // Carry the pre-scaling count so the backend can verify the
+      // capacity_percent it records against the scaled count (#647).
+      recommended_count: r.count,
       upfront_cost: r.upfront_cost * ratio,
       monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
       savings: r.savings * ratio,

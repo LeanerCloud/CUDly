@@ -180,6 +180,12 @@ type StoreInterface interface {
 	// so the execution insert + suppression writes commit atomically.
 	SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
 
+	// GetPendingExecutionsTx is the tx-accepting variant of
+	// GetPendingExecutions. Used inside the executePurchase WithTx block
+	// so the duplicate-detection read and the new-execution insert are
+	// atomic under the same transaction, eliminating the TOCTOU race (#643).
+	GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error)
+
 	// WithTx opens a pgx transaction, runs fn, and commits on success or
 	// rolls back on error. fn can call any *Tx method on the store to
 	// participate in the transaction. Nested transactions are not
