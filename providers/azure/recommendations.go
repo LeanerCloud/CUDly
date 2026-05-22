@@ -225,31 +225,41 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 			logging.Warnf("Azure Advisor pagination error (partial results may be returned): %v", err)
 			break
 		}
-
-		for _, advisorRec := range page.Value {
-			if advisorRec.Properties == nil {
-				continue
-			}
-
-			// Convert Azure Advisor recommendation to our common format
-			rec := r.convertAdvisorRecommendation(advisorRec)
-			if rec != nil && shouldIncludeService(params, rec.Service) {
-				// Preserve Advisor-provided EstimatedSavings when both OnDemandCost
-				// and CommitmentCost are unset (zero), since ExpandPaymentVariants
-				// would otherwise overwrite it with zero (OnDemandCost - CommitmentCost).
-				advisorSavings := rec.EstimatedSavings
-				variants := azrecs.ExpandPaymentVariants(*rec)
-				if rec.OnDemandCost == 0 && rec.CommitmentCost == 0 && advisorSavings != 0 {
-					for i := range variants {
-						variants[i].EstimatedSavings = advisorSavings
-					}
-				}
-				recommendations = append(recommendations, variants...)
-			}
-		}
+		recommendations = r.appendAdvisorPageRecs(params, page, recommendations)
 	}
 
 	return recommendations, nil
+}
+
+// appendAdvisorPageRecs converts one Advisor pager page into common recommendations
+// and appends them to the provided slice. Pulled out of getAdvisorRecommendations
+// to keep that function under the cyclomatic limit.
+func (r *RecommendationsClientAdapter) appendAdvisorPageRecs(
+	params common.RecommendationParams,
+	page armadvisor.RecommendationsClientListResponse,
+	recommendations []common.Recommendation,
+) []common.Recommendation {
+	for _, advisorRec := range page.Value {
+		if advisorRec.Properties == nil {
+			continue
+		}
+		// Convert Azure Advisor recommendation to our common format
+		rec := r.convertAdvisorRecommendation(advisorRec)
+		if rec != nil && shouldIncludeService(params, rec.Service) {
+			// Preserve Advisor-provided EstimatedSavings when both OnDemandCost
+			// and CommitmentCost are unset (zero), since ExpandPaymentVariants
+			// would otherwise overwrite it with zero (OnDemandCost - CommitmentCost).
+			advisorSavings := rec.EstimatedSavings
+			variants := azrecs.ExpandPaymentVariants(*rec)
+			if rec.OnDemandCost == 0 && rec.CommitmentCost == 0 && advisorSavings != 0 {
+				for i := range variants {
+					variants[i].EstimatedSavings = advisorSavings
+				}
+			}
+			recommendations = append(recommendations, variants...)
+		}
+	}
+	return recommendations
 }
 
 // resolveAdvisorRegion picks the region for an Advisor recommendation.
