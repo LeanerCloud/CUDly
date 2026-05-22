@@ -260,14 +260,17 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for ElastiCache")
 	}
-	return c.paginateElastiCacheOfferings(ctx, rec, details)
+	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
+	if err != nil {
+		return "", err
+	}
+	return c.paginateElastiCacheOfferings(ctx, rec, details, offeringType)
 }
 
 // paginateElastiCacheOfferings walks DescribeReservedCacheNodesOfferings pages and returns
 // the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
 // timeout exhaustion (issue #688).
-func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Recommendation, details *common.CacheDetails) (string, error) {
-	offeringType := c.convertPaymentOption(rec.PaymentOption)
+func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Recommendation, details *common.CacheDetails, offeringType string) (string, error) {
 	duration := c.getDurationString(rec.Term)
 
 	var marker *string
@@ -301,7 +304,7 @@ func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Re
 		} else if id != "" {
 			return id, nil
 		}
-		if result.Marker == nil {
+		if result.Marker == nil || aws.ToString(result.Marker) == "" {
 			break
 		}
 		marker = result.Marker
@@ -417,17 +420,20 @@ func (c *Client) getDurationString(term string) string {
 	return fmt.Sprintf("%d", OneYearSeconds)
 }
 
-// convertPaymentOption converts payment option to AWS string
-func (c *Client) convertPaymentOption(option string) string {
+// convertPaymentOption converts payment option to AWS string.
+// Returns an error on unknown values so unsupported payment options surface
+// at the API boundary instead of being silently coerced to "Partial Upfront"
+// and committing the buyer to the wrong payment terms.
+func (c *Client) convertPaymentOption(option string) (string, error) {
 	switch option {
 	case "all-upfront":
-		return "All Upfront"
+		return "All Upfront", nil
 	case "partial-upfront":
-		return "Partial Upfront"
+		return "Partial Upfront", nil
 	case "no-upfront":
-		return "No Upfront"
+		return "No Upfront", nil
 	default:
-		return "Partial Upfront"
+		return "", fmt.Errorf("unsupported ElastiCache payment option %q (want all-upfront, partial-upfront, or no-upfront)", option)
 	}
 }
 

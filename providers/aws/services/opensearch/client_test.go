@@ -844,12 +844,11 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 	mockOS.AssertNumberOfCalls(t, "DescribeReservedInstanceOfferings", maxOfferingPages)
 }
 
-// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID does not
-// return an offering whose PaymentOption does not match the requested payment
-// option (issue #688). OpenSearch's API has no server-side payment-option
-// filter, so matchesPaymentOption filters mismatches client-side and the loop
-// exhausts with a "no offerings found" error rather than returning the wrong
-// variant's ID.
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID returns an
+// explicit error when an offering matches on instance type and duration but its
+// PaymentOption does not match the request (issue #688). The mismatch is surfaced
+// immediately as a diagnostic error rather than silently skipping the offering and
+// exhausting the pagination loop.
 func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	mockOS := &MockOpenSearchClient{}
 	t.Cleanup(func() { mockOS.AssertExpectations(t) })
@@ -862,9 +861,8 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	}
 
 	// Return an offering matching the instance type and duration but with a
-	// different payment option. matchesPaymentOption filters it out, so the
-	// page contains no matches and findOfferingID returns a "no offerings
-	// found" error.
+	// different payment option. The new guard returns an explicit mismatch error
+	// rather than silently skipping and exhausting pagination.
 	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
 		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
 			ReservedInstanceOfferings: []types.ReservedInstanceOffering{
@@ -872,7 +870,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 					ReservedInstanceOfferingId: aws.String("other-offering"),
 					InstanceType:               types.OpenSearchPartitionInstanceTypeM5XlargeSearch,
 					Duration:                   31536000,
-					PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront, // mismatch -- filtered out
+					PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront, // mismatch -- explicit error
 				},
 			},
 		}, nil).Once()
@@ -880,6 +878,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 	id, err := client.findOfferingID(context.Background(), rec)
 
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "payment option")
 	assert.Empty(t, id)
 }
 

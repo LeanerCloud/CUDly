@@ -924,7 +924,10 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 		Term:          "1yr",
 	}
 
-	// Return offerings with unknown offering type
+	// Return an offering matching node type and duration but with an unknown
+	// ReservedNodeOfferingType. scanRedshiftOfferingPage runs the enum guard
+	// BEFORE matchesOfferingType so the explicit "unexpected type" error
+	// surfaces (issue #688 CodeRabbit feedback).
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(&redshift.DescribeReservedNodeOfferingsOutput{
 			ReservedNodeOfferings: []types.ReservedNodeOffering{
@@ -932,7 +935,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 					ReservedNodeOfferingId:   aws.String("offering-123"),
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
-					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // Invalid type
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // not Regular/Upgradable -- surfaces as error
 				},
 			},
 		}, nil).Once()
@@ -940,7 +943,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 	err := client.ValidateOffering(context.Background(), rec)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no offerings found")
+	assert.Contains(t, err.Error(), "unexpected type")
 	mockRS.AssertExpectations(t)
 }
 

@@ -393,20 +393,28 @@ func TestClient_ConvertPaymentOption(t *testing.T) {
 	client := &Client{}
 
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name      string
+		input     string
+		expected  string
+		expectErr bool
 	}{
-		{"All Upfront", "all-upfront", "All Upfront"},
-		{"Partial Upfront", "partial-upfront", "Partial Upfront"},
-		{"No Upfront", "no-upfront", "No Upfront"},
-		{"Unknown defaults to Partial Upfront", "unknown", "Partial Upfront"},
+		{"All Upfront", "all-upfront", "All Upfront", false},
+		{"Partial Upfront", "partial-upfront", "Partial Upfront", false},
+		{"No Upfront", "no-upfront", "No Upfront", false},
+		{"Unknown is an error -- no silent coercion to Partial Upfront", "unknown", "", true},
+		{"Empty is an error -- no silent coercion to Partial Upfront", "", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.convertPaymentOption(tt.input)
-			assert.Equal(t, tt.expected, result)
+			result, err := client.convertPaymentOption(tt.input)
+			if tt.expectErr {
+				assert.Error(t, err)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
 		})
 	}
 }

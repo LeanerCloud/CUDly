@@ -432,6 +432,9 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 
 // scanRedshiftOfferingPage finds a matching offering in a single page of results.
 // Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+// Returns an error when an offering matches on node type and duration but carries an
+// unrecognised ReservedNodeOfferingType -- this surfaces unexpected enum values rather
+// than silently skipping them and potentially committing to the wrong offering.
 func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNodeOffering, rec common.Recommendation) (string, error) {
 	for _, offering := range offerings {
 		if offering.NodeType == nil || *offering.NodeType != rec.ResourceType {
@@ -440,8 +443,10 @@ func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNode
 		if !c.matchesDuration(offering.Duration, rec.Term) {
 			continue
 		}
-		if !c.matchesOfferingType(string(offering.ReservedNodeOfferingType), rec.PaymentOption) {
-			continue
+		offeringTypeStr := string(offering.ReservedNodeOfferingType)
+		if offeringTypeStr != "Regular" && offeringTypeStr != "Upgradable" {
+			return "", fmt.Errorf("Redshift offering %s has unexpected type %q (rec: %s)",
+				aws.ToString(offering.ReservedNodeOfferingId), offeringTypeStr, rec.ResourceType)
 		}
 		return aws.ToString(offering.ReservedNodeOfferingId), nil
 	}
