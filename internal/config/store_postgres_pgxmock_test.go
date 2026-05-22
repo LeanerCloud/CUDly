@@ -1430,6 +1430,84 @@ func TestPGXMock_ListPendingExecutionIDsForAccount_Empty(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// ─── ListStuckExecutions ─────────────────────────────────────────────────────
+
+// stuckExecRow builds a pgxmock row that matches the queryExecutions scan
+// order. Mirrors the inline row construction in TestPGXMock_GetExecutionByID_*
+// but factored out for the reaper sweep tests below which need 3 rows.
+func stuckExecRow(execID, status string, scheduled time.Time) []any {
+	recsJSON, _ := json.Marshal([]RecommendationRecord{})
+	return []any{
+		"plan-1", execID, status, 1, scheduled,
+		sql.NullTime{}, "tok-" + execID, recsJSON,
+		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
+		nil, "cudly-web", nil, nil, 100,
+		nil, nil, 0,
+		sql.NullTime{},
+	}
+}
+
+func stuckExecCols() []string {
+	return []string{
+		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+		"notification_sent", "approval_token", "recommendations",
+		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
+		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
+	}
+}
+
+func TestPGXMock_ListStuckExecutions_ReturnsMultiple(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(stuckExecCols()).
+		AddRow(stuckExecRow("exec-1", "approved", now)...).
+		AddRow(stuckExecRow("exec-2", "running", now)...).
+		AddRow(stuckExecRow("exec-3", "approved", now)...)
+	mock.ExpectQuery("SELECT.*FROM purchase_executions.*status = ANY.*updated_at < NOW").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	execs, err := store.ListStuckExecutions(ctx, []string{"approved", "running"}, 10*time.Minute)
+	require.NoError(t, err)
+	assert.Len(t, execs, 3)
+	assert.Equal(t, "exec-1", execs[0].ExecutionID)
+	assert.Equal(t, "approved", execs[0].Status)
+	assert.Equal(t, "running", execs[1].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_ListStuckExecutions_EmptyStatuses(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// No statuses → caller wants nothing — short-circuit returns nil with no
+	// SQL roundtrip. pgxmock will fail if any expectation is unmet (we
+	// register none) so this also guards against an accidental query.
+	execs, err := store.ListStuckExecutions(ctx, nil, 10*time.Minute)
+	require.NoError(t, err)
+	assert.Nil(t, execs)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_ListStuckExecutions_QueryError(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(errors.New("db down"))
+
+	_, err := store.ListStuckExecutions(ctx, []string{"approved"}, 10*time.Minute)
+	require.Error(t, err)
+}
+
 // ─── errNoRows helper ────────────────────────────────────────────────────────
 
 func errNoRows() error {
