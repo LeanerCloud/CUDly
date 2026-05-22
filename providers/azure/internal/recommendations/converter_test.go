@@ -318,6 +318,18 @@ func TestExpandPaymentVariants_ZeroOnDemand_NoSavings(t *testing.T) {
 	}
 }
 
+func TestExpandPaymentVariants_ZeroOnDemand_NonZeroCommitment(t *testing.T) {
+	// Regression: when OnDemandCost == 0 but CommitmentCost > 0, the guard
+	// must also force EstimatedSavings to 0. Without it, savings would be
+	// computed as 0 - CommitmentCost and emit negative savings.
+	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 0, 10))
+	require.Len(t, variants, 2)
+	for _, v := range variants {
+		assert.InDelta(t, 0.0, v.EstimatedSavings, 1e-9)
+		assert.InDelta(t, 0.0, v.SavingsPercentage, 1e-9)
+	}
+}
+
 func TestExpandPaymentVariants_ZeroCommitmentCost(t *testing.T) {
 	// Zero reservation total: both variants still emitted; no-upfront monthly = 0.
 	variants := ExpandPaymentVariants(baseRec(common.ServiceCompute, "1yr", 50, 0))

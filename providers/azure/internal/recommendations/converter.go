@@ -285,10 +285,11 @@ func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
 	totalOnDemand := base.OnDemandCost
 
 	var savingsPct float64
+	var savings float64
 	if totalOnDemand != 0 {
-		savingsPct = (totalOnDemand - totalReservation) / totalOnDemand * 100
+		savings = totalOnDemand - totalReservation
+		savingsPct = savings / totalOnDemand * 100
 	}
-	savings := totalOnDemand - totalReservation
 
 	months := termToMonths(base.Term)
 	recurringMonthly := totalReservation / float64(months)
