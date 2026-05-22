@@ -522,7 +522,7 @@ func TestPurchaseCommitment_Success(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 500.0,
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "mr-order-001", result.CommitmentID)
@@ -542,7 +542,7 @@ func TestPurchaseCommitment_3yr(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P2", Term: "3yr", Count: 2, CommitmentCost: 1200.0,
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "mr-order-3yr", result.CommitmentID)
@@ -561,7 +561,7 @@ func TestPurchaseCommitment_Accepted(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr",
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -573,7 +573,7 @@ func TestPurchaseCommitment_TokenError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr",
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to get access token")
@@ -589,7 +589,7 @@ func TestPurchaseCommitment_HTTPError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr",
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
@@ -608,7 +608,7 @@ func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "1yr",
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
@@ -620,10 +620,30 @@ func TestPurchaseCommitment_InvalidTerm(t *testing.T) {
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
 		ResourceType: "Premium_P1", Term: "5yr", Count: 1,
-	}, common.PurchaseOptions{})
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
+// TestPurchaseCommitment_RequiresSource pins the dedupe guard:
+// PurchaseCommitment must reject an empty opts.Source before issuing any HTTP
+// call. Azure mints the reservation order ID server-side, so the
+// purchase-automation tag derived from Source is the only stable dedupe
+// signal CUDly controls -- proceeding without it would allow a re-driven
+// purchase to create a duplicate reservation.
+func TestPurchaseCommitment_RequiresSource(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub", "eastus", h)
+	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
+	}, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "purchase source is required")
+	h.AssertNotCalled(t, "Do", mock.Anything)
 }
 
 func TestGetOfferingDetails_InvalidTerm(t *testing.T) {
@@ -722,56 +742,41 @@ func TestRedisPricingStruct(t *testing.T) {
 }
 
 // TestPurchaseCommitment_TagInjection verifies that the purchase-automation tag
-// is present in the purchase request body when opts.Source is set, and absent
-// when opts.Source is empty.
+// is present in the purchase request body when opts.Source is set. The
+// empty-Source path is covered separately by TestPurchaseCommitment_RequiresSource
+// because the dedupe-guard now fails fast at function entry.
 func TestPurchaseCommitment_TagInjection(t *testing.T) {
 	const orderID = "mr-tag-test-order"
 	const source = "cudly-web"
 
-	for _, tc := range []struct {
-		name      string
-		source    string
-		expectTag bool
-	}{
-		{"tag_present_when_source_set", source, true},
-		{"tag_absent_when_source_empty", "", false},
-	} {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			h := &mockHTTPClient{}
-			t.Cleanup(func() { h.AssertExpectations(t) })
-			cred := &mockTokenCredential{token: "tok"}
-			c := NewClientWithHTTP(cred, "sub", "eastus", h)
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 
-			h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
-				return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-			})).Return(fakeHTTPResp(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(fakeHTTPResp(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
 
-			var capturedBody []byte
-			h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
-				if r.URL.Path != "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase" {
-					return false
-				}
-				capturedBody, _ = io.ReadAll(r.Body)
-				r.Body = io.NopCloser(bytes.NewReader(capturedBody))
-				return true
-			})).Return(fakeHTTPResp(http.StatusOK, `{}`), nil).Once()
+	var capturedBody []byte
+	h.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.URL.Path != "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase" {
+			return false
+		}
+		capturedBody, _ = io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+		return true
+	})).Return(fakeHTTPResp(http.StatusOK, `{}`), nil).Once()
 
-			result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-				ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 500.0,
-			}, common.PurchaseOptions{Source: tc.source})
-			require.NoError(t, err)
-			assert.True(t, result.Success)
+	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1, CommitmentCost: 500.0,
+	}, common.PurchaseOptions{Source: source})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
 
-			var body map[string]interface{}
-			require.NoError(t, json.Unmarshal(capturedBody, &body))
-			tags, hasTags := body["tags"].(map[string]interface{})
-			if tc.expectTag {
-				require.True(t, hasTags, "tags field must be present in purchase body when Source is set")
-				assert.Equal(t, tc.source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
-			} else {
-				assert.False(t, hasTags, "tags field must be absent in purchase body when Source is empty")
-			}
-		})
-	}
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(capturedBody, &body))
+	tags, hasTags := body["tags"].(map[string]interface{})
+	require.True(t, hasTags, "tags field must be present in purchase body when Source is set")
+	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
 }

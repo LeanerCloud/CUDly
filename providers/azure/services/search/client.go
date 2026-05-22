@@ -246,6 +246,17 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		Timestamp:      time.Now(),
 	}
 
+	// Azure's reservation API mints the order ID server-side in calculatePrice,
+	// so the only stable dedupe signal we control is the purchase-automation tag
+	// derived from opts.Source. Without a non-empty Source the tag is dropped and
+	// a re-driven purchase cannot recognise the prior attempt, producing
+	// duplicate reservations. Fail fast at function entry rather than allowing
+	// an un-tagged, non-idempotent purchase to hit the cloud.
+	if opts.Source == "" {
+		result.Error = fmt.Errorf("purchase source is required for idempotent Azure reservation purchases")
+		return result, result.Error
+	}
+
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3

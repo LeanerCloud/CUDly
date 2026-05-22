@@ -516,7 +516,7 @@ func TestPurchaseCommitment_success(t *testing.T) {
 		Count:          1,
 		CommitmentCost: 5000.0,
 	}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "syn-order-001", result.CommitmentID)
@@ -537,7 +537,7 @@ func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW500c", Term: "3yr", Count: 2, CommitmentCost: 9000.0}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -585,7 +585,7 @@ func TestPurchaseCommitment_apiError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -602,7 +602,7 @@ func TestPurchaseCommitment_httpError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
@@ -613,7 +613,7 @@ func TestPurchaseCommitment_tokenError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -762,7 +762,7 @@ func TestPurchaseCommitment_emptyResourceType(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "resource type is required")
@@ -772,7 +772,7 @@ func TestPurchaseCommitment_zeroCount(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 0}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "quantity must be greater than zero")
@@ -782,7 +782,7 @@ func TestPurchaseCommitment_negativeCount(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: -1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -791,10 +791,29 @@ func TestPurchaseCommitment_unsupportedTerm(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "5yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "unsupported reservation term")
+}
+
+// TestPurchaseCommitment_requiresSource pins the dedupe guard:
+// PurchaseCommitment must reject an empty opts.Source before issuing any HTTP
+// call. Azure mints the reservation order ID server-side, so the
+// purchase-automation tag derived from Source is the only stable dedupe
+// signal CUDly controls -- proceeding without it would allow a re-driven
+// purchase to create a duplicate reservation.
+func TestPurchaseCommitment_requiresSource(t *testing.T) {
+	mHTTP := &mockHTTPClient{}
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
+	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
+	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "purchase source is required")
+	mHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }
 
 // ---- GetOfferingDetails: no reservation price ----------------------------
