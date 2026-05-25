@@ -328,19 +328,13 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		log.Printf("purchase[%s]: MemoryDB findOfferingID page %d: %d offerings in %s",
 			tag, page, len(result.ReservedNodesOfferings), time.Since(pageStart))
 
-		for _, o := range result.ReservedNodesOfferings {
-			got := aws.ToString(o.OfferingType)
-			if got != wantOfferingType {
-				return "", fmt.Errorf("MemoryDB offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
-					aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
-					rec.ResourceType, rec.PaymentOption)
-			}
-			log.Printf("purchase[%s]: MemoryDB findOfferingID found match on page %d after %s total",
-				tag, page, time.Since(t0))
-			return aws.ToString(o.ReservedNodesOfferingId), nil
+		if id, err := scanMemoryDBOfferingPage(result.ReservedNodesOfferings, wantOfferingType, rec, tag, page, t0); err != nil {
+			return "", err
+		} else if id != "" {
+			return id, nil
 		}
 
-		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+		if isLastMemoryDBPage(result.NextToken) {
 			break
 		}
 		nextToken = result.NextToken
@@ -350,6 +344,37 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for MemoryDB %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, rec.PaymentOption, page)
+}
+
+// scanMemoryDBOfferingPage inspects a single page of DescribeReservedNodesOfferings
+// results and returns the first matching offering ID.
+// It returns ("", nil) when the page is empty or no offering matched; it returns
+// ("", err) on an API filter mismatch; it returns (id, nil) on a successful match.
+//
+// Pulled out of findOfferingID to keep that function under the cyclomatic limit.
+func scanMemoryDBOfferingPage(offerings []types.ReservedNodesOffering, wantOfferingType string, rec common.Recommendation, tag string, page int, t0 time.Time) (string, error) {
+	for _, o := range offerings {
+		got := aws.ToString(o.OfferingType)
+		if got != wantOfferingType {
+			return "", fmt.Errorf("MemoryDB offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		log.Printf("purchase[%s]: MemoryDB findOfferingID found match on page %d after %s total",
+			tag, page, time.Since(t0))
+		return aws.ToString(o.ReservedNodesOfferingId), nil
+	}
+	return "", nil
+}
+
+// isLastMemoryDBPage reports whether a NextToken indicates the terminal page.
+// The AWS SDK may return either nil or a pointer to an empty string for the
+// last page; both must end pagination so the loop does not issue a redundant
+// request (and risk a false page-cap error on borderline page counts).
+//
+// Pulled out of findOfferingID to keep that function under the cyclomatic limit.
+func isLastMemoryDBPage(nextToken *string) bool {
+	return nextToken == nil || aws.ToString(nextToken) == ""
 }
 
 // getDurationStringForAPI converts the term string to a duration value accepted

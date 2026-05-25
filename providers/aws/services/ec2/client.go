@@ -393,6 +393,24 @@ func describeInputFromQuery(q ec2OfferingQuery, nextToken *string) *ec2.Describe
 	}
 }
 
+// buildEC2QueryFromRec extracts ComputeDetails from rec, converts the payment
+// option, and assembles the ec2OfferingQuery used by findOfferingID.
+//
+// Pulled out of findOfferingID to keep that function under the cyclomatic limit.
+func (c *Client) buildEC2QueryFromRec(rec common.Recommendation) (ec2OfferingQuery, error) {
+	details, ok := rec.Details.(*common.ComputeDetails)
+	if !ok || details == nil {
+		return ec2OfferingQuery{}, fmt.Errorf("invalid service details for EC2")
+	}
+	wantOfferingType, err := convertEC2PaymentOption(rec.PaymentOption)
+	if err != nil {
+		return ec2OfferingQuery{}, err
+	}
+	q := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
+	q.wantOfferingType = wantOfferingType
+	return q, nil
+}
+
 // findOfferingID finds the appropriate EC2 Reserved Instance offering ID.
 //
 // The input is built from typed first-class fields on
@@ -407,16 +425,10 @@ func describeInputFromQuery(q ec2OfferingQuery, nextToken *string) *ec2.Describe
 // execID is the purchase execution UUID for log correlation; pass "" when
 // calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
 func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
-	details, ok := rec.Details.(*common.ComputeDetails)
-	if !ok || details == nil {
-		return "", fmt.Errorf("invalid service details for EC2")
-	}
-	wantOfferingType, err := convertEC2PaymentOption(rec.PaymentOption)
+	q, err := c.buildEC2QueryFromRec(rec)
 	if err != nil {
 		return "", err
 	}
-	q := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
-	q.wantOfferingType = wantOfferingType
 
 	tag := execID
 	if tag == "" {
@@ -424,7 +436,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	}
 	t0 := time.Now()
 	log.Printf("purchase[%s]: EC2 findOfferingID starting (instance=%s platform=%s tenancy=%s term=%s payment=%s)",
-		tag, rec.ResourceType, details.Platform, details.Tenancy, rec.Term, rec.PaymentOption)
+		tag, rec.ResourceType, q.productDesc, q.tenancy, rec.Term, rec.PaymentOption)
 
 	var nextToken *string
 	page := 0
@@ -435,7 +447,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		page++
 		if page > maxOfferingPages {
 			return "", fmt.Errorf("pagination cap reached after %d pages for EC2 %s %s %s (issue #688)",
-				maxOfferingPages, rec.ResourceType, details.Platform, rec.PaymentOption)
+				maxOfferingPages, rec.ResourceType, q.productDesc, rec.PaymentOption)
 		}
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedInstancesOfferings(ctx, describeInputFromQuery(q, nextToken))
@@ -446,7 +458,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		}
 		log.Printf("purchase[%s]: EC2 findOfferingID page %d: %d offerings in %s",
 			tag, page, len(result.ReservedInstancesOfferings), time.Since(pageStart))
-		if id := scanEC2OfferingPage(result.ReservedInstancesOfferings, wantOfferingType); id != "" {
+		if id := scanEC2OfferingPage(result.ReservedInstancesOfferings, q.wantOfferingType); id != "" {
 			log.Printf("purchase[%s]: EC2 findOfferingID found match on page %d after %s total",
 				tag, page, time.Since(t0))
 			return id, nil
@@ -459,7 +471,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	log.Printf("purchase[%s]: EC2 findOfferingID exhausted %d page(s) in %s -- no match",
 		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for EC2 %s %s %s after %d page(s) (issue #688)",
-		rec.ResourceType, details.Platform, rec.PaymentOption, page)
+		rec.ResourceType, q.productDesc, rec.PaymentOption, page)
 }
 
 // isLastEC2Page reports whether a NextToken indicates the terminal page.
