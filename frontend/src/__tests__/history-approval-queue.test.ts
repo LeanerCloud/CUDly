@@ -58,10 +58,15 @@ jest.mock('../state', () => ({
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
 }));
 
+jest.mock('../recommendations', () => ({
+  getAccountName: jest.fn((id: string) => id),
+}));
+
 import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
+import { getAccountName } from '../recommendations';
 
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', role: 'admin' };
 
@@ -262,5 +267,129 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     // Approve button in BOTH views.
     expect(queue.querySelectorAll('.history-approve-btn[data-approve-id="p-pending"]').length).toBe(1);
     expect(list.querySelectorAll('.history-approve-btn[data-approve-id="p-pending"]').length).toBe(1);
+  });
+
+  // Issue #704 — new column tests
+
+  test('renders email in Created-by column when created_by_user_email is set', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-email',
+          status: 'pending',
+          created_by_user_id: 'some-uuid',
+          created_by_user_email: 'alice@example.com',
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    expect(queue.textContent).toContain('alice@example.com');
+    // Raw UUID must NOT appear when email is available.
+    expect(queue.textContent).not.toContain('some-uuid');
+  });
+
+  test('falls back to UUID in Created-by column when email is absent', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-uuid',
+          status: 'pending',
+          created_by_user_id: 'fallback-uuid',
+          // created_by_user_email intentionally absent
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    expect(queue.textContent).toContain('fallback-uuid');
+  });
+
+  test('renders Account column via getAccountName when account_id is set', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (getAccountName as jest.Mock).mockReturnValue('Production Account');
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-acct',
+          status: 'pending',
+          account_id: '123456789012',
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    expect(getAccountName).toHaveBeenCalledWith('123456789012');
+    expect(queue.textContent).toContain('Production Account');
+  });
+
+  test('renders Term and Payment columns', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-term',
+          status: 'pending',
+          term: 3,
+          payment: 'no-upfront',
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    // formatTerm mock renders "3 Years"
+    expect(queue.textContent).toContain('3 Years');
+    expect(queue.textContent).toContain('no-upfront');
+  });
+
+  test('renders Monthly Cost column when monthly_cost is present', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-monthly',
+          status: 'pending',
+          monthly_cost: 42.5,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    // formatCurrency mock renders ".5"
+    expect(queue.textContent).toContain('.5');
+  });
+
+  test('renders Account/Term/Payment/Monthly column headers', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ status: 'pending', created_by_user_id: ADMIN_USER.id })],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    const headerText = queue.querySelector('thead')?.textContent || '';
+    expect(headerText).toContain('Account');
+    expect(headerText).toContain('Term');
+    expect(headerText).toContain('Payment');
+    expect(headerText).toContain('Monthly Cost');
   });
 });

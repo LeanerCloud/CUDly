@@ -180,8 +180,11 @@ export interface HistoryPurchase {
   region: string;
   count: number;
   term: number;
+  payment?: string;
   upfront_cost: number;
+  monthly_cost?: number;
   estimated_savings: number;
+  account_id?: string;
   plan_name?: string;
   // Status is set by the API to "completed" or "pending". Legacy pre-schema
   // rows come back without it; the UI treats absent status as completed for
@@ -195,6 +198,12 @@ export interface HistoryPurchase {
   // non-ok rows. "failed" → backend's send-error message; "expired" → canned
   // 7-day-window reminder. Empty on completed / pending rows.
   status_description?: string;
+  // CreatedByUserEmail: resolved email of the user who created the
+  // underlying execution. Populated on synthesised execution rows when the
+  // auth lookup succeeds. Empty for scheduler-driven rows, legacy NULL-
+  // creator rows, and completed purchase_history rows. The Approval Queue
+  // renders this instead of the raw UUID when present.
+  created_by_user_email?: string;
   // CreatedByUserID: UUID of the user who created the underlying execution.
   // Populated on every synthesised purchase_executions row the History
   // endpoint returns (pending, notified, failed, expired, cancelled — see

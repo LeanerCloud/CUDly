@@ -1040,6 +1040,79 @@ func TestParseHistoryDateRange(t *testing.T) {
 	})
 }
 
+// TestHandler_getHistory_CreatedByUserEmailResolved verifies that when a
+// pending execution carries a non-nil CreatedByUserID, the returned history row
+// includes the resolved email address in CreatedByUserEmail so the Approval
+// Queue can show a name instead of a UUID. A lookup failure must degrade
+// gracefully (email field stays empty, row still renders, no panic).
+func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
+	creatorID := "user-uuid-1234"
+	creatorEmail := "alice@example.com"
+	approverEmail := "ops@example.com"
+
+	t.Run("email resolved from auth service", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		exec := config.PurchaseExecution{
+			ExecutionID:     "pend-with-creator",
+			Status:          "pending",
+			ScheduledDate:   time.Now(),
+			CreatedByUserID: &creatorID,
+			Recommendations: []config.RecommendationRecord{
+				{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+			},
+		}
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth.On("GetUser", ctx, creatorID).Return(&User{ID: creatorID, Email: creatorEmail}, nil)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+
+		require.Len(t, resp.Purchases, 1)
+		row := resp.Purchases[0]
+		assert.Equal(t, creatorID, row.CreatedByUserID, "raw UUID must still be present for cancel-own gate")
+		assert.Equal(t, creatorEmail, row.CreatedByUserEmail, "email must be resolved for Approval Queue display")
+	})
+
+	t.Run("lookup failure degrades gracefully", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		exec := config.PurchaseExecution{
+			ExecutionID:     "pend-bad-user",
+			Status:          "pending",
+			ScheduledDate:   time.Now(),
+			CreatedByUserID: &creatorID,
+			Recommendations: []config.RecommendationRecord{
+				{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+			},
+		}
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth.On("GetUser", ctx, creatorID).Return(nil, errors.New("user not found"))
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err, "a user-lookup failure must not abort the history response")
+		resp := result.(HistoryResponse)
+
+		require.Len(t, resp.Purchases, 1, "row must still render when email lookup fails")
+		row := resp.Purchases[0]
+		assert.Equal(t, creatorID, row.CreatedByUserID)
+		assert.Empty(t, row.CreatedByUserEmail, "email must be empty when lookup fails — UI falls back to UUID")
+	})
+}
+
 // TestHandler_getHistory_CompletedExecutionNotDuplicated guards the dedup path.
 // The store loads "completed" executions now (so audit-gap rows can surface),
 // but a NORMAL completed execution (Error=="") is already represented by its
