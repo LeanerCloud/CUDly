@@ -812,7 +812,7 @@ function wireRowActionHandlers(container: HTMLElement): void {
       // Retry POST succeeded — surface success regardless of whether
       // the refresh works. The reload error path mirrors the cancel
       // flow above.
-      showToast({ message: 'Retry execution created', kind: 'success', timeout: 5_000 });
+      showToast({ message: 'Purchase request sent for approval', kind: 'success', timeout: 5_000 });
       try {
         await loadHistory();
       } catch (reloadError) {
