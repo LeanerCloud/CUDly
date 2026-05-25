@@ -560,7 +560,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   if (activeStatusFilter !== 'all' && !purchases.some(p => {
     const s = normalizeStatus(p).toLowerCase();
     if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
-    if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
+    if (activeStatusFilter === 'completed') return s === 'completed' || s === 'partially_completed' || !p.status;
     return s === activeStatusFilter;
   })) {
     activeStatusFilter = 'all';
@@ -575,7 +575,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     if (activeStatusFilter === 'all') return true;
     const s = normalizeStatus(p).toLowerCase();
     if (activeStatusFilter === 'pending') return s === 'pending' || s === 'notified' || isInFlightStatus(s);
-    if (activeStatusFilter === 'completed') return s === 'completed' || !p.status;
+    if (activeStatusFilter === 'completed') return s === 'completed' || s === 'partially_completed' || !p.status;
     return s === activeStatusFilter;
   });
 

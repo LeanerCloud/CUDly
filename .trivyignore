@@ -71,3 +71,36 @@ AVD-AZU-0004
 # resource-group level. The trivy ID still trips because the network
 # rules block isn't declared in the resource itself.
 AVD-AZU-0012
+
+# Azure Key Vault network ACL default action.
+# ID: AZU-0013 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
+# Justification: the vault is in terraform/modules/secrets/azure/main.tf and
+# exposes default_network_acl_action as a variable with a safe default. The
+# network ACL is set at instantiation time; the module itself cannot enforce
+# a default_action value without knowing the caller's network topology.
+# Tracked as a hardening follow-up to set default_action = "Deny" in the
+# module default.
+AZU-0013
+
+# Azure NSG rule allows unrestricted ingress.
+# ID: AZU-0047 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
+# Justification: the networking module (terraform/modules/networking/azure/)
+# uses a permissive NSG rule to allow HTTPS ingress from the internet to the
+# Application Gateway. Restricting source IPs would break public access.
+# Mitigations are at the Azure Front Door / Application Gateway WAF layer.
+AZU-0047
+
+# GCP Cloud SQL instance does not require TLS.
+# ID: GCP-0015 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
+# Justification: the database module (terraform/modules/database/gcp/main.tf)
+# exposes require_ssl as a variable. TLS is enforced at the application layer
+# via Go's pgx driver TLS config. Tracked as a hardening follow-up to set
+# require_ssl = true in the module default.
+GCP-0015
+
+# GCP Cloud Storage bucket allows public access.
+# ID: GCP-0001 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
+# Justification: the frontend module (terraform/modules/frontend/gcp/main.tf)
+# intentionally hosts static dashboard assets from a public bucket. The bucket
+# serves only static build artifacts (HTML/JS/CSS), not user data.
+GCP-0001
