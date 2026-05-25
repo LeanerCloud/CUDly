@@ -2712,6 +2712,34 @@ const BULK_PURCHASE_LS_KEY = 'cudly.recommendations.bulkPurchase.v1';
 // is silently ignored on read — no migration shim needed.
 type BulkPurchasePayment = 'all-upfront' | 'partial-upfront' | 'no-upfront' | 'monthly';
 
+// Normalize payment synonyms that upstream rows may carry (e.g. Azure's
+// 'upfront') to the canonical BulkPurchasePayment forms used throughout the
+// bucket-key and toolbar machinery.  Returns null for unknown or absent values
+// so callers can fall back safely.
+//
+// Mappings:
+//   'upfront'       -> 'all-upfront'  (Azure canonical synonym)
+//   'all-upfront'   -> 'all-upfront'  (AWS / pass-through)
+//   'partial-upfront' -> 'partial-upfront' (pass-through)
+//   'no-upfront'    -> 'no-upfront'   (pass-through)
+//   'monthly'       -> 'monthly'      (GCP canonical; kept as-is)
+//   anything else / undefined -> null
+function normalizeBulkPayment(payment: string | undefined): BulkPurchasePayment | null {
+  switch (payment) {
+    case 'upfront':
+    case 'all-upfront':
+      return 'all-upfront';
+    case 'partial-upfront':
+      return 'partial-upfront';
+    case 'no-upfront':
+      return 'no-upfront';
+    case 'monthly':
+      return 'monthly';
+    default:
+      return null;
+  }
+}
+
 // Centralized bucket-level payment compatibility check. A bucket is
 // compatible iff EVERY rec in it has a supported (provider, service,
 // term, payment) combination. Used by the bulk-buy fan-out path to
@@ -3155,7 +3183,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   const buckets = new Map<string, LocalRecommendation[]>();
   for (const r of scaled) {
     const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
-    const key = `${r.provider}|${bucketService}|${r.term}|${r.payment ?? ''}`;
+    const key = `${r.provider}|${bucketService}|${r.term}|${normalizeBulkPayment(r.payment) ?? ''}`;
     const existing = buckets.get(key);
     if (existing) existing.push(r);
     else buckets.set(key, [r]);
@@ -3316,11 +3344,15 @@ function resolveBucketPaymentSeed(
   // term) cell instead of blindly falling back to toolbar.payment
   // ('all-upfront'). Multi-account buckets, missing-payment recs, and
   // unsupported payment values still fall through to toolbar.
+  //
+  // Normalize first so upstream synonym forms ('upfront', 'monthly') map to
+  // the canonical BulkPurchasePayment values before the support check.
+  const recPayment = normalizeBulkPayment(r0.payment);
   if (
-    r0.payment
-    && isPaymentSupported(provider, r0.service, term, r0.payment as CompatPayment)
+    recPayment
+    && isPaymentSupported(provider, r0.service, term, recPayment as CompatPayment)
   ) {
-    return { payment: r0.payment as BulkPurchaseToolbarState['payment'], source: 'toolbar' };
+    return { payment: recPayment, source: 'toolbar' };
   }
 
   return { payment: toolbar.payment, source: 'toolbar' };
