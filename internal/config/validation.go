@@ -17,48 +17,29 @@ var ValidProviders = []string{"aws", "azure", "gcp"}
 var ValidPaymentOptions = []string{"no-upfront", "partial-upfront", "all-upfront"}
 
 // ValidPaymentOptionsByProvider maps each provider to the payment option
-// tokens it accepts. The sets are tightened to the canonical tokens each
-// provider actually models semantically; AWS-style aliases the service
-// clients also accept (for legacy frontend compat) are deliberately not
-// surfaced here — config-layer validation rejects them so input bugs aren't
-// hidden behind silent alias coercion in the service-client switches.
-// Callers that need to translate legacy/cross-provider tokens into the
-// canonical form should use NormalizePaymentOption at the emission boundary
-// (see internal/scheduler/scheduler.go:convertRecommendations).
+// tokens it accepts. Each provider's set is the canonical set verified
+// against the provider's service-client switch statements:
 //
-// Canonical sets, verified against the per-service purchase/pricing switches:
+//   - aws:   {no-upfront, partial-upfront, all-upfront}: the three RI/SP
+//     billing tiers exposed by AWS APIs.
 //
-//   - AWS  : {no-upfront, partial-upfront, all-upfront}
-//     Three distinct billing tiers exposed by RI/SP offering APIs.
+//   - azure: {upfront, monthly}: verified against the 7 Azure service-client
+//     switches in providers/azure/services/{compute,cache,cosmosdb,database,
+//     search,synapse,managedredis}/client.go. (The savingsplans client mirrors
+//     AWS's three-tier set, but Azure savings-plan recs are not currently
+//     emitted; GetRecommendations returns []. The canonical set follows the
+//     only path that emits today.)
 //
-//   - Azure: {upfront, monthly}
-//     Reservation purchases only model two billing plans. See:
-//     providers/azure/services/compute/client.go:493-497
-//     providers/azure/services/cache/client.go:375-379
-//     providers/azure/services/cosmosdb/client.go:368-372
-//     providers/azure/services/database/client.go:376-380
-//     providers/azure/services/search/client.go:349-353
-//     providers/azure/services/synapse/client.go:354-358
-//     providers/azure/services/managedredis/client.go:345-349
-//     (The savingsplans switch at providers/azure/services/savingsplans/
-//     client.go:418-429 mirrors AWS's three-tier set, but Azure savings-plan
-//     recommendations are not currently emitted — GetRecommendations returns
-//     []; the canonical set follows the only path that emits today.)
+//   - gcp:   {monthly}: GCP CUDs are billed monthly across the commitment
+//     term; there is no upfront billing tier. See
+//     providers/gcp/services/computeengine/client.go:buildCommitmentRequests
+//     which takes only a Plan (TWELVE_MONTH/THIRTY_SIX_MONTH) and never reads
+//     PaymentOption.
 //
-//   - GCP  : {monthly}
-//     GCP CUDs are inherently monthly-billed across the term — the GCP CUD
-//     purchase API only takes a Plan (TWELVE_MONTH / THIRTY_SIX_MONTH), not a
-//     payment-option discriminator (see
-//     providers/gcp/services/computeengine/client.go:350-373 where
-//     buildCommitmentRequests sets Plan from rec.Term and never reads
-//     PaymentOption). The per-service pricing switches at
-//     providers/gcp/services/computeengine/client.go:587-591,
-//     providers/gcp/services/cloudsql/client.go:288-292,
-//     providers/gcp/services/cloudstorage/client.go:297-301,
-//     providers/gcp/services/memorystore/client.go:245-249 alias "upfront"
-//     and "all-upfront" only for compatibility with downstream code that
-//     expects a payment-option token; semantically GCP exposes one billing
-//     plan and the validator surfaces that explicitly.
+// Cross-provider tokens are rejected loudly by the validator. Legacy AWS-style
+// tokens emitted by older code paths are canonicalized via NormalizePaymentOption
+// at the rec-emission boundary BEFORE reaching this validator (see
+// internal/scheduler/scheduler.go:convertRecommendations).
 var ValidPaymentOptionsByProvider = map[string][]string{
 	"aws":   {"no-upfront", "partial-upfront", "all-upfront"},
 	"azure": {"upfront", "monthly"},
