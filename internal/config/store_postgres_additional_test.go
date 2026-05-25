@@ -522,7 +522,7 @@ func TestListPurchasePlans_ScanError(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	assert.Error(t, err)
 	assert.Nil(t, plans)
 

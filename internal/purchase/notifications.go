@@ -16,7 +16,7 @@ import (
 func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*NotificationResult, error) {
 	logging.Info("Checking for upcoming purchases to notify...")
 
-	plans, err := m.config.ListPurchasePlans(ctx)
+	plans, err := m.config.ListPurchasePlans(ctx, config.PurchasePlanFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list purchase plans: %w", err)
 	}

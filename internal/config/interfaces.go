@@ -29,7 +29,7 @@ type StoreInterface interface {
 	// rows and no stale plan pointer.
 	UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error
 	DeletePurchasePlan(ctx context.Context, planID string) error
-	ListPurchasePlans(ctx context.Context) ([]PurchasePlan, error)
+	ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error)
 
 	// Purchase executions
 	SavePurchaseExecution(ctx context.Context, execution *PurchaseExecution) error

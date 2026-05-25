@@ -153,7 +153,7 @@ func (m *mockConfigStore) DeletePurchasePlan(ctx context.Context, planID string)
 	return nil
 }
 
-func (m *mockConfigStore) ListPurchasePlans(ctx context.Context) ([]config.PurchasePlan, error) {
+func (m *mockConfigStore) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
 	return nil, nil
 }
 

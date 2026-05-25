@@ -17,7 +17,7 @@ func TestManager_SendUpcomingPurchaseNotifications_NoPlans(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -48,7 +48,7 @@ func TestManager_SendUpcomingPurchaseNotifications_DisabledPlan(t *testing.T) {
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -79,7 +79,7 @@ func TestManager_SendUpcomingPurchaseNotifications_NotAutoPurchase(t *testing.T)
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -101,7 +101,7 @@ func TestManager_SendUpcomingPurchaseNotifications_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("ListPurchasePlans", ctx).Return(nil, errors.New("database error"))
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("database error"))
 
 	manager := &Manager{
 		config:       mockStore,
@@ -314,7 +314,7 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// No existing execution found
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -354,7 +354,7 @@ func TestManager_SendUpcomingPurchaseNotifications_TooFarAway(t *testing.T) {
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -390,7 +390,7 @@ func TestManager_SendUpcomingPurchaseNotifications_RecentNotification(t *testing
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -423,7 +423,7 @@ func TestManager_SendUpcomingPurchaseNotifications_NoNextExecutionDate(t *testin
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -458,7 +458,7 @@ func TestManager_SendUpcomingPurchaseNotifications_EmailFails(t *testing.T) {
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// No existing execution found
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)

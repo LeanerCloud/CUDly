@@ -31,7 +31,7 @@ func TestHandler_listPlans(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -40,10 +40,46 @@ func TestHandler_listPlans(t *testing.T) {
 			"Authorization": "Bearer admin-token",
 		},
 	}
-	result, err := handler.listPlans(ctx, req)
+	result, err := handler.listPlans(ctx, req, map[string]string{})
 	require.NoError(t, err)
 
 	assert.Len(t, result.Plans, 2)
+}
+
+func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	plans := []config.PurchasePlan{
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "Account Plan", Enabled: true},
+	}
+
+	accountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	expectedFilter := config.PurchasePlanFilter{AccountIDs: []string{accountID}}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+	}
+	params := map[string]string{"account_ids": accountID}
+	result, err := handler.listPlans(ctx, req, params)
+	require.NoError(t, err)
+
+	assert.Len(t, result.Plans, 1)
+	assert.Equal(t, "Account Plan", result.Plans[0].Name)
 }
 
 func TestHandler_createPlan(t *testing.T) {

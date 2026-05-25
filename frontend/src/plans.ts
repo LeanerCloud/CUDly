@@ -46,7 +46,15 @@ export async function loadPlans(): Promise<void> {
   if (newPlanBtn) newPlanBtn.hidden = !canAccess('create', 'plans');
 
   try {
-    const data = await api.getPlans() as unknown as PlansResponse;
+    // Account filter: pass account_ids to the backend so it JOINs
+    // plan_accounts and returns only plans that reference one of the
+    // selected accounts. Empty array means "all plans" — the backend
+    // omits the JOIN entirely in that case. Mirrors the pattern used by
+    // getRecommendations (see recommendations.ts, issue #705).
+    const accountIDs = state.getCurrentAccountIDs();
+    const data = await api.getPlans(
+      accountIDs.length > 0 ? { account_ids: accountIDs } : {}
+    ) as unknown as PlansResponse;
     let plans = data.plans || [];
 
     // Client-side provider filter. Backend `config.PurchasePlan` has no

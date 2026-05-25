@@ -111,8 +111,8 @@ func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string)
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) ListPurchasePlans(ctx context.Context) ([]config.PurchasePlan, error) {
-	args := m.Called(ctx)
+func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
+	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -988,11 +988,11 @@ func TestSchedulerConfigStoreInterface(t *testing.T) {
 	// These calls just verify the mock has the methods
 	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	store.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
-	store.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+	store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
 	_, _ = store.GetGlobalConfig(ctx)
 	_, _ = store.ListServiceConfigs(ctx)
-	_, _ = store.ListPurchasePlans(ctx)
+	_, _ = store.ListPurchasePlans(ctx, config.PurchasePlanFilter{})
 
 	store.AssertExpectations(t)
 }

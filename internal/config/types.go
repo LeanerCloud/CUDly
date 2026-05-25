@@ -392,6 +392,14 @@ type RecommendationFilter struct {
 	MinSavings float64  // 0 = no floor on monthly savings
 }
 
+// PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no
+// filter" (all plans are returned). Non-empty AccountIDs restricts the result
+// to plans that reference at least one of the given account IDs via the
+// plan_accounts join table.
+type PurchasePlanFilter struct {
+	AccountIDs []string // nil/empty = all plans
+}
+
 // RecommendationsFreshness describes the cache staleness state surfaced to
 // the frontend. LastCollectedAt is nil on a cold start.
 // LastCollectionError is non-nil when the most recent collect attempt

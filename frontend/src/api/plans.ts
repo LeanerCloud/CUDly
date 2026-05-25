@@ -3,13 +3,23 @@
  */
 
 import { apiRequest } from './client';
-import type { Plan, CreatePlanRequest } from './types';
+import type { Plan, CreatePlanRequest, PlanFilters } from './types';
 
 /**
- * Get purchase plans
+ * Get purchase plans, optionally filtered by account IDs.
+ *
+ * When filters.account_ids is non-empty the backend returns only plans
+ * that reference at least one of those accounts via the plan_accounts
+ * join table. Mirrors the account_ids filtering pattern in
+ * getRecommendations (see recommendations.ts).
  */
-export async function getPlans(): Promise<Plan[]> {
-  return apiRequest<Plan[]>('/plans');
+export async function getPlans(filters: PlanFilters = {}): Promise<Plan[]> {
+  const params = new URLSearchParams();
+  if (filters.account_ids && filters.account_ids.length > 0) {
+    params.set('account_ids', filters.account_ids.join(','));
+  }
+  const queryString = params.toString();
+  return apiRequest<Plan[]>(`/plans${queryString ? '?' + queryString : ''}`);
 }
 
 /**

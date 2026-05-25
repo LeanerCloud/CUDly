@@ -474,7 +474,7 @@ func TestPostgresStoreDB_PurchasePlans(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		retrieved, err := store.ListPurchasePlans(ctx)
+		retrieved, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 		require.NoError(t, err)
 		assert.Len(t, retrieved, 2)
 	})
@@ -500,7 +500,7 @@ func TestPostgresStoreDB_PurchasePlans(t *testing.T) {
 		err := store.CreatePurchasePlan(ctx, plan)
 		require.NoError(t, err)
 
-		plans, err := store.ListPurchasePlans(ctx)
+		plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 		require.NoError(t, err)
 		assert.Len(t, plans, 1)
 		assert.NotNil(t, plans[0].NextExecutionDate)

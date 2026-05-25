@@ -83,7 +83,7 @@ func TestManager_ProcessMessage(t *testing.T) {
 			email:        mockEmail,
 			dashboardURL: "https://dashboard.example.com",
 		}
-		mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+		mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
 		err := manager.ProcessMessage(ctx, `{"type": "send_notification"}`)
 		assert.NoError(t, err)

@@ -544,7 +544,7 @@ func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 
 	plans := []config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111"}}
-	mockStore.On("ListPurchasePlans", mock.Anything).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 
@@ -953,7 +953,7 @@ func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 		},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// New: handler now enumerates pending executions per PR #213. Fixture
 	// supplies one pending exec for the plan above so the integration test
 	// still observes a single upcoming row.
@@ -1012,7 +1012,7 @@ func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 	}
 
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1289,7 +1289,7 @@ func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 
-	mockStore.On("ListPurchasePlans", mock.Anything).Return(nil, assert.AnError)
+	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 

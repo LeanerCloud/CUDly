@@ -95,7 +95,7 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("failed to get pending executions: %w", err)
 	}
 
-	plans, err := h.config.ListPurchasePlans(ctx)
+	plans, err := h.config.ListPurchasePlans(ctx, config.PurchasePlanFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get purchase plans: %w", err)
 	}

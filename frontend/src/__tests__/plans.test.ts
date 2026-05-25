@@ -327,6 +327,40 @@ describe('Plans Module', () => {
       }
     });
 
+    test('passes account_ids to api.getPlans when account filter is active (issue #705)', async () => {
+      // Regression test for the Account global filter being non-functional
+      // on the Plans page. loadPlans must forward the account selection to
+      // api.getPlans so the backend can JOIN plan_accounts and prune the list.
+      const state = await import('../state');
+      const accountID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([accountID]);
+
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      try {
+        await loadPlans();
+
+        expect(api.getPlans).toHaveBeenCalledWith({ account_ids: [accountID] });
+      } finally {
+        (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      }
+    });
+
+    test('calls api.getPlans with empty object when no account is selected', async () => {
+      // When no account chip is active, getPlans receives {} so the backend
+      // returns all plans (no account_ids filter applied).
+      const state = await import('../state');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      expect(api.getPlans).toHaveBeenCalledWith({});
+    });
+
     test('shows error on API failure', async () => {
       (api.getPlans as jest.Mock).mockRejectedValue(new Error('API Error'));
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });

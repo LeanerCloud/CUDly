@@ -433,7 +433,7 @@ func (r *Router) getRecommendationDetailHandler(ctx context.Context, req *events
 }
 
 func (r *Router) listPlansHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.listPlans(ctx, req)
+	return r.h.listPlans(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) createPlanHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

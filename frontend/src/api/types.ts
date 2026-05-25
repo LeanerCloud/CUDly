@@ -132,6 +132,11 @@ export interface RecommendationFilters {
   account_ids?: string[];
 }
 
+// PlanFilters are the query parameters accepted by the GET /api/plans endpoint.
+export interface PlanFilters {
+  account_ids?: string[];
+}
+
 // Plan types
 export interface PlanRampSchedule {
   type: string;

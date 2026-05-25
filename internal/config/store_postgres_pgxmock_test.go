@@ -303,7 +303,7 @@ func TestPGXMock_ListPurchasePlans_Success(t *testing.T) {
 			sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(ctx)
+	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 	require.NoError(t, err)
 	assert.Len(t, plans, 2)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -316,7 +316,7 @@ func TestPGXMock_ListPurchasePlans_Error(t *testing.T) {
 
 	mock.ExpectQuery("SELECT").WillReturnError(errors.New("db error"))
 
-	_, err := store.ListPurchasePlans(ctx)
+	_, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 	require.Error(t, err)
 }
 

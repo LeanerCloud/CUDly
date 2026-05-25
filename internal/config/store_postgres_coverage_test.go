@@ -342,7 +342,7 @@ func TestPostgresStore_ListPurchasePlans_NilDB(t *testing.T) {
 	ctx := context.Background()
 
 	panicked := callWithRecover(func() {
-		_, _ = store.ListPurchasePlans(ctx)
+		_, _ = store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 	})
 
 	assert.True(t, panicked, "expected panic with nil db connection")
