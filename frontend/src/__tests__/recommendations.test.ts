@@ -2838,10 +2838,46 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     }
   });
 
+  // CR finding on PR #710: account override carrying Azure's 'upfront' synonym
+  // must be normalized before seeding the bucket, so the fan-out dropdown
+  // receives 'all-upfront' (not the raw 'upfront') and paymentSource is
+  // 'override', not 'toolbar'.
+  test('(f) account override with upfront (Azure synonym) normalizes to all-upfront with source override', async () => {
+    // Two azure/vm recs, same single account, different terms to force fan-out.
+    const recs = [
+      { id: 'g1', provider: 'azure', cloud_account_id: 'az-account-a', service: 'vm', resource_type: 'Standard_D2s_v3', region: 'eastus', count: 1, term: 1, payment: 'all-upfront', savings: 120, upfront_cost: 600 },
+      { id: 'g2', provider: 'azure', cloud_account_id: 'az-account-a', service: 'vm', resource_type: 'Standard_D2s_v3', region: 'eastus', count: 1, term: 3, payment: 'all-upfront', savings: 300, upfront_cost: 1200 },
+    ];
+    setupMixedTermRecs(recs);
+    // Override uses the Azure-canonical 'upfront' synonym — before the fix this
+    // would seed FanOutBucket.payment = 'upfront' (not rendered by the dropdown);
+    // after the fix it normalizes to 'all-upfront'.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'az-account-a') {
+        return [{ id: 'ovr-az', account_id: 'az-account-a', provider: 'azure', service: 'vm', payment: 'upfront' }];
+      }
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    expect(buckets!.length).toBe(2);
+    for (const b of buckets!) {
+      // Override 'upfront' must normalize to canonical 'all-upfront'.
+      expect(b.payment).toBe('all-upfront');
+      expect(b.paymentSource).toBe('override');
+    }
+  });
+
   // Regression: CR finding on PR #710.  'upfront' is a synonym for
   // 'all-upfront' used by some upstream rows (Azure canonical form).
   // Both must land in ONE bucket with the normalized 'all-upfront' seed.
-  test('(f) payment synonyms upfront / all-upfront collapse into one bucket seeded as all-upfront', async () => {
+  test('(g) payment synonyms upfront / all-upfront collapse into one bucket seeded as all-upfront', async () => {
     // Two recs, same aws/ec2/1yr, but one carries 'upfront' (Azure
     // synonym) and the other carries 'all-upfront' (canonical form).
     // Different resource_type so each is its own cell and both survive

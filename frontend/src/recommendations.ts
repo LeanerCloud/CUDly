@@ -3321,17 +3321,17 @@ function resolveBucketPaymentSeed(
       const match = overrides.find(
         (o) => o.provider === provider && o.service === r0.service,
       );
+      const overridePayment = normalizeBulkPayment(match?.payment);
       if (
-        match
-        && match.payment
+        overridePayment
         // Defensive: only honour the override when the (provider, service,
         // term, payment) combo is actually supported. A stale or hand-saved
         // override pointing at an unsupported payment for this term shouldn't
         // poison the dropdown — fall through to rec.payment seed.
-        && isPaymentSupported(provider, r0.service, term, match.payment as CompatPayment)
+        && isPaymentSupported(provider, r0.service, term, overridePayment)
       ) {
         return {
-          payment: match.payment as BulkPurchaseToolbarState['payment'],
+          payment: overridePayment,
           source: 'override',
         };
       }
