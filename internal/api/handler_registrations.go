@@ -405,7 +405,7 @@ const maxAccountNameLen = 256
 // source, complementing sanitizeHeader on the email subject path) and the
 // result is length-capped.
 func validateRegistrationRequest(req *RegistrationRequest) error {
-	req.AccountName = strings.NewReplacer("\r", "", "\n", "").Replace(req.AccountName)
+	req.AccountName = strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "").Replace(req.AccountName))
 	if r := []rune(req.AccountName); len(r) > maxAccountNameLen {
 		req.AccountName = string(r[:maxAccountNameLen])
 	}

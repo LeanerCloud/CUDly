@@ -51,4 +51,16 @@ func TestValidateRegistrationRequest_AccountNameSanitized(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "account_name is required")
 	})
+
+	t.Run("whitespace-only name is rejected as empty", func(t *testing.T) {
+		req := RegistrationRequest{
+			Provider:     "aws",
+			ExternalID:   "ext-123",
+			AccountName:  "   \t  ",
+			ContactEmail: "user@example.com",
+		}
+		err := validateRegistrationRequest(&req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "account_name is required")
+	})
 }
