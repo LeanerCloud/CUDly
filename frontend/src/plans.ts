@@ -704,7 +704,9 @@ async function handlePlanAccountSearch(value: string): Promise<void> {
   }
 
   try {
-    const accounts = await api.listAccounts({ search: value });
+    const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
+    const provider = providerSelect?.value as api.Provider | undefined;
+    const accounts = await api.listAccounts({ search: value, ...(provider ? { provider } : {}) });
     suggestions.textContent = '';
     if (accounts.length === 0) {
       suggestions.classList.add('hidden');
@@ -736,10 +738,17 @@ async function handlePlanAccountSearch(value: string): Promise<void> {
 async function setupPlanAccountsSection(planId?: string): Promise<void> {
   planSelectedAccounts = [];
 
+  const planProvider = (document.getElementById('plan-provider') as HTMLSelectElement | null)?.value;
+
   if (planId) {
     try {
       const existingAccounts = await api.listPlanAccounts(planId);
-      planSelectedAccounts = existingAccounts.map(a => ({ id: a.id, name: a.name, external_id: a.external_id }));
+      // Filter out any account whose provider does not match the current plan
+      // provider. This prevents stale cross-provider assignments from silently
+      // surviving a provider switch on an existing plan.
+      planSelectedAccounts = existingAccounts
+        .filter(a => !planProvider || a.provider === planProvider)
+        .map(a => ({ id: a.id, name: a.name, external_id: a.external_id }));
     } catch {
       // Non-critical — section just starts empty
     }
@@ -750,6 +759,9 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
 
   const searchInput = document.getElementById('plan-account-search') as HTMLInputElement | null;
   if (searchInput) {
+    // Disable the search input until a provider is selected.
+    searchInput.disabled = !planProvider;
+
     // Remove previous listeners by replacing node
     const newInput = searchInput.cloneNode(true) as HTMLInputElement;
     searchInput.parentNode?.replaceChild(newInput, searchInput);
@@ -920,6 +932,18 @@ function setupRampScheduleHandlers(): void {
   providerSelect?.addEventListener('change', () => {
     updateCommitmentOptions();
     updatePlanNameFromSchedule();
+    // Clear all selected accounts when the provider changes. Selected account
+    // entries only carry id/name/external_id (no provider field), so we cannot
+    // filter by provider directly. Clearing on change is the safe default:
+    // an account valid for the old provider is almost never valid for the new
+    // one, and it prevents a cross-provider assignment from silently reaching
+    // the backend validator.
+    planSelectedAccounts = [];
+    renderPlanAccountChips();
+    updatePlanAccountIdsField();
+    // Re-enable/disable the account search input to match the new provider state.
+    const accountSearchInput = document.getElementById('plan-account-search') as HTMLInputElement | null;
+    if (accountSearchInput) accountSearchInput.disabled = !providerSelect.value;
   });
 
   serviceSelect?.addEventListener('change', () => {

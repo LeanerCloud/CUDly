@@ -2053,4 +2053,150 @@ describe('Plans Module', () => {
       expect(service.value).not.toBe('ec2');
     });
   });
+
+  describe('Target Accounts provider filter (issue #703)', () => {
+    // These tests need the account-search DOM elements in addition to the
+    // standard plan-modal markup provided by the outer beforeEach.
+    beforeEach(() => {
+      // Inject account-search elements into the existing form using safe DOM API calls.
+      const form = document.getElementById('plan-form');
+      if (form) {
+        const accountSection = document.createElement('div');
+        accountSection.className = 'plan-accounts-search';
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.id = 'plan-account-search';
+        searchInput.placeholder = 'Search accounts';
+        accountSection.appendChild(searchInput);
+
+        const suggestions = document.createElement('div');
+        suggestions.id = 'plan-account-suggestions';
+        suggestions.className = 'account-suggestions hidden';
+        accountSection.appendChild(suggestions);
+
+        const selectedContainer = document.createElement('div');
+        selectedContainer.id = 'plan-accounts-selected';
+        selectedContainer.className = 'selected-accounts';
+        accountSection.appendChild(selectedContainer);
+
+        const hiddenIds = document.createElement('input');
+        hiddenIds.type = 'hidden';
+        hiddenIds.id = 'plan-account-ids';
+        hiddenIds.value = '';
+        accountSection.appendChild(hiddenIds);
+
+        form.appendChild(accountSection);
+      }
+
+      // Use fake timers so setTimeout in handlePlanAccountSearch can be
+      // controlled synchronously.
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    test('account search passes the current plan provider to listAccounts', async () => {
+      (api.listAccounts as jest.Mock).mockResolvedValue([]);
+
+      // openNewPlanModal calls form.reset() synchronously, resetting the provider
+      // select back to its first option ('aws'). Wire up the modal first, then
+      // change provider, then trigger the search so the handler reads the new value.
+      openNewPlanModal();
+      // Let setupPlanAccountsSection's async portion settle (it clones the input node).
+      await Promise.resolve();
+
+      // Now change provider AFTER the form reset so setupPlanAccountsSection already ran.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'azure';
+
+      // The search input node was replaced (cloneNode) inside setupPlanAccountsSection;
+      // re-query by id to get the live node with the registered listener.
+      const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
+      searchInput.value = 'my-azure';
+      searchInput.dispatchEvent(new Event('input'));
+
+      // Advance past the 300 ms debounce timer and flush async api call.
+      jest.runAllTimers();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(api.listAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ search: 'my-azure', provider: 'azure' })
+      );
+    });
+
+    test('account search passes aws provider when plan provider is aws', async () => {
+      (api.listAccounts as jest.Mock).mockResolvedValue([]);
+
+      openNewPlanModal();
+      await Promise.resolve();
+
+      // form.reset() resets to first option 'aws', so provider is already 'aws'.
+      const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
+      searchInput.value = 'prod';
+      searchInput.dispatchEvent(new Event('input'));
+
+      jest.runAllTimers();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(api.listAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'aws' })
+      );
+    });
+
+    test('switching provider clears existing account chips and hidden field', async () => {
+      // openNewPlanModal wires up setupRampScheduleHandlers, which attaches the
+      // provider-change listener that clears accounts. Must call it before the test.
+      openNewPlanModal();
+      await Promise.resolve();
+
+      // Pre-populate the hidden field to simulate an earlier account selection.
+      // renderPlanAccountChips() will clear the DOM container from planSelectedAccounts,
+      // so populating it directly in the DOM is sufficient to assert the clear.
+      const selectedContainer = document.getElementById('plan-accounts-selected') as HTMLElement;
+      const chip = document.createElement('span');
+      chip.className = 'account-chip';
+      chip.textContent = 'old-acct';
+      selectedContainer.appendChild(chip);
+      (document.getElementById('plan-account-ids') as HTMLInputElement).value = 'acct-old-id';
+
+      // Switch provider — should clear chips and hidden field via the handler added in
+      // setupRampScheduleHandlers (called by openNewPlanModal).
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'gcp';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      expect(selectedContainer.textContent).toBe('');
+      expect((document.getElementById('plan-account-ids') as HTMLInputElement).value).toBe('');
+    });
+
+    test('account search input is disabled when provider is cleared after modal open', async () => {
+      // Open the modal with default provider (aws from form reset).
+      openNewPlanModal();
+      await Promise.resolve();
+
+      // Simulate user clearing the provider via the change listener, which should disable search.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = '';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
+      expect(searchInput.disabled).toBe(true);
+    });
+
+    test('account search input is enabled when plan-provider has a value', async () => {
+      // Default after form.reset() is 'aws' (first option), so disabled should be false.
+      openNewPlanModal();
+      await Promise.resolve();
+
+      // The cloned input replaces the original in setupPlanAccountsSection;
+      // query by id to get the current node.
+      const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
+      expect(searchInput.disabled).toBe(false);
+    });
+  });
 });
