@@ -46,6 +46,7 @@ export type {
   RIUtilization,
   ReshapeRecommendation,
   OfferingOption,
+  TargetOffering,
   ExchangeQuoteRequest,
   ExchangeQuoteSummary,
   ExchangeExecuteRequest,
@@ -181,7 +182,8 @@ export {
   executeExchange,
   getRIExchangeConfig,
   updateRIExchangeConfig,
-  getRIExchangeHistory
+  getRIExchangeHistory,
+  listTargetOfferings,
 } from './riexchange';
 
 // Re-export registrations functions and types
