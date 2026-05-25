@@ -394,6 +394,17 @@ func DefaultUserPermissions() []Permission {
 		{Action: ActionView, Resource: ResourceHistory},
 		{Action: ActionCreate, Resource: ResourcePlans},
 		{Action: ActionUpdate, Resource: ResourcePlans},
+		// delete:plans — every authenticated user can delete plans they
+		// have access to (PR-A of #660). The handler still requires
+		// requirePermission("delete", "plans") and the plan-access scope
+		// check, so only plans in the user's allowed accounts are
+		// reachable.
+		{Action: ActionDelete, Resource: ResourcePlans},
+		// update:purchases — every authenticated user can pause, resume,
+		// and update planned purchase executions (PR-A of #660). The
+		// handler still requires requirePermission("update", "purchases")
+		// and the execution-access scope check.
+		{Action: ActionUpdate, Resource: ResourcePurchases},
 		// cancel-own:purchases — every authenticated user can cancel
 		// pending purchase executions they created themselves (issue #46).
 		// The handler still requires the execution to be in a cancellable
