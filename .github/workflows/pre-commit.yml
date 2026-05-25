@@ -13,7 +13,13 @@ jobs:
   pre-commit:
     name: Run pre-commit hooks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 35 minutes accommodates the 3-attempt retry wrapper on the
+    # `Run pre-commit` step below (3 attempts * 10 min per-attempt
+    # timeout + 2 * 90 s retry waits = 33 min worst case) plus a
+    # small margin for setup/install steps. Without the bump, the
+    # job-level cap killed any retry attempt before it could start,
+    # making the retry policy ineffective (CR finding on #697).
+    timeout-minutes: 35
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -199,7 +205,7 @@ jobs:
           SKIP: terraform_validate
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          timeout_minutes: 15
+          timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 90
           command: pre-commit run --all-files
