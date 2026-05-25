@@ -138,8 +138,8 @@ func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string)
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) ListPurchasePlans(ctx context.Context) ([]config.PurchasePlan, error) {
-	args := m.Called(ctx)
+func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
+	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

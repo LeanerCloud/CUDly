@@ -265,7 +265,7 @@ func TestPostgresStore_PurchasePlans(t *testing.T) {
 		}
 
 		// List all plans
-		retrieved, err := store.ListPurchasePlans(ctx)
+		retrieved, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(retrieved), 2)
 	})

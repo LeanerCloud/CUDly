@@ -55,7 +55,7 @@ func (m *mockConfigStoreForHealth) DeletePurchasePlan(ctx context.Context, planI
 	return nil
 }
 
-func (m *mockConfigStoreForHealth) ListPurchasePlans(ctx context.Context) ([]config.PurchasePlan, error) {
+func (m *mockConfigStoreForHealth) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
 	return nil, nil
 }
 

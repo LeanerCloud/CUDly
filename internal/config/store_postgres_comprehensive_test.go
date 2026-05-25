@@ -125,7 +125,7 @@ func (s *mockablePostgresStore) UpdatePurchasePlan(ctx context.Context, plan *Pu
 	return nil
 }
 
-func (s *mockablePostgresStore) ListPurchasePlans(ctx context.Context) ([]PurchasePlan, error) {
+func (s *mockablePostgresStore) ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error) {
 	query := `
 		SELECT id, name, enabled, auto_purchase, notification_days_before,
 		       services, ramp_schedule, created_at, updated_at,
@@ -748,7 +748,7 @@ func TestListPurchasePlans_Success(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	require.NoError(t, err)
 	assert.Len(t, plans, 2)
 
@@ -782,7 +782,7 @@ func TestListPurchasePlans_Empty(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	require.NoError(t, err)
 	assert.NotNil(t, plans)
 	assert.Empty(t, plans)
@@ -800,7 +800,7 @@ func TestListPurchasePlans_QueryError(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnError(errors.New("table not found"))
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	assert.Error(t, err)
 	assert.Nil(t, plans)
 	assert.Contains(t, err.Error(), "table not found")
@@ -829,7 +829,7 @@ func TestListPurchasePlans_InvalidServicesJSON(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	assert.Error(t, err)
 	assert.Nil(t, plans)
 
@@ -857,7 +857,7 @@ func TestListPurchasePlans_InvalidRampScheduleJSON(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	assert.Error(t, err)
 	assert.Nil(t, plans)
 
@@ -1925,7 +1925,7 @@ func TestListPurchasePlans_RowsError(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
 
-	plans, err := store.ListPurchasePlans(context.Background())
+	plans, err := store.ListPurchasePlans(context.Background(), PurchasePlanFilter{})
 	assert.Error(t, err)
 	assert.Nil(t, plans)
 

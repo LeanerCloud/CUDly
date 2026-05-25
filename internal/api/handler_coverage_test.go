@@ -628,7 +628,7 @@ func TestHandler_listPlans_Error(t *testing.T) {
 
 	adminSession := &Session{UserID: "admin-id", Role: "admin"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
-	mockStore.On("ListPurchasePlans", mock.Anything).Return(nil, errors.New("db error"))
+	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(nil, errors.New("db error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -636,7 +636,7 @@ func TestHandler_listPlans_Error(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer test-token"},
 	}
 
-	_, err := handler.listPlans(ctx, req)
+	_, err := handler.listPlans(ctx, req, map[string]string{})
 	assert.Error(t, err)
 }
 

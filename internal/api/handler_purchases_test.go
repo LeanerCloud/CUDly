@@ -752,7 +752,7 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return(plans, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1069,7 +1069,7 @@ func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return(nil, errors.New("database error"))
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("database error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 

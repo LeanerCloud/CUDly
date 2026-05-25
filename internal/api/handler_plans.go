@@ -15,13 +15,21 @@ import (
 )
 
 // Plans handlers
-func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlansResponse, error) {
+func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*PlansResponse, error) {
 	// Require view:plans permission
 	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
 		return nil, err
 	}
 
-	plans, err := h.config.ListPurchasePlans(ctx)
+	// parseAccountIDs validates and splits the comma-separated account_ids
+	// query param. Returns nil (no filter) when absent or empty.
+	accountIDs, err := parseAccountIDs(params["account_ids"])
+	if err != nil {
+		return nil, NewClientError(400, err.Error())
+	}
+
+	filter := config.PurchasePlanFilter{AccountIDs: accountIDs}
+	plans, err := h.config.ListPurchasePlans(ctx, filter)
 	if err != nil {
 		return nil, err
 	}

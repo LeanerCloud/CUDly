@@ -306,7 +306,7 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	}
 
 	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{planA, planB}, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{planA, planB}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
@@ -350,7 +350,7 @@ func TestHandler_getUpcomingPurchases_OrphanExecutionSkipped(t *testing.T) {
 		},
 	}
 	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
-	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
@@ -403,7 +403,7 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
 	}
 
-	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{planA, planB}, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{planA, planB}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
 		{ExecutionID: "exec-A", PlanID: planA.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
 		{ExecutionID: "exec-B", PlanID: planB.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
@@ -453,7 +453,7 @@ func TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed(t *testing.T)
 		NextExecutionDate: &nextExecDate,
 		RampSchedule:      config.RampSchedule{CurrentStep: 0, TotalSteps: 5},
 	}
-	mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{plan}, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
 		{ExecutionID: "exec-unattributed", PlanID: plan.ID, Status: "pending", ScheduledDate: nextExecDate, StepNumber: 1},
 	}, nil)
@@ -793,7 +793,7 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 	t.Run("list plans error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
-		mockStore.On("ListPurchasePlans", ctx).Return(nil, errors.New("db error"))
+		mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("db error"))
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
@@ -806,7 +806,7 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 	t.Run("no pending executions yields empty list", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
-		mockStore.On("ListPurchasePlans", ctx).Return([]config.PurchasePlan{}, nil)
+		mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}

@@ -583,17 +583,44 @@ func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) e
 	return nil
 }
 
-// ListPurchasePlans lists all purchase plans
-func (s *PostgresStore) ListPurchasePlans(ctx context.Context) ([]PurchasePlan, error) {
-	query := `
-		SELECT id, name, enabled, auto_purchase, notification_days_before,
-		       services, ramp_schedule, created_at, updated_at,
-		       next_execution_date, last_execution_date, last_notification_sent
-		FROM purchase_plans
-		ORDER BY created_at DESC
-	`
+// buildListPlansQuery returns the SQL query and args for ListPurchasePlans.
+// When accountIDs is non-empty the query JOINs plan_accounts and filters
+// on account_id IN ($1, $2, …) using parameterised placeholders so the
+// result is bounded to plans that reference at least one of the given accounts.
+func buildListPlansQuery(accountIDs []string) (query string, args []any) {
+	if len(accountIDs) == 0 {
+		return `
+			SELECT id, name, enabled, auto_purchase, notification_days_before,
+			       services, ramp_schedule, created_at, updated_at,
+			       next_execution_date, last_execution_date, last_notification_sent
+			FROM purchase_plans
+			ORDER BY created_at DESC
+		`, nil
+	}
+	placeholders := make([]string, len(accountIDs))
+	args = make([]any, len(accountIDs))
+	for i, id := range accountIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	query = fmt.Sprintf(`
+		SELECT DISTINCT pp.id, pp.name, pp.enabled, pp.auto_purchase, pp.notification_days_before,
+		       pp.services, pp.ramp_schedule, pp.created_at, pp.updated_at,
+		       pp.next_execution_date, pp.last_execution_date, pp.last_notification_sent
+		FROM purchase_plans pp
+		JOIN plan_accounts pa ON pa.plan_id = pp.id
+		WHERE pa.account_id IN (%s)
+		ORDER BY pp.created_at DESC
+	`, strings.Join(placeholders, ", "))
+	return query, args
+}
 
-	rows, err := s.db.Query(ctx, query)
+// ListPurchasePlans lists purchase plans, optionally filtered by account IDs.
+// When filter.AccountIDs is non-empty the result is limited to plans that
+// reference at least one of those accounts via the plan_accounts join table.
+func (s *PostgresStore) ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error) {
+	query, args := buildListPlansQuery(filter.AccountIDs)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list purchase plans: %w", err)
 	}
