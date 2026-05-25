@@ -915,7 +915,11 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
   // Idempotency guard: skip registration if already wired during a prior
   // modal open. The error span, aria-describedby, and listeners persist
   // across opens because the modal node stays in the DOM.
-  if (input.dataset['rangeWired']) return;
+  if (input.dataset['rangeWired']) {
+    // Re-trigger validation so stale error UI is reconciled on modal reopen.
+    input.dispatchEvent(new Event('input'));
+    return;
+  }
   input.dataset['rangeWired'] = '1';
 
   const errorId = `${inputId}-range-error`;
@@ -944,8 +948,14 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
       error.classList.add('hidden');
       return;
     }
-    const invalid = !integerPattern.test(raw) || parseInt(raw, 10) < min || parseInt(raw, 10) > max;
-    if (invalid) {
+    if (!integerPattern.test(raw)) {
+      input.setAttribute('aria-invalid', 'true');
+      error.textContent = message;
+      error.classList.remove('hidden');
+      return;
+    }
+    const parsed = parseInt(raw, 10);
+    if (parsed < min || parsed > max) {
       input.setAttribute('aria-invalid', 'true');
       error.textContent = message;
       error.classList.remove('hidden');
@@ -955,8 +965,19 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
     }
   };
 
+  const clampOnBlur = (): void => {
+    const raw = input.value.trim();
+    if (!integerPattern.test(raw) || raw === '') return;
+    const parsed = parseInt(raw, 10);
+    if (parsed < min || parsed > max) {
+      input.value = String(Math.min(max, Math.max(min, parsed)));
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+    }
+  };
+
   input.addEventListener('input', check);
-  input.addEventListener('blur', check);
+  input.addEventListener('blur', clampOnBlur);
 }
 
 /**

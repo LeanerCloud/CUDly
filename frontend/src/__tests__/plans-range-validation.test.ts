@@ -15,6 +15,7 @@
  */
 
 import { openNewPlanModal, closePlanModal } from '../plans';
+import type { ToastOptions } from '../toast';
 
 jest.mock('../api', () => ({
   getPlans: jest.fn(),
@@ -57,9 +58,9 @@ jest.mock('../commitmentOptions', () => ({
   normalizePaymentValue: jest.fn((value) => value),
 }));
 
-const mockShowToast = jest.fn(() => ({ dismiss: jest.fn() }));
+const mockShowToast = jest.fn((_opts: ToastOptions) => ({ dismiss: jest.fn() }));
 jest.mock('../toast', () => ({
-  showToast: (opts) => mockShowToast(opts),
+  showToast: (opts: ToastOptions) => mockShowToast(opts),
 }));
 
 jest.mock('../confirmDialog', () => ({
@@ -324,15 +325,56 @@ describe('plan numeric inputs: live range validation (#702)', () => {
     expect(errorEl('plan-notify-days')!.classList.contains('hidden')).toBe(true);
   });
 
-  // --- blur also triggers the check ----------------------------------------
+  // --- blur clamps the value to [min, max] ---------------------------------
 
-  it('out-of-range value shows error on blur', () => {
+  it('out-of-range value is clamped to max on blur', () => {
     const input = document.getElementById('plan-coverage') as HTMLInputElement;
     input.value = '150';
     fire(input, 'blur');
 
+    expect(input.value).toBe('100');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('below-min value is clamped to min on blur', () => {
+    const input = document.getElementById('plan-notify-days') as HTMLInputElement;
+    input.value = '0';
+    fire(input, 'blur');
+
+    expect(input.value).toBe('1');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('non-integer value is NOT clamped on blur (error stays visible)', () => {
+    const input = document.getElementById('plan-coverage') as HTMLInputElement;
+    input.value = '1e+30';
+    fire(input, 'input');
     expect(input.getAttribute('aria-invalid')).toBe('true');
-    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(false);
+
+    fire(input, 'blur');
+    // Non-integer cannot be clamped; error persists so the user sees feedback.
+    expect(input.value).toBe('1e+30');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+  });
+
+  // --- idempotency: stale error UI is reconciled on reopen -----------------
+
+  it('re-opening the modal reconciles stale error UI for valid default values', () => {
+    // Trigger an error.
+    const coverage = document.getElementById('plan-coverage') as HTMLInputElement;
+    coverage.value = '999';
+    fire(coverage, 'input');
+    expect(coverage.getAttribute('aria-invalid')).toBe('true');
+
+    // Reset the field to a valid value (simulating form reset) then reopen.
+    coverage.value = '80';
+    closePlanModal();
+    openNewPlanModal();
+
+    // The reopen re-dispatches 'input', which clears the stale error.
+    expect(coverage.getAttribute('aria-invalid')).toBeNull();
+    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(true);
   });
 
   // --- idempotency: re-opening does not stack duplicate error spans ---------
