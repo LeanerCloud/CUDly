@@ -220,9 +220,9 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 
-	mockFactory.On("CreateAndValidateProvider", ctx, "", mock.Anything).Return(mockProvider, nil)
-	mockProvider.On("GetServiceClient", ctx, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)

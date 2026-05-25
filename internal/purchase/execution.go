@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -289,34 +290,57 @@ func (e *partialPurchaseError) Error() string {
 }
 
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
-// for the given account. Returns an error if credential resolution fails — callers
+// for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
 func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAccountProvider]: resolving credentials for provider=%s account=%s",
+		account.Provider, account.ID)
+	var cfg *provider.ProviderConfig
+	var err error
 	switch account.Provider {
 	case "aws":
-		return m.resolveAWSProvider(ctx, account)
+		cfg, err = m.resolveAWSProvider(ctx, account)
 	case "azure":
-		return m.resolveAzureProvider(ctx, account)
+		cfg, err = m.resolveAzureProvider(ctx, account)
 	case "gcp":
-		return m.resolveGCPProvider(ctx, account)
+		cfg, err = m.resolveGCPProvider(ctx, account)
 	default:
 		return nil, fmt.Errorf("credentials: unknown cloud provider %q for account %s", account.Provider, account.ID)
 	}
+	if err != nil {
+		logging.Errorf("purchase[resolveAccountProvider]: credential resolution failed for provider=%s account=%s after %s: %v",
+			account.Provider, account.ID, time.Since(t0), err)
+		return nil, err
+	}
+	logging.Infof("purchase[resolveAccountProvider]: credentials resolved for provider=%s account=%s in %s",
+		account.Provider, account.ID, time.Since(t0))
+	return cfg, nil
 }
 
 func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAWSProvider]: resolving AWS credentials for account=%s authMode=%s",
+		account.ID, account.AWSAuthMode)
 	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
 		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &account, m.credStore, m.assumeRoleSTS,
 		credentials.AWSResolveOptions{AmbientProvider: m.ambientAWSCreds})
 	if err != nil {
+		logging.Errorf("purchase[resolveAWSProvider]: failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve AWS for account %s (%s): %w", account.ID, account.Name, err)
 	}
+	logging.Infof("purchase[resolveAWSProvider]: AWS credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
 func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveAzureProvider]: resolving Azure credentials for account=%s authMode=%s",
+		account.ID, account.AzureAuthMode)
 	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-managed_identity Azure account %s", account.ID)
 	}
@@ -325,17 +349,26 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 		IssuerURL: m.oidcIssuerURL,
 	})
 	if err != nil {
+		logging.Errorf("purchase[resolveAzureProvider]: token credential resolution failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
 	if err != nil {
+		logging.Errorf("purchase[resolveAzureProvider]: Azure provider construction failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: create Azure provider for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	azProv.SetCredential(azCred)
+	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
 }
 
 func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+	t0 := time.Now()
+	logging.Infof("purchase[resolveGCPProvider]: resolving GCP credentials for account=%s authMode=%s",
+		account.ID, account.GCPAuthMode)
 	if account.GCPAuthMode != "application_default" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-ADC GCP account %s", account.ID)
 	}
@@ -344,13 +377,19 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 		IssuerURL: m.oidcIssuerURL,
 	})
 	if err != nil {
+		logging.Errorf("purchase[resolveGCPProvider]: token source resolution failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve GCP for account %s (%s): %w", account.ID, account.Name, err)
 	}
 	if gcpTS == nil {
-		// ADC mode: no explicit token source — use ambient credentials
+		// ADC mode: no explicit token source -- use ambient credentials.
+		logging.Infof("purchase[resolveGCPProvider]: GCP ADC mode for account=%s (ambient credentials) in %s",
+			account.ID, time.Since(t0))
 		return nil, nil
 	}
 	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
+	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
+		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
 }
 
@@ -646,6 +685,24 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 	return data
 }
 
+// logRecCtxErr emits a diagnostic log line when a per-recommendation context has
+// been cancelled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
+// budget fired) from Canceled (a parent context stopped the execution) so that
+// CloudWatch filters can tell the two apart without parsing error strings.
+// It is a no-op when recCtxErr is nil.
+func logRecCtxErr(executionID, recTuple string, elapsed time.Duration, recCtxErr error) {
+	if recCtxErr == nil {
+		return
+	}
+	if errors.Is(recCtxErr, context.DeadlineExceeded) {
+		logging.Errorf("purchase[%s]: per-rec deadline exceeded for %s (elapsed=%s)",
+			executionID, recTuple, elapsed)
+	} else if errors.Is(recCtxErr, context.Canceled) {
+		logging.Errorf("purchase[%s]: recommendation context canceled for %s (elapsed=%s)",
+			executionID, recTuple, elapsed)
+	}
+}
+
 // executeSinglePurchase executes a single purchase using the appropriate provider.
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
 // opts carries execution-level metadata (the source surface) that providers stamp
@@ -653,7 +710,7 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Per-purchase Info logs tagged with the owning execution ID so a
 	// CloudWatch filter on the execution UUID surfaces every step of the
-	// purchase attempt — provider construction, service-client lookup,
+	// purchase attempt -- provider construction, service-client lookup,
 	// details decode, the cloud SDK call, and the result. Issue #667
 	// surfaced that the prior flow had ZERO observable signal between the
 	// approve handler and the final aggregated error toast; a timed-out
@@ -661,9 +718,19 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	logging.Infof("purchase[%s]: starting rec %s/%s/%s/%s (count=%d term=%dyr payment=%s)",
 		opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Count, rec.Term, rec.Payment)
 
+	// Cap this individual rec at 30s so one hung rec (SDK retry storm, STS
+	// hang, pagination hang) cannot exhaust the Lambda budget and starve the
+	// other recs running in parallel in the same execution. 30s matches the
+	// purchasecfg hard limits (2 retries * 15s HTTP timeout) from issue #683.
+	// The parent ctx governs the overall Lambda budget; this per-rec deadline
+	// is always the shorter of the two.
+	recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
+	recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer recCancel()
+
 	// Create the provider
 	t0 := time.Now()
-	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(ctx, rec.Provider, provCfg)
+	cloudProvider, err := m.providerFactory.CreateAndValidateProvider(recCtx, rec.Provider, provCfg)
 	if err != nil {
 		logging.Errorf("purchase[%s]: provider construction failed for %s after %s: %v",
 			opts.ExecutionID, rec.Provider, time.Since(t0), err)
@@ -676,7 +743,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 
 	// Get the service client for this region
 	t0 = time.Now()
-	serviceClient, err := cloudProvider.GetServiceClient(ctx, serviceType, rec.Region)
+	serviceClient, err := cloudProvider.GetServiceClient(recCtx, serviceType, rec.Region)
 	if err != nil {
 		logging.Errorf("purchase[%s]: service client lookup failed for %s/%s in %s after %s: %v",
 			opts.ExecutionID, rec.Provider, serviceType, rec.Region, time.Since(t0), err)
@@ -737,9 +804,10 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
-	result, err := serviceClient.PurchaseCommitment(ctx, recommendation, opts)
+	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {
+		logRecCtxErr(opts.ExecutionID, recTuple, elapsed, recCtx.Err())
 		logging.Errorf("purchase[%s]: %s/%s/%s/%s PurchaseCommitment failed after %s: %v",
 			opts.ExecutionID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, elapsed, err)
 		return result, fmt.Errorf("purchase failed: %w", err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -233,11 +234,19 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 		stsClient = sts.NewFromConfig(p.cfg)
 	}
 
-	_, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	t0 := time.Now()
+	logging.Infof("purchase[STS]: GetCallerIdentity starting (profile=%s region=%s)",
+		p.profile, p.region)
+	result, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
+		logging.Errorf("purchase[STS]: GetCallerIdentity failed after %s: %v", time.Since(t0), err)
 		return fmt.Errorf("AWS credentials validation failed: %w", err)
 	}
-
+	account := ""
+	if result.Account != nil {
+		account = *result.Account
+	}
+	logging.Infof("purchase[STS]: GetCallerIdentity returned in %s (account=%s)", time.Since(t0), account)
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
@@ -92,7 +93,17 @@ func FanOutWithConcurrency[T any](
 					}
 				}
 			}()
+			t0 := time.Now()
+			logging.Infof("purchase[fan-out]: goroutine starting for account=%s", accountID)
 			val, err := fn(ctx, accountID)
+			elapsed := time.Since(t0)
+			if err != nil {
+				logging.Errorf("purchase[fan-out]: goroutine for account=%s failed after %s: %v",
+					accountID, elapsed, err)
+			} else {
+				logging.Infof("purchase[fan-out]: goroutine for account=%s completed in %s",
+					accountID, elapsed)
+			}
 			results[idx] = Result[T]{AccountID: accountID, Value: val, Err: err}
 		}(i, id)
 	}

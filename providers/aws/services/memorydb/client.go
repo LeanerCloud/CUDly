@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/memorydb/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
@@ -30,10 +31,12 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new MemoryDB client
+// NewClient creates a new MemoryDB client with purchase-path retry/timeout
+// settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: memorydb.NewFromConfig(cfg),
+		client: memorydb.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }
@@ -116,7 +119,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -276,13 +279,23 @@ func convertMemoryDBPaymentOption(option string) (string, error) {
 // findOfferingID finds the appropriate Reserved Node offering ID.
 // All supported narrow filters (NodeType, OfferingType, Duration) are set
 // directly on the request to minimize the result set (issue #688).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+//
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	wantOfferingType, err := convertMemoryDBPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", err
 	}
 
 	duration := c.getDurationStringForAPI(rec.Term)
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: MemoryDB findOfferingID starting (nodeType=%s term=%s payment=%s)",
+		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
 
 	var nextToken *string
 	page := 0
@@ -308,29 +321,60 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedNodesOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: MemoryDB findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("MemoryDB findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedNodesOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: MemoryDB findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedNodesOfferings), time.Since(pageStart))
 
-		for _, o := range result.ReservedNodesOfferings {
-			got := aws.ToString(o.OfferingType)
-			if got != wantOfferingType {
-				return "", fmt.Errorf("MemoryDB offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
-					aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
-					rec.ResourceType, rec.PaymentOption)
-			}
-			return aws.ToString(o.ReservedNodesOfferingId), nil
+		if id, err := scanMemoryDBOfferingPage(result.ReservedNodesOfferings, wantOfferingType, rec, tag, page, t0); err != nil {
+			return "", err
+		} else if id != "" {
+			return id, nil
 		}
 
-		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+		if isLastMemoryDBPage(result.NextToken) {
 			break
 		}
 		nextToken = result.NextToken
 	}
 
+	log.Printf("purchase[%s]: MemoryDB findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for MemoryDB %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, rec.PaymentOption, page)
+}
+
+// scanMemoryDBOfferingPage inspects a single page of DescribeReservedNodesOfferings
+// results and returns the first matching offering ID.
+// It returns ("", nil) when the page is empty or no offering matched; it returns
+// ("", err) on an API filter mismatch; it returns (id, nil) on a successful match.
+//
+// Pulled out of findOfferingID to keep that function under the cyclomatic limit.
+func scanMemoryDBOfferingPage(offerings []types.ReservedNodesOffering, wantOfferingType string, rec common.Recommendation, tag string, page int, t0 time.Time) (string, error) {
+	for _, o := range offerings {
+		got := aws.ToString(o.OfferingType)
+		if got != wantOfferingType {
+			return "", fmt.Errorf("MemoryDB offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedNodesOfferingId), got, wantOfferingType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		log.Printf("purchase[%s]: MemoryDB findOfferingID found match on page %d after %s total",
+			tag, page, time.Since(t0))
+		return aws.ToString(o.ReservedNodesOfferingId), nil
+	}
+	return "", nil
+}
+
+// isLastMemoryDBPage reports whether a NextToken indicates the terminal page.
+// The AWS SDK may return either nil or a pointer to an empty string for the
+// last page; both must end pagination so the loop does not issue a redundant
+// request (and risk a false page-cap error on borderline page counts).
+//
+// Pulled out of findOfferingID to keep that function under the cyclomatic limit.
+func isLastMemoryDBPage(nextToken *string) bool {
+	return nextToken == nil || aws.ToString(nextToken) == ""
 }
 
 // getDurationStringForAPI converts the term string to a duration value accepted
@@ -345,13 +389,13 @@ func (c *Client) getDurationStringForAPI(term string) string {
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

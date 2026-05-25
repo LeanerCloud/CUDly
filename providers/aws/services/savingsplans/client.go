@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
 // SavingsPlansAPI defines the interface for Savings Plans operations (enables mocking)
@@ -33,13 +34,14 @@ type Client struct {
 	planType types.SavingsPlanType
 }
 
-// NewClient creates a new Savings Plans client scoped to one plan type.
-// The plan type determines which slug GetServiceType returns and which
-// commitments GetExistingCommitments includes — both critical for the
-// per-plan-type ServiceConfig dispatch added in the AWS provider.
+// NewClient creates a new Savings Plans client scoped to one plan type with
+// purchase-path retry/timeout settings. The plan type determines which slug
+// GetServiceType returns and which commitments GetExistingCommitments includes.
+// See purchasecfg for retry rationale.
 func NewClient(cfg aws.Config, planType types.SavingsPlanType) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client:   savingsplans.NewFromConfig(cfg),
+		client:   savingsplans.NewFromConfig(pcfg),
 		region:   cfg.Region,
 		planType: planType,
 	}
@@ -180,7 +182,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find Savings Plans offering: %w", err)
 		return result, result.Error
@@ -221,8 +223,10 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	return result, nil
 }
 
-// findOfferingID finds the appropriate Savings Plans offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// findOfferingID finds the appropriate Savings Plans offering ID.
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
 	if !ok {
 		return "", fmt.Errorf("invalid service details for Savings Plans")
@@ -252,13 +256,28 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	termSeconds := convertTermToSeconds(rec.Term)
 	paymentOption := convertPaymentOption(rec.PaymentOption)
 
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+
+	t0 := time.Now()
+	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
+		tag, planType, rec.Term, rec.PaymentOption)
+
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termSeconds},
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
 	}
 
-	return c.lookupOfferingID(ctx, input)
+	offeringID, err := c.lookupOfferingID(ctx, input)
+	if err != nil {
+		log.Printf("purchase[%s]: SavingsPlans findOfferingID failed after %s: %v", tag, time.Since(t0), err)
+	} else {
+		log.Printf("purchase[%s]: SavingsPlans findOfferingID found offering in %s", tag, time.Since(t0))
+	}
+	return offeringID, err
 }
 
 // convertPlanType converts a plan type string to AWS SDK type
@@ -313,6 +332,7 @@ const maxOfferingPages = 5
 // filters that narrow the result set, so only a handful of results are expected
 // on the first page. Pagination with a cap is added as a safety net.
 func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
+	t0 := time.Now()
 	page := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -327,8 +347,12 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 
 		result, err := c.client.DescribeSavingsPlansOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d failed after %s: %v",
+				page, time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe Savings Plans offerings: %w", err)
 		}
+		log.Printf("purchase[SavingsPlans]: DescribeSavingsPlansOfferings page %d returned %d results in %s",
+			page, len(result.SearchResults), time.Since(t0))
 
 		for _, offering := range result.SearchResults {
 			if offering.OfferingId == nil {
@@ -348,13 +372,13 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 
 // ValidateOffering checks if a Savings Plans offering exists
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

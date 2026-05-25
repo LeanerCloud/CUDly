@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/elasticache/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
@@ -30,10 +31,12 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new ElastiCache client
+// NewClient creates a new ElastiCache client with purchase-path retry/timeout
+// settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: elasticache.NewFromConfig(cfg),
+		client: elasticache.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }
@@ -120,7 +123,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -264,8 +267,10 @@ func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationID 
 // of timing out the Lambda budget (issue #688).
 const maxOfferingPages = 5
 
-// findOfferingID finds the appropriate Reserved Cache Node offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// findOfferingID finds the appropriate Reserved Cache Node offering ID.
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	details, ok := rec.Details.(*common.CacheDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for ElastiCache")
@@ -274,14 +279,21 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	if err != nil {
 		return "", err
 	}
-	return c.paginateElastiCacheOfferings(ctx, rec, details, offeringType)
+	return c.paginateElastiCacheOfferings(ctx, rec, details, offeringType, execID)
 }
 
 // paginateElastiCacheOfferings walks DescribeReservedCacheNodesOfferings pages and returns
 // the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
 // timeout exhaustion (issue #688).
-func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Recommendation, details *common.CacheDetails, offeringType string) (string, error) {
+func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Recommendation, details *common.CacheDetails, offeringType, execID string) (string, error) {
 	duration := c.getDurationString(rec.Term)
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: ElastiCache findOfferingID starting (nodeType=%s engine=%s duration=%s payment=%s)",
+		tag, rec.ResourceType, details.Engine, duration, offeringType)
 
 	var marker *string
 	page := 0
@@ -305,13 +317,17 @@ func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Re
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedCacheNodesOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: ElastiCache findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("ElastiCache findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedCacheNodesOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: ElastiCache findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedCacheNodesOfferings), time.Since(pageStart))
 		if id, scanErr := scanElastiCacheOfferingPage(result.ReservedCacheNodesOfferings, rec, offeringType); scanErr != nil {
 			return "", scanErr
 		} else if id != "" {
+			log.Printf("purchase[%s]: ElastiCache findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return id, nil
 		}
 		if result.Marker == nil || aws.ToString(result.Marker) == "" {
@@ -319,6 +335,8 @@ func (c *Client) paginateElastiCacheOfferings(ctx context.Context, rec common.Re
 		}
 		marker = result.Marker
 	}
+	log.Printf("purchase[%s]: ElastiCache findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for ElastiCache %s %s %s after %d page(s) (issue #688)",
 		rec.ResourceType, details.Engine, rec.PaymentOption, page)
 }
@@ -340,13 +358,13 @@ func scanElastiCacheOfferingPage(offerings []types.ReservedCacheNodesOffering, r
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

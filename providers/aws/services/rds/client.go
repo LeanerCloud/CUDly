@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
@@ -32,10 +33,12 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new RDS client
+// NewClient creates a new RDS client with purchase-path retry/timeout settings.
+// See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: rds.NewFromConfig(cfg),
+		client: rds.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }
@@ -134,7 +137,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -292,8 +295,10 @@ func (c *Client) findReservationByID(ctx context.Context, reservationID string) 
 // of timing out the Lambda budget (issue #688).
 const maxOfferingPages = 5
 
-// findOfferingID finds the appropriate RDS Reserved Instance offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// findOfferingID finds the appropriate RDS Reserved Instance offering ID.
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	details, ok := rec.Details.(*common.DatabaseDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
@@ -302,16 +307,24 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 	if err != nil {
 		return "", fmt.Errorf("invalid payment option: %w", err)
 	}
-	return c.paginateRDSOfferings(ctx, rec, details, offeringType)
+	return c.paginateRDSOfferings(ctx, rec, details, offeringType, execID)
 }
 
 // paginateRDSOfferings walks DescribeReservedDBInstancesOfferings pages and returns
 // the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
 // timeout exhaustion (issue #688).
-func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string) (string, error) {
+func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string, execID string) (string, error) {
 	multiAZ := details.AZConfig == "multi-az"
 	normalizedEngine := c.normalizeEngineName(details.Engine)
 	duration := c.getDurationString(rec.Term)
+
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: RDS findOfferingID starting (class=%s engine=%s multi-az=%v duration=%s payment=%s)",
+		tag, rec.ResourceType, normalizedEngine, multiAZ, duration, offeringType)
 
 	var marker *string
 	page := 0
@@ -336,13 +349,17 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("RDS findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
 		if id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType); scanErr != nil {
 			return "", scanErr
 		} else if id != "" {
+			log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return id, nil
 		}
 		if result.Marker == nil || aws.ToString(result.Marker) == "" {
@@ -350,6 +367,8 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 		}
 		marker = result.Marker
 	}
+	log.Printf("purchase[%s]: RDS findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for RDS %s %s multi-az=%v %s after %d page(s) (issue #688)",
 		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, page)
 }
@@ -371,13 +390,13 @@ func scanRDSOfferingPage(offerings []types.ReservedDBInstancesOffering, rec comm
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

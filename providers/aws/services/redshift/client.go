@@ -16,6 +16,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/retry"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
 // RedshiftAPI defines the interface for Redshift operations (enables mocking)
@@ -47,11 +48,13 @@ type Client struct {
 	accountErr  error
 }
 
-// NewClient creates a new Redshift client
+// NewClient creates a new Redshift client with purchase-path retry/timeout
+// settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client:    redshift.NewFromConfig(cfg),
-		stsClient: sts.NewFromConfig(cfg),
+		client:    redshift.NewFromConfig(pcfg),
+		stsClient: sts.NewFromConfig(pcfg),
 		region:    cfg.Region,
 	}
 }
@@ -146,7 +149,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -396,10 +399,19 @@ const maxOfferingPages = 5
 // Redshift's DescribeReservedNodeOfferings has no server-side node-type or
 // payment-option filter, so matching is done client-side with a pagination cap
 // to prevent indefinite runtime (issue #688).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: Redshift findOfferingID starting (nodeType=%s term=%s payment=%s)",
+		tag, rec.ResourceType, rec.Term, rec.PaymentOption)
+
 	var marker *string
 	page := 0
-
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -419,14 +431,18 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		pageStart := time.Now()
 		result, err := c.client.DescribeReservedNodeOfferings(ctx, input)
 		if err != nil {
+			log.Printf("purchase[%s]: Redshift findOfferingID page %d failed after %s (total %s): %v",
+				tag, page, time.Since(pageStart), time.Since(t0), err)
 			return "", fmt.Errorf("failed to describe offerings: %w", err)
 		}
-		log.Printf("Redshift findOfferingID page %d: %d offerings in %s",
-			page, len(result.ReservedNodeOfferings), time.Since(pageStart))
+		log.Printf("purchase[%s]: Redshift findOfferingID page %d: %d offerings in %s",
+			tag, page, len(result.ReservedNodeOfferings), time.Since(pageStart))
 
 		if id, scanErr := c.scanRedshiftOfferingPage(result.ReservedNodeOfferings, rec); scanErr != nil {
 			return "", scanErr
 		} else if id != "" {
+			log.Printf("purchase[%s]: Redshift findOfferingID found match on page %d after %s total",
+				tag, page, time.Since(t0))
 			return id, nil
 		}
 
@@ -436,6 +452,8 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		marker = result.Marker
 	}
 
+	log.Printf("purchase[%s]: Redshift findOfferingID exhausted %d page(s) in %s -- no match",
+		tag, page, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for Redshift %s after %d page(s) (issue #688)",
 		rec.ResourceType, page)
 }
@@ -486,13 +504,13 @@ func (c *Client) matchesOfferingType(offeringType string, _ string) bool {
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}

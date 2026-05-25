@@ -837,7 +837,7 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 			}, nil).Once()
 	}
 
-	_, err := client.findOfferingID(context.Background(), rec)
+	_, err := client.findOfferingID(context.Background(), rec, "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "pagination cap reached")
@@ -876,7 +876,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec, "")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "payment option")
@@ -908,7 +908,7 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec, "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)

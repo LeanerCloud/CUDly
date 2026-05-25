@@ -19,7 +19,7 @@ enable_docker_build = true # Build image via Terraform build module (no separate
 
 # Lambda Configuration
 lambda_memory_size            = 1024
-lambda_timeout                = 60
+lambda_timeout                = 300
 lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 30
 lambda_enable_function_url    = true

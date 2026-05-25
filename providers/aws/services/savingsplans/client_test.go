@@ -284,7 +284,7 @@ func TestClient_findOfferingID_RejectsMismatchedPlanType(t *testing.T) {
 		},
 	}
 
-	_, err := client.findOfferingID(context.Background(), rec)
+	_, err := client.findOfferingID(context.Background(), rec, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match client scope")
 	// AWS API must not be called — the mismatch should be caught
