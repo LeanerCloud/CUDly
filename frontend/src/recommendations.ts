@@ -3134,10 +3134,13 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
     return;
   }
 
-  // Bucket by (provider, service, term). Bundle B added `term` to the key:
-  // each rec is purchased with its OWN per-row term (the toolbar Term
-  // selector is gone). Multi-term selections legitimately fan out into
-  // multiple buckets, e.g. AWS EC2 1y + AWS EC2 3y → 2 buckets.
+  // Bucket by (provider, service, term, payment). Bundle B added `term` to
+  // the key so multi-term selections fan out into separate buckets. Issue
+  // #699 adds `payment` for the same reason: recs with identical
+  // (provider, service, term) but different per-rec payment values must
+  // also land in separate buckets so each bucket is payment-uniform and
+  // resolveBucketPaymentSeed can seed from recs[0].payment rather than
+  // falling back to the toolbar default ('all-upfront').
   //
   // Issue #132: SP recs (savings-plans-{compute,ec2instance,sagemaker,
   // database}) collapse into a single bucket per (provider, term) so an
@@ -3152,7 +3155,7 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
   const buckets = new Map<string, LocalRecommendation[]>();
   for (const r of scaled) {
     const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
-    const key = `${r.provider}|${bucketService}|${r.term}`;
+    const key = `${r.provider}|${bucketService}|${r.term}|${r.payment ?? ''}`;
     const existing = buckets.get(key);
     if (existing) existing.push(r);
     else buckets.set(key, [r]);
@@ -3265,8 +3268,7 @@ function resolveBucketPaymentSeed(
   toolbar: BulkPurchaseToolbarState,
   overridesByAccount: Map<string, AccountServiceOverride[]>,
 ): { payment: BulkPurchaseToolbarState['payment']; source: 'override' | 'toolbar' } {
-  const fallback = { payment: toolbar.payment, source: 'toolbar' as const };
-  if (recs.length === 0) return fallback;
+  if (recs.length === 0) return { payment: toolbar.payment, source: 'toolbar' };
   const r0 = recs[0]!;
   const provider = r0.provider as CompatProvider;
   const term = r0.term as 1 | 3;
@@ -3274,33 +3276,54 @@ function resolveBucketPaymentSeed(
   // Single-account check: every rec must carry the same non-empty cloud_account_id.
   const accountIDs = new Set<string>();
   for (const r of recs) {
-    if (!r.cloud_account_id) return fallback; // any rec missing an id → toolbar
+    if (!r.cloud_account_id) {
+      // Any rec missing an account id skips the override lookup; fall
+      // through to the rec.payment seed below.
+      accountIDs.clear();
+      break;
+    }
     accountIDs.add(r.cloud_account_id);
   }
-  if (accountIDs.size !== 1) return fallback;
-  const accountID = recs[0]!.cloud_account_id!;
-
-  const overrides = overridesByAccount.get(accountID);
-  if (!overrides) return fallback;
-
-  // Match on the per-rec service (NOT bucket.service) — see the comment
-  // above for the SP-canonical-bucket-key future-proofing rationale.
-  const match = overrides.find(
-    (o) => o.provider === provider && o.service === r0.service,
-  );
-  if (!match || !match.payment) return fallback;
-
-  // Defensive: only honour the override when the (provider, service,
-  // term, payment) combo is actually supported. A stale or hand-saved
-  // override pointing at an unsupported payment for this term shouldn't
-  // poison the dropdown — fall back to toolbar.
-  if (!isPaymentSupported(provider, r0.service, term, match.payment as CompatPayment)) {
-    return fallback;
+  if (accountIDs.size === 1) {
+    const accountID = recs[0]!.cloud_account_id!;
+    const overrides = overridesByAccount.get(accountID);
+    if (overrides) {
+      // Match on the per-rec service (NOT bucket.service) — see the comment
+      // above for the SP-canonical-bucket-key future-proofing rationale.
+      const match = overrides.find(
+        (o) => o.provider === provider && o.service === r0.service,
+      );
+      if (
+        match
+        && match.payment
+        // Defensive: only honour the override when the (provider, service,
+        // term, payment) combo is actually supported. A stale or hand-saved
+        // override pointing at an unsupported payment for this term shouldn't
+        // poison the dropdown — fall through to rec.payment seed.
+        && isPaymentSupported(provider, r0.service, term, match.payment as CompatPayment)
+      ) {
+        return {
+          payment: match.payment as BulkPurchaseToolbarState['payment'],
+          source: 'override',
+        };
+      }
+    }
   }
-  return {
-    payment: match.payment as BulkPurchaseToolbarState['payment'],
-    source: 'override',
-  };
+
+  // Issue #699: since `payment` is now part of the bucket key, every bucket
+  // is payment-uniform (all recs share the same rec.payment). Seed from
+  // recs[0].payment when it's a supported value for this (provider, service,
+  // term) cell instead of blindly falling back to toolbar.payment
+  // ('all-upfront'). Multi-account buckets, missing-payment recs, and
+  // unsupported payment values still fall through to toolbar.
+  if (
+    r0.payment
+    && isPaymentSupported(provider, r0.service, term, r0.payment as CompatPayment)
+  ) {
+    return { payment: r0.payment as BulkPurchaseToolbarState['payment'], source: 'toolbar' };
+  }
+
+  return { payment: toolbar.payment, source: 'toolbar' };
 }
 
 async function openFanOutModal(

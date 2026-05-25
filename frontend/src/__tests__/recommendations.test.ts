@@ -2793,6 +2793,45 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     // At least one bucket payment must now be 'no-upfront'.
     expect(after!.some((b) => b.payment === 'no-upfront')).toBe(true);
   });
+
+  // Regression: issue #699. Before the fix, recs with the same
+  // (provider, service, term) but different rec.payment values were
+  // collapsed into one bucket and seeded from toolbar.payment
+  // ('all-upfront'), silently overriding each rec's actual payment.
+  // Fix: include `payment` in the bucket key so each distinct payment
+  // fans into its own bucket; resolveBucketPaymentSeed then uses
+  // recs[0].payment (uniform within the bucket) as its seed.
+  test('(e) issue #699: same (provider, service, term) but different rec.payment fans into separate buckets seeded from rec.payment, not toolbar', async () => {
+    // Two recs: same aws/ec2/1yr but one is partial-upfront and one is
+    // no-upfront. Different resource_type so each is its own cell (not
+    // collapsed by pickBestVariantPerCell).
+    const recs = [
+      { id: 'x1', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'x2', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large',  region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront',      savings: 150, upfront_cost: 0 },
+    ];
+    setupMixedTermRecs(recs);
+    // No account overrides — resolveBucketPaymentSeed must seed from
+    // rec.payment, not the toolbar default (all-upfront).
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    // After the fix: 2 buckets (one per payment variant).
+    expect(buckets!.length).toBe(2);
+    // Each bucket carries the correct per-rec payment, not the toolbar default.
+    const payments = buckets!.map((b) => b.payment).sort();
+    expect(payments).toEqual(['no-upfront', 'partial-upfront']);
+    // paymentSource is 'toolbar' (rec.payment fallback path, no override),
+    // confirming the seed came from the rec, not an account override.
+    for (const b of buckets!) {
+      expect(b.paymentSource).toBe('toolbar');
+    }
+  });
 });
 
 // Issue #111 (iii): per-row Payment seed in openPurchaseModal — the
