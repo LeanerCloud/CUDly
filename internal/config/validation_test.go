@@ -390,13 +390,24 @@ func TestServiceConfig_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "azure all-upfront is valid",
+			name: "azure all-upfront is rejected (aws-only token)",
 			config: ServiceConfig{
 				Provider: "azure",
 				Service:  "vm",
 				Payment:  "all-upfront",
 			},
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure no-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
 		},
 		{
 			name: "azure partial-upfront is rejected (aws-only token)",
@@ -407,6 +418,16 @@ func TestServiceConfig_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure error message includes canonical set",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "all-upfront",
+			},
+			wantErr: true,
+			errMsg:  "valid for azure: upfront, monthly",
 		},
 		{
 			name: "gcp upfront is valid",
@@ -435,6 +456,36 @@ func TestServiceConfig_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp all-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "all-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp no-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp error message includes canonical set",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "valid for gcp: upfront, monthly",
 		},
 		{
 			name: "coverage too low",

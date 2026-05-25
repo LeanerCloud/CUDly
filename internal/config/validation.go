@@ -16,14 +16,44 @@ var ValidProviders = []string{"aws", "azure", "gcp"}
 var ValidPaymentOptions = []string{"no-upfront", "partial-upfront", "all-upfront"}
 
 // ValidPaymentOptionsByProvider maps each provider to the payment option
-// tokens it accepts. Azure and GCP reservations use "upfront" (all-upfront
-// billing) and "monthly" (no-upfront / spread billing). AWS RIs/SPs use the
-// three classic tiers. See providers/{azure,gcp}/services/*/client.go for
-// the case statements that consume these values.
+// tokens it accepts. The sets are tightened to the canonical tokens each
+// provider actually models semantically; AWS-style aliases the service
+// clients also accept (for legacy frontend compat) are deliberately not
+// surfaced here — config-layer validation rejects them so input bugs aren't
+// hidden behind silent alias coercion in the service-client switches.
+// Callers that need to translate legacy/cross-provider tokens into the
+// canonical form should use NormalizePaymentOption at the emission boundary
+// (see internal/scheduler/scheduler.go:convertRecommendations).
+//
+// Canonical sets, verified against the per-service purchase/pricing switches:
+//
+//   - AWS  : {no-upfront, partial-upfront, all-upfront}
+//     Three distinct billing tiers exposed by RI/SP offering APIs.
+//
+//   - Azure: {upfront, monthly}
+//     Reservation purchases only model two billing plans. See:
+//     providers/azure/services/compute/client.go:493-497
+//     providers/azure/services/cache/client.go:375-379
+//     providers/azure/services/cosmosdb/client.go:368-372
+//     providers/azure/services/database/client.go:376-380
+//     providers/azure/services/search/client.go:349-353
+//     providers/azure/services/synapse/client.go:354-358
+//     providers/azure/services/managedredis/client.go:345-349
+//     (The savingsplans switch at providers/azure/services/savingsplans/
+//     client.go:418-429 mirrors AWS's three-tier set, but Azure savings-plan
+//     recommendations are not currently emitted — GetRecommendations returns
+//     []; the canonical set follows the only path that emits today.)
+//
+//   - GCP  : {upfront, monthly}
+//     CUD purchase model has only one-time upfront vs monthly recurring. See:
+//     providers/gcp/services/computeengine/client.go:587-591
+//     providers/gcp/services/cloudsql/client.go:288-292
+//     providers/gcp/services/cloudstorage/client.go:297-301
+//     providers/gcp/services/memorystore/client.go:245-249
 var ValidPaymentOptionsByProvider = map[string][]string{
 	"aws":   {"no-upfront", "partial-upfront", "all-upfront"},
-	"azure": {"all-upfront", "no-upfront", "upfront", "monthly"},
-	"gcp":   {"all-upfront", "no-upfront", "upfront", "monthly"},
+	"azure": {"upfront", "monthly"},
+	"gcp":   {"upfront", "monthly"},
 }
 
 // validPaymentOptionsUnion is the union of all provider payment option sets,
