@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net/mail"
+	"sort"
 	"strings"
 )
 
@@ -67,6 +68,8 @@ var ValidPaymentOptionsByProvider = map[string][]string{
 // validPaymentOptionsUnion is the union of all provider payment option sets,
 // used for global-config default validation where no provider context is
 // available. Accepts any token that is valid for at least one provider.
+// The slice is sorted so that validation error messages are deterministic
+// across runs (map iteration order in Go is non-deterministic).
 var validPaymentOptionsUnion = func() []string {
 	seen := map[string]bool{}
 	var all []string
@@ -78,6 +81,7 @@ var validPaymentOptionsUnion = func() []string {
 			}
 		}
 	}
+	sort.Strings(all)
 	return all
 }()
 

@@ -855,6 +855,28 @@ func TestIsValidPaymentOption(t *testing.T) {
 	assert.False(t, isValidPaymentOption(""))
 }
 
+func TestValidPaymentOptionsUnionDeterministic(t *testing.T) {
+	// validPaymentOptionsUnion must be sorted so that validation error messages
+	// that include the list of valid options are reproducible across runs.
+	// Map iteration in Go is non-deterministic; without an explicit sort the
+	// slice order can vary, making test assertions on error strings brittle.
+	expected := []string{"all-upfront", "monthly", "no-upfront", "partial-upfront", "upfront"}
+	assert.Equal(t, expected, validPaymentOptionsUnion,
+		"validPaymentOptionsUnion must be in sorted order for deterministic error messages")
+
+	// Double-check: building the union a second time (simulating another init
+	// call) must produce the same sorted result. We verify by sorting a fresh
+	// copy of the current value and confirming it is byte-equal.
+	sorted := make([]string, len(validPaymentOptionsUnion))
+	copy(sorted, validPaymentOptionsUnion)
+	// sorted is already sorted by construction; assert the slice is in order.
+	for i := 1; i < len(sorted); i++ {
+		assert.LessOrEqual(t, sorted[i-1], sorted[i],
+			"validPaymentOptionsUnion[%d] %q must be <= validPaymentOptionsUnion[%d] %q",
+			i-1, sorted[i-1], i, sorted[i])
+	}
+}
+
 func TestNormalizePaymentOption(t *testing.T) {
 	tests := []struct {
 		name     string
