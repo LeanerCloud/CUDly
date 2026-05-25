@@ -40,6 +40,8 @@ describe('permissions', () => {
         'view:history',
         'create:plans',
         'update:plans',
+        'delete:plans',
+        'update:purchases',
         'cancel-own:purchases',
         'retry-own:purchases',
         'approve-own:purchases',
@@ -91,7 +93,9 @@ describe('permissions', () => {
 
     test('user role: denied for admin-gated actions', () => {
       mockUser('user');
-      expect(canAccess('delete', 'plans')).toBe(false);
+      // delete:plans is now a default user permission (PR #660); no longer admin-gated.
+      expect(canAccess('delete', 'plans')).toBe(true);
+      // execute:purchases was NOT added to user defaults; remains admin-only.
       expect(canAccess('execute', 'purchases')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
       expect(canAccess('view', 'users')).toBe(false);
