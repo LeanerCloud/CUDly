@@ -16,9 +16,11 @@
  *   6. retry_execution_id set → no Retry button (act on the descendant).
  *   7. lineage links: "↻ Retried as #abc" for predecessors, "↻ Retry #n" for retries.
  *   8. Click + decline confirmDialog → no API call.
- *   9. Click + accept → retryPurchase + reload + toast.
+ *   9. Click + accept → retryPurchase + reload + success toast (email_sent true).
  *  10. retryPurchase rejects → toast.error + button re-enabled.
  *  11. Over-threshold click sends force=true.
+ *  12. email_sent absent but status=pending → success toast.
+ *  13. email_sent false → warning toast (approval email failed).
  */
 
 import { loadHistory } from '../history';
@@ -214,7 +216,13 @@ describe('History inline Retry button (issue #47)', () => {
   test('threshold-reached row renders override button + sends force=true on accept', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);
-    (api.retryPurchase as jest.Mock).mockResolvedValue({ execution_id: 'new', original_execution: 'r-1' });
+    (api.retryPurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'new',
+      original_execution: 'r-1',
+      status: 'pending',
+      retry_attempt_n: 6,
+      email_sent: true,
+    });
     (api.getHistory as jest.Mock).mockResolvedValue({
       summary: {},
       purchases: [
@@ -286,10 +294,16 @@ describe('History inline Retry button (issue #47)', () => {
     expect(api.retryPurchase).not.toHaveBeenCalled();
   });
 
-  test('accepted confirm posts retry + reloads + toasts', async () => {
+  test('accepted confirm posts retry + reloads + success toast when email_sent is true', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);
-    (api.retryPurchase as jest.Mock).mockResolvedValue({ execution_id: 'new', original_execution: 'r-1' });
+    (api.retryPurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'new',
+      original_execution: 'r-1',
+      status: 'pending',
+      retry_attempt_n: 1,
+      email_sent: true,
+    });
     (api.getHistory as jest.Mock).mockResolvedValue({
       summary: {},
       purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
@@ -303,7 +317,63 @@ describe('History inline Retry button (issue #47)', () => {
 
     expect(api.retryPurchase).toHaveBeenCalledWith('r-1', undefined);
     expect(api.getHistory).toHaveBeenCalledTimes(2);
-    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'success', message: 'Purchase request sent for approval' }),
+    );
+  });
+
+  test('retry success toast uses approval wording when status is pending but email_sent absent', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    // Backend may omit email_sent; status==='pending' is sufficient.
+    (api.retryPurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'new',
+      original_execution: 'r-1',
+      status: 'pending',
+      retry_attempt_n: 1,
+    });
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
+    });
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'success', message: 'Purchase request sent for approval' }),
+    );
+  });
+
+  test('retry shows warning toast when email_sent is false', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    (api.retryPurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'new',
+      original_execution: 'r-1',
+      status: 'failed',
+      retry_attempt_n: 1,
+      email_sent: false,
+    });
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
+    });
+    console.error = jest.fn();
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'warning',
+        message: expect.stringContaining('approval email failed'),
+      }),
+    );
   });
 
   test('retry API failure surfaces toast and re-enables the button', async () => {
