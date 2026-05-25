@@ -347,6 +347,8 @@ func isValidProvider(p string) bool {
 	return false
 }
 
+// isValidPaymentOption reports whether p is a valid payment option for any
+// provider. It checks against the union of all provider payment option sets.
 func isValidPaymentOption(p string) bool {
 	for _, valid := range validPaymentOptionsUnion {
 		if p == valid {
