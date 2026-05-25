@@ -941,9 +941,19 @@ function setupRampScheduleHandlers(): void {
     planSelectedAccounts = [];
     renderPlanAccountChips();
     updatePlanAccountIdsField();
+    // Clear and hide any open account suggestion dropdown so stale suggestions
+    // from the previous provider cannot be clicked and add a mismatched account.
+    const suggestions = document.getElementById('plan-account-suggestions') as HTMLElement | null;
+    if (suggestions) {
+      suggestions.textContent = '';
+      suggestions.classList.add('hidden');
+    }
     // Re-enable/disable the account search input to match the new provider state.
     const accountSearchInput = document.getElementById('plan-account-search') as HTMLInputElement | null;
-    if (accountSearchInput) accountSearchInput.disabled = !providerSelect.value;
+    if (accountSearchInput) {
+      accountSearchInput.value = '';
+      accountSearchInput.disabled = !providerSelect.value;
+    }
   });
 
   serviceSelect?.addEventListener('change', () => {

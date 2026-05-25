@@ -2174,6 +2174,29 @@ describe('Plans Module', () => {
       expect((document.getElementById('plan-account-ids') as HTMLInputElement).value).toBe('');
     });
 
+    test('switching provider clears and hides open account suggestion dropdown', async () => {
+      openNewPlanModal();
+      await Promise.resolve();
+
+      // Simulate an open suggestion dropdown with stale results from a previous search.
+      const suggestions = document.getElementById('plan-account-suggestions') as HTMLElement;
+      suggestions.textContent = 'stale-item';
+      suggestions.classList.remove('hidden');
+
+      // Also put text in the search input to verify it is cleared.
+      const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
+      searchInput.value = 'old query';
+
+      // Switch provider — the handler must clear + hide the dropdown and clear the input.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'gcp';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      expect(suggestions.textContent).toBe('');
+      expect(suggestions.classList.contains('hidden')).toBe(true);
+      expect(searchInput.value).toBe('');
+    });
+
     test('account search input is disabled when provider is cleared after modal open', async () => {
       // Open the modal with default provider (aws from form reset).
       openNewPlanModal();
