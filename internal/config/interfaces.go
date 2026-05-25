@@ -84,6 +84,24 @@ type StoreInterface interface {
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error
 	GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error)
 	GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error)
+	// GetPurchaseHistoryFiltered reads purchase_history rows matching the
+	// supplied filter set, newest-first, capped at limit. Each filter is
+	// applied independently and only when non-empty:
+	//   - providerFilter: matches purchase_history.provider exactly. Empty
+	//     skips the clause.
+	//   - accountIDs: matches purchase_history.cloud_account_id (UUID) with
+	//     ANY($). Empty/nil skips the clause; non-empty excludes legacy
+	//     ambient rows whose cloud_account_id IS NULL (mirrors the
+	//     recommendations filter semantics on issue #211).
+	//   - start/end: bounds purchase_history.timestamp with a BETWEEN. nil
+	//     for both skips the clause; nil for either sets that side open
+	//     (caller is responsible for any range cap, see
+	//     api.MaxHistoryDateRangeDays).
+	// Added for issue #701: the legacy GetPurchaseHistory /
+	// GetAllPurchaseHistory pair only accepted a single account_id and the
+	// limit, so the /api/history handler silently dropped the
+	// provider/account_ids/start/end query params the frontend was sending.
+	GetPurchaseHistoryFiltered(ctx context.Context, providerFilter string, accountIDs []string, start, end *time.Time, limit int) ([]PurchaseHistoryRecord, error)
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

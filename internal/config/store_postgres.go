@@ -1304,6 +1304,68 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// GetPurchaseHistoryFiltered reads purchase_history rows matching the
+// supplied filter set, newest-first, capped at limit. See the StoreInterface
+// docstring for the per-filter semantics. Each WHERE clause is appended
+// only when its filter is populated, so callers that pass an empty
+// providerFilter / nil accountIDs / nil dates get the same plan-shape as
+// GetAllPurchaseHistory. Implementation mirrors buildRecommendationFilter
+// (store_postgres_recommendations.go).
+func (s *PostgresStore) GetPurchaseHistoryFiltered(
+	ctx context.Context,
+	providerFilter string,
+	accountIDs []string,
+	start, end *time.Time,
+	limit int,
+) ([]PurchaseHistoryRecord, error) {
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+
+	var (
+		conds []string
+		args  []any
+	)
+	add := func(cond string, val any) {
+		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
+		args = append(args, val)
+	}
+	if providerFilter != "" {
+		add("provider = $%d", providerFilter)
+	}
+	if len(accountIDs) > 0 {
+		// NULL cloud_account_id rows are excluded once a list is supplied,
+		// same as buildRecommendationFilter (issue #211 semantics).
+		add("cloud_account_id = ANY($%d)", accountIDs)
+	}
+	if start != nil {
+		add("timestamp >= $%d", *start)
+	}
+	if end != nil {
+		add("timestamp <= $%d", *end)
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		FROM purchase_history%s
+		ORDER BY timestamp DESC
+		LIMIT $%d
+	`, where, len(args))
+
+	return s.queryPurchaseHistory(ctx, query, args...)
+}
+
 // queryPurchaseHistory is a helper to query and scan purchase history
 func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)

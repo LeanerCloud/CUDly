@@ -189,6 +189,15 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
 }
 
+// GetPurchaseHistoryFiltered mocks the GetPurchaseHistoryFiltered operation (issue #701).
+func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, providerFilter string, accountIDs []string, start, end *time.Time, limit int) ([]config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx, providerFilter, accountIDs, start, end, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

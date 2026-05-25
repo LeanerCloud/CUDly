@@ -22,11 +22,12 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	if err := logMultiAccountFilter(params); err != nil {
+	filters, err := parseHistoryFilters(params)
+	if err != nil {
 		return nil, err
 	}
 
-	completed, err := h.fetchPurchaseHistory(ctx, params)
+	completed, err := h.fetchPurchaseHistory(ctx, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -40,8 +41,11 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// 7-day cutoff (expired). Executions live in a separate table
 	// (purchase_executions) from the completed purchase_history rows, so we
 	// merge after the fact. A failure to list executions must not hide
-	// completed history — log, skip, continue.
-	extra := h.fetchExecutionsAsHistory(ctx)
+	// completed history — log, skip, continue. The same filter set is applied
+	// here (in-memory against the synthesised row's recommendations and
+	// scheduled_date) so the two halves of the merged response are
+	// consistently scoped (issue #701).
+	extra := h.fetchExecutionsAsHistory(ctx, filters)
 
 	all := append(completed, extra...) //nolint:gocritic // intentional new slice
 
@@ -108,7 +112,13 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // lazily transitioned to "expired" in the store so a stale approval link
 // can't be clicked and the History badge reflects reality. A listing error
 // is logged and skipped — completed history must still render.
-func (h *Handler) fetchExecutionsAsHistory(ctx context.Context) []config.PurchaseHistoryRecord {
+//
+// The filter set (issue #701) is applied in Go against the synthetic row:
+// provider via the recs' collapsed provider, account via CloudAccountID,
+// date via ScheduledDate. Filtering after expireIfStale so a row that
+// transitioned to expired during this request still gets evaluated against
+// the same predicates as a DB row.
+func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) []config.PurchaseHistoryRecord {
 	executions, err := h.config.GetExecutionsByStatuses(ctx, historyExecutionStatuses, config.DefaultListLimit)
 	if err != nil {
 		logging.Warnf("history: failed to load non-completed executions: %v", err)
@@ -129,6 +139,9 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context) []config.Purchas
 			continue
 		}
 		exec = h.expireIfStale(ctx, exec)
+		if !filters.matchesExecution(exec) {
+			continue
+		}
 		out = append(out, executionToHistoryRow(exec, approver))
 	}
 	return out
@@ -387,35 +400,261 @@ func collapseRecommendationProvider(recs []config.RecommendationRecord) string {
 	return p
 }
 
-// logMultiAccountFilter validates and logs the multi-account filter param.
-// GetPurchaseHistory/GetAllPurchaseHistory do not yet support multi-account
-// filtering at the store layer; the param is accepted for observability.
-func logMultiAccountFilter(params map[string]string) error {
-	accountIDs, err := parseAccountIDs(params["account_ids"])
-	if err != nil {
-		return NewClientError(400, err.Error())
-	}
-	if len(accountIDs) > 0 {
-		logging.Infof("history: account_ids filter received (%d accounts); per-account filtering not yet implemented", len(accountIDs))
-	}
-	return nil
+// MaxHistoryDateRangeDays caps the inclusive start/end window the History
+// handler accepts on a single request. Mirrors the analytics cap (issue
+// #414 / PR #529): an unbounded range turns the WHERE-on-timestamp into a
+// full-table scan over purchase_history, which the dashboard frontend
+// neither needs nor renders coherently past a year. 366 admits a full leap
+// year and rejects anything larger with 400.
+const MaxHistoryDateRangeDays = 366
+
+// historyFilters carries the shared filter set used by both halves of the
+// merged /api/history response: the SQL path (purchase_history rows in
+// fetchPurchaseHistory) and the in-memory path (synthesised execution rows
+// in fetchExecutionsAsHistory). Keeping them in one struct guarantees the
+// two halves stay scoped consistently — the bug behind issue #701 was that
+// the executions path ignored the filters the SQL path was supposed to apply.
+//
+// Two account inputs are accepted but they are NOT interchangeable:
+//   - LegacyAccountID is the singular `account_id` query param. It is the
+//     cloud-provider account number (VARCHAR(20) — e.g. "123456789012"),
+//     matched against purchase_history.account_id by GetPurchaseHistory.
+//     Only the no-other-filters fast path consumes it; the filtered SQL
+//     path ignores it because cloud_account_id is a UUID column.
+//   - AccountIDs is the plural `account_ids` query param, a list of UUIDs
+//     matched against purchase_history.cloud_account_id (the
+//     cloud_accounts FK). This is what the frontend sends.
+//
+// HasDate is true iff start OR end was supplied. When false the Start/End
+// times are zero-valued and the SQL/in-memory date predicates are skipped
+// entirely (so legacy clients that don't send dates keep working).
+type historyFilters struct {
+	Provider        string
+	LegacyAccountID string
+	AccountIDs      []string
+	HasDate         bool
+	Start           time.Time
+	End             time.Time
+	Limit           int
 }
 
-// fetchPurchaseHistory reads purchases from the store, honouring the legacy
-// singular account_id query param and the limit cap.
-func (h *Handler) fetchPurchaseHistory(ctx context.Context, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
+// parseHistoryFilters validates and normalises the /api/history query string.
+// Returns a 400 ClientError for malformed provider, non-UUID account_ids, a
+// start/end that doesn't parse as YYYY-MM-DD, an inverted range
+// (start > end), or a range exceeding MaxHistoryDateRangeDays.
+func parseHistoryFilters(params map[string]string) (historyFilters, error) {
+	var f historyFilters
+
+	provider := params["provider"]
+	if provider == "all" {
+		provider = "" // "all" is the explicit "no filter" sentinel
+	}
+	if err := validateProvider(provider); err != nil {
+		return f, err
+	}
+	f.Provider = provider
+
+	accountIDs, err := parseAccountIDs(params["account_ids"])
+	if err != nil {
+		return f, NewClientError(400, err.Error())
+	}
+	f.AccountIDs = accountIDs
+	f.LegacyAccountID = params["account_id"]
+
+	start, end, hasDate, err := parseHistoryDateRange(params["start"], params["end"])
+	if err != nil {
+		return f, err
+	}
+	f.HasDate = hasDate
+	f.Start = start
+	f.End = end
+
 	limit := config.DefaultListLimit
 	if s := params["limit"]; s != "" {
 		fmt.Sscanf(s, "%d", &limit)
 	}
+	if limit <= 0 {
+		limit = config.DefaultListLimit
+	}
 	if limit > config.MaxListLimit {
 		limit = config.MaxListLimit
 	}
+	f.Limit = limit
 
-	if accountID := params["account_id"]; accountID != "" {
-		return h.config.GetPurchaseHistory(ctx, accountID, limit)
+	return f, nil
+}
+
+// parseHistoryDateRange parses optional YYYY-MM-DD start/end strings. Both
+// empty -> no date filter (hasDate=false, returned times are zero). One or
+// both populated -> hasDate=true; an unset bound defaults to span the
+// maximum allowed window from the supplied side. The window is capped at
+// MaxHistoryDateRangeDays to mirror PR #529 (issue #414) and prevent a full-
+// table-scan DoS via start=1970-01-01&end=2100-12-31.
+//
+// YYYY-MM-DD only (per issue #701 spec): the frontend's <input type="date">
+// fields emit exactly that format, so accepting RFC 3339 here would be a
+// surface area not exercised in production and a divergence from the
+// analytics handler's broader format set.
+func parseHistoryDateRange(startStr, endStr string) (time.Time, time.Time, bool, error) {
+	if startStr == "" && endStr == "" {
+		return time.Time{}, time.Time{}, false, nil
 	}
-	return h.config.GetAllPurchaseHistory(ctx, limit)
+	start, end, err := parseHistoryDateBounds(startStr, endStr)
+	if err != nil {
+		return time.Time{}, time.Time{}, false, err
+	}
+	const maxWindow = MaxHistoryDateRangeDays * 24 * time.Hour
+	// Fill in the open side, if any, so the absent bound spans the maximum
+	// allowed window from the supplied side. This keeps a "start only" or
+	// "end only" call meaningful AND still bounded by the same DoS cap.
+	switch {
+	case startStr == "" && endStr != "":
+		start = end.Add(-maxWindow)
+	case startStr != "" && endStr == "":
+		end = start.Add(maxWindow)
+	}
+	if start.After(end) {
+		return time.Time{}, time.Time{}, false, NewClientError(400,
+			"start date must be before or equal to end date")
+	}
+	if end.Sub(start) > maxWindow {
+		return time.Time{}, time.Time{}, false, NewClientError(400,
+			fmt.Sprintf("date range too large: maximum allowed range is %d days", MaxHistoryDateRangeDays))
+	}
+	return start, end, true, nil
+}
+
+// parseHistoryDateBounds parses each YYYY-MM-DD side independently. An empty
+// string returns the zero value for that side; the caller is responsible for
+// substituting a sensible default. The end side is rolled forward to end-of-
+// day so a date input is inclusive of the chosen day.
+func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, error) {
+	const layout = "2006-01-02"
+	var start, end time.Time
+	if startStr != "" {
+		s, err := time.ParseInLocation(layout, startStr, time.UTC)
+		if err != nil {
+			return time.Time{}, time.Time{}, NewClientError(400,
+				"invalid start date format: expected YYYY-MM-DD")
+		}
+		start = s
+	}
+	if endStr != "" {
+		e, err := time.ParseInLocation(layout, endStr, time.UTC)
+		if err != nil {
+			return time.Time{}, time.Time{}, NewClientError(400,
+				"invalid end date format: expected YYYY-MM-DD")
+		}
+		// Make end inclusive of the requested day (frontend semantics: a
+		// user picking 2024-01-31 expects rows from that day to render).
+		end = e.Add(24*time.Hour - time.Second)
+	}
+	return start, end, nil
+}
+
+// matchesExecution reports whether a PurchaseExecution should be retained
+// after applying the request filters in Go (the SQL path is on
+// purchase_history; this in-memory equivalent keeps the two halves of the
+// merged response consistently scoped, issue #701).
+//
+//   - Provider: matches when ANY recommendation in the execution carries
+//     the filter value. A single-rec execution collapses to one provider; a
+//     multi-rec basket that spans providers (e.g. aws+azure) matches any of
+//     them — dropping such an execution because its collapsed display label
+//     is "multiple" would hide real activity the user owns.
+//   - Account: matches when the execution's CloudAccountID is one of the
+//     filtered IDs. Executions with a NULL CloudAccountID are excluded once
+//     account_ids is non-empty, mirroring the SQL semantics on
+//     purchase_history.cloud_account_id (issue #211).
+//   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
+//     both sides; End is the end-of-day for YYYY-MM-DD inputs.
+func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
+	if f.Provider != "" {
+		if !executionHasProvider(exec, f.Provider) {
+			return false
+		}
+	}
+	if len(f.AccountIDs) > 0 {
+		// AccountIDs are UUIDs against cloud_account_id; legacy
+		// LegacyAccountID is intentionally NOT folded here because it is a
+		// different (VARCHAR(20)) cloud-provider account number that the
+		// fast path applies on the SQL side.
+		if exec.CloudAccountID == nil {
+			return false
+		}
+		if !stringInSlice(*exec.CloudAccountID, f.AccountIDs) {
+			return false
+		}
+	}
+	if f.HasDate {
+		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
+			return false
+		}
+	}
+	return true
+}
+
+// executionHasProvider reports whether any of the execution's
+// recommendations carries the given provider value.
+func executionHasProvider(exec config.PurchaseExecution, provider string) bool {
+	for _, r := range exec.Recommendations {
+		if r.Provider == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// stringInSlice is a tiny linear-search helper for the per-execution
+// account filter. The slice is bounded by MaxAccountIDsPerRequest (200) so
+// a linear scan is comfortably cheaper than the map allocation a set would
+// require, and the call is hot only for executions (DB rows go through SQL).
+func stringInSlice(needle string, haystack []string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchPurchaseHistory reads purchases from the store, applying the parsed
+// filter set. The store-level filtered method (added with issue #701)
+// pushes provider / cloud_account_id / timestamp range into SQL; the
+// fast-path legacy methods (no-filter, single-account-only) are kept for
+// the dashboard/inventory/analytics callers that don't speak the new shape.
+//
+// LegacyAccountID is honoured only on the fast path (it filters the
+// VARCHAR(20) purchase_history.account_id column). When combined with any
+// new filter it is ignored: the new filtered method's account predicate is
+// on cloud_account_id (UUID), and silently coercing one column's identifier
+// into the other would either match nothing or, worse, match the wrong
+// rows. Callers using the new filter set should send `account_ids`
+// (UUIDs); the legacy singular param is preserved for the dashboard's
+// historical, single-cloud-account view.
+func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, error) {
+	noNewFilters := !filters.HasDate && filters.Provider == "" && len(filters.AccountIDs) == 0
+	if noNewFilters {
+		if filters.LegacyAccountID != "" {
+			return h.config.GetPurchaseHistory(ctx, filters.LegacyAccountID, filters.Limit)
+		}
+		return h.config.GetAllPurchaseHistory(ctx, filters.Limit)
+	}
+
+	var startPtr, endPtr *time.Time
+	if filters.HasDate {
+		s, e := filters.Start, filters.End
+		startPtr = &s
+		endPtr = &e
+	}
+	return h.config.GetPurchaseHistoryFiltered(
+		ctx,
+		filters.Provider,
+		filters.AccountIDs,
+		startPtr,
+		endPtr,
+		filters.Limit,
+	)
 }
 
 // filterPurchaseHistoryByAllowedAccounts drops records whose AccountID/Name

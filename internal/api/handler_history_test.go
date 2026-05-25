@@ -622,6 +622,424 @@ func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.
 	assert.Equal(t, 70.0, resp.Summary.TotalMonthlySavings)
 }
 
+// TestHandler_getHistory_FilterParams is the issue #701 primary regression
+// guard. /api/history must honour the provider / account_ids / start / end
+// query params the frontend sends — both on the SQL path (purchase_history
+// rows in fetchPurchaseHistory) and on the in-memory path (synthesised
+// execution rows in fetchExecutionsAsHistory). The filters were previously
+// dropped silently; visible filter affordances were no-ops.
+//
+// Each sub-test seeds enough rows on both halves that an unfiltered
+// response would include extras, then asserts the filter prunes both halves
+// consistently and that the SQL path receives the right store call.
+//
+// Each filter is exercised independently first, then combined.
+func TestHandler_getHistory_FilterParams(t *testing.T) {
+	approver := "ops@example.com"
+
+	// Helper to build a fresh handler/store/req triple per sub-test so mock
+	// expectations don't bleed across cases.
+	newHandler := func(t *testing.T) (*MockConfigStore, *Handler, *events.LambdaFunctionURLRequest, context.Context) {
+		t.Helper()
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		mockAuth, req := adminHistoryReq(ctx)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil).Maybe()
+		return mockStore, &Handler{auth: mockAuth, config: mockStore}, req, ctx
+	}
+
+	t.Run("provider filter is pushed to SQL and prunes executions", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		// SQL path: must be called via GetPurchaseHistoryFiltered with
+		// provider="aws" and no other filters set. Return only the aws row.
+		filtered := []config.PurchaseHistoryRecord{
+			{AccountID: "acc-aws", PurchaseID: "p-aws", Provider: "aws", UpfrontCost: 100.0},
+		}
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+			Return(filtered, nil).Once()
+
+		// Executions path: two execs, one aws-rec and one azure-rec. Only the
+		// aws-rec exec must survive the in-memory provider filter.
+		execs := []config.PurchaseExecution{
+			{
+				ExecutionID:     "exec-aws",
+				Status:          "pending",
+				ScheduledDate:   time.Now(),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1"}},
+			},
+			{
+				ExecutionID:     "exec-azure",
+				Status:          "pending",
+				ScheduledDate:   time.Now(),
+				Recommendations: []config.RecommendationRecord{{Provider: "azure", Service: "vm", Region: "westeurope"}},
+			},
+		}
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"provider": "aws"})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+
+		// 1 DB row + 1 surviving exec.
+		require.Len(t, resp.Purchases, 2)
+		for _, p := range resp.Purchases {
+			assert.NotEqual(t, "exec-azure", p.PurchaseID, "azure-only execution must be filtered out when provider=aws")
+		}
+		mockStore.AssertCalled(t, "GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit)
+	})
+
+	t.Run("provider=all is treated as no filter (legacy SQL path)", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+		mockStore.On("GetAllPurchaseHistory", ctx, config.DefaultListLimit).Return([]config.PurchaseHistoryRecord{}, nil).Once()
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		_, err := handler.getHistory(ctx, req, map[string]string{"provider": "all"})
+		require.NoError(t, err)
+		mockStore.AssertCalled(t, "GetAllPurchaseHistory", ctx, config.DefaultListLimit)
+		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("account_ids filter is pushed to SQL and prunes executions", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		uuidA := "11111111-1111-1111-1111-111111111111"
+		uuidB := "22222222-2222-2222-2222-222222222222"
+
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string{uuidA, uuidB}, (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+			Return([]config.PurchaseHistoryRecord{{AccountID: "acc-A", PurchaseID: "p-A"}}, nil).Once()
+
+		execs := []config.PurchaseExecution{
+			{
+				ExecutionID:     "exec-in-A",
+				Status:          "pending",
+				ScheduledDate:   time.Now(),
+				CloudAccountID:  strPtr(uuidA),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+			{
+				ExecutionID:     "exec-in-C",
+				Status:          "pending",
+				ScheduledDate:   time.Now(),
+				CloudAccountID:  strPtr("33333333-3333-3333-3333-333333333333"),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+			{
+				ExecutionID:     "exec-nil-account",
+				Status:          "pending",
+				ScheduledDate:   time.Now(),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+		}
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": uuidA + "," + uuidB})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+
+		// 1 DB row + only the exec whose CloudAccountID is in the filter list.
+		// NULL CloudAccountID execs must be excluded (mirrors SQL semantics).
+		require.Len(t, resp.Purchases, 2)
+		ids := map[string]bool{}
+		for _, p := range resp.Purchases {
+			ids[p.PurchaseID] = true
+		}
+		assert.True(t, ids["exec-in-A"], "execution in account A must survive the filter")
+		assert.False(t, ids["exec-in-C"], "execution in unrelated account C must be filtered out")
+		assert.False(t, ids["exec-nil-account"], "execution with NULL CloudAccountID must be excluded once account_ids is non-empty")
+	})
+
+	t.Run("legacy singular account_id is ignored when combined with new filters", func(t *testing.T) {
+		// account_id (singular) is the AWS-style VARCHAR(20) account number
+		// matched against purchase_history.account_id by the legacy
+		// GetPurchaseHistory; it is NOT a UUID and therefore must not be
+		// silently coerced into the cloud_account_id (UUID) WHERE clause of
+		// the new GetPurchaseHistoryFiltered method when other filters are
+		// also present. The frontend uses `account_ids` (plural, UUIDs) for
+		// the new shape; the singular param survives only for backward
+		// compatibility with the no-other-filters fast path.
+		mockStore, handler, req, ctx := newHandler(t)
+
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+			Return([]config.PurchaseHistoryRecord{}, nil).Once()
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		_, err := handler.getHistory(ctx, req, map[string]string{"provider": "aws", "account_id": "123456789012"})
+		require.NoError(t, err)
+		mockStore.AssertExpectations(t)
+		mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("legacy singular account_id alone still hits the fast path", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+		mockStore.On("GetPurchaseHistory", ctx, "123456789012", config.DefaultListLimit).
+			Return([]config.PurchaseHistoryRecord{{AccountID: "123456789012", PurchaseID: "p-legacy"}}, nil).Once()
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		_, err := handler.getHistory(ctx, req, map[string]string{"account_id": "123456789012"})
+		require.NoError(t, err)
+		mockStore.AssertExpectations(t)
+		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("start/end date filter is pushed to SQL and prunes executions", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		// Build start/end relative to "now" so the in-range execution's
+		// ScheduledDate stays younger than the approvalExpiryWindow (7 days).
+		// Older ScheduledDates would trigger the lazy expireIfStale path and
+		// require mocking TransitionExecutionStatus — orthogonal to what
+		// this test covers.
+		now := time.Now().UTC()
+		startDay := now.AddDate(0, 0, -3).Format("2006-01-02")
+		endDay := now.Format("2006-01-02")
+		outOfRangeDay := now.AddDate(0, 0, -10) // older than the window AND outside the requested range
+
+		mockStore.On("GetPurchaseHistoryFiltered",
+			ctx, "", []string(nil),
+			mock.MatchedBy(func(p *time.Time) bool { return p != nil && p.Format("2006-01-02") == startDay }),
+			mock.MatchedBy(func(p *time.Time) bool { return p != nil && p.Format("2006-01-02") == endDay }),
+			config.DefaultListLimit,
+		).Return([]config.PurchaseHistoryRecord{{AccountID: "in-range", PurchaseID: "p-in-range"}}, nil).Once()
+
+		execs := []config.PurchaseExecution{
+			{
+				ExecutionID:     "exec-in-range",
+				Status:          "approved", // approved -> expireIfStale short-circuits before transition
+				ScheduledDate:   now.Add(-12 * time.Hour),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+			{
+				ExecutionID:     "exec-out-of-range",
+				Status:          "approved",
+				ScheduledDate:   outOfRangeDay,
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+		}
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"start": startDay, "end": endDay})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+
+		require.Len(t, resp.Purchases, 2, "1 DB row + 1 in-range exec")
+		for _, p := range resp.Purchases {
+			assert.NotEqual(t, "exec-out-of-range", p.PurchaseID, "out-of-range execution must be filtered out")
+		}
+	})
+
+	t.Run("combined provider+account_ids+date filter is applied on both halves", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		uuidA := "55555555-5555-5555-5555-555555555555"
+		mockStore.On("GetPurchaseHistoryFiltered",
+			ctx, "aws", []string{uuidA},
+			mock.MatchedBy(func(p *time.Time) bool { return p != nil }),
+			mock.MatchedBy(func(p *time.Time) bool { return p != nil }),
+			config.DefaultListLimit,
+		).Return([]config.PurchaseHistoryRecord{{AccountID: "match", PurchaseID: "p-match"}}, nil).Once()
+
+		now := time.Now().UTC()
+		startDay := now.AddDate(0, 0, -3).Format("2006-01-02")
+		endDay := now.Format("2006-01-02")
+		// Use "approved" status so expireIfStale short-circuits regardless of
+		// ScheduledDate (the date predicate itself is what we're asserting).
+		inRange := now.Add(-12 * time.Hour)
+		execs := []config.PurchaseExecution{
+			{
+				ExecutionID:     "exec-match",
+				Status:          "approved",
+				ScheduledDate:   inRange,
+				CloudAccountID:  strPtr(uuidA),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+			{
+				ExecutionID:     "exec-wrong-provider",
+				Status:          "approved",
+				ScheduledDate:   inRange,
+				CloudAccountID:  strPtr(uuidA),
+				Recommendations: []config.RecommendationRecord{{Provider: "azure", Service: "vm"}},
+			},
+			{
+				ExecutionID:     "exec-wrong-account",
+				Status:          "approved",
+				ScheduledDate:   inRange,
+				CloudAccountID:  strPtr("66666666-6666-6666-6666-666666666666"),
+				Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+			},
+		}
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{
+			"provider":    "aws",
+			"account_ids": uuidA,
+			"start":       startDay,
+			"end":         endDay,
+		})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+
+		require.Len(t, resp.Purchases, 2, "1 DB row + only the exec that matches ALL three filters")
+		ids := map[string]bool{}
+		for _, p := range resp.Purchases {
+			ids[p.PurchaseID] = true
+		}
+		assert.True(t, ids["exec-match"])
+		assert.False(t, ids["exec-wrong-provider"])
+		assert.False(t, ids["exec-wrong-account"])
+	})
+}
+
+// TestHandler_getHistory_FilterValidation covers the 400-on-malformed-input
+// paths for issue #701: an invalid provider, a non-UUID account_id, a date
+// that doesn't parse as YYYY-MM-DD, an inverted range, and a range that
+// exceeds MaxHistoryDateRangeDays (the DoS guard mirroring PR #529 / issue
+// #414). Each must return a 400 ClientError; none must reach the store.
+func TestHandler_getHistory_FilterValidation(t *testing.T) {
+	cases := []struct {
+		name        string
+		params      map[string]string
+		wantCode    int
+		wantContain string
+	}{
+		{
+			name:        "invalid provider",
+			params:      map[string]string{"provider": "unknown"},
+			wantCode:    400,
+			wantContain: "invalid provider",
+		},
+		{
+			name:        "non-UUID account_ids",
+			params:      map[string]string{"account_ids": "not-a-uuid"},
+			wantCode:    400,
+			wantContain: "invalid account_ids",
+		},
+		{
+			name:        "malformed start date (not YYYY-MM-DD)",
+			params:      map[string]string{"start": "01/02/2024"},
+			wantCode:    400,
+			wantContain: "invalid start date format",
+		},
+		{
+			name:        "malformed end date",
+			params:      map[string]string{"end": "2024-13-40"},
+			wantCode:    400,
+			wantContain: "invalid end date format",
+		},
+		{
+			name:        "inverted range (start after end)",
+			params:      map[string]string{"start": "2024-12-31", "end": "2024-01-01"},
+			wantCode:    400,
+			wantContain: "before or equal to end",
+		},
+		{
+			name:        "range exceeds 366 days",
+			params:      map[string]string{"start": "2024-01-01", "end": "2025-12-31"},
+			wantCode:    400,
+			wantContain: "date range too large",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockAuth, req := adminHistoryReq(ctx)
+			handler := &Handler{auth: mockAuth, config: mockStore}
+
+			_, err := handler.getHistory(ctx, req, tc.params)
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "validation failure must surface as a ClientError, got %T: %v", err, err)
+			assert.Equal(t, tc.wantCode, ce.code)
+			assert.Contains(t, err.Error(), tc.wantContain)
+
+			// Sanity guards: no store calls leaked through on a 400.
+			mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestHandler_getHistory_DateRangeBoundary asserts the inclusive boundaries
+// of the 366-day window: a range of exactly 366 days is accepted; 367 is
+// rejected. Mirrors the analytics handler's range cap (PR #529).
+func TestHandler_getHistory_DateRangeBoundary(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("range of exactly 366 days is accepted", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string(nil), mock.Anything, mock.Anything, config.DefaultListLimit).
+			Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		// 2024 is a leap year — Jan 1 to Dec 31 inclusive is 366 days.
+		_, err := handler.getHistory(ctx, req, map[string]string{"start": "2024-01-01", "end": "2024-12-31"})
+		require.NoError(t, err, "366-day range must be accepted (boundary)")
+	})
+
+	t.Run("range of 367 days is rejected", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		_, err := handler.getHistory(ctx, req, map[string]string{"start": "2024-01-01", "end": "2025-01-02"})
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 400, ce.code)
+	})
+}
+
+// TestParseHistoryDateRange covers the YYYY-MM-DD parser in isolation: empty
+// inputs disable the filter (hasDate=false), one-sided inputs default the
+// other bound open, and end is rolled forward to end-of-day so date inputs
+// behave inclusively on the user's chosen day.
+func TestParseHistoryDateRange(t *testing.T) {
+	t.Run("both empty -> no date filter", func(t *testing.T) {
+		s, e, has, err := parseHistoryDateRange("", "")
+		require.NoError(t, err)
+		assert.False(t, has, "empty inputs must yield hasDate=false so the SQL clause is skipped")
+		assert.True(t, s.IsZero())
+		assert.True(t, e.IsZero())
+	})
+
+	t.Run("only end -> start defaults to end - MaxHistoryDateRangeDays", func(t *testing.T) {
+		s, e, has, err := parseHistoryDateRange("", "2024-06-15")
+		require.NoError(t, err)
+		assert.True(t, has)
+		assert.Equal(t, "2024-06-15", e.Format("2006-01-02"))
+		// The absent lower bound must be MaxHistoryDateRangeDays before end
+		// (not epoch) so the open-side default still satisfies the DoS cap.
+		expectedStart := e.Add(-MaxHistoryDateRangeDays * 24 * time.Hour)
+		assert.Equal(t, expectedStart.Format("2006-01-02"), s.Format("2006-01-02"))
+	})
+
+	t.Run("only start -> end defaults to start + MaxHistoryDateRangeDays", func(t *testing.T) {
+		s, e, has, err := parseHistoryDateRange("2024-06-15", "")
+		require.NoError(t, err)
+		assert.True(t, has)
+		assert.Equal(t, "2024-06-15", s.Format("2006-01-02"))
+		expectedEnd := s.Add(MaxHistoryDateRangeDays * 24 * time.Hour)
+		assert.Equal(t, expectedEnd.Format("2006-01-02"), e.Format("2006-01-02"))
+	})
+
+	t.Run("end is inclusive of the requested day", func(t *testing.T) {
+		_, e, _, err := parseHistoryDateRange("2024-01-01", "2024-01-15")
+		require.NoError(t, err)
+		// End must be 2024-01-15 23:59:59 UTC so a row stamped at any time on
+		// that day is included.
+		assert.Equal(t, 2024, e.Year())
+		assert.Equal(t, time.January, e.Month())
+		assert.Equal(t, 15, e.Day())
+		assert.Equal(t, 23, e.Hour())
+	})
+}
+
 // TestHandler_getHistory_CompletedExecutionNotDuplicated guards the dedup path.
 // The store loads "completed" executions now (so audit-gap rows can surface),
 // but a NORMAL completed execution (Error=="") is already represented by its

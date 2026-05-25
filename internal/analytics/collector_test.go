@@ -196,6 +196,10 @@ func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return nil, nil
 }
 
+func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, providerFilter string, accountIDs []string, start, end *time.Time, limit int) ([]config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	return 0, nil
 }
