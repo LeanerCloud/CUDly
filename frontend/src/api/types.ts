@@ -516,6 +516,23 @@ export interface OfferingOption {
   effective_monthly_cost: number;
 }
 
+// TargetOffering is one valid exchange target returned by
+// GET /api/ri-exchange/target-offerings. The offering_id is the AWS
+// ReservedInstancesOfferingId UUID that must be submitted in the
+// targets[] exchange request.
+export interface TargetOffering {
+  offering_id: string;
+  instance_type: string;
+  offering_type: string;
+  product_description: string;
+  duration: number;
+  fixed_price: number;
+  usage_price: number;
+  currency_code: string;
+  scope: string;
+  normalization_factor: number;
+}
+
 export interface ReshapeRecommendation {
   source_ri_id: string;
   source_instance_type: string;

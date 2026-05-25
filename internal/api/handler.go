@@ -71,6 +71,10 @@ type Handler struct {
 	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
 	reshapeRecsFactory func(aws.Config) reshapeRecsClient
 
+	// Optional target-offerings EC2 client factory injected by tests. When nil
+	// (the production default), listTargetOfferings uses awsprovider.NewEC2ClientDirect.
+	targetOfferingsEC2Factory func(aws.Config) targetOfferingsEC2Client
+
 	// Optional Azure exchange client factory injected by tests. When nil
 	// (the production default), buildAzureExchangeClient uses
 	// azidentity.NewDefaultAzureCredential to construct a real

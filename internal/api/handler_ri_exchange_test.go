@@ -12,6 +12,7 @@ import (
 	azurecompute "github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -669,4 +670,228 @@ func (m *mockAuthForExchange) MFAEnableAPI(_ context.Context, _, _ string) ([]st
 func (m *mockAuthForExchange) MFADisableAPI(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockAuthForExchange) MFARegenerateRecoveryCodesAPI(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Defect 1 backend: GET /api/ri-exchange/target-offerings
+// ---------------------------------------------------------------------------
+
+// stubTargetOfferingsEC2 is a test stub for targetOfferingsEC2Client.
+// It returns a fixed list of ConvertibleRIs for the lookup step and a
+// fixed list of TargetOfferings for the DescribeReservedInstancesOfferings
+// step. Both are configurable per-test so we can exercise the 404 and
+// happy paths without live AWS.
+type stubTargetOfferingsEC2 struct {
+	instances []ec2svc.ConvertibleRI
+	offerings []ec2svc.TargetOffering
+	err       error
+}
+
+func (s *stubTargetOfferingsEC2) ListConvertibleReservedInstances(_ context.Context) ([]ec2svc.ConvertibleRI, error) {
+	return s.instances, s.err
+}
+
+func (s *stubTargetOfferingsEC2) ListTargetOfferings(_ context.Context, _ ec2svc.ListTargetOfferingsParams) ([]ec2svc.TargetOffering, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.offerings, nil
+}
+
+func TestListTargetOfferings_RequiresPermission(t *testing.T) {
+	h := &Handler{}
+	_, err := h.listTargetOfferings(context.Background(), &events.LambdaFunctionURLRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication")
+}
+
+func TestListTargetOfferings_MissingSourceRIID(t *testing.T) {
+	h := &Handler{auth: &mockAuthForExchange{}}
+	_, err := h.listTargetOfferings(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "source_ri_id is required")
+}
+
+func TestListTargetOfferings_SourceRINotFound(t *testing.T) {
+	stub := &stubTargetOfferingsEC2{
+		instances: []ec2svc.ConvertibleRI{
+			{ReservedInstanceID: "ri-known", InstanceType: "m5.large"},
+		},
+	}
+	h := &Handler{
+		auth:                      &mockAuthForExchange{},
+		targetOfferingsEC2Factory: func(_ aws.Config) targetOfferingsEC2Client { return stub },
+	}
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
+
+	_, err := h.listTargetOfferings(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"source_ri_id": "ri-unknown"},
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 404, ce.code)
+	assert.Contains(t, err.Error(), "ri-unknown")
+}
+
+func TestListTargetOfferings_HappyPath(t *testing.T) {
+	sourceID := "296818b6-73f8-4cd2-94bc-dbb95f794812"
+	stub := &stubTargetOfferingsEC2{
+		instances: []ec2svc.ConvertibleRI{
+			{
+				ReservedInstanceID: sourceID,
+				InstanceType:       "t3.medium",
+				ProductDescription: "Linux/UNIX",
+				InstanceTenancy:    "default",
+				Scope:              "Region",
+				Duration:           31536000,
+				OfferingType:       "No Upfront",
+			},
+		},
+		offerings: []ec2svc.TargetOffering{
+			{OfferingID: "4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91", InstanceType: "m5.large", OfferingType: "No Upfront"},
+			{OfferingID: "7e1234aa-0000-4567-abcd-ef0123456789", InstanceType: "m6i.large", OfferingType: "No Upfront"},
+		},
+	}
+	h := &Handler{
+		auth:                      &mockAuthForExchange{},
+		targetOfferingsEC2Factory: func(_ aws.Config) targetOfferingsEC2Client { return stub },
+	}
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
+
+	res, err := h.listTargetOfferings(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"source_ri_id": sourceID},
+	})
+	require.NoError(t, err)
+	resp, ok := res.(*TargetOfferingsResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Offerings, 2)
+	assert.Equal(t, "4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91", resp.Offerings[0].OfferingID)
+	assert.Equal(t, "m5.large", resp.Offerings[0].InstanceType)
+}
+
+// ---------------------------------------------------------------------------
+// Defect 2: offering-id UUID format validation
+// ---------------------------------------------------------------------------
+
+func TestGetExchangeQuote_InvalidOfferingIDFormat(t *testing.T) {
+	h := &Handler{auth: &mockAuthForExchange{}}
+
+	// "t3.medium" looks like an instance type, not an offering UUID
+	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"t3.medium","count":1}]}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "t3.medium")
+	assert.Contains(t, err.Error(), "offering UUID")
+}
+
+func TestGetExchangeQuote_ValidOfferingIDPassesFormat(t *testing.T) {
+	// A well-formed UUID should pass the format check. The AWS call will
+	// fail because there's no real EC2 client wired -- but the test
+	// exercises that the regex guard does NOT fire on a valid UUID.
+	// We stub the handler to short-circuit before the AWS call.
+	called := false
+	stub := &stubTargetOfferingsEC2{
+		instances: []ec2svc.ConvertibleRI{},
+	}
+	_ = stub
+	_ = called
+
+	h := &Handler{auth: &mockAuthForExchange{}}
+
+	// The handler calls exchange.GetExchangeQuote next; that will fail
+	// with a config error in test (no real AWS cred). We only care that
+	// the regex guard doesn't block a valid UUID -- so any error after
+	// passing the UUID check is acceptable.
+	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91","count":1}]}`,
+	})
+	// Must NOT be the UUID format error
+	if err != nil {
+		assert.NotContains(t, err.Error(), "offering UUID",
+			"a valid UUID must not be rejected by the format check")
+	}
+}
+
+func TestValidateExecuteExchangeBody_InvalidOfferingIDFormat(t *testing.T) {
+	err := validateExecuteExchangeBody(ExchangeExecuteRequestBody{
+		RIIDs:            []string{"ri-123"},
+		Targets:          []ExchangeTargetBody{{OfferingID: "t3.medium", Count: 1}},
+		MaxPaymentDueUSD: "50.00",
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "t3.medium")
+	assert.Contains(t, err.Error(), "offering UUID")
+}
+
+// ---------------------------------------------------------------------------
+// Defect 3: AWS 4xx -> client 4xx, error message preserved
+// ---------------------------------------------------------------------------
+
+// fakeAPIError is a minimal smithy.APIError implementation for tests.
+type fakeAPIError struct {
+	code    string
+	message string
+}
+
+func (e *fakeAPIError) Error() string                 { return fmt.Sprintf("%s: %s", e.code, e.message) }
+func (e *fakeAPIError) ErrorCode() string             { return e.code }
+func (e *fakeAPIError) ErrorMessage() string          { return e.message }
+func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
+
+func TestMapAWSExchangeError_ClientFault4xx(t *testing.T) {
+	codes := []string{
+		"InvalidOfferingId",
+		"InvalidParameter",
+		"ValidationError",
+		"InvalidReservedInstancesId.NotFound",
+		"InvalidInstanceID.NotFound",
+	}
+	for _, code := range codes {
+		t.Run(code, func(t *testing.T) {
+			apiErr := &fakeAPIError{code: code, message: "AWS says: bad input"}
+			mapped := mapAWSExchangeError("fallback msg", apiErr)
+			ce, ok := IsClientError(mapped)
+			require.True(t, ok, "must be ClientError")
+			assert.Equal(t, 400, ce.code, "client-fault codes must map to 400")
+			assert.Contains(t, mapped.Error(), "AWS says: bad input",
+				"AWS error message must be preserved")
+		})
+	}
+}
+
+func TestMapAWSExchangeError_ServerFault5xx(t *testing.T) {
+	// An AWS error with an unrecognised code must stay 500
+	apiErr := &fakeAPIError{code: "InternalError", message: "AWS is having a bad day"}
+	mapped := mapAWSExchangeError("exchange quote failed", apiErr)
+	ce, ok := IsClientError(mapped)
+	require.True(t, ok)
+	assert.Equal(t, 500, ce.code)
+	assert.Contains(t, mapped.Error(), "exchange quote failed")
+	assert.NotContains(t, mapped.Error(), "AWS is having a bad day",
+		"non-client-fault AWS message must NOT leak through")
+}
+
+func TestMapAWSExchangeError_NonAWSError(t *testing.T) {
+	// A plain Go error must also stay 500
+	mapped := mapAWSExchangeError("exchange quote failed", fmt.Errorf("network timeout"))
+	ce, ok := IsClientError(mapped)
+	require.True(t, ok)
+	assert.Equal(t, 500, ce.code)
 }

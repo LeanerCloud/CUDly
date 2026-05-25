@@ -12,6 +12,10 @@ jest.mock('../api', () => ({
   getRIExchangeHistory: jest.fn(),
   getRIExchangeConfig: jest.fn(),
   updateRIExchangeConfig: jest.fn(),
+  // listTargetOfferings is called by populateAwsOfferings() in openExchangeModal.
+  // Default to returning an empty list so tests that don't care about the picker
+  // content remain unaffected. Override per-test for picker-content assertions.
+  listTargetOfferings: jest.fn().mockResolvedValue([]),
 }));
 
 // Mock navigation to avoid loading dashboard/plans/... transitively.
@@ -70,15 +74,26 @@ describe('openExchangeModal', () => {
     expect(countInput?.value).toBe('5');
   });
 
-  it('pre-fills target input with suggestedTargetType when provided', () => {
-    openExchangeModal('ri-abc123', 2, 'm5.large');
+  it('pre-fills hidden target input with offering_id when suggestedTargetType matches an alternativeTarget', () => {
+    // suggestedTargetType is resolved to an offering_id via alternativeTargets lookup.
+    openExchangeModal('ri-abc123', 2, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
     const targetInput = modal.querySelector<HTMLInputElement>('.modal-exchange-target');
-    expect(targetInput?.value).toBe('m5.large');
+    // Hidden input must contain the UUID, not the instance type string.
+    expect(targetInput?.value).toBe('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
   });
 
-  it('leaves target input empty when suggestedTargetType is not provided', () => {
+  it('leaves hidden target input empty when suggestedTargetType is not provided', () => {
     openExchangeModal('ri-abc123', 2);
     const targetInput = modal.querySelector<HTMLInputElement>('.modal-exchange-target');
+    expect(targetInput?.value).toBe('');
+  });
+
+  it('leaves hidden target input empty when suggestedTargetType has no matching alternativeTarget', () => {
+    openExchangeModal('ri-abc123', 2, 'm5.large');
+    const targetInput = modal.querySelector<HTMLInputElement>('.modal-exchange-target');
+    // No alternativeTargets provided -- cannot resolve instance type to UUID.
     expect(targetInput?.value).toBe('');
   });
 
@@ -111,7 +126,11 @@ describe('openExchangeModal', () => {
       TargetRemainingUpfrontRaw: '',
       TargetRemainingTotalRaw: '',
     });
-    openExchangeModal('ri-abc', 3, 'm5.large');
+    // Pre-seed with a CE alternative so suggestedTargetType resolves to a UUID.
+    const offeringUUID = '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91';
+    openExchangeModal('ri-abc', 3, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: offeringUUID, effective_monthly_cost: 42.5 },
+    ]);
     const quoteBtn = Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote');
     quoteBtn?.click();
     // Wait for the async submit handler to settle.
@@ -120,7 +139,8 @@ describe('openExchangeModal', () => {
     expect(mockGetQuote).toHaveBeenCalledTimes(1);
     const req = mockGetQuote.mock.calls[0][0];
     expect(req.ri_ids).toEqual(['ri-abc']);
-    expect(req.target_offering_id).toBe('m5.large');
+    // Singleton shape: target_offering_id must be the UUID, not the instance type.
+    expect(req.target_offering_id).toBe(offeringUUID);
     expect(req.target_count).toBe(3);
     expect(req.targets).toBeUndefined();
   });
@@ -139,14 +159,20 @@ describe('openExchangeModal', () => {
       TargetRemainingUpfrontRaw: '',
       TargetRemainingTotalRaw: '',
     });
-    openExchangeModal('ri-multi', 1, 'm5.large');
+    const uuid1 = '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91';
+    const uuid2 = '7e123456-0000-4567-abcd-ef0123456789';
+    // Pre-seed with CE alternatives so the first row can resolve a UUID.
+    openExchangeModal('ri-multi', 1, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: uuid1, effective_monthly_cost: 40.0 },
+    ]);
     modal.querySelector<HTMLButtonElement>('#modal-exchange-add-target')?.click();
 
-    // Populate the second row.
+    // Inject a UUID into the second row's hidden input directly (simulates
+    // the user picking from the dropdown for the second target).
     const rows = modal.querySelectorAll<HTMLDivElement>('.exchange-target-row');
     const secondOffering = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-target');
     const secondCount = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-count');
-    if (secondOffering) secondOffering.value = 'm6i.large';
+    if (secondOffering) secondOffering.value = uuid2;
     if (secondCount) secondCount.value = '2';
 
     const quoteBtn = Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote');
@@ -157,8 +183,8 @@ describe('openExchangeModal', () => {
     const req = mockGetQuote.mock.calls[0][0];
     expect(req.ri_ids).toEqual(['ri-multi']);
     expect(req.targets).toEqual([
-      { offering_id: 'm5.large', count: 1 },
-      { offering_id: 'm6i.large', count: 2 },
+      { offering_id: uuid1, count: 1 },
+      { offering_id: uuid2, count: 2 },
     ]);
     expect(req.target_offering_id).toBeUndefined();
     expect(req.target_count).toBeUndefined();
@@ -191,7 +217,9 @@ describe('openExchangeModal', () => {
     expect(modal.classList.contains('hidden')).toBe(true);
   });
 
-  it('shows a cost chip when the typed instance type matches an alternative', () => {
+  it('shows a cost chip when the selected offering_id matches an alternative', () => {
+    // suggestedTargetType='m5.large' resolves to offering_id 'off-m5' via alternativeTargets.
+    // The chip should show the cost for that offering.
     openExchangeModal('ri-abc', 2, 'm5.large', [
       { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 42.5 },
       { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
@@ -201,7 +229,9 @@ describe('openExchangeModal', () => {
     expect(chip?.textContent).toBe('$42.50/mo each');
   });
 
-  it('shows an em-dash in the cost chip when the typed instance type has no alternative match', () => {
+  it('shows an em-dash in the cost chip when the selected offering_id has no CE pricing match', () => {
+    // 'unknown.shape' cannot be resolved to an offering_id from alternativeTargets,
+    // so the hidden input stays empty and the chip shows "—".
     openExchangeModal('ri-abc', 2, 'unknown.shape', [
       { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 42.5 },
     ]);
@@ -224,7 +254,9 @@ describe('openExchangeModal', () => {
     const secondOffering = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-target');
     const secondCount = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-count');
     if (secondOffering) {
-      secondOffering.value = 'm6i.large';
+      // Inject the offering_id UUID directly into the hidden input and
+      // trigger an input event so updateRunningTotal fires.
+      secondOffering.value = 'off-m6i';
       secondOffering.dispatchEvent(new Event('input'));
     }
     if (secondCount) {
@@ -244,7 +276,8 @@ describe('openExchangeModal', () => {
     const rows = modal.querySelectorAll<HTMLDivElement>('.exchange-target-row');
     const secondOffering = rows[1]?.querySelector<HTMLInputElement>('.modal-exchange-target');
     if (secondOffering) {
-      secondOffering.value = 'unknown.shape';
+      // 'unknown-offering' does not match any CE alternative offering_id.
+      secondOffering.value = 'unknown-offering';
       secondOffering.dispatchEvent(new Event('input'));
     }
     const total = modal.querySelector<HTMLDivElement>('#modal-exchange-running-total');
@@ -261,6 +294,88 @@ describe('openExchangeModal', () => {
   it('does not throw when modal element is missing', () => {
     document.body.innerHTML = '';
     expect(() => openExchangeModal('ri-abc123', 2)).not.toThrow();
+  });
+
+  // Defect 1 -- picker tests
+  it('renders a select picker (not a free-text input) for the target offering', () => {
+    openExchangeModal('ri-abc123', 2);
+    // There must be a <select> for the picker.
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    expect(picker).not.toBeNull();
+    // There must NOT be a visible text input (the hidden field has type="hidden").
+    const textInput = modal.querySelector<HTMLInputElement>('input[type="text"].modal-exchange-target');
+    expect(textInput).toBeNull();
+  });
+
+  it('populates the select with CE recommendation options when alternativeTargets are provided', async () => {
+    openExchangeModal('ri-abc', 2, undefined, [
+      { instance_type: 'm5.large', offering_id: 'off-m5', effective_monthly_cost: 42.5 },
+      { instance_type: 'm6i.large', offering_id: 'off-m6i', effective_monthly_cost: 35.0 },
+    ]);
+    // CE recommendations land in the select synchronously (no async fetch needed).
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    const options = picker ? Array.from(picker.querySelectorAll('option')) : [];
+    const optionValues = options.map((o) => o.value);
+    expect(optionValues).toContain('off-m5');
+    expect(optionValues).toContain('off-m6i');
+  });
+
+  it('populates the select with AWS offerings after async load completes', async () => {
+    const mockListOfferings = api.listTargetOfferings as jest.Mock;
+    mockListOfferings.mockResolvedValueOnce([
+      {
+        offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91',
+        instance_type: 'm5.xlarge',
+        offering_type: 'No Upfront',
+        product_description: 'Linux/UNIX',
+        duration: 31536000,
+        fixed_price: 0,
+        usage_price: 0.12,
+        currency_code: 'USD',
+        scope: 'Region',
+        normalization_factor: 8,
+      },
+    ]);
+    openExchangeModal('ri-abc', 2);
+    // Let the async populateAwsOfferings() settle.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    const options = picker ? Array.from(picker.querySelectorAll('option')) : [];
+    const optionValues = options.map((o) => o.value);
+    expect(optionValues).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+    expect(mockListOfferings).toHaveBeenCalledWith('ri-abc');
+  });
+
+  it('selecting a picker option drives the hidden offering input with a UUID', () => {
+    openExchangeModal('ri-abc', 2, undefined, [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    const hiddenInput = modal.querySelector<HTMLInputElement>('.modal-exchange-target');
+    if (picker) {
+      picker.value = '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91';
+      picker.dispatchEvent(new Event('change'));
+    }
+    expect(hiddenInput?.value).toBe('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+  });
+
+  it('rejects submission when the hidden offering input contains a non-UUID value', async () => {
+    const mockGetQuote = api.getExchangeQuote as jest.Mock;
+    openExchangeModal('ri-abc', 1);
+    // Force a non-UUID value into the hidden input (simulates a bypass attempt).
+    const hiddenInput = modal.querySelector<HTMLInputElement>('.modal-exchange-target');
+    if (hiddenInput) hiddenInput.value = 't3.medium';
+
+    const quoteBtn = Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote');
+    quoteBtn?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The quote API must NOT have been called -- the frontend guard fires first.
+    expect(mockGetQuote).not.toHaveBeenCalled();
+    // The result container must show an error mentioning the invalid value.
+    const result = modal.querySelector('#modal-exchange-result');
+    expect(result?.textContent).toContain('t3.medium');
   });
 });
 

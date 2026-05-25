@@ -705,8 +705,150 @@ func (c *Client) FindConvertibleOffering(ctx context.Context, params FindConvert
 	return aws.ToString(result.ReservedInstancesOfferings[0].ReservedInstancesOfferingId), nil
 }
 
+// TargetOffering is one valid target offering for a convertible RI exchange.
+type TargetOffering struct {
+	OfferingID          string  `json:"offering_id"`
+	InstanceType        string  `json:"instance_type"`
+	OfferingType        string  `json:"offering_type"`
+	ProductDescription  string  `json:"product_description"`
+	Duration            int64   `json:"duration"`
+	FixedPrice          float64 `json:"fixed_price"`
+	UsagePrice          float64 `json:"usage_price"`
+	CurrencyCode        string  `json:"currency_code"`
+	Scope               string  `json:"scope"`
+	NormalizationFactor float64 `json:"normalization_factor"`
+}
+
+// ListTargetOfferingsParams holds the source RI attributes used to narrow the
+// DescribeReservedInstancesOfferings query to valid exchange targets.
+type ListTargetOfferingsParams struct {
+	ProductDescription string
+	Tenancy            string
+	Scope              string
+	Duration           int64
+	OfferingType       string
+}
+
+// maxTargetOfferingPages caps the pagination walk for ListTargetOfferings.
+// At 100 results per page this allows up to 1000 offerings -- more than
+// enough given the small number of convertible instance types AWS offers.
+const maxTargetOfferingPages = 10
+
+// normalizeTargetOfferingsParams fills defaults for any zero-valued fields in
+// p and converts the OfferingType string to the AWS SDK enum. Extracted from
+// ListTargetOfferings to keep the main function's cyclomatic complexity under
+// the project threshold of 10.
+func normalizeTargetOfferingsParams(p ListTargetOfferingsParams) (tenancy, scope, productDesc string, duration int64, offeringType types.OfferingTypeValues) {
+	tenancy = canonicalizeEC2Tenancy(p.Tenancy)
+	if tenancy == "" {
+		tenancy = string(types.TenancyDefault)
+	}
+	scope = canonicalizeEC2Scope(p.Scope)
+	if scope == "" {
+		scope = string(types.ScopeRegional)
+	}
+	duration = p.Duration
+	if duration == 0 {
+		duration = OneYearSeconds
+	}
+	productDesc = p.ProductDescription
+	if productDesc == "" {
+		productDesc = "Linux/UNIX"
+	}
+	// OfferingType: typed field when non-empty; empty string means "all
+	// payment options" (the caller didn't specify). Leave unset so AWS
+	// returns all payment variants, giving the user maximum choice.
+	if p.OfferingType != "" {
+		if ot, err := convertEC2PaymentOption(p.OfferingType); err == nil {
+			offeringType = ot
+		}
+	}
+	return
+}
+
+// appendTargetOfferings maps the SDK result page into TargetOffering values
+// and appends them to out. Extracted from ListTargetOfferings to keep it
+// under the gocyclo threshold.
+func appendTargetOfferings(out []TargetOffering, offerings []types.ReservedInstancesOffering, scope string) []TargetOffering {
+	for _, o := range offerings {
+		id := aws.ToString(o.ReservedInstancesOfferingId)
+		if id == "" {
+			continue
+		}
+		instanceType := string(o.InstanceType)
+		var size string
+		if parts := strings.SplitN(instanceType, ".", 2); len(parts) == 2 {
+			size = parts[1]
+		}
+		out = append(out, TargetOffering{
+			OfferingID:          id,
+			InstanceType:        instanceType,
+			OfferingType:        string(o.OfferingType),
+			ProductDescription:  string(o.ProductDescription),
+			Duration:            aws.ToInt64(o.Duration),
+			FixedPrice:          float64(aws.ToFloat32(o.FixedPrice)),
+			UsagePrice:          float64(aws.ToFloat32(o.UsagePrice)),
+			CurrencyCode:        string(o.CurrencyCode),
+			Scope:               scope,
+			NormalizationFactor: exchange.NormalizationFactorForSize(size),
+		})
+	}
+	return out
+}
+
+// ListTargetOfferings returns convertible RI offerings that are valid exchange
+// targets for a source RI described by params. The query uses the same
+// typed-field approach as findOfferingID / describeInputFromQuery (PR #690):
+// typed primary fields (OfferingClass, OfferingType, Duration, ProductDescription,
+// InstanceTenancy) instead of Filters[]-heavy style to avoid the empty-page
+// pagination bug documented in issue #688. Scope has no typed field and stays
+// in Filters[] as before.
+//
+// InstanceType is intentionally left unset so AWS returns all instance types
+// matching the other constraints -- that is exactly the "valid targets" set for
+// a convertible RI exchange.
+func (c *Client) ListTargetOfferings(ctx context.Context, params ListTargetOfferingsParams) ([]TargetOffering, error) {
+	tenancy, scope, productDesc, duration, offeringType := normalizeTargetOfferingsParams(params)
+
+	var out []TargetOffering
+	var nextToken *string
+	for page := 1; page <= maxTargetOfferingPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		input := &ec2.DescribeReservedInstancesOfferingsInput{
+			ProductDescription: types.RIProductDescription(productDesc),
+			InstanceTenancy:    types.Tenancy(tenancy),
+			MinDuration:        aws.Int64(duration),
+			MaxDuration:        aws.Int64(duration),
+			OfferingClass:      types.OfferingClassTypeConvertible,
+			OfferingType:       offeringType,
+			IncludeMarketplace: aws.Bool(false),
+			MaxResults:         aws.Int32(100),
+			NextToken:          nextToken,
+			Filters:            []types.Filter{{Name: aws.String("scope"), Values: []string{scope}}},
+		}
+		result, err := c.client.DescribeReservedInstancesOfferings(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("describe target offerings: %w", err)
+		}
+		out = appendTargetOfferings(out, result.ReservedInstancesOfferings, scope)
+		if isLastEC2Page(result.NextToken) {
+			break
+		}
+		nextToken = result.NextToken
+		if page == maxTargetOfferingPages {
+			// Return what we collected: the picker is best-effort and
+			// partial results are still useful to the user.
+			log.Printf("ListTargetOfferings: pagination cap (%d pages) reached, returning %d offerings",
+				maxTargetOfferingPages, len(out))
+		}
+	}
+	return out, nil
+}
+
 // normalizationFactorForInstanceType extracts the size from an instance type
-// (e.g., "m5.xlarge" → "xlarge") and returns the AWS normalization factor.
+// (e.g., "m5.xlarge" -> "xlarge") and returns the AWS normalization factor.
 func normalizationFactorForInstanceType(instanceType string) float64 {
 	parts := strings.SplitN(instanceType, ".", 2)
 	if len(parts) != 2 {

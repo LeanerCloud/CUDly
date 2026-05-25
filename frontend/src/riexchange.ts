@@ -15,6 +15,7 @@ import type {
   RIExchangeConfig,
   RIExchangeHistoryRecord,
   OfferingOption,
+  TargetOffering,
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -288,9 +289,15 @@ export function fillQuoteFromRI(riId: string, count: number): void {
 
 // TargetRow captures the DOM inputs for one target-offering entry in
 // the multi-target modal. Tests assert on the posted request shape by
-// finding these inputs through their data-row-index attribute.
+// finding inputs through their class attributes.
+//
+// offeringInput is a hidden <input type="hidden"> that holds the resolved
+// AWS ReservedInstancesOfferingId UUID. The visible picker
+// (modal-exchange-target-select) drives this field on change so the
+// submission path always sees a UUID and never a free-text instance type.
 interface TargetRow {
-  offeringInput: HTMLInputElement;
+  offeringInput: HTMLInputElement;  // hidden; holds the UUID
+  pickerSelect: HTMLSelectElement;  // visible; drives offeringInput
   countInput: HTMLInputElement;
   chipEl: HTMLSpanElement; // cost chip; shows "$X.XX/mo each" or "—".
   rowEl: HTMLDivElement;
@@ -334,7 +341,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   riRow.appendChild(riLabel);
   content.appendChild(riRow);
 
-  // Targets container: one or more rows, each with offering ID +
+  // Targets container: one or more rows, each with offering picker +
   // count. Users click "+ Add target" to split a source RI across
   // multiple target shapes in a single atomic AWS exchange.
   const targetsContainer = document.createElement('div');
@@ -344,21 +351,110 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
 
   const targetRows: TargetRow[] = [];
 
-  const addTargetRow = (initialOffering?: string, initialCount?: number): void => {
+  // awsOfferings holds the list loaded from the target-offerings endpoint.
+  // Starts empty; populateAwsOfferings() fills it once after the modal opens.
+  let awsOfferings: TargetOffering[] = [];
+  // offeringsLoaded tracks whether the async load has completed so new
+  // rows added after completion are seeded with the already-loaded list.
+  let offeringsLoaded = false;
+  let offeringsError = false;
+
+  // buildPickerOptions rebuilds the <select> options for all existing
+  // rows. Called once after the AWS offerings are loaded, and for any
+  // row added after that point.
+  const buildPickerOptions = (
+    select: HTMLSelectElement,
+    initialOfferingId?: string,
+  ): void => {
+    // Remove all existing options to avoid duplicate listeners.
+    select.innerHTML = '';
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    if (offeringsError) {
+      placeholder.textContent = 'Could not load offerings -- type a UUID';
+    } else if (!offeringsLoaded) {
+      placeholder.textContent = 'Loading offerings...';
+    } else {
+      placeholder.textContent = 'Select a target offering';
+    }
+    select.appendChild(placeholder);
+
+    // Group 1: AWS-driven target offerings from DescribeReservedInstancesOfferings
+    if (awsOfferings.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'AWS Target Offerings';
+      for (const o of awsOfferings) {
+        const opt = document.createElement('option');
+        opt.value = o.offering_id;
+        // Display: "m5.large -- No Upfront" (no HTML injection: all fields from API)
+        const label = escapeHtml(o.instance_type) + (o.offering_type ? ' -- ' + escapeHtml(o.offering_type) : '');
+        opt.textContent = label;
+        if (initialOfferingId && o.offering_id === initialOfferingId) {
+          opt.selected = true;
+        }
+        grp.appendChild(opt);
+      }
+      select.appendChild(grp);
+    }
+
+    // Group 2: CE recommendations (alternativeTargets from reshape recs)
+    if (alternativeTargets && alternativeTargets.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'CE Recommendations';
+      for (const alt of alternativeTargets) {
+        const opt = document.createElement('option');
+        opt.value = alt.offering_id;
+        const costStr = formatCurrency(alt.effective_monthly_cost, '$', 2);
+        opt.textContent = escapeHtml(alt.instance_type) + ' -- ' + costStr + '/mo';
+        if (initialOfferingId && alt.offering_id === initialOfferingId) {
+          opt.selected = true;
+        }
+        grp.appendChild(opt);
+      }
+      select.appendChild(grp);
+    }
+  };
+
+  // populateAwsOfferings loads target offerings from the backend and
+  // refreshes all existing pickers.
+  const populateAwsOfferings = async (): Promise<void> => {
+    try {
+      awsOfferings = await api.listTargetOfferings(riId);
+      offeringsLoaded = true;
+    } catch {
+      offeringsLoaded = true;
+      offeringsError = true;
+    }
+    // Refresh all existing row pickers with the loaded offerings.
+    for (const row of targetRows) {
+      buildPickerOptions(row.pickerSelect, row.offeringInput.value || undefined);
+    }
+  };
+
+  const addTargetRow = (initialOfferingId?: string, initialCount?: number): void => {
     const rowIndex = targetRows.length;
     const rowEl = document.createElement('div');
     rowEl.className = 'setting-row exchange-target-row';
     rowEl.dataset.rowIndex = String(rowIndex);
 
-    const offeringLabel = document.createElement('label');
-    offeringLabel.textContent = 'Target Offering ID: ';
+    // Hidden input holds the resolved offering-id UUID. The picker
+    // select drives this field; collectTargets reads from it. Tests can
+    // set this directly to inject a UUID without going through the UI.
     const offeringInput = document.createElement('input');
-    offeringInput.type = 'text';
+    offeringInput.type = 'hidden';
     offeringInput.className = 'modal-exchange-target';
-    offeringInput.placeholder = 'e.g. t3.medium';
-    if (initialOffering) offeringInput.value = initialOffering;
-    offeringLabel.appendChild(offeringInput);
-    rowEl.appendChild(offeringLabel);
+    if (initialOfferingId) offeringInput.value = initialOfferingId;
+    rowEl.appendChild(offeringInput);
+
+    // Visible picker: a <select> with two optgroups (AWS + CE recs).
+    const pickerLabel = document.createElement('label');
+    pickerLabel.textContent = 'Target offering: ';
+    const pickerSelect = document.createElement('select');
+    pickerSelect.className = 'modal-exchange-target-select';
+    buildPickerOptions(pickerSelect, initialOfferingId);
+    pickerLabel.appendChild(pickerSelect);
+    rowEl.appendChild(pickerLabel);
 
     const countLabel = document.createElement('label');
     countLabel.textContent = 'Count: ';
@@ -386,45 +482,50 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     });
     rowEl.appendChild(removeBtn);
 
-    // Cost chip: last child of the row. Shows per-instance rate when
-    // the typed offering ID exact-matches an entry in
-    // alternativeTargets; otherwise shows "—". Updated live on input.
+    // Cost chip: shows per-instance monthly cost for the selected offering
+    // when it appears in alternativeTargets; otherwise shows "—".
     const chipEl = document.createElement('span');
     chipEl.className = 'cost-chip';
     chipEl.textContent = '—';
     rowEl.appendChild(chipEl);
 
-    offeringInput.addEventListener('input', () => {
-      updateRowChip(offeringInput, chipEl);
+    // pickerSelect drives the hidden offeringInput and refreshes the chip.
+    pickerSelect.addEventListener('change', () => {
+      offeringInput.value = pickerSelect.value;
+      updateRowChip(pickerSelect.value, chipEl);
       updateRunningTotal();
     });
     countInput.addEventListener('input', updateRunningTotal);
 
     targetsContainer.appendChild(rowEl);
-    targetRows.push({ offeringInput, countInput, chipEl, rowEl });
+    targetRows.push({ offeringInput, pickerSelect, countInput, chipEl, rowEl });
     // Initial chip population for pre-filled rows.
-    updateRowChip(offeringInput, chipEl);
+    updateRowChip(offeringInput.value, chipEl);
   };
 
-  // lookupAlternativeCost returns the per-instance monthly cost for an
-  // exact instance_type match in alternativeTargets, or undefined when
-  // no match exists (or when the caller didn't pass alternatives —
-  // e.g. the Convertible-RIs-table "Exchange" button path).
-  function lookupAlternativeCost(instanceType: string): number | undefined {
-    if (!alternativeTargets || !instanceType) return undefined;
-    const trimmed = instanceType.trim();
-    const hit = alternativeTargets.find((a) => a.instance_type === trimmed);
+  // lookupCECost returns the per-instance monthly cost for an offering_id
+  // that appears in alternativeTargets, or undefined when absent.
+  function lookupCECost(offeringId: string): number | undefined {
+    if (!alternativeTargets || !offeringId) return undefined;
+    const hit = alternativeTargets.find((a) => a.offering_id === offeringId);
     return hit?.effective_monthly_cost;
   }
 
-  function updateRowChip(input: HTMLInputElement, chip: HTMLSpanElement): void {
-    const cost = lookupAlternativeCost(input.value);
+  function updateRowChip(offeringId: string, chip: HTMLSpanElement): void {
+    const cost = lookupCECost(offeringId);
     chip.textContent = cost !== undefined ? `${formatCurrency(cost, '$', 2)}/mo each` : '—';
   }
 
-  // Seed the modal with the current behaviour: one row, pre-filled
-  // from the suggested target type + count passed in by the caller.
-  addTargetRow(suggestedTargetType, count);
+  // Seed the modal with one row, optionally pre-selecting by offering_id.
+  // suggestedTargetType is an instance type (from reshape recs); we
+  // match it against CE alternatives to find the offering_id to pre-select.
+  const suggestedOfferingId = suggestedTargetType && alternativeTargets
+    ? (alternativeTargets.find((a) => a.instance_type === suggestedTargetType)?.offering_id)
+    : undefined;
+  addTargetRow(suggestedOfferingId, count);
+
+  // Kick off the async AWS offerings load after the first row exists.
+  void populateAwsOfferings();
 
   const addTargetBtnRow = document.createElement('div');
   addTargetBtnRow.className = 'setting-row';
@@ -458,7 +559,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     let total = 0;
     let anyMissing = false;
     for (const row of targetRows) {
-      const cost = lookupAlternativeCost(row.offeringInput.value);
+      const cost = lookupCECost(row.offeringInput.value);
       const rawCount = parseInt(row.countInput.value, 10);
       const cnt = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
       if (cost === undefined) {
@@ -467,7 +568,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       }
       total += cost * cnt;
     }
-    const suffix = anyMissing ? ' (incomplete — some targets have no pricing data)' : '';
+    const suffix = anyMissing ? ' (incomplete -- some targets have no pricing data)' : '';
     runningTotalEl.textContent = `Estimated monthly cost for the quoted target set: ${formatCurrency(total, '$', 2)}/mo${suffix}`;
   }
   updateRunningTotal();
@@ -514,11 +615,13 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     void submitModalExecute();
   });
 
+  // offeringUUIDPattern mirrors the backend regex for AWS offering UUIDs.
+  const offeringUUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
   // collectTargets reads each row into a validated target. Rows with
-  // empty offering IDs are treated as an error; the first offending
-  // row's message is surfaced to the user. Count defaults to 1 when
-  // the input is empty or non-numeric (matches the pre-multi-target
-  // behaviour).
+  // empty or non-UUID offering IDs are treated as an error; the first
+  // offending row's message is surfaced to the user. Count defaults to 1
+  // when the input is empty or non-numeric.
   function collectTargets(): { targets: Array<{ offering_id: string; count: number }>; error?: string } {
     const targets: Array<{ offering_id: string; count: number }> = [];
     for (let i = 0; i < targetRows.length; i++) {
@@ -526,7 +629,13 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       if (!row) continue;
       const offeringId = row.offeringInput.value.trim();
       if (!offeringId) {
-        return { targets: [], error: `Please enter a target offering ID for target ${i + 1}.` };
+        return { targets: [], error: `Please select a target offering for target ${i + 1}.` };
+      }
+      if (!offeringUUIDPattern.test(offeringId)) {
+        return {
+          targets: [],
+          error: `Target ${i + 1}: "${offeringId}" is not a valid offering UUID. Please select an offering from the dropdown.`,
+        };
       }
       const rawCount = parseInt(row.countInput.value, 10);
       const targetCount = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;

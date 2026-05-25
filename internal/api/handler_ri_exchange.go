@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/smithy-go"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -64,6 +67,99 @@ func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
 		return h.reshapeRecsFactory(cfg)
 	}
 	return awsprovider.NewRecommendationsClientDirect(cfg)
+}
+
+// targetOfferingsEC2Client is the narrow EC2 interface that
+// listTargetOfferings needs. Scoped here so tests can inject a tiny
+// stub without implementing the full ec2svc.Client surface.
+type targetOfferingsEC2Client interface {
+	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	ListTargetOfferings(ctx context.Context, params ec2svc.ListTargetOfferingsParams) ([]ec2svc.TargetOffering, error)
+}
+
+// buildTargetOfferingsEC2Client honours the injected factory when set,
+// falling back to the direct AWS SDK constructor otherwise.
+func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client {
+	if h.targetOfferingsEC2Factory != nil {
+		return h.targetOfferingsEC2Factory(cfg)
+	}
+	return awsprovider.NewEC2ClientDirect(cfg)
+}
+
+// TargetOfferingsResponse is the response for
+// GET /api/ri-exchange/target-offerings.
+type TargetOfferingsResponse struct {
+	Offerings []ec2svc.TargetOffering `json:"offerings"`
+}
+
+// offeringIDPattern matches a standard AWS offering UUID used for
+// ReservedInstancesOfferingId values. Used both as a server-side guard
+// (Defect 2) and to reject any stray free-text before it reaches AWS.
+var offeringIDPattern = regexp.MustCompile(
+	`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+)
+
+// listTargetOfferings returns valid convertible RI exchange target
+// offerings for the source RI identified by ?source_ri_id=<uuid>.
+//
+// The handler looks up the source RI from DescribeReservedInstances,
+// extracts its ProductDescription / Tenancy / Scope / Duration /
+// OfferingType, and passes those to ec2svc.ListTargetOfferings which
+// calls DescribeReservedInstancesOfferings with the same typed-field
+// shape used by PR #690. Instance type is intentionally omitted from
+// the query so AWS returns all valid target instance types -- the full
+// menu of what the user can exchange into.
+//
+// GET /api/ri-exchange/target-offerings?source_ri_id=<uuid>&region=<region>
+func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+		return nil, err
+	}
+
+	sourceRIID := req.QueryStringParameters["source_ri_id"]
+	if sourceRIID == "" {
+		return nil, NewClientError(400, "source_ri_id is required")
+	}
+
+	region := req.QueryStringParameters["region"]
+	cfg, err := h.loadAWSConfigWithRegion(ctx, region)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	ec2Client := h.buildTargetOfferingsEC2Client(cfg)
+
+	// Fetch all convertible RIs to locate the source RI's attributes.
+	// DescribeReservedInstances does not support a single-ID filter
+	// without the full ARN, so we enumerate and filter by ID.
+	ris, err := ec2Client.ListConvertibleReservedInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
+	}
+
+	var sourceRI *ec2svc.ConvertibleRI
+	for i := range ris {
+		if ris[i].ReservedInstanceID == sourceRIID {
+			sourceRI = &ris[i]
+			break
+		}
+	}
+	if sourceRI == nil {
+		return nil, NewClientError(404, fmt.Sprintf("source RI %q not found in region %s", sourceRIID, cfg.Region))
+	}
+
+	offerings, err := ec2Client.ListTargetOfferings(ctx, ec2svc.ListTargetOfferingsParams{
+		ProductDescription: sourceRI.ProductDescription,
+		Tenancy:            sourceRI.InstanceTenancy,
+		Scope:              sourceRI.Scope,
+		Duration:           sourceRI.Duration,
+		OfferingType:       sourceRI.OfferingType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list target offerings: %w", err)
+	}
+
+	return &TargetOfferingsResponse{Offerings: offerings}, nil
 }
 
 // azureExchangeClient is the narrow interface that listExchangeableAzureRIs
@@ -353,6 +449,25 @@ func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
 	return "USD"
 }
 
+// validateTargets checks each entry in targets for a non-empty, UUID-shaped
+// offering_id. Extracted so both getExchangeQuote and validateExecuteExchangeBody
+// share the same check without exceeding the gocyclo threshold.
+func validateTargets(targets []ExchangeTargetBody) error {
+	for i, t := range targets {
+		if t.OfferingID == "" {
+			return NewClientError(400, fmt.Sprintf("targets[%d].offering_id is required", i))
+		}
+		if !offeringIDPattern.MatchString(t.OfferingID) {
+			return NewClientError(400, fmt.Sprintf(
+				"targets[%d].offering_id %q does not look like an AWS offering UUID; "+
+					"expected something like 4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91 -- "+
+					"did you paste an instance type by mistake?",
+				i, t.OfferingID))
+		}
+	}
+	return nil
+}
+
 // getExchangeQuote gets a quote for an RI exchange.
 func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
@@ -369,10 +484,8 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
 		return nil, NewClientError(400, "either targets[] or target_offering_id is required")
 	}
-	for i, t := range body.Targets {
-		if t.OfferingID == "" {
-			return nil, NewClientError(400, fmt.Sprintf("targets[%d].offering_id is required", i))
-		}
+	if err := validateTargets(body.Targets); err != nil {
+		return nil, err
 	}
 
 	region := body.Region
@@ -389,7 +502,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	})
 	if err != nil {
 		logging.Errorf("exchange quote failed: %v", err)
-		return nil, NewClientError(500, "exchange quote failed")
+		return nil, mapAWSExchangeError("exchange quote failed", err)
 	}
 
 	return quote, nil
@@ -407,10 +520,8 @@ func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
 		return NewClientError(400, "either targets[] or target_offering_id is required")
 	}
-	for i, t := range body.Targets {
-		if t.OfferingID == "" {
-			return NewClientError(400, fmt.Sprintf("targets[%d].offering_id is required", i))
-		}
+	if err := validateTargets(body.Targets); err != nil {
+		return err
 	}
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
@@ -452,13 +563,39 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	})
 	if err != nil {
 		logging.Errorf("exchange execution failed: %v", err)
-		return nil, NewClientError(500, "exchange execution failed")
+		return nil, mapAWSExchangeError("exchange execution failed", err)
 	}
 
 	return &ExchangeExecuteResponse{
 		ExchangeID: exchangeID,
 		Quote:      quote,
 	}, nil
+}
+
+// awsExchangeClientFaultCodes is the set of AWS error codes that are
+// documented client faults for RI exchange operations. These map to
+// 4xx responses so the caller receives the original AWS error message
+// and understands it was their input that was wrong. All other AWS
+// errors remain 5xx (transient / server-side).
+var awsExchangeClientFaultCodes = map[string]bool{
+	"InvalidOfferingId":                   true,
+	"InvalidParameter":                    true,
+	"ValidationError":                     true,
+	"InvalidReservedInstancesId.NotFound": true,
+	"InvalidInstanceID.NotFound":          true,
+}
+
+// mapAWSExchangeError converts an AWS SDK error from an RI exchange
+// operation to a ClientError with the appropriate HTTP status code.
+// AWS 4xx client-fault errors produce a 400 with the original AWS
+// message preserved. Any other error produces a 500 (generic server
+// failure) using the provided opMsg fallback.
+func mapAWSExchangeError(opMsg string, err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
+		return NewClientError(400, apiErr.ErrorMessage())
+	}
+	return NewClientError(500, opMsg)
 }
 
 // Response types

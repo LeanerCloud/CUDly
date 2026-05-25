@@ -12,7 +12,8 @@ import type {
   ExchangeExecuteRequest,
   ExchangeResult,
   RIExchangeConfig,
-  RIExchangeHistoryRecord
+  RIExchangeHistoryRecord,
+  TargetOffering,
 } from './types';
 
 /**
@@ -59,6 +60,18 @@ export async function executeExchange(req: ExchangeExecuteRequest): Promise<Exch
     method: 'POST',
     body: JSON.stringify(req),
   });
+}
+
+/**
+ * List valid target offerings for a convertible RI exchange.
+ * Returns offerings from DescribeReservedInstancesOfferings filtered to
+ * the same convertible class / term / product-description as the source RI.
+ */
+export async function listTargetOfferings(sourceRIId: string, region?: string): Promise<TargetOffering[]> {
+  let qs = `?source_ri_id=${encodeURIComponent(sourceRIId)}`;
+  if (region) qs += `&region=${encodeURIComponent(region)}`;
+  const resp = await apiRequest<{ offerings: TargetOffering[] }>(`/ri-exchange/target-offerings${qs}`);
+  return resp.offerings ?? [];
 }
 
 /**
