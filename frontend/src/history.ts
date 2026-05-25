@@ -811,12 +811,16 @@ function wireRowActionHandlers(container: HTMLElement): void {
         return;
       }
       // Gate the toast on the approval email outcome reported by the backend.
-      // email_sent===true (or status==='pending'/'notified') means the approval
-      // request is in the queue; false means the execution was created but the
-      // email delivery failed, so show a partial-failure warning instead.
-      const emailOk = retryResult.email_sent === true
+      // email_sent===false is an explicit failure signal that overrides any
+      // status-based inference; show a warning even when status==='pending'.
+      // email_sent===true or a pending/notified status (with email_sent absent)
+      // means the approval request is in the queue.
+      const emailExplicitlyFailed = retryResult.email_sent === false;
+      const emailOk = !emailExplicitlyFailed && (
+        retryResult.email_sent === true
         || retryResult.status === 'pending'
-        || retryResult.status === 'notified';
+        || retryResult.status === 'notified'
+      );
       if (emailOk) {
         showToast({ message: 'Purchase request sent for approval', kind: 'success', timeout: 5_000 });
       } else {

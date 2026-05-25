@@ -21,6 +21,7 @@
  *  11. Over-threshold click sends force=true.
  *  12. email_sent absent but status=pending → success toast.
  *  13. email_sent false → warning toast (approval email failed).
+ *  14. email_sent false + status pending → warning toast (explicit failure overrides status).
  */
 
 import { loadHistory } from '../history';
@@ -373,6 +374,40 @@ describe('History inline Retry button (issue #47)', () => {
         kind: 'warning',
         message: expect.stringContaining('approval email failed'),
       }),
+    );
+  });
+
+  test('email_sent false overrides pending status - shows warning not success toast', async () => {
+    // This is the case CR round 2 identified: email_sent===false must win over
+    // status==='pending'. The prior logic short-circuited on the status check
+    // and could produce a false success toast on conflicting payloads.
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    (api.retryPurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'new',
+      original_execution: 'r-1',
+      status: 'pending',
+      retry_attempt_n: 1,
+      email_sent: false,
+    });
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id })],
+    });
+
+    await loadHistory();
+    const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
+    btn?.click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'warning',
+        message: expect.stringContaining('approval email failed'),
+      }),
+    );
+    expect(showToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'success' }),
     );
   });
 
