@@ -786,8 +786,9 @@ function wireRowActionHandlers(container: HTMLElement): void {
       });
       if (!ok) return;
       btn.disabled = true;
+      let retryResult: Awaited<ReturnType<typeof api.retryPurchase>>;
       try {
-        await api.retryPurchase(id, overThreshold ? { force: true } : undefined);
+        retryResult = await api.retryPurchase(id, overThreshold ? { force: true } : undefined);
       } catch (retryError) {
         console.error('Failed to retry purchase:', retryError);
         // Surface structured retry hints from the backend (issue #47):
@@ -809,10 +810,22 @@ function wireRowActionHandlers(container: HTMLElement): void {
         btn.disabled = false;
         return;
       }
-      // Retry POST succeeded — surface success regardless of whether
-      // the refresh works. The reload error path mirrors the cancel
-      // flow above.
-      showToast({ message: 'Retry execution created', kind: 'success', timeout: 5_000 });
+      // Gate the toast on the approval email outcome reported by the backend.
+      // email_sent===false is an explicit failure signal that overrides any
+      // status-based inference; show a warning even when status==='pending'.
+      // email_sent===true or a pending/notified status (with email_sent absent)
+      // means the approval request is in the queue.
+      const emailExplicitlyFailed = retryResult.email_sent === false;
+      const emailOk = !emailExplicitlyFailed && (
+        retryResult.email_sent === true
+        || retryResult.status === 'pending'
+        || retryResult.status === 'notified'
+      );
+      if (emailOk) {
+        showToast({ message: 'Purchase request sent for approval', kind: 'success', timeout: 5_000 });
+      } else {
+        showToast({ message: 'Retry created but approval email failed - check your notification settings', kind: 'warning', timeout: 8_000 });
+      }
       try {
         await loadHistory();
       } catch (reloadError) {
