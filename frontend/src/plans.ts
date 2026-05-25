@@ -547,6 +547,8 @@ async function editPlan(planId: string): Promise<void> {
     }
 
     void setupPlanAccountsSection(backendPlan.id);
+    // Wire live range validation on all five numeric inputs (#702).
+    wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
     if (planModal) openModal(planModal);
   } catch (error) {
@@ -802,6 +804,9 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   // Set up ramp schedule change handlers for dynamic plan name
   setupRampScheduleHandlers();
 
+  // Wire live range validation on all five numeric inputs (#702).
+  wirePlanRangeInputs();
+
   // Generate initial plan name
   updatePlanNameFromSchedule();
 
@@ -830,6 +835,9 @@ export function openNewPlanModal(): void {
 
   // Set up ramp schedule change handlers for dynamic plan name
   setupRampScheduleHandlers();
+
+  // Wire live range validation on all five numeric inputs (#702).
+  wirePlanRangeInputs();
 
   // Generate initial plan name
   updatePlanNameFromSchedule();
@@ -894,6 +902,106 @@ function updatePlanNameFromSchedule(): void {
   if (planNameInput) {
     planNameInput.value = generatePlanName(rampSchedule, customStepPercent, customIntervalDays);
   }
+}
+
+/**
+ * Wire live range + integer-only validation on a plan numeric input.
+ *
+ * Registers `input` and `blur` event handlers that:
+ *   - reject non-integer values via the regex `^\d+$` (blocks scientific
+ *     notation such as `1e+30` and decimal fractions)
+ *   - show a sibling `.field-error` span when the value is out of [min, max]
+ *     or non-integer, and hide it when the value is valid or the field is empty
+ *   - set / clear `aria-invalid` for screen-reader accessibility
+ *
+ * Idempotent: the `data-range-wired` attribute guards against re-registering
+ * duplicate listeners when the modal is closed and reopened. The error span
+ * is created once on the first call and reused thereafter. Explicit `min` /
+ * `max` parameters are used instead of reading HTML attributes so callers are
+ * the source of truth and the helper stays self-contained.
+ */
+function wireRangeInput(inputId: string, min: number, max: number): void {
+  const input = document.getElementById(inputId) as HTMLInputElement | null;
+  if (!input) return;
+
+  // Idempotency guard: skip registration if already wired during a prior
+  // modal open. The error span, aria-describedby, and listeners persist
+  // across opens because the modal node stays in the DOM.
+  if (input.dataset['rangeWired']) {
+    // Re-trigger validation so stale error UI is reconciled on modal reopen.
+    input.dispatchEvent(new Event('input'));
+    return;
+  }
+  input.dataset['rangeWired'] = '1';
+
+  const errorId = `${inputId}-range-error`;
+  let errorEl = document.getElementById(errorId);
+  if (!errorEl) {
+    errorEl = document.createElement('small');
+    errorEl.id = errorId;
+    errorEl.className = 'field-error hidden';
+    errorEl.setAttribute('role', 'status');
+    errorEl.setAttribute('aria-live', 'polite');
+    input.insertAdjacentElement('afterend', errorEl);
+    const existing = input.getAttribute('aria-describedby');
+    input.setAttribute(
+      'aria-describedby',
+      existing ? `${existing} ${errorId}` : errorId,
+    );
+  }
+  const error = errorEl;
+  const message = `Must be a whole number between ${min} and ${max}`;
+  const integerPattern = /^\d+$/;
+
+  const check = (): void => {
+    const raw = input.value.trim();
+    if (raw === '') {
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+      return;
+    }
+    if (!integerPattern.test(raw)) {
+      input.setAttribute('aria-invalid', 'true');
+      error.textContent = message;
+      error.classList.remove('hidden');
+      return;
+    }
+    const parsed = parseInt(raw, 10);
+    if (parsed < min || parsed > max) {
+      input.setAttribute('aria-invalid', 'true');
+      error.textContent = message;
+      error.classList.remove('hidden');
+    } else {
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+    }
+  };
+
+  const clampOnBlur = (): void => {
+    const raw = input.value.trim();
+    if (!integerPattern.test(raw) || raw === '') return;
+    const parsed = parseInt(raw, 10);
+    if (parsed < min || parsed > max) {
+      input.value = String(Math.min(max, Math.max(min, parsed)));
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+    }
+  };
+
+  input.addEventListener('input', check);
+  input.addEventListener('blur', clampOnBlur);
+}
+
+/**
+ * Wire live range validation on all five plan-creation number inputs.
+ * Called every time the plan modal opens so validation is active for both
+ * the create and edit flows.
+ */
+function wirePlanRangeInputs(): void {
+  wireRangeInput('plan-coverage', 0, 100);
+  wireRangeInput('ramp-step-percent', 1, 100);
+  wireRangeInput('ramp-interval-days', 1, 365);
+  wireRangeInput('plan-notify-days', 1, 30);
 }
 
 /**

@@ -669,6 +669,12 @@ describe('HTML Structure', () => {
       const notifyDays = document.getElementById('setting-notification-days') as HTMLInputElement | null;
       expect(notifyDays?.getAttribute('min')).toBe('1');
       expect(notifyDays?.getAttribute('max')).toBe('30');
+
+      // #702: ramp-interval-days must carry max=365 so the browser spinner
+      // stays bounded and wireRangeInput uses the correct upper limit.
+      const intervalDays = document.getElementById('ramp-interval-days') as HTMLInputElement | null;
+      expect(intervalDays?.getAttribute('min')).toBe('1');
+      expect(intervalDays?.getAttribute('max')).toBe('365');
     });
 
     test('password inputs have minlength', () => {
