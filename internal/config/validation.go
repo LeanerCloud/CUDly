@@ -10,8 +10,44 @@ import (
 // ValidProviders lists all supported cloud providers
 var ValidProviders = []string{"aws", "azure", "gcp"}
 
-// ValidPaymentOptions lists all supported payment options
+// ValidPaymentOptions lists the AWS-canonical payment options. Kept for
+// backwards compatibility; prefer ValidPaymentOptionsByProvider for
+// provider-aware validation.
 var ValidPaymentOptions = []string{"no-upfront", "partial-upfront", "all-upfront"}
+
+// ValidPaymentOptionsByProvider maps each provider to the payment option
+// tokens it accepts. Azure and GCP reservations use "upfront" (all-upfront
+// billing) and "monthly" (no-upfront / spread billing). AWS RIs/SPs use the
+// three classic tiers. See providers/{azure,gcp}/services/*/client.go for
+// the case statements that consume these values.
+var ValidPaymentOptionsByProvider = map[string][]string{
+	"aws":   {"no-upfront", "partial-upfront", "all-upfront"},
+	"azure": {"all-upfront", "no-upfront", "upfront", "monthly"},
+	"gcp":   {"all-upfront", "no-upfront", "upfront", "monthly"},
+}
+
+// validPaymentOptionsUnion is the union of all provider payment option sets,
+// used for global-config default validation where no provider context is
+// available. Accepts any token that is valid for at least one provider.
+var validPaymentOptionsUnion = func() []string {
+	seen := map[string]bool{}
+	var all []string
+	for _, opts := range ValidPaymentOptionsByProvider {
+		for _, o := range opts {
+			if !seen[o] {
+				seen[o] = true
+				all = append(all, o)
+			}
+		}
+	}
+	return all
+}()
+
+// validPaymentOptionsFor returns the provider-canonical payment option slice
+// for the given provider (lowercase). Returns nil when the provider is unknown.
+func validPaymentOptionsFor(provider string) []string {
+	return ValidPaymentOptionsByProvider[provider]
+}
 
 // ValidRampScheduleTypes lists all supported ramp schedule types
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
@@ -142,10 +178,12 @@ func validateGlobalTerm(term int) error {
 	return nil
 }
 
-// validatePaymentOption validates that the payment option is valid if set
+// validatePaymentOption validates that the payment option is in the union of
+// all provider sets. Used by GlobalConfig.Validate where no provider context
+// is available; any token valid for at least one provider is accepted.
 func validatePaymentOption(payment string) error {
 	if payment != "" && !isValidPaymentOption(payment) {
-		return fmt.Errorf("invalid payment option: %s (valid: %s)", payment, strings.Join(ValidPaymentOptions, ", "))
+		return fmt.Errorf("invalid payment option: %s (valid: %s)", payment, strings.Join(validPaymentOptionsUnion, ", "))
 	}
 	return nil
 }
@@ -200,10 +238,23 @@ func (c *ServiceConfig) validateTerm() error {
 }
 
 func (c *ServiceConfig) validatePayment() error {
-	if c.Payment != "" && !isValidPaymentOption(c.Payment) {
-		return fmt.Errorf("invalid payment option: %s (valid: %s)", c.Payment, strings.Join(ValidPaymentOptions, ", "))
+	if c.Payment == "" {
+		return nil
 	}
-	return nil
+	// Provider-canonical validation: each provider accepts only its own token
+	// set. A cross-provider token (e.g. "all-upfront" on an Azure service) is
+	// rejected even though that token is valid somewhere else.
+	opts := validPaymentOptionsFor(c.Provider)
+	if opts == nil {
+		// Provider was already validated; unknown provider here is a bug.
+		return fmt.Errorf("internal error: no payment options defined for provider %q", c.Provider)
+	}
+	for _, v := range opts {
+		if c.Payment == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid payment option: %s (valid for %s: %s)", c.Payment, c.Provider, strings.Join(opts, ", "))
 }
 
 func (c *ServiceConfig) validateConfigCoverage() error {
@@ -297,7 +348,7 @@ func isValidProvider(p string) bool {
 }
 
 func isValidPaymentOption(p string) bool {
-	for _, valid := range ValidPaymentOptions {
+	for _, valid := range validPaymentOptionsUnion {
 		if p == valid {
 			return true
 		}

@@ -72,6 +72,23 @@ func TestGlobalConfig_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "invalid payment option",
 		},
+		// Issue #698: GlobalConfig accepts union of all provider payment tokens
+		{
+			name: "global config accepts azure/gcp upfront token",
+			config: GlobalConfig{
+				DefaultTerm:    3,
+				DefaultPayment: "upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "global config accepts azure/gcp monthly token",
+			config: GlobalConfig{
+				DefaultTerm:    3,
+				DefaultPayment: "monthly",
+			},
+			wantErr: false,
+		},
 		{
 			name: "coverage too low",
 			config: GlobalConfig{
@@ -330,6 +347,91 @@ func TestServiceConfig_Validate(t *testing.T) {
 				Provider: "gcp",
 				Service:  "compute",
 				Payment:  "invalid-payment",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		// Issue #698: provider-canonical payment validation
+		{
+			name: "aws all-upfront is valid",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Payment:  "all-upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "aws monthly is rejected",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Payment:  "monthly",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure upfront is valid",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "azure monthly is valid",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "monthly",
+			},
+			wantErr: false,
+		},
+		{
+			name: "azure all-upfront is valid",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "all-upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "azure partial-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "partial-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp upfront is valid",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "gcp monthly is valid",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "monthly",
+			},
+			wantErr: false,
+		},
+		{
+			name: "gcp partial-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "partial-upfront",
 			},
 			wantErr: true,
 			errMsg:  "invalid payment option",
@@ -689,9 +791,14 @@ func TestIsValidProvider(t *testing.T) {
 }
 
 func TestIsValidPaymentOption(t *testing.T) {
+	// AWS tokens
 	assert.True(t, isValidPaymentOption("no-upfront"))
 	assert.True(t, isValidPaymentOption("partial-upfront"))
 	assert.True(t, isValidPaymentOption("all-upfront"))
+	// Azure/GCP tokens (union set)
+	assert.True(t, isValidPaymentOption("upfront"))
+	assert.True(t, isValidPaymentOption("monthly"))
+	// Unknown tokens rejected
 	assert.False(t, isValidPaymentOption("invalid"))
 	assert.False(t, isValidPaymentOption(""))
 }
