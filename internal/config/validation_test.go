@@ -854,6 +854,63 @@ func TestIsValidPaymentOption(t *testing.T) {
 	assert.False(t, isValidPaymentOption(""))
 }
 
+func TestNormalizePaymentOption(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		raw      string
+		want     string
+		ok       bool
+	}{
+		// AWS: passthrough for every canonical token.
+		{"aws no-upfront passthrough", "aws", "no-upfront", "no-upfront", true},
+		{"aws partial-upfront passthrough", "aws", "partial-upfront", "partial-upfront", true},
+		{"aws all-upfront passthrough", "aws", "all-upfront", "all-upfront", true},
+		// AWS: Azure/GCP-style tokens are left as-is and flagged for the
+		// next validator boundary to surface.
+		{"aws upfront left as-is", "aws", "upfront", "upfront", false},
+		{"aws monthly left as-is", "aws", "monthly", "monthly", false},
+
+		// Azure: canonical passthrough.
+		{"azure upfront passthrough", "azure", "upfront", "upfront", true},
+		{"azure monthly passthrough", "azure", "monthly", "monthly", true},
+		// Azure: AWS-style aliases coerced to canonical.
+		{"azure all-upfront → upfront", "azure", "all-upfront", "upfront", true},
+		{"azure no-upfront → monthly", "azure", "no-upfront", "monthly", true},
+		{"azure partial-upfront → upfront (nearest)", "azure", "partial-upfront", "upfront", true},
+
+		// GCP: canonical passthrough.
+		{"gcp upfront passthrough", "gcp", "upfront", "upfront", true},
+		{"gcp monthly passthrough", "gcp", "monthly", "monthly", true},
+		// GCP: AWS-style aliases coerced to canonical.
+		{"gcp all-upfront → upfront", "gcp", "all-upfront", "upfront", true},
+		{"gcp no-upfront → monthly", "gcp", "no-upfront", "monthly", true},
+		{"gcp partial-upfront → upfront (nearest)", "gcp", "partial-upfront", "upfront", true},
+
+		// Empty raw: passthrough on any known provider.
+		{"empty raw on aws", "aws", "", "", true},
+		{"empty raw on azure", "azure", "", "", true},
+		{"empty raw on gcp", "gcp", "", "", true},
+
+		// Unknown provider: ok=false, no canonicalization.
+		{"unknown provider", "ibm", "all-upfront", "", false},
+		{"empty provider", "", "monthly", "", false},
+
+		// Garbage tokens on known providers: left as-is, ok=false.
+		{"azure garbage", "azure", "ohai", "ohai", false},
+		{"gcp garbage", "gcp", "ohai", "ohai", false},
+		{"aws garbage", "aws", "ohai", "ohai", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := NormalizePaymentOption(tt.provider, tt.raw)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.ok, ok)
+		})
+	}
+}
+
 func TestIsValidRampScheduleType(t *testing.T) {
 	assert.True(t, isValidRampScheduleType("immediate"))
 	assert.True(t, isValidRampScheduleType("weekly"))

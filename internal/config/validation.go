@@ -79,6 +79,66 @@ func validPaymentOptionsFor(provider string) []string {
 	return ValidPaymentOptionsByProvider[provider]
 }
 
+// NormalizePaymentOption maps a raw payment-option token onto the canonical
+// token the given provider semantically models (see ValidPaymentOptionsByProvider).
+// It exists so the recommendation-emission boundary (see
+// internal/scheduler/scheduler.go:convertRecommendations) can defensively
+// canonicalize any AWS-style token that a code path or a globally-default
+// payment-option setting might stamp onto a non-AWS rec, before the rec is
+// persisted and later validated against the provider-canonical set.
+//
+// Returns (canonical, true) when raw is already canonical for the provider
+// or has an unambiguous canonical mapping. Returns ("", false) only for
+// unknown providers — every known cross-provider AWS-style token maps to a
+// canonical value:
+//
+//   - AWS  : passthrough (AWS already speaks the three-tier set).
+//   - Azure: all-upfront → upfront, no-upfront → monthly,
+//     partial-upfront → upfront (no semantic equivalent — coerce to nearest
+//     all-upfront tier rather than drop the rec; caller may log).
+//   - GCP  : all-upfront → upfront, no-upfront → monthly,
+//     partial-upfront → upfront (same rationale as Azure).
+//
+// The partial-upfront coercion is deliberate: dropping the rec would be a
+// silent data loss for the user, while coercing to the all-upfront tier
+// preserves the rec at the closest billing model the provider offers. The
+// caller is expected to log a warning so an operator notices the input bug.
+//
+// Empty raw passes through as ("", true) — callers that distinguish "unset"
+// from "invalid" can check the returned bool only when raw is non-empty.
+func NormalizePaymentOption(provider, raw string) (string, bool) {
+	if _, known := ValidPaymentOptionsByProvider[provider]; !known {
+		return "", false
+	}
+	if raw == "" {
+		return "", true
+	}
+	// Already canonical for this provider: passthrough.
+	for _, v := range ValidPaymentOptionsByProvider[provider] {
+		if raw == v {
+			return raw, true
+		}
+	}
+	// Cross-provider AWS-style tokens that have a canonical equivalent in
+	// the Azure/GCP two-tier model.
+	if provider == "azure" || provider == "gcp" {
+		switch raw {
+		case "all-upfront":
+			return "upfront", true
+		case "no-upfront":
+			return "monthly", true
+		case "partial-upfront":
+			// No semantic equivalent — coerce to the all-upfront tier so the
+			// rec survives validation; caller should WARN-log the substitution
+			// so an operator can fix the upstream stamping bug.
+			return "upfront", true
+		}
+	}
+	// Anything else (including Azure/GCP-style tokens on AWS) is left as-is
+	// and will surface as a validation error at the next boundary.
+	return raw, false
+}
+
 // ValidRampScheduleTypes lists all supported ramp schedule types
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
 

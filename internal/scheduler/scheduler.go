@@ -1102,6 +1102,26 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 		engine := extractEngine(rec.Details)
 		detailsBlob := marshalRecDetails(rec, providerName)
 
+		// Canonicalize PaymentOption at the emission boundary so a downstream
+		// plan-validator round-trip never sees a cross-provider/AWS-style
+		// token on a non-AWS rec (issue #698). The provider service clients
+		// historically aliased "all-upfront"/"no-upfront" to the canonical
+		// "upfront"/"monthly" inside their pricing switches; the validator
+		// no longer accepts those aliases. Normalize once here so persisted
+		// recs always carry the provider-canonical token.
+		if canon, ok := config.NormalizePaymentOption(providerName, rec.PaymentOption); ok {
+			if canon != rec.PaymentOption {
+				logging.Warnf("convertRecommendations: coerced %s payment_option %q to canonical %q (account=%s service=%s sku=%s)",
+					providerName, rec.PaymentOption, canon, rec.Account, rec.Service, rec.ResourceType)
+				rec.PaymentOption = canon
+			}
+		} else if rec.PaymentOption != "" {
+			// Unknown provider or unmapped token: leave as-is. The next
+			// validator boundary will surface the issue with a clear error.
+			logging.Warnf("convertRecommendations: cannot canonicalize %s payment_option %q (account=%s service=%s sku=%s) — leaving as-is",
+				providerName, rec.PaymentOption, rec.Account, rec.Service, rec.ResourceType)
+		}
+
 		// Parse term to integer (e.g., "3yr" -> 3)
 		term := 3
 		if rec.Term != "" {
