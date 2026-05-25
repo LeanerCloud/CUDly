@@ -430,15 +430,6 @@ func TestServiceConfig_Validate(t *testing.T) {
 			errMsg:  "valid for azure: upfront, monthly",
 		},
 		{
-			name: "gcp upfront is valid",
-			config: ServiceConfig{
-				Provider: "gcp",
-				Service:  "computeengine",
-				Payment:  "upfront",
-			},
-			wantErr: false,
-		},
-		{
 			name: "gcp monthly is valid",
 			config: ServiceConfig{
 				Provider: "gcp",
@@ -446,6 +437,16 @@ func TestServiceConfig_Validate(t *testing.T) {
 				Payment:  "monthly",
 			},
 			wantErr: false,
+		},
+		{
+			name: "gcp upfront is rejected (gcp is monthly-only)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
 		},
 		{
 			name: "gcp partial-upfront is rejected (aws-only token)",
@@ -485,7 +486,7 @@ func TestServiceConfig_Validate(t *testing.T) {
 				Payment:  "no-upfront",
 			},
 			wantErr: true,
-			errMsg:  "valid for gcp: upfront, monthly",
+			errMsg:  "valid for gcp: monthly",
 		},
 		{
 			name: "coverage too low",
@@ -879,13 +880,14 @@ func TestNormalizePaymentOption(t *testing.T) {
 		{"azure no-upfront → monthly", "azure", "no-upfront", "monthly", true},
 		{"azure partial-upfront → upfront (nearest)", "azure", "partial-upfront", "upfront", true},
 
-		// GCP: canonical passthrough.
-		{"gcp upfront passthrough", "gcp", "upfront", "upfront", true},
+		// GCP: canonical passthrough (monthly-only — every non-monthly token
+		// collapses to monthly because GCP CUDs only model one billing plan).
 		{"gcp monthly passthrough", "gcp", "monthly", "monthly", true},
-		// GCP: AWS-style aliases coerced to canonical.
-		{"gcp all-upfront → upfront", "gcp", "all-upfront", "upfront", true},
+		{"gcp upfront → monthly (gcp is monthly-only)", "gcp", "upfront", "monthly", true},
+		// GCP: AWS-style aliases coerced to the one canonical token.
+		{"gcp all-upfront → monthly", "gcp", "all-upfront", "monthly", true},
 		{"gcp no-upfront → monthly", "gcp", "no-upfront", "monthly", true},
-		{"gcp partial-upfront → upfront (nearest)", "gcp", "partial-upfront", "upfront", true},
+		{"gcp partial-upfront → monthly", "gcp", "partial-upfront", "monthly", true},
 
 		// Empty raw: passthrough on any known provider.
 		{"empty raw on aws", "aws", "", "", true},
