@@ -2662,7 +2662,7 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
 // payment unsupported by the (provider, service, term) cell) the
 // bucket falls back to the toolbar payment.
 describe('Issue #111: per-bucket Payment seed from per-account service override', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     document.body.replaceChildren();
     const recsTab = document.createElement('div');
     recsTab.id = 'opportunities-tab';
@@ -2684,6 +2684,11 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     jest.clearAllMocks();
     // Default: empty overrides — overridden per-test.
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    // Module-level fan-out state survives test isolation; reset it so a
+    // previous test's openFanOutModal call does not leak into tests that
+    // assert the single-bucket happy path (getFanOutBuckets() === null).
+    const { clearFanOutBuckets } = await import('../recommendations');
+    clearFanOutBuckets();
   });
 
   // Force a multi-bucket fan-out by mixing terms (1yr + 3yr both
@@ -2858,6 +2863,112 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     expect(firstBucketIdx).toBeGreaterThanOrEqual(0);
     // At least one bucket payment must now be 'no-upfront'.
     expect(after!.some((b) => b.payment === 'no-upfront')).toBe(true);
+  });
+
+  // Regression: issue #699. Before the fix, recs with the same
+  // (provider, service, term) but different rec.payment values were
+  // collapsed into one bucket and seeded from toolbar.payment
+  // ('all-upfront'), silently overriding each rec's actual payment.
+  // Fix: include `payment` in the bucket key so each distinct payment
+  // fans into its own bucket; resolveBucketPaymentSeed then uses
+  // recs[0].payment (uniform within the bucket) as its seed.
+  test('(e) issue #699: same (provider, service, term) but different rec.payment fans into separate buckets seeded from rec.payment, not toolbar', async () => {
+    // Two recs: same aws/ec2/1yr but one is partial-upfront and one is
+    // no-upfront. Different resource_type so each is its own cell (not
+    // collapsed by pickBestVariantPerCell).
+    const recs = [
+      { id: 'x1', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'x2', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large',  region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront',      savings: 150, upfront_cost: 0 },
+    ];
+    setupMixedTermRecs(recs);
+    // No account overrides — resolveBucketPaymentSeed must seed from
+    // rec.payment, not the toolbar default (all-upfront).
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    // After the fix: 2 buckets (one per payment variant).
+    expect(buckets!.length).toBe(2);
+    // Each bucket carries the correct per-rec payment, not the toolbar default.
+    const payments = buckets!.map((b) => b.payment).sort();
+    expect(payments).toEqual(['no-upfront', 'partial-upfront']);
+    // paymentSource is 'toolbar' (rec.payment fallback path, no override),
+    // confirming the seed came from the rec, not an account override.
+    for (const b of buckets!) {
+      expect(b.paymentSource).toBe('toolbar');
+    }
+  });
+
+  // CR finding on PR #710: account override carrying Azure's 'upfront' synonym
+  // must be normalized before seeding the bucket, so the fan-out dropdown
+  // receives 'all-upfront' (not the raw 'upfront') and paymentSource is
+  // 'override', not 'toolbar'.
+  test('(f) account override with upfront (Azure synonym) normalizes to all-upfront with source override', async () => {
+    // Two azure/vm recs, same single account, different terms to force fan-out.
+    const recs = [
+      { id: 'g1', provider: 'azure', cloud_account_id: 'az-account-a', service: 'vm', resource_type: 'Standard_D2s_v3', region: 'eastus', count: 1, term: 1, payment: 'all-upfront', savings: 120, upfront_cost: 600 },
+      { id: 'g2', provider: 'azure', cloud_account_id: 'az-account-a', service: 'vm', resource_type: 'Standard_D2s_v3', region: 'eastus', count: 1, term: 3, payment: 'all-upfront', savings: 300, upfront_cost: 1200 },
+    ];
+    setupMixedTermRecs(recs);
+    // Override uses the Azure-canonical 'upfront' synonym — before the fix this
+    // would seed FanOutBucket.payment = 'upfront' (not rendered by the dropdown);
+    // after the fix it normalizes to 'all-upfront'.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'az-account-a') {
+        return [{ id: 'ovr-az', account_id: 'az-account-a', provider: 'azure', service: 'vm', payment: 'upfront' }];
+      }
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    expect(buckets!.length).toBe(2);
+    for (const b of buckets!) {
+      // Override 'upfront' must normalize to canonical 'all-upfront'.
+      expect(b.payment).toBe('all-upfront');
+      expect(b.paymentSource).toBe('override');
+    }
+  });
+
+  // Regression: CR finding on PR #710.  'upfront' is a synonym for
+  // 'all-upfront' used by some upstream rows (Azure canonical form).
+  // Both must land in ONE bucket with the normalized 'all-upfront' seed.
+  test('(g) payment synonyms upfront / all-upfront collapse into one bucket seeded as all-upfront', async () => {
+    // Two recs, same aws/ec2/1yr, but one carries 'upfront' (Azure
+    // synonym) and the other carries 'all-upfront' (canonical form).
+    // Different resource_type so each is its own cell and both survive
+    // pickBestVariantPerCell without collapsing.
+    // After normalization they share the same bucket key and should
+    // produce a SINGLE bucket (not two), forcing the single-bucket happy
+    // path (openPurchaseModal, not openFanOutModal).
+    const recs = [
+      { id: 'f1', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'upfront',     savings: 100, upfront_cost: 500 },
+      { id: 'f2', provider: 'aws', cloud_account_id: 'test-account-a', service: 'ec2', resource_type: 'm5.large',  region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 150, upfront_cost: 600 },
+    ];
+    setupMixedTermRecs(recs);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    // Single bucket expected: 'upfront' normalized to 'all-upfront' before keying.
+    // Both recs share the same normalized key so no fan-out is triggered and
+    // getFanOutBuckets() returns null (single-bucket happy path opens
+    // openPurchaseModal instead of openFanOutModal).
+    expect(buckets).toBeNull();
   });
 });
 
