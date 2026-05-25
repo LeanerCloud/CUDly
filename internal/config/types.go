@@ -513,6 +513,15 @@ type PurchaseHistoryRecord struct {
 	// rows loaded from the DB always leave this false. Excluded from DB
 	// persistence (set only at read time on synthesised rows).
 	IsAuditGap bool `json:"is_audit_gap,omitempty" dynamodbav:"-"`
+	// CreatedByUserEmail is the email address of the user who created the
+	// underlying execution, resolved from CreatedByUserID via the auth
+	// service. Populated only on synthesised execution rows (pending,
+	// notified, failed, expired, cancelled) when a valid user ID is
+	// present; empty for scheduler-driven executions, legacy NULL-creator
+	// rows, and completed purchase_history rows. Excluded from DB
+	// persistence (resolved at read time). The UI renders this in the
+	// Approval Queue "Created by" column instead of the raw UUID.
+	CreatedByUserEmail string `json:"created_by_user_email,omitempty" dynamodbav:"-"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

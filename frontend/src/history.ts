@@ -12,6 +12,7 @@ import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { getAccountName } from './recommendations';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -859,14 +860,32 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const rows = pending.map(p => {
     const actions = renderPendingActionButtons(p);
     const actionsCell = actions || '<span class="muted">-</span>';
-    const createdBy = p.created_by_user_id ? escapeHtml(p.created_by_user_id) : '<span class="muted">-</span>';
+    // Show email when resolved; fall back to UUID so the cancel-own gate still
+    // has something human-readable to show. Fall back to "-" for scheduler rows.
+    const createdBy = p.created_by_user_email
+      ? escapeHtml(p.created_by_user_email)
+      : p.created_by_user_id
+        ? escapeHtml(p.created_by_user_id)
+        : '<span class="muted">-</span>';
+    const accountCell = p.account_id
+      ? escapeHtml(getAccountName(p.account_id))
+      : '<span class="muted">-</span>';
+    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
+    const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
+    const monthlyCostCell = p.monthly_cost != null
+      ? formatCurrency(p.monthly_cost)
+      : '<span class="muted">-</span>';
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
         <td>${formatDate(p.timestamp)}</td>
+        <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
         <td>${escapeHtml(p.service)}</td>
         <td>${p.count}</td>
+        <td>${termCell}</td>
+        <td>${paymentCell}</td>
+        <td>${monthlyCostCell}</td>
         <td>${formatCurrency(p.upfront_cost)}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${createdBy}</td>
@@ -880,9 +899,13 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       <thead>
         <tr>
           <th>Date</th>
+          <th>Account</th>
           <th>Provider</th>
           <th>Service</th>
           <th>Count</th>
+          <th>Term</th>
+          <th>Payment</th>
+          <th>Monthly Cost</th>
           <th>Upfront Cost</th>
           <th>Monthly Savings</th>
           <th>Created by</th>

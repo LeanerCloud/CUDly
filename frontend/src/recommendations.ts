@@ -37,6 +37,16 @@ let checkedPurchaseModalInitialised = false;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 
+/**
+ * Returns the display name for a cloud account ID, falling back to the raw
+ * ID when the name has not been cached yet. Exported so other modules (e.g.
+ * history.ts Approval Queue) can resolve account names without importing the
+ * full recommendations data model.
+ */
+export function getAccountName(accountId: string): string {
+  return accountNamesCache.get(accountId) || accountId;
+}
+
 // issues #225 + #226: expand/collapse state for cell grouping.
 // Contains the cellKey strings of cells the user has explicitly expanded.
 // Cleared on page load / full refresh; survives per-column filter/sort re-renders.

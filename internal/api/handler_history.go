@@ -128,6 +128,7 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		return nil
 	}
 	approver := h.resolvePendingApproverEmail(ctx)
+	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	for _, exec := range executions {
 		// Dedup: a normal completed execution is already represented by its
@@ -142,7 +143,36 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		if !filters.matchesExecution(exec) {
 			continue
 		}
-		out = append(out, executionToHistoryRow(exec, approver))
+		var createdByEmail string
+		if exec.CreatedByUserID != nil {
+			createdByEmail = userEmailCache[*exec.CreatedByUserID]
+		}
+		out = append(out, executionToHistoryRow(exec, approver, createdByEmail))
+	}
+	return out
+}
+
+// resolveUserEmails builds a map of user-ID to email by calling GetUser once
+// per unique non-nil CreatedByUserID found in the execution list. Lookup
+// failures are logged and skipped — a missing email degrades gracefully (the
+// UI falls back to the raw UUID via created_by_user_id). Called once per
+// /api/history request so the cost is proportional to the number of distinct
+// creators, not the number of execution rows.
+func (h *Handler) resolveUserEmails(ctx context.Context, executions []config.PurchaseExecution) map[string]string {
+	seen := make(map[string]struct{})
+	for _, exec := range executions {
+		if exec.CreatedByUserID != nil && *exec.CreatedByUserID != "" {
+			seen[*exec.CreatedByUserID] = struct{}{}
+		}
+	}
+	out := make(map[string]string, len(seen))
+	for uid := range seen {
+		user, err := h.auth.GetUser(ctx, uid)
+		if err != nil {
+			logging.Warnf("history: failed to resolve email for user %s: %v", uid, err)
+			continue
+		}
+		out[uid] = user.Email
 	}
 	return out
 }
@@ -189,8 +219,9 @@ func (h *Handler) resolvePendingApproverEmail(ctx context.Context) string {
 // For pending/notified rows we attach the approver email so the UI can show
 // "awaiting approval from X"; for failed rows we surface the stored Error
 // message as the status description so the user sees WHY it failed (e.g.
-// "send failed: Missing domain").
-func executionToHistoryRow(exec config.PurchaseExecution, approver string) config.PurchaseHistoryRecord {
+// "send failed: Missing domain"). createdByEmail is the resolved email for
+// the execution's creator (empty when not resolvable).
+func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEmail string) config.PurchaseHistoryRecord {
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
@@ -204,16 +235,17 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver string) confi
 		retryExecID = *exec.RetryExecutionID
 	}
 	row := config.PurchaseHistoryRecord{
-		AccountID:        accountID,
-		PurchaseID:       exec.ExecutionID,
-		Timestamp:        exec.ScheduledDate,
-		Provider:         collapseRecommendationProvider(exec.Recommendations),
-		Count:            len(exec.Recommendations),
-		PlanID:           exec.PlanID,
-		Status:           exec.Status,
-		CreatedByUserID:  createdBy,
-		RetryExecutionID: retryExecID,
-		RetryAttemptN:    exec.RetryAttemptN,
+		AccountID:          accountID,
+		PurchaseID:         exec.ExecutionID,
+		Timestamp:          exec.ScheduledDate,
+		Provider:           collapseRecommendationProvider(exec.Recommendations),
+		Count:              len(exec.Recommendations),
+		PlanID:             exec.PlanID,
+		Status:             exec.Status,
+		CreatedByUserID:    createdBy,
+		CreatedByUserEmail: createdByEmail,
+		RetryExecutionID:   retryExecID,
+		RetryAttemptN:      exec.RetryAttemptN,
 	}
 	projectRecommendationFields(&row, exec)
 	// Compute ops_hint at read time (issue #47, Q3) so updates to the
