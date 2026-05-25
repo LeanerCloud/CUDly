@@ -74,8 +74,14 @@ export function paymentOptionsFor(provider: Provider, service: string, term: Ter
 // hardcoded set so a future plan type added on the backend
 // (`common.IsSavingsPlan` is also `HasPrefix`) is picked up without a
 // frontend edit.
+//
+// Issue #658: Azure Savings Plans use the umbrella slug "savingsplans"
+// (no hyphen) — the same constant as common.ServiceSavingsPlans. The
+// Go IsSavingsPlan function handles this via an explicit equality check
+// (`string(s) == "savingsplans"`); we mirror that here so Azure SP rows
+// are grouped correctly in the filter popover and bulk-buy bucketing.
 export function isSavingsPlanService(service: string): boolean {
-  return service.startsWith('savings-plans');
+  return service.startsWith('savings-plans') || service === 'savingsplans';
 }
 
 // SAVINGS_PLANS_BUCKET_KEY is the canonical service slug used in the
@@ -94,11 +100,22 @@ const SP_SHORT_LABEL: Record<string, string> = {
   'savings-plans-database':    'Database',
 };
 
+// UMBRELLA_SLUGS are SP slugs that identify the family as a whole rather
+// than a specific plan type; they are excluded from the parenthetical
+// plan-type list in savingsPlansBucketLabel so a bucket of Azure SP recs
+// renders as "Savings Plans" rather than the raw slug.
+//
+// Issue #658: "savingsplans" (no hyphen) is the Azure SP client's service
+// slug and the legacy AWS SP umbrella (common.ServiceSavingsPlans). It is
+// a family marker, not a plan-type label, so it is treated the same way
+// as SAVINGS_PLANS_BUCKET_KEY.
+const UMBRELLA_SLUGS = new Set<string>([SAVINGS_PLANS_BUCKET_KEY, 'savingsplans']);
+
 // savingsPlansBucketLabel formats the bulk-buy bucket title for one
 // or more SP plan types. Returns:
-//   - 'Savings Plans (Compute)' for a single plan type
+//   - 'Savings Plans (Compute)' for a single named plan type
 //   - 'Savings Plans (Compute + SageMaker)' for a mixed bucket
-//   - 'Savings Plans' if no plan types resolve (defensive fallback)
+//   - 'Savings Plans' for umbrella/Azure SP slugs or when no types resolve
 // Plan-type order in the output follows insertion order of the input
 // slugs — caller controls the order.
 export function savingsPlansBucketLabel(serviceSlugs: readonly string[]): string {
@@ -106,10 +123,11 @@ export function savingsPlansBucketLabel(serviceSlugs: readonly string[]): string
   const parts: string[] = [];
   for (const slug of serviceSlugs) {
     if (!isSavingsPlanService(slug) || seen.has(slug)) continue;
-    // Skip the canonical bucket key itself if it shows up in the input
-    // — it's a marker, not a plan-type label, so rendering it as
-    // "savings-plans" inside the parentheses would be ugly.
-    if (slug === SAVINGS_PLANS_BUCKET_KEY) continue;
+    // Skip umbrella slugs (bucket-key marker and the "savingsplans" Azure
+    // SP / legacy AWS SP identifier) — they represent the family, not a
+    // specific plan type, so rendering them in the parentheses would be
+    // misleading.
+    if (UMBRELLA_SLUGS.has(slug)) continue;
     seen.add(slug);
     parts.push(SP_SHORT_LABEL[slug] ?? slug);
   }
