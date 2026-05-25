@@ -234,11 +234,6 @@ variable "lambda_timeout" {
   default     = 30
 }
 
-variable "lambda_enable_function_url" {
-  description = "Enable Lambda Function URL"
-  type        = bool
-  default     = true
-}
 
 # Lambda Function URL auth type is derived from var.enable_cdn (see
 # local.lambda_function_url_auth_type in compute.tf). When enable_cdn = true

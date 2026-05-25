@@ -83,11 +83,6 @@ variable "vpc_config" {
   default = null
 }
 
-variable "enable_function_url" {
-  description = "Enable Lambda Function URL"
-  type        = bool
-  default     = true
-}
 
 variable "function_url_auth_type" {
   description = <<-EOT

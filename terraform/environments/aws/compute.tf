@@ -60,7 +60,6 @@ module "compute_lambda" {
   }
 
   # Function URL
-  enable_function_url    = var.lambda_enable_function_url
   function_url_auth_type = local.lambda_function_url_auth_type
   allowed_origins        = var.lambda_allowed_origins
 

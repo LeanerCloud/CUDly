@@ -10,7 +10,7 @@ output "function_arn" {
 
 output "function_url" {
   description = "Lambda Function URL"
-  value       = var.enable_function_url ? aws_lambda_function_url.main[0].function_url : null
+  value       = aws_lambda_function_url.main.function_url
 }
 
 output "function_invoke_arn" {

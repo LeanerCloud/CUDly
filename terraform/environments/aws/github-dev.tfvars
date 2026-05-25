@@ -22,7 +22,6 @@ lambda_memory_size          = 2048
 lambda_timeout              = 300
 lambda_reserved_concurrency = -1
 lambda_log_retention_days   = 7
-lambda_enable_function_url  = true
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
 #   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
