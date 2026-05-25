@@ -1508,6 +1508,92 @@ func TestPGXMock_ListStuckExecutions_QueryError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// ─── ListAccountRegistrations — LIKE wildcard escaping ───────────────────────
+
+// registrationCols returns the column slice that mirrors registrationColumns().
+func registrationCols() []string {
+	return []string{
+		"id", "reference_token", "status",
+		"provider", "external_id", "account_name", "contact_email", "description",
+		"source_provider",
+		"aws_role_arn", "aws_auth_mode", "aws_external_id",
+		"azure_subscription_id", "azure_tenant_id", "azure_client_id", "azure_auth_mode",
+		"gcp_project_id", "gcp_client_email", "gcp_auth_mode", "gcp_wif_audience",
+		"reg_credential_type", "reg_credential_payload",
+		"rejection_reason", "cloud_account_id", "reviewed_by", "reviewed_at",
+		"created_at", "updated_at",
+	}
+}
+
+// minimalRegRow returns a single pgxmock row with only the required non-null
+// columns filled in and the rest as nil (matching the sql.NullString scan path).
+func minimalRegRow(id, accountName, contactEmail string) []interface{} {
+	now := time.Now()
+	return []interface{}{
+		id, "tok-" + id, "pending",
+		"aws", "ext-" + id, accountName, contactEmail, nil,
+		nil,
+		nil, nil, nil,
+		nil, nil, nil, nil,
+		nil, nil, nil, nil,
+		nil, nil,
+		nil, nil, nil, sql.NullTime{},
+		now, now,
+	}
+}
+
+// TestPGXMock_ListAccountRegistrations_SearchEscapesPercent verifies that a
+// filter.Search value beginning with "%" is forwarded to the DB as "\%..."
+// (escaped) so it matches the literal substring, not every row.
+func TestPGXMock_ListAccountRegistrations_SearchEscapesPercent(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// The raw input contains a leading %; after escaping it must become \%foo.
+	rawSearch := "%foo"
+	escapedArg := `\%foo`
+
+	rows := pgxmock.NewRows(registrationCols()).
+		AddRow(minimalRegRow("reg-1", "%foo Corp", "%foo@example.com")...)
+	// The query must contain ESCAPE to prove the clause was updated.
+	mock.ExpectQuery(`ESCAPE`).
+		WithArgs("%" + escapedArg + "%").
+		WillReturnRows(rows)
+
+	filter := AccountRegistrationFilter{Search: rawSearch}
+	regs, err := store.ListAccountRegistrations(ctx, filter)
+	require.NoError(t, err)
+	assert.Len(t, regs, 1, "expected exactly the literal-match row")
+	assert.Equal(t, "reg-1", regs[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_ListAccountRegistrations_SearchEscapesUnderscore verifies that
+// "_" in filter.Search is sent as "\_" so it is not treated as the SQL
+// single-character wildcard.
+func TestPGXMock_ListAccountRegistrations_SearchEscapesUnderscore(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rawSearch := "foo_bar"
+	escapedArg := `foo\_bar`
+
+	rows := pgxmock.NewRows(registrationCols()).
+		AddRow(minimalRegRow("reg-2", "foo_bar Inc", "foo_bar@example.com")...)
+	mock.ExpectQuery(`ESCAPE`).
+		WithArgs("%" + escapedArg + "%").
+		WillReturnRows(rows)
+
+	filter := AccountRegistrationFilter{Search: rawSearch}
+	regs, err := store.ListAccountRegistrations(ctx, filter)
+	require.NoError(t, err)
+	assert.Len(t, regs, 1, "expected exactly the literal-match row")
+	assert.Equal(t, "reg-2", regs[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── errNoRows helper ────────────────────────────────────────────────────────
 
 func errNoRows() error {
