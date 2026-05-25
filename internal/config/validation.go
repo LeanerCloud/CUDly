@@ -4,14 +4,163 @@ package config
 import (
 	"fmt"
 	"net/mail"
+	"sort"
 	"strings"
 )
 
 // ValidProviders lists all supported cloud providers
 var ValidProviders = []string{"aws", "azure", "gcp"}
 
-// ValidPaymentOptions lists all supported payment options
+// ValidPaymentOptions lists the AWS-canonical payment options. Kept for
+// backwards compatibility; prefer ValidPaymentOptionsByProvider for
+// provider-aware validation.
 var ValidPaymentOptions = []string{"no-upfront", "partial-upfront", "all-upfront"}
+
+// ValidPaymentOptionsByProvider maps each provider to the payment option
+// tokens it accepts. Each provider's set is the canonical set verified
+// against the provider's service-client switch statements:
+//
+//   - aws:   {no-upfront, partial-upfront, all-upfront}: the three RI/SP
+//     billing tiers exposed by AWS APIs.
+//
+//   - azure: {upfront, monthly}: verified against the 7 Azure service-client
+//     switches in providers/azure/services/{compute,cache,cosmosdb,database,
+//     search,synapse,managedredis}/client.go. (The savingsplans client mirrors
+//     AWS's three-tier set, but Azure savings-plan recs are not currently
+//     emitted; GetRecommendations returns []. The canonical set follows the
+//     only path that emits today.)
+//
+//   - gcp:   {monthly}: GCP CUDs are billed monthly across the commitment
+//     term; there is no upfront billing tier. See
+//     providers/gcp/services/computeengine/client.go:buildCommitmentRequests
+//     which takes only a Plan (TWELVE_MONTH/THIRTY_SIX_MONTH) and never reads
+//     PaymentOption.
+//
+// Cross-provider tokens are rejected loudly by the validator. Legacy AWS-style
+// tokens emitted by older code paths are canonicalized via NormalizePaymentOption
+// at the rec-emission boundary BEFORE reaching this validator (see
+// internal/scheduler/scheduler.go:convertRecommendations).
+var ValidPaymentOptionsByProvider = map[string][]string{
+	"aws":   {"no-upfront", "partial-upfront", "all-upfront"},
+	"azure": {"upfront", "monthly"},
+	"gcp":   {"monthly"},
+}
+
+// validPaymentOptionsUnion is the union of all provider payment option sets,
+// used for global-config default validation where no provider context is
+// available. Accepts any token that is valid for at least one provider.
+// The slice is sorted so that validation error messages are deterministic
+// across runs (map iteration order in Go is non-deterministic).
+var validPaymentOptionsUnion = func() []string {
+	seen := map[string]bool{}
+	var all []string
+	for _, opts := range ValidPaymentOptionsByProvider {
+		for _, o := range opts {
+			if !seen[o] {
+				seen[o] = true
+				all = append(all, o)
+			}
+		}
+	}
+	sort.Strings(all)
+	return all
+}()
+
+// validPaymentOptionsFor returns the provider-canonical payment option slice
+// for the given provider (lowercase). Returns nil when the provider is unknown.
+func validPaymentOptionsFor(provider string) []string {
+	return ValidPaymentOptionsByProvider[provider]
+}
+
+// NormalizePaymentOption maps a raw payment-option token onto the canonical
+// token the given provider semantically models (see ValidPaymentOptionsByProvider).
+// It exists so the recommendation-emission boundary (see
+// internal/scheduler/scheduler.go:convertRecommendations) can defensively
+// canonicalize any AWS-style token that a code path or a globally-default
+// payment-option setting might stamp onto a non-AWS rec, before the rec is
+// persisted and later validated against the provider-canonical set.
+//
+// Returns (canonical, true) when raw is already canonical for the provider
+// or has an unambiguous canonical mapping. Returns ("", false) for unknown
+// providers and (raw, false) for tokens that have no canonical mapping on
+// the given provider (e.g. an Azure/GCP-style "upfront" on AWS) — callers
+// can use ok=false to surface the unmapped token at the next validator
+// boundary. Per-provider mapping:
+//
+//   - AWS  : passthrough (AWS already speaks the three-tier set).
+//   - Azure: all-upfront → upfront, no-upfront → monthly,
+//     partial-upfront → upfront (no semantic equivalent — coerce to the
+//     all-upfront tier rather than drop the rec; caller may log).
+//   - GCP  : all-upfront → monthly, no-upfront → monthly,
+//     partial-upfront → monthly, upfront → monthly (GCP CUDs are
+//     inherently monthly-billed — every non-monthly token collapses to the
+//     one billing plan GCP actually models). The collapse from "upfront" to
+//     "monthly" is what makes the existing
+//     providers/gcp/services/computeengine/client.go:804 stamp safe: the
+//     scheduler.convertRecommendations boundary coerces it once before
+//     persistence so the rec carries the canonical token downstream.
+//
+// The partial-upfront coercion is deliberate on both Azure and GCP: dropping
+// the rec would be a silent data loss for the user, while coercing to the
+// closest billing model the provider offers preserves the rec. The caller is
+// expected to log a warning when raw != canonical so an operator notices the
+// upstream input bug.
+//
+// Empty raw passes through as ("", true) — callers that distinguish "unset"
+// from "invalid" can check the returned bool only when raw is non-empty.
+func NormalizePaymentOption(provider, raw string) (string, bool) {
+	if _, known := ValidPaymentOptionsByProvider[provider]; !known {
+		return "", false
+	}
+	if raw == "" {
+		return "", true
+	}
+	// Already canonical for this provider: passthrough.
+	for _, v := range ValidPaymentOptionsByProvider[provider] {
+		if raw == v {
+			return raw, true
+		}
+	}
+	// Cross-provider tokens that have a canonical equivalent in the target
+	// provider's billing model. Each provider's mapping is delegated to a
+	// helper to keep cyclomatic complexity below the project limit.
+	if canon, ok := crossProviderPaymentAlias(provider, raw); ok {
+		return canon, true
+	}
+	// Anything else (including Azure/GCP-style tokens on AWS) is left as-is
+	// and will surface as a validation error at the next boundary.
+	return raw, false
+}
+
+// crossProviderPaymentAlias maps an AWS-style (or Azure-style on GCP) token
+// onto the target provider's canonical token. Returns (canonical, true) when
+// a mapping exists, ("", false) when none does. Split out of
+// NormalizePaymentOption purely to keep that function under the project's
+// gocyclo limit; the policy lives here.
+func crossProviderPaymentAlias(provider, raw string) (string, bool) {
+	switch provider {
+	case "azure":
+		// Azure reservations model both billing plans; coerce AWS-style tokens
+		// to the Azure-canonical spelling. partial-upfront has no Azure
+		// equivalent — coerce to the all-upfront tier so the rec survives
+		// validation rather than dropping silently (caller WARN-logs).
+		switch raw {
+		case "all-upfront", "partial-upfront":
+			return "upfront", true
+		case "no-upfront":
+			return "monthly", true
+		}
+	case "gcp":
+		// GCP commitments are monthly-only — every non-monthly token (AWS-style
+		// or the legacy "upfront" some GCP code paths still stamp) collapses
+		// to "monthly", the one billing plan GCP semantically models.
+		switch raw {
+		case "all-upfront", "no-upfront", "partial-upfront", "upfront":
+			return "monthly", true
+		}
+	}
+	return "", false
+}
 
 // ValidRampScheduleTypes lists all supported ramp schedule types
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
@@ -142,10 +291,12 @@ func validateGlobalTerm(term int) error {
 	return nil
 }
 
-// validatePaymentOption validates that the payment option is valid if set
+// validatePaymentOption validates that the payment option is in the union of
+// all provider sets. Used by GlobalConfig.Validate where no provider context
+// is available; any token valid for at least one provider is accepted.
 func validatePaymentOption(payment string) error {
 	if payment != "" && !isValidPaymentOption(payment) {
-		return fmt.Errorf("invalid payment option: %s (valid: %s)", payment, strings.Join(ValidPaymentOptions, ", "))
+		return fmt.Errorf("invalid payment option: %s (valid: %s)", payment, strings.Join(validPaymentOptionsUnion, ", "))
 	}
 	return nil
 }
@@ -200,10 +351,23 @@ func (c *ServiceConfig) validateTerm() error {
 }
 
 func (c *ServiceConfig) validatePayment() error {
-	if c.Payment != "" && !isValidPaymentOption(c.Payment) {
-		return fmt.Errorf("invalid payment option: %s (valid: %s)", c.Payment, strings.Join(ValidPaymentOptions, ", "))
+	if c.Payment == "" {
+		return nil
 	}
-	return nil
+	// Provider-canonical validation: each provider accepts only its own token
+	// set. A cross-provider token (e.g. "all-upfront" on an Azure service) is
+	// rejected even though that token is valid somewhere else.
+	opts := validPaymentOptionsFor(c.Provider)
+	if opts == nil {
+		// Provider was already validated; unknown provider here is a bug.
+		return fmt.Errorf("internal error: no payment options defined for provider %q", c.Provider)
+	}
+	for _, v := range opts {
+		if c.Payment == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid payment option: %s (valid for %s: %s)", c.Payment, c.Provider, strings.Join(opts, ", "))
 }
 
 func (c *ServiceConfig) validateConfigCoverage() error {
@@ -296,8 +460,10 @@ func isValidProvider(p string) bool {
 	return false
 }
 
+// isValidPaymentOption reports whether p is a valid payment option for any
+// provider. It checks against the union of all provider payment option sets.
 func isValidPaymentOption(p string) bool {
-	for _, valid := range ValidPaymentOptions {
+	for _, valid := range validPaymentOptionsUnion {
 		if p == valid {
 			return true
 		}

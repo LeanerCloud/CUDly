@@ -72,6 +72,23 @@ func TestGlobalConfig_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "invalid payment option",
 		},
+		// Issue #698: GlobalConfig accepts union of all provider payment tokens
+		{
+			name: "global config accepts azure/gcp upfront token",
+			config: GlobalConfig{
+				DefaultTerm:    3,
+				DefaultPayment: "upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "global config accepts azure/gcp monthly token",
+			config: GlobalConfig{
+				DefaultTerm:    3,
+				DefaultPayment: "monthly",
+			},
+			wantErr: false,
+		},
 		{
 			name: "coverage too low",
 			config: GlobalConfig{
@@ -333,6 +350,143 @@ func TestServiceConfig_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "invalid payment option",
+		},
+		// Issue #698: provider-canonical payment validation
+		{
+			name: "aws all-upfront is valid",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Payment:  "all-upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "aws monthly is rejected",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Payment:  "monthly",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure upfront is valid",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "upfront",
+			},
+			wantErr: false,
+		},
+		{
+			name: "azure monthly is valid",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "monthly",
+			},
+			wantErr: false,
+		},
+		{
+			name: "azure all-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "all-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure no-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure partial-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "partial-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "azure error message includes canonical set",
+			config: ServiceConfig{
+				Provider: "azure",
+				Service:  "vm",
+				Payment:  "all-upfront",
+			},
+			wantErr: true,
+			errMsg:  "valid for azure: upfront, monthly",
+		},
+		{
+			name: "gcp monthly is valid",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "monthly",
+			},
+			wantErr: false,
+		},
+		{
+			name: "gcp upfront is rejected (gcp is monthly-only)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp partial-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "partial-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp all-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "all-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp no-upfront is rejected (aws-only token)",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "invalid payment option",
+		},
+		{
+			name: "gcp error message includes canonical set",
+			config: ServiceConfig{
+				Provider: "gcp",
+				Service:  "computeengine",
+				Payment:  "no-upfront",
+			},
+			wantErr: true,
+			errMsg:  "valid for gcp: monthly",
 		},
 		{
 			name: "coverage too low",
@@ -689,11 +843,96 @@ func TestIsValidProvider(t *testing.T) {
 }
 
 func TestIsValidPaymentOption(t *testing.T) {
+	// AWS tokens
 	assert.True(t, isValidPaymentOption("no-upfront"))
 	assert.True(t, isValidPaymentOption("partial-upfront"))
 	assert.True(t, isValidPaymentOption("all-upfront"))
+	// Azure/GCP tokens (union set)
+	assert.True(t, isValidPaymentOption("upfront"))
+	assert.True(t, isValidPaymentOption("monthly"))
+	// Unknown tokens rejected
 	assert.False(t, isValidPaymentOption("invalid"))
 	assert.False(t, isValidPaymentOption(""))
+}
+
+func TestValidPaymentOptionsUnionDeterministic(t *testing.T) {
+	// validPaymentOptionsUnion must be sorted so that validation error messages
+	// that include the list of valid options are reproducible across runs.
+	// Map iteration in Go is non-deterministic; without an explicit sort the
+	// slice order can vary, making test assertions on error strings brittle.
+	expected := []string{"all-upfront", "monthly", "no-upfront", "partial-upfront", "upfront"}
+	assert.Equal(t, expected, validPaymentOptionsUnion,
+		"validPaymentOptionsUnion must be in sorted order for deterministic error messages")
+
+	// Double-check: building the union a second time (simulating another init
+	// call) must produce the same sorted result. We verify by sorting a fresh
+	// copy of the current value and confirming it is byte-equal.
+	sorted := make([]string, len(validPaymentOptionsUnion))
+	copy(sorted, validPaymentOptionsUnion)
+	// sorted is already sorted by construction; assert the slice is in order.
+	for i := 1; i < len(sorted); i++ {
+		assert.LessOrEqual(t, sorted[i-1], sorted[i],
+			"validPaymentOptionsUnion[%d] %q must be <= validPaymentOptionsUnion[%d] %q",
+			i-1, sorted[i-1], i, sorted[i])
+	}
+}
+
+func TestNormalizePaymentOption(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		raw      string
+		want     string
+		ok       bool
+	}{
+		// AWS: passthrough for every canonical token.
+		{"aws no-upfront passthrough", "aws", "no-upfront", "no-upfront", true},
+		{"aws partial-upfront passthrough", "aws", "partial-upfront", "partial-upfront", true},
+		{"aws all-upfront passthrough", "aws", "all-upfront", "all-upfront", true},
+		// AWS: Azure/GCP-style tokens are left as-is and flagged for the
+		// next validator boundary to surface.
+		{"aws upfront left as-is", "aws", "upfront", "upfront", false},
+		{"aws monthly left as-is", "aws", "monthly", "monthly", false},
+
+		// Azure: canonical passthrough.
+		{"azure upfront passthrough", "azure", "upfront", "upfront", true},
+		{"azure monthly passthrough", "azure", "monthly", "monthly", true},
+		// Azure: AWS-style aliases coerced to canonical.
+		{"azure all-upfront → upfront", "azure", "all-upfront", "upfront", true},
+		{"azure no-upfront → monthly", "azure", "no-upfront", "monthly", true},
+		{"azure partial-upfront → upfront (nearest)", "azure", "partial-upfront", "upfront", true},
+
+		// GCP: canonical passthrough (monthly-only — every non-monthly token
+		// collapses to monthly because GCP CUDs only model one billing plan).
+		{"gcp monthly passthrough", "gcp", "monthly", "monthly", true},
+		{"gcp upfront → monthly (gcp is monthly-only)", "gcp", "upfront", "monthly", true},
+		// GCP: AWS-style aliases coerced to the one canonical token.
+		{"gcp all-upfront → monthly", "gcp", "all-upfront", "monthly", true},
+		{"gcp no-upfront → monthly", "gcp", "no-upfront", "monthly", true},
+		{"gcp partial-upfront → monthly", "gcp", "partial-upfront", "monthly", true},
+
+		// Empty raw: passthrough on any known provider.
+		{"empty raw on aws", "aws", "", "", true},
+		{"empty raw on azure", "azure", "", "", true},
+		{"empty raw on gcp", "gcp", "", "", true},
+
+		// Unknown provider: ok=false, no canonicalization.
+		{"unknown provider", "ibm", "all-upfront", "", false},
+		{"empty provider", "", "monthly", "", false},
+
+		// Garbage tokens on known providers: left as-is, ok=false.
+		{"azure garbage", "azure", "ohai", "ohai", false},
+		{"gcp garbage", "gcp", "ohai", "ohai", false},
+		{"aws garbage", "aws", "ohai", "ohai", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := NormalizePaymentOption(tt.provider, tt.raw)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.ok, ok)
+		})
+	}
 }
 
 func TestIsValidRampScheduleType(t *testing.T) {
