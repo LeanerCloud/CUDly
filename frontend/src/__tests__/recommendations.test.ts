@@ -587,6 +587,9 @@ describe('Recommendations Module', () => {
     });
 
     test('shows empty-state message when no recommendations', async () => {
+      // Issue #700: zero rows now render an empty <tbody> with a hint cell
+      // rather than replacing the entire table with a <p>. The <thead> stays
+      // so column headers remain visible. The hint text lives inside the tbody.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -596,7 +599,12 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const list = document.getElementById('recommendations-list');
-      expect(list?.innerHTML).toContain('No recommendations match');
+      // The table (including <thead>) must still be rendered.
+      expect(list?.querySelector('thead')).not.toBeNull();
+      // The hint cell must be present inside the tbody.
+      const emptyCell = list?.querySelector('tbody td.empty');
+      expect(emptyCell).not.toBeNull();
+      expect(emptyCell?.textContent).toMatch(/No rows match/);
     });
 
     test('stores recommendations in state', async () => {
@@ -2220,6 +2228,64 @@ describe('Bundle B: column header filter triggers', () => {
     const clearBtn = document.querySelector<HTMLButtonElement>('.column-filter-popover .column-filter-clear');
     clearBtn?.click();
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', { kind: 'set', values: [] });
+  });
+
+  test('Issue #700: Clear resets (All) checkbox to unchecked (not indeterminate)', async () => {
+    // Bug: the old Clear branch set cb.checked = false on individual boxes but
+    // never called updateAllTriState(), so the (All) checkbox kept its prior
+    // state (checked or indeterminate). After the fix, commitAllRef(false) is
+    // used which calls updateAllTriState() and leaves (All) unchecked.
+    //
+    // Simulate real state-store behaviour: setRecommendationsColumnFilter
+    // updates the store so the next getRecommendationsColumnFilters() call
+    // sees the cleared filter. Without this the resyncOpenPopover() call
+    // triggered by the rerender would re-apply the stale filter and overwrite
+    // the tri-state that updateAllTriState() just set.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: ['aws'] },
+    });
+    (state.setRecommendationsColumnFilter as jest.Mock).mockImplementation(
+      (col: string, val: unknown) => {
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue(
+          val === null ? {} : { [col]: val },
+        );
+      },
+    );
+    await loadRecommendations();
+    const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+    providerBtn?.click();
+
+    // (All) starts in a known state before Clear.
+    const allBox = document.querySelector<HTMLInputElement>('.column-filter-popover .column-filter-all input[type="checkbox"]');
+    expect(allBox).not.toBeNull();
+
+    const clearBtn = document.querySelector<HTMLButtonElement>('.column-filter-popover .column-filter-clear');
+    clearBtn?.click();
+
+    // After Clear: (All) must be unchecked and not indeterminate.
+    expect(allBox!.checked).toBe(false);
+    expect(allBox!.indeterminate).toBe(false);
+    expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('provider', { kind: 'set', values: [] });
+  });
+
+  test('Issue #700: table <thead> survives a filter that yields zero rows', async () => {
+    // Bug: renderRecommendationsList replaced the entire <table> with a <p>
+    // when no rows matched, removing <thead>. After the fix, the header row
+    // remains visible (with an empty <tbody> + hint cell) so columns are still
+    // readable while the user adjusts filters.
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+      provider: { kind: 'set', values: [] },
+    });
+    await loadRecommendations();
+
+    const container = document.getElementById('recommendations-list');
+    expect(container?.querySelector('thead')).not.toBeNull();
+    // The empty hint cell must be present inside the table body.
+    const emptyCell = container?.querySelector('tbody td.empty');
+    expect(emptyCell).not.toBeNull();
+    expect(emptyCell?.textContent).toMatch(/No rows match/);
+    // No standalone <p class="empty"> should replace the table.
+    expect(container?.querySelector('p.empty')).toBeNull();
   });
 
   test('Clear button on a numeric column clears the expression filter (null)', async () => {

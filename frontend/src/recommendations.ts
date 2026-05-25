@@ -1636,6 +1636,10 @@ function buildPopoverContent(
   const checkboxes = new Map<string, HTMLInputElement>();
   let input: HTMLInputElement | null = null;
   let errorEl: HTMLElement | null = null;
+  // commitAllRef is set inside the categorical else-branch so the Clear
+  // button handler (which lives outside that branch) can call commitAll()
+  // and thereby invoke updateAllTriState() — fixing issue #700.
+  let commitAllRef: ((target: boolean) => void) | null = null;
 
   if (NUMERIC_COLUMNS.has(column)) {
     const label = document.createElement('label');
@@ -1794,6 +1798,8 @@ function buildPopoverContent(
       updateSPTriState();
       rerenderRecommendations();
     };
+    // Expose commitAll to the Clear button handler outside this else-branch.
+    commitAllRef = commitAll;
 
     checkboxes.forEach((cb) => {
       cb.addEventListener('change', commit);
@@ -1833,15 +1839,18 @@ function buildPopoverContent(
       state.setRecommendationsColumnFilter(column, null);
       input.value = '';
       if (errorEl) errorEl.textContent = '';
+      rerenderRecommendations();
     } else {
       // Issue #482: Clear on a categorical filter sets an explicit empty
       // allow-list rather than null, so it's distinguishable from "no
       // filter applied" (which renders as all-checked). The popover's
       // checkboxes flip unchecked; the table renders 0 rows.
-      checkboxes.forEach((cb) => { cb.checked = false; });
-      state.setRecommendationsColumnFilter(column, { kind: 'set', values: [] });
+      // Issue #700: call commitAllRef(false) (the same as commitAll(false)
+      // inside the categorical branch) so updateAllTriState() is invoked and
+      // the (All) checkbox reflects the cleared state. commitAllRef also
+      // calls rerenderRecommendations() internally.
+      commitAllRef?.(false);
     }
-    rerenderRecommendations();
   });
   footer.appendChild(clearBtn);
   popover.appendChild(footer);
@@ -3553,13 +3562,9 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // Mount once; update is per-render below.
   mountBottomActionBox();
 
-  if (!recommendations || recommendations.length === 0) {
+  const emptyResult = !recommendations || recommendations.length === 0;
+  if (emptyResult) {
     lastVisibleGroupKeys = [];
-    // Filter status bar renders even for the empty case (live-region count).
-    renderFilterStatusBar(loadedRecs?.length ?? 0, 0);
-    container.innerHTML = '<p class="empty">No recommendations match these filters. Try clearing filters or refreshing.</p>';
-    updateBottomActionBox(0, loadedRecs?.length ?? 0);
-    return;
   }
 
   // Compute the visible column set once per render — passed to buildListMarkup
@@ -3571,15 +3576,36 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // escapeHtml or is a number. The string is built in buildListMarkup.
   // NOTE: buildListMarkup also populates lastVisibleGroupKeys, so it MUST
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
-  container.innerHTML = buildListMarkup(recommendations, selectedIDs, visibleCols);
+  container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols);
+
+  // Issue #700: when the filter yields zero rows, preserve the <thead> by
+  // injecting a hint row into the empty <tbody> rather than replacing the
+  // entire table with a <p>. The column headers remain visible so the user
+  // can see which columns are active while they adjust filters.
+  if (emptyResult) {
+    const tbody = container.querySelector('tbody');
+    if (tbody) {
+      // colspan = 1 (checkbox col) + all visible data columns.
+      const colspan = 1 + visibleCols.length;
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.setAttribute('colspan', String(colspan));
+      td.className = 'empty';
+      td.textContent = 'No rows match these filters.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  }
+
+  const visibleCount = recommendations?.length ?? 0;
 
   // Filter status: Clear-filters badge + aria-live count + Expand-All toggle.
   // Rendered AFTER buildListMarkup so lastVisibleGroupKeys is populated.
   // Mounted as a sibling above the table so it survives the container's
   // innerHTML rewrite without losing aria-live announcements.
-  renderFilterStatusBar(loadedRecs?.length ?? 0, recommendations.length);
+  renderFilterStatusBar(loadedRecs?.length ?? 0, visibleCount);
 
-  updateBottomActionBox(recommendations.length, loadedRecs?.length ?? recommendations.length);
+  updateBottomActionBox(visibleCount, loadedRecs?.length ?? visibleCount);
 
 
   // Per-column filter button: trigger opens the popover anchored to the
