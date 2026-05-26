@@ -1594,6 +1594,33 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesUnderscore(t *testing.T) 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestPGXMock_ListAccountRegistrations_SearchEscapesBackslash verifies that a
+// literal "\" in filter.Search is doubled to "\\" before being bound, so the
+// backslash is treated as data rather than as the LIKE escape character.
+func TestPGXMock_ListAccountRegistrations_SearchEscapesBackslash(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Raw input contains a literal backslash; after escaping it must be doubled.
+	rawSearch := `foo\bar`
+	escapedArg := `foo\\bar`
+
+	rows := pgxmock.NewRows(registrationCols()).
+		AddRow(minimalRegRow("reg-3", `foo\bar Ltd`, `foo\bar@example.com`)...)
+	// The query must contain ESCAPE to prove the clause was updated.
+	mock.ExpectQuery(`ESCAPE`).
+		WithArgs("%" + escapedArg + "%").
+		WillReturnRows(rows)
+
+	filter := AccountRegistrationFilter{Search: rawSearch}
+	regs, err := store.ListAccountRegistrations(ctx, filter)
+	require.NoError(t, err)
+	assert.Len(t, regs, 1, "expected exactly the literal-match row")
+	assert.Equal(t, "reg-3", regs[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── errNoRows helper ────────────────────────────────────────────────────────
 
 func errNoRows() error {
