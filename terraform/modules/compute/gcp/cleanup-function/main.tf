@@ -66,6 +66,7 @@ resource "google_storage_bucket" "function_source" {
   force_destroy = false # Prevent accidental data loss; delete bucket contents manually before destroying
 
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 }
 
 # Placeholder source object (will be replaced by actual deployment)

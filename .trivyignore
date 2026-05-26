@@ -98,9 +98,14 @@ AZU-0047
 # require_ssl = true in the module default.
 GCP-0015
 
-# GCP Cloud Storage bucket allows public access.
+# GCP Cloud Storage bucket: cleanup Cloud Function source bucket.
 # ID: GCP-0001 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
-# Justification: the frontend module (terraform/modules/frontend/gcp/main.tf)
-# intentionally hosts static dashboard assets from a public bucket. The bucket
-# serves only static build artifacts (HTML/JS/CSS), not user data.
+# Justification: the only GCS bucket in the GCP deployment is the cleanup
+# Cloud Function source bucket (terraform/modules/compute/gcp/cleanup-function/main.tf).
+# This bucket is NOT public: it has uniform_bucket_level_access = true and
+# public_access_prevention = "enforced". Trivy may still flag the resource if
+# it does not recognise the public_access_prevention attribute.
+# The GCP frontend is served from Cloud Run (not a GCS bucket), so no frontend
+# build artifacts -- including source maps (*.map, produced by hidden-source-map
+# in webpack.config.js) -- are uploaded to any GCS bucket.
 GCP-0001
