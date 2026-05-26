@@ -688,6 +688,49 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign(t *testin
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
+// TestManager_RecoverStrandedApprovals_SafeFail_ErrExecutionNotInExpectedStatusIsBenign
+// verifies that when TransitionExecutionStatus returns
+// config.ErrExecutionNotInExpectedStatus (the row exists but its status has
+// already moved out of "approved" -- a concurrent sweep or the original run
+// won the CAS) safeFail returns (false, nil) WITHOUT calling GetExecutionByID.
+// Re-reading in this case is unnecessary: the sentinel already tells us the row
+// is in some non-approved state. Probing can also turn the benign race into a
+// hard sweep error if the second read flakes or the row disappears between the
+// CAS rejection and the probe. This matches how claimAndRedrive and reaper.go
+// already treat ErrExecutionNotInExpectedStatus as terminally benign.
+func TestManager_RecoverStrandedApprovals_SafeFail_ErrExecutionNotInExpectedStatusIsBenign(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-already-transitioned",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			// Azure provider routes to safe-fail (not claimAndRedrive).
+			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// TransitionExecutionStatus signals the row is in a non-approved state.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-already-transitioned", []string{"approved"}, "failed").
+		Return(nil, fmt.Errorf("%w: execution exec-already-transitioned status is completed", config.ErrExecutionNotInExpectedStatus))
+
+	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err, "ErrExecutionNotInExpectedStatus from CAS must not propagate as a sweep error")
+	assert.Equal(t, 0, recovered, "a row already out of approved contributes nothing to the recovery count")
+
+	// GetExecutionByID must NOT be called: ErrExecutionNotInExpectedStatus already
+	// tells us the row has moved on; the probe is a redundant round-trip and the
+	// early branch avoids it (mirroring the ErrNotFound short-circuit above it).
+	mockStore.AssertNotCalled(t, "GetExecutionByID", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
 // TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagates is
 // the regression test for the CR #728 round-2 finding: when executeAndFinalize's
 // SavePurchaseExecution fails AFTER the CAS-to-running succeeded, claimAndRedrive

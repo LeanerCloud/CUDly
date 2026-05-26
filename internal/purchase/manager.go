@@ -279,6 +279,16 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 			logging.Warnf("Skipping recovery of %s (row no longer exists, benign race-loss): %v", exec.ExecutionID, txErr)
 			return false, nil
 		}
+		// ErrExecutionNotInExpectedStatus means the row exists but its
+		// status has already moved out of "approved" (a concurrent sweep or
+		// the original run won the CAS race). Treat identically to the
+		// ErrNotFound case: nothing left to do here, no re-read needed.
+		// This mirrors claimAndRedrive and reaper.go, which both treat this
+		// sentinel as terminally benign.
+		if errors.Is(txErr, config.ErrExecutionNotInExpectedStatus) {
+			logging.Warnf("Skipping recovery of %s (row already left approved state, benign CAS race-loss): %v", exec.ExecutionID, txErr)
+			return false, nil
+		}
 		// Distinguish benign races (row already left the "approved"
 		// state - concurrent sweep handled it, or the original run
 		// finished after the LIST snapshot) from real store
