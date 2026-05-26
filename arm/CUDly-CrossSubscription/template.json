@@ -59,7 +59,7 @@
           }
         ],
         "assignableScopes": [
-          "[subscriptionResourceId('Microsoft.Resources/subscriptions', subscription().subscriptionId)]"
+          "[subscription().id]"
         ]
       }
     },

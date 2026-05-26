@@ -23,7 +23,8 @@ az deployment sub create \
   --location eastus \
   --template-file arm/CUDly-CrossSubscription/template.json \
   --parameters servicePrincipalObjectId=<SP-object-id> \
-  --name CUDly-CrossSubscription
+  --name CUDly-CrossSubscription \
+  --no-prompt
 ```
 
 Until re-deployed, `PurchaseCommitment` and `ValidateOffering` for savings plans
