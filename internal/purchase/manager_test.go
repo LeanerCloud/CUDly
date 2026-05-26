@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -405,6 +406,10 @@ func TestManager_RecoverStrandedApprovals_FreshRowUntouched(t *testing.T) {
 // opts.IdempotencyToken via DeriveIdempotencyToken(exec.ExecutionID, i), so the
 // second call is a safe no-op on the AWS side and the row transitions directly to
 // "completed" without requiring a manual Retry.
+//
+// The CAS claim (approved -> running) is expected before the re-drive call; only
+// the winner of this CAS proceeds to executeAndFinalize, preventing concurrent
+// sweeps from double-purchasing.
 func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -414,6 +419,13 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockSTS.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
 	stranded := config.PurchaseExecution{
 		ExecutionID: "exec-aws-stranded",
 		PlanID:      "plan-aws-456",
@@ -422,6 +434,8 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 200.0, Selected: true, Purchased: false},
 		},
 	}
+	runningRow := stranded
+	runningRow.Status = "running"
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-aws-456",
@@ -434,6 +448,9 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
+	// CAS claim: approved -> running. The re-drive proceeds only after winning this.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running").
+		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-456").Return(plan, nil).Twice()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
@@ -472,11 +489,9 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 
 	// The provider was reached: the re-drive called PurchaseCommitment exactly once.
 	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
-	// TransitionExecutionStatus to "failed" must NOT have been called - we re-drove, not failed.
-	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	mockStore.AssertExpectations(t)
-	mockEmail.AssertExpectations(t)
-	mockSTS.AssertExpectations(t)
+	// The CAS claim (approved -> running) was called; "failed" transition was not.
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
 }
 
 // TestManager_RecoverStrandedApprovals_MixedAWSAzureSafeFails verifies that a
@@ -632,5 +647,87 @@ func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.
 	assert.Equal(t, 0, recovered, "a row that completed between SELECT and UPDATE is skipped, not failed")
 
 	mockStore.AssertExpectations(t)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
+// TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign verifies
+// that when TransitionExecutionStatus returns config.ErrNotFound (row deleted
+// between the stale SELECT and the CAS) the safe-fail path returns (false, nil)
+// without calling GetExecutionByID. This avoids a pointless read on a row that
+// no longer exists and treats the disappearance as a benign race-loss.
+func TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-vanished",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			// Azure provider falls through to safe-fail path.
+			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// TransitionExecutionStatus wraps "row vanished" as config.ErrNotFound.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-vanished", []string{"approved"}, "failed").
+		Return(nil, fmt.Errorf("%w: execution exec-vanished", config.ErrNotFound))
+
+	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err, "ErrNotFound from CAS must not propagate as a sweep error")
+	assert.Equal(t, 0, recovered, "a vanished row contributes nothing to the recovery count")
+
+	// GetExecutionByID must NOT be called: ErrNotFound already tells us the row
+	// is gone; the probe would be a redundant round-trip and the early branch
+	// avoids it.
+	mockStore.AssertNotCalled(t, "GetExecutionByID", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}
+
+// TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive verifies that when
+// the CAS claim (approved -> running) fails with ErrExecutionNotInExpectedStatus
+// the AWS re-drive path does NOT call executeAndFinalize. Only the sweep that
+// wins the CAS should ever re-drive; the loser must skip silently. This prevents
+// two overlapping sweeps from both calling executeAndFinalize and potentially
+// double-purchasing.
+func TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-aws-claimed",
+		PlanID:      "plan-aws-claimed",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 300.0, Selected: true},
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// A concurrent sweep has already claimed the row (status changed to "running"),
+	// so our CAS (approved -> running) is rejected as ErrExecutionNotInExpectedStatus.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-claimed", []string{"approved"}, "running").
+		Return(nil, fmt.Errorf("%w: execution exec-aws-claimed cannot transition from \"running\" to \"running\"", config.ErrExecutionNotInExpectedStatus))
+
+	manager := &Manager{
+		config:          mockStore,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err, "losing the CAS claim must not propagate as a sweep error")
+	assert.Equal(t, 0, recovered, "a row claimed by a concurrent sweep must not be counted by the loser")
+
+	// The loser must never reach the provider - that would be a double-purchase.
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }

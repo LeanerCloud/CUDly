@@ -196,6 +196,48 @@ func allRecsAWS(exec *config.PurchaseExecution) bool {
 	return true
 }
 
+// claimAndRedrive atomically claims a stranded AWS-only execution (by
+// transitioning its status from "approved" to "running") and then re-drives it
+// via executeAndFinalize. It is extracted from RecoverStrandedApprovals to keep
+// that function's cyclomatic complexity within the gocyclo:10 limit.
+//
+// Returns (true, nil) when the claim was won and the re-drive completed (row is
+// now in a terminal state). A re-drive error is not fatal -- executeAndFinalize
+// already stamped a terminal status -- so it returns (false, nil) on drive
+// failure too (the failed row is still visible in History).
+// Returns (false, nil) when the CAS claim is lost to a concurrent sweep or the
+// row vanishes mid-flight (both are benign races).
+// Returns (false, err) only on a genuine DB error during the claim step.
+func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
+	// Atomically claim ownership before re-driving to prevent two concurrent
+	// sweeps (or a late original completion) from both calling executeAndFinalize
+	// on the same approved row. The CAS transitions "approved" -> "running";
+	// only the winner proceeds.
+	claimed, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "running")
+	if claimErr != nil {
+		// ErrNotFound: row vanished between SELECT and CAS - benign race.
+		// ErrExecutionNotInExpectedStatus: another sweep or the original run
+		// already claimed/completed this row - also benign.
+		if errors.Is(claimErr, config.ErrNotFound) || errors.Is(claimErr, config.ErrExecutionNotInExpectedStatus) {
+			logging.Warnf("Skipping re-drive of %s (CAS claim lost to concurrent worker): %v", exec.ExecutionID, claimErr)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim execution %s for re-drive: %w", exec.ExecutionID, claimErr)
+	}
+	// Update the local struct to reflect the committed DB state so
+	// finalizeExecution starts from "running" rather than "approved".
+	exec.Status = claimed.Status
+	logging.Infof("Recovering stranded AWS-only execution %s via idempotent re-drive (issue #632)", exec.ExecutionID)
+	if driveErr := m.executeAndFinalize(ctx, exec); driveErr != nil {
+		logging.Errorf("Re-drive of stranded execution %s failed: %v", exec.ExecutionID, driveErr)
+		// A re-drive error is not fatal to the sweep: executeAndFinalize already
+		// called finalizeExecution + SavePurchaseExecution, so the row is in a
+		// terminal state. Log and continue without counting as recovered.
+		return false, nil
+	}
+	return true, nil
+}
+
 // safeFail atomically transitions a stranded execution to "failed" and stamps a
 // recovery error on it. It is extracted from RecoverStrandedApprovals to keep
 // that function's cyclomatic complexity within the gocyclo:10 limit.
@@ -210,6 +252,15 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 
 	updated, txErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "failed")
 	if txErr != nil {
+		// ErrNotFound means the row vanished between the stale SELECT and
+		// this CAS attempt (e.g. deleted by an operator or a concurrent
+		// sweep already claimed and deleted it). That is a benign race-loss:
+		// there is nothing left to fail, and the caller should not be
+		// charged with an error.
+		if errors.Is(txErr, config.ErrNotFound) {
+			logging.Warnf("Skipping recovery of %s (row no longer exists, benign race-loss): %v", exec.ExecutionID, txErr)
+			return false, nil
+		}
 		// Distinguish benign races (row already left the "approved"
 		// state - concurrent sweep handled it, or the original run
 		// finished after the LIST snapshot) from real store
@@ -277,15 +328,13 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 		// side. The ExecutionID must be non-empty to derive a unique token; an
 		// empty ID would map every legacy row to the same token set.
 		if allRecsAWS(exec) && exec.ExecutionID != "" {
-			logging.Infof("Recovering stranded AWS-only execution %s via idempotent re-drive (issue #632)", exec.ExecutionID)
-			if driveErr := m.executeAndFinalize(ctx, exec); driveErr != nil {
-				logging.Errorf("Re-drive of stranded execution %s failed: %v", exec.ExecutionID, driveErr)
-				// A re-drive error is not fatal to the sweep: executeAndFinalize
-				// already called finalizeExecution + SavePurchaseExecution, so
-				// the row is in a terminal state. Log and continue.
-				continue
+			counted, driveErr := m.claimAndRedrive(ctx, exec)
+			if driveErr != nil {
+				return recovered, driveErr
 			}
-			recovered++
+			if counted {
+				recovered++
+			}
 			continue
 		}
 
