@@ -41,19 +41,26 @@ func adminSessionFixture() *Session {
 // authForUserWith returns a MockAuthService that:
 //   - validates "user-token" as the user session fixture
 //   - responds to HasPermissionAPI(ctx, userID, action, resource) with granted
+//
+// AssertExpectations is registered as a t.Cleanup so that every granted-path
+// sub-test fails if HasPermissionAPI was never called (i.e. the gate was
+// bypassed before the permission check ran).
 func authForUserWith(ctx context.Context, t *testing.T, userID, action, resource string, granted bool) *MockAuthService {
 	t.Helper()
 	m := new(MockAuthService)
 	m.On("ValidateSession", ctx, "user-token").Return(userSessionFixture(userID), nil)
 	m.On("HasPermissionAPI", ctx, userID, action, resource).Return(granted, nil)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	return m
 }
 
 // authForAdmin returns a MockAuthService that validates "admin-token" as admin.
+// AssertExpectations is registered as a t.Cleanup to verify ValidateSession was called.
 func authForAdmin(ctx context.Context, t *testing.T) *MockAuthService {
 	t.Helper()
 	m := new(MockAuthService)
 	m.On("ValidateSession", ctx, "admin-token").Return(adminSessionFixture(), nil)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	return m
 }
 
@@ -130,8 +137,9 @@ func TestDeletePlan_PermissionGate(t *testing.T) {
 	})
 
 	t.Run("admin bypasses permission check", func(t *testing.T) {
+		// Admin sessions short-circuit in getAllowedAccounts (role == "admin" returns
+		// nil without calling GetAllowedAccountsAPI), so do NOT register that expectation.
 		mockAuth := authForAdmin(ctx, t)
-		mockAuth.On("GetAllowedAccountsAPI", ctx, "admin-uid").Return([]string{}, nil)
 		mockStore := new(MockConfigStore)
 		mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
 			return &config.PurchasePlan{ID: id}, nil
@@ -209,11 +217,11 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 	})
 
 	t.Run("admin bypasses permission check", func(t *testing.T) {
+		// Admin sessions short-circuit in getAllowedAccounts (role == "admin" returns
+		// nil, IsUnrestrictedAccess returns true, requireExecutionAccess returns nil
+		// immediately without calling GetAllowedAccountsAPI or GetExecutionByID).
 		mockAuth := authForAdmin(ctx, t)
-		mockAuth.On("GetAllowedAccountsAPI", ctx, "admin-uid").Return([]string{}, nil)
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetExecutionByID", ctx, execID).
-			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 
