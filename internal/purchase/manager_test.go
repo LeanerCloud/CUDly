@@ -688,6 +688,88 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign(t *testin
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
+// TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagates is
+// the regression test for the CR #728 round-2 finding: when executeAndFinalize's
+// SavePurchaseExecution fails AFTER the CAS-to-running succeeded, claimAndRedrive
+// must NOT return (false, nil). The row is now "running" in the DB with no
+// terminal state persisted -- silently dropping the error would strand it there
+// indefinitely. The sweep must surface the error (ErrAuditLoss) so the caller
+// can stop processing and the next tick retries the recovery.
+func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagates(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockSTS := new(MockSTSClient)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockSTS.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-aws-persist-fail",
+		PlanID:      "plan-aws-persist-456",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 200.0, Selected: true, Purchased: false},
+		},
+	}
+	runningRow := stranded
+	runningRow.Status = "running"
+
+	plan := &config.PurchasePlan{
+		ID:   "plan-aws-persist-456",
+		Name: "AWS Persist-Fail Test Plan",
+		RampSchedule: config.RampSchedule{
+			CurrentStep: 0,
+			TotalSteps:  4,
+		},
+	}
+
+	saveErr := errors.New("DB connection lost")
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// CAS claim: approved -> running. This succeeds -- the row is now "running".
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-persist-fail", []string{"approved"}, "running").
+		Return(&runningRow, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-aws-persist-456").Return(plan, nil).Once()
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	// SavePurchaseExecution fails AFTER the CAS-to-running succeeded.
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Return(saveErr)
+
+	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
+		Account: aws.String("123456789012"),
+	}, nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+		Success:      true,
+		CommitmentID: "ri-persist-fail-12345",
+	}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		stsClient:       mockSTS,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	// The persistence failure must surface as an error, not be silently dropped.
+	require.Error(t, err, "SavePurchaseExecution failure after CAS-to-running must not be silently dropped")
+	assert.ErrorIs(t, err, config.ErrAuditLoss, "error must wrap ErrAuditLoss so callers can classify it")
+	assert.Equal(t, 0, recovered, "a row that failed to persist must not be counted as recovered")
+}
+
 // TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive verifies that when
 // the CAS claim (approved -> running) fails with ErrExecutionNotInExpectedStatus
 // the AWS re-drive path does NOT call executeAndFinalize. Only the sweep that

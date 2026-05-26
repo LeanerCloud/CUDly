@@ -163,7 +163,11 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
 			logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 			if execErr == nil {
-				execErr = fmt.Errorf("audit loss: %w", err)
+				// Wrap with ErrAuditLoss so callers (e.g. claimAndRedrive) can
+				// distinguish a persistence failure -- where the row is left
+				// stranded in "running" -- from a benign provider/rec error
+				// where finalizeExecution already committed a terminal status.
+				execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
 			}
 		}
 	}
@@ -230,9 +234,17 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 	logging.Infof("Recovering stranded AWS-only execution %s via idempotent re-drive (issue #632)", exec.ExecutionID)
 	if driveErr := m.executeAndFinalize(ctx, exec); driveErr != nil {
 		logging.Errorf("Re-drive of stranded execution %s failed: %v", exec.ExecutionID, driveErr)
-		// A re-drive error is not fatal to the sweep: executeAndFinalize already
-		// called finalizeExecution + SavePurchaseExecution, so the row is in a
-		// terminal state. Log and continue without counting as recovered.
+		// Persistence failures (ErrAuditLoss) are non-benign: the row was CAS-ed
+		// to "running" but SavePurchaseExecution failed, so no terminal status was
+		// persisted. Propagate so the sweep surfaces the error rather than silently
+		// dropping a row that is now stranded in "running".
+		if errors.Is(driveErr, config.ErrAuditLoss) {
+			return false, fmt.Errorf("persistence failure re-driving execution %s (row stranded in running): %w", exec.ExecutionID, driveErr)
+		}
+		// Benign provider/rec errors: finalizeExecution already stamped a terminal
+		// status (failed/partially_completed) and SavePurchaseExecution succeeded.
+		// The row is in a terminal state; log and continue without counting as
+		// recovered.
 		return false, nil
 	}
 	return true, nil
