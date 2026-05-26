@@ -769,6 +769,105 @@ func TestHandler_sendPurchaseApprovalEmail_NoNotificationEmail(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// sendPurchaseApprovalEmail — approval_recipient uses notification_email (issue #735)
+// ---------------------------------------------------------------------------
+
+// recordingEmailNotifier captures the NotificationData passed to
+// SendPurchaseApprovalRequest so tests can assert on recipient fields.
+type recordingEmailNotifier struct {
+	stubEmailNotifier
+	captured email.NotificationData
+}
+
+func (r *recordingEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, data email.NotificationData) error {
+	r.captured = data
+	return nil
+}
+
+// TestHandler_sendPurchaseApprovalEmail_ResponseRecipientUsesNotificationEmail
+// is the regression test for issue #735: when both a per-account contact_email
+// and a global notification_email are configured, the approval_recipient field
+// returned by sendPurchaseApprovalEmail must equal notification_email (the
+// value the History UI shows via resolvePendingApproverEmail), not contact_email.
+// The actual email To address remains the contact_email — the fix only affects
+// the approval_recipient used in the post-submit toast.
+func TestHandler_sendPurchaseApprovalEmail_ResponseRecipientUsesNotificationEmail(t *testing.T) {
+	ctx := context.Background()
+	notificationEmail := "admin@example.com"
+	contactEmail := "contact@acct.example.com"
+	accountID := "acct-1"
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &notificationEmail,
+	}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	notifier := &recordingEmailNotifier{}
+	h := &Handler{
+		config:        mockStore,
+		emailNotifier: notifier,
+	}
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "11111111-1111-1111-1111-111111111111",
+		ApprovalToken: "tok",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	emailSent, _, responseRecipient := h.sendPurchaseApprovalEmail(ctx, nil, exec, exec.Recommendations, 0, 0)
+
+	require.True(t, emailSent, "email send must succeed")
+	// The response recipient surfaced in the toast must be the notification_email
+	// (consistent with History), not the per-account contact_email.
+	assert.Equal(t, notificationEmail, responseRecipient,
+		"approval_recipient must equal notification_email so the toast matches History (issue #735)")
+	// The actual email To must still be the contact_email (security model unchanged).
+	assert.Equal(t, contactEmail, notifier.captured.RecipientEmail,
+		"actual email To address must be the per-account contact_email")
+}
+
+// TestHandler_sendPurchaseApprovalEmail_ResponseRecipientFallsBackToContactEmail
+// covers the case where no notification_email is set: responseRecipient falls
+// back to the per-account contact_email (the actual To address).
+func TestHandler_sendPurchaseApprovalEmail_ResponseRecipientFallsBackToContactEmail(t *testing.T) {
+	ctx := context.Background()
+	contactEmail := "contact@acct.example.com"
+	accountID := "acct-2"
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		// NotificationEmail intentionally not set.
+	}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	notifier := &recordingEmailNotifier{}
+	h := &Handler{
+		config:        mockStore,
+		emailNotifier: notifier,
+	}
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "22222222-2222-2222-2222-222222222222",
+		ApprovalToken: "tok2",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	emailSent, _, responseRecipient := h.sendPurchaseApprovalEmail(ctx, nil, exec, exec.Recommendations, 0, 0)
+
+	require.True(t, emailSent, "email send must succeed")
+	// Without a notification_email, the response recipient falls back to contact_email.
+	assert.Equal(t, contactEmail, responseRecipient,
+		"when notification_email is absent, approval_recipient falls back to contact_email")
+}
+
+// ---------------------------------------------------------------------------
 // Helper types for tests above
 // ---------------------------------------------------------------------------
 

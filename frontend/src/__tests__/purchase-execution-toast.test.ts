@@ -388,6 +388,61 @@ describe('handleExecutePurchase — single-record path', () => {
   });
 });
 
+// Issue #735: toast must show notification_email (approval_recipient from API),
+// not a hardcoded or per-account contact_email. The backend now sets
+// approval_recipient = notification_email when configured; the toast must use
+// whatever the API returns without a hardcoded fallback.
+describe('issue #735 — toast uses API approval_recipient, not hardcoded email', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([]);
+    (recs.getPurchaseModalRecommendations as jest.Mock).mockReturnValue([buildMinimalRec()]);
+    (plans.closePurchaseModal as jest.Mock).mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    document.body.textContent = '';
+  });
+
+  test('toast shows the notification_email returned by the API as approval_recipient', async () => {
+    const notificationEmail = 'admin@company.example';
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-735',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: notificationEmail,
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(lastToastMessage()).toContain(notificationEmail);
+    expect(lastToastMessage()).toContain('Approval request sent to');
+    expect(lastToastKind()).toBe('success');
+  });
+
+  test('toast does not contain a different address when API returns notification_email', async () => {
+    const notificationEmail = 'admin@company.example';
+    const contactEmail = 'contact@acct.example';
+    // Simulate backend now returning notification_email (not contact_email).
+    (api.executePurchase as jest.Mock).mockResolvedValue({
+      execution_id: 'exec-735b',
+      status: 'queued',
+      email_sent: true,
+      approval_recipient: notificationEmail,
+    });
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(lastToastMessage()).toContain(notificationEmail);
+    expect(lastToastMessage()).not.toContain(contactEmail);
+    expect(lastToastKind()).toBe('success');
+  });
+});
+
 describe('handleFanOutExecute — fan-out path', () => {
   function buildBucket(id: string, capacityPercent = 100) {
     return {
