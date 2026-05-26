@@ -114,6 +114,18 @@ resource "aws_lambda_function" "main" {
 # Lambda Function URL (for HTTP access)
 # ==============================================
 
+# moved: aws_lambda_function_url.main lost its `count` in PR #574 (drop
+# of dead-knob lambda_enable_function_url). The existing deployment's
+# state holds the resource at index [0]; this block tells terraform
+# to update the state index in-place instead of destroying the
+# existing Function URL and creating a fresh one with a different
+# host (which would break the dashboard until origins/DASHBOARD_URL
+# are re-propagated everywhere).
+moved {
+  from = aws_lambda_function_url.main[0]
+  to   = aws_lambda_function_url.main
+}
+
 resource "aws_lambda_function_url" "main" {
   function_name      = aws_lambda_function.main.function_name
   authorization_type = var.function_url_auth_type
