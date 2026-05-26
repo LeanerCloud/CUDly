@@ -376,6 +376,50 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     expect(queue.textContent).toContain('.5');
   });
 
+  // Issue #733 — regression guard. PR #713 shipped the columns but the
+  // backend never populated account_id / payment / monthly_cost on synthesised
+  // execution rows, so every Approval-queue cell rendered as "-". The fix is
+  // backend-side (handler_history.go now sources Account/Payment/MonthlyCost
+  // from the rec when exec.CloudAccountID is nil and copies Payment off the
+  // rec). This test pins the frontend contract end-to-end: when the API
+  // returns the populated shape we expect after the fix, the cells must show
+  // the real values, not the dash fallback.
+  test('Approval queue cells show real values, not "-", when backend returns populated row (#733)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (getAccountName as jest.Mock).mockReturnValue('Production Account');
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'p-733',
+          status: 'pending',
+          account_id: '123456789012',
+          term: 1,
+          payment: 'all-upfront',
+          monthly_cost: 7.5,
+          created_by_user_id: ADMIN_USER.id,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    const queue = document.getElementById('purchases-approval-queue')!;
+    const queueRow = queue.querySelector('tr[data-execution-id="p-733"]')!;
+    expect(queueRow).toBeTruthy();
+
+    const cellTexts = Array.from(queueRow.querySelectorAll('td')).map((c) => c.textContent || '');
+    // Find by content rather than column index so a reorder doesn't break this.
+    expect(cellTexts).toEqual(expect.arrayContaining([
+      expect.stringContaining('Production Account'),
+      expect.stringContaining('1 Year'),
+      expect.stringContaining('all-upfront'),
+      expect.stringContaining('7.5'),
+    ]));
+    // No dash fallback may appear on the populated cells.
+    expect(cellTexts).not.toContain('-');
+  });
+
   test('renders Account/Term/Payment/Monthly column headers', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (api.getHistory as jest.Mock).mockResolvedValue({

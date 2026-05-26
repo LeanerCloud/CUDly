@@ -479,6 +479,7 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 			assert.Equal(t, 0.0, row.UpfrontCost, "upfront must come from the rec")
 			assert.Equal(t, 1.2333, row.EstimatedSavings, "savings must come from the rec")
 			assert.Equal(t, 2.117, row.MonthlyCost, "monthly cost must come from the rec")
+			assert.Equal(t, "no-upfront", row.Payment, "payment must come from the rec, not be left blank (#733)")
 			assert.NotEmpty(t, row.StatusDescription,
 				"in-progress rows must carry a human-readable status description, not render as a finished purchase")
 		})
@@ -1110,6 +1111,140 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 		row := resp.Purchases[0]
 		assert.Equal(t, creatorID, row.CreatedByUserID)
 		assert.Empty(t, row.CreatedByUserEmail, "email must be empty when lookup fails — UI falls back to UUID")
+	})
+}
+
+// TestHandler_getHistory_ApprovalQueueColumnsPopulated is the issue #733
+// regression guard. PR #713 added the Approval queue's Account, Term, Payment,
+// and Monthly Cost columns to the frontend; the backend handler was missing the
+// data plumbing for Account (web-initiated pending executions never set
+// exec.CloudAccountID — the rec carries it), Payment (never copied off the rec
+// in projectRecommendationFields), and multi-rec MonthlyCost (only the single-
+// rec branch was mapped). Without these, every Approval queue cell rendered as
+// the "-" fallback. Three sub-tests pin the contract:
+//   - single-rec: Payment is copied from the rec; Account falls back to the
+//     rec's CloudAccountID when exec.CloudAccountID is nil.
+//   - multi-rec uniform: Payment + Account collapse to the shared value;
+//     MonthlyCost sums across recs.
+//   - multi-rec mixed Payment: Payment collapses to "" (the frontend's "-"
+//     fallback) rather than silently picking a single value for a basket
+//     that genuinely mixes payment options.
+func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
+	approverEmail := "ops@example.com"
+
+	t.Run("single-rec pending row carries Account + Payment + MonthlyCost", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		monthly := 7.5
+		accountID := "123456789012"
+		pending := []config.PurchaseExecution{
+			{
+				ExecutionID:   "pend-single",
+				Status:        "pending",
+				ScheduledDate: time.Now(),
+				// exec.CloudAccountID intentionally nil — matches the
+				// real-world web bulk-purchase flow which only populates
+				// the per-rec CloudAccountID.
+				Recommendations: []config.RecommendationRecord{
+					{
+						Provider:       "aws",
+						Service:        "ec2",
+						Region:         "us-east-1",
+						ResourceType:   "t4g.nano",
+						Term:           1,
+						Payment:        "all-upfront",
+						Count:          1,
+						UpfrontCost:    100.0,
+						MonthlyCost:    &monthly,
+						Savings:        2.5,
+						CloudAccountID: &accountID,
+					},
+				},
+			},
+		}
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+		require.Len(t, resp.Purchases, 1)
+		row := resp.Purchases[0]
+
+		assert.Equal(t, accountID, row.AccountID, "Account must fall back to rec.CloudAccountID when exec.CloudAccountID is nil (#733)")
+		assert.Equal(t, "all-upfront", row.Payment, "Payment must be copied from the single rec (#733)")
+		assert.Equal(t, 7.5, row.MonthlyCost, "MonthlyCost must come from the rec")
+	})
+
+	t.Run("multi-rec uniform pending row collapses Account + Payment, sums MonthlyCost", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		monthlyA := 3.0
+		monthlyB := 4.5
+		accountID := "987654321098"
+		pending := []config.PurchaseExecution{
+			{
+				ExecutionID:      "pend-multi-uniform",
+				Status:           "pending",
+				ScheduledDate:    time.Now(),
+				TotalUpfrontCost: 250.0,
+				EstimatedSavings: 12.0,
+				Recommendations: []config.RecommendationRecord{
+					{Provider: "aws", Service: "ec2", Region: "us-east-1", Payment: "no-upfront", MonthlyCost: &monthlyA, CloudAccountID: &accountID},
+					{Provider: "aws", Service: "ec2", Region: "us-east-1", Payment: "no-upfront", MonthlyCost: &monthlyB, CloudAccountID: &accountID},
+				},
+			},
+		}
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+		require.Len(t, resp.Purchases, 1)
+		row := resp.Purchases[0]
+
+		assert.Equal(t, accountID, row.AccountID, "Account must collapse to the shared rec value (#733)")
+		assert.Equal(t, "no-upfront", row.Payment, "Payment must collapse to the shared rec value (#733)")
+		assert.InDelta(t, 7.5, row.MonthlyCost, 1e-9, "MonthlyCost must sum across recs (#733)")
+	})
+
+	t.Run("multi-rec heterogeneous Payment collapses to empty for honest dash fallback", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		pending := []config.PurchaseExecution{
+			{
+				ExecutionID:   "pend-multi-mixed",
+				Status:        "pending",
+				ScheduledDate: time.Now(),
+				Recommendations: []config.RecommendationRecord{
+					{Provider: "aws", Service: "ec2", Region: "us-east-1", Payment: "all-upfront"},
+					{Provider: "aws", Service: "ec2", Region: "us-east-1", Payment: "no-upfront"},
+				},
+			},
+		}
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+		require.Len(t, resp.Purchases, 1)
+		row := resp.Purchases[0]
+
+		assert.Empty(t, row.Payment, "Payment must collapse to empty when recs disagree — the dash fallback is more honest than a single arbitrary value (#733)")
 	})
 }
 
