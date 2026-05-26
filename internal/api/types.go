@@ -728,9 +728,9 @@ type HistoryResponse struct {
 // HistorySummary provides aggregate statistics for purchase history.
 // TotalPurchases is the total count of rows (completed + all non-completed
 // states); the per-state counters break it down so the UI can render
-// meaningful totals. Dollar totals count completed rows only — none of the
-// non-completed states have committed money yet, so folding them in would
-// inflate "what I have spent".
+// meaningful totals. Dollar totals count completed rows only: pending,
+// in-progress, failed, expired, and cancelled rows are all excluded because
+// no money was committed for any of those states.
 type HistorySummary struct {
 	TotalPurchases int `json:"total_purchases"`
 	TotalCompleted int `json:"total_completed"`
