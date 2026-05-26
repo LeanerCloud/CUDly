@@ -162,11 +162,17 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	if !wasMultiAccount {
 		if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
 			logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
-			if execErr == nil {
-				// Wrap with ErrAuditLoss so callers (e.g. claimAndRedrive) can
-				// distinguish a persistence failure -- where the row is left
-				// stranded in "running" -- from a benign provider/rec error
-				// where finalizeExecution already committed a terminal status.
+			// Wrap with ErrAuditLoss regardless of whether executePurchase itself
+			// failed. When execErr != nil (provider/partial error), finalizeExecution
+			// stamped a terminal status on the in-memory exec struct, but if
+			// SavePurchaseExecution then failed the DB row is still in "running" --
+			// exactly the stranded-row scenario ErrAuditLoss signals. Preserve the
+			// original execErr as the innermost %w so errors.As/errors.Is can still
+			// reach it from callers (e.g. claimAndRedrive checking ErrAuditLoss).
+			if execErr != nil {
+				execErr = fmt.Errorf("%w: terminal save failed (%v); original execution error: %w",
+					config.ErrAuditLoss, err, execErr)
+			} else {
 				execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
 			}
 		}

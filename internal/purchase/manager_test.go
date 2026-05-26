@@ -770,6 +770,77 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 	assert.Equal(t, 0, recovered, "a row that failed to persist must not be counted as recovered")
 }
 
+// TestManager_RecoverStrandedApprovals_AWSRedrive_ExecAndPersistBothFail is the
+// regression test for CR #728 round-3: when executePurchase returns a non-nil
+// error (e.g. partialPurchaseError or a plain provider error) AND
+// SavePurchaseExecution then also fails, the old guard (execErr == nil) silently
+// dropped the save failure. The row was left stranded in "running" because no
+// terminal status was persisted.
+//
+// After the fix, any SavePurchaseExecution failure is wrapped as ErrAuditLoss
+// regardless of whether executePurchase itself returned an error. The test
+// verifies:
+//   - RecoverStrandedApprovals returns a non-nil error (not silently dropped)
+//   - errors.Is(err, config.ErrAuditLoss) is true (sentinel is present)
+//   - the original execution error (plan lookup failure) is still reachable via
+//     errors.As / errors.Unwrap so callers can inspect the root cause
+func TestManager_RecoverStrandedApprovals_AWSRedrive_ExecAndPersistBothFail(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-aws-both-fail",
+		PlanID:      "plan-aws-both-fail",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 200.0, Selected: true, Purchased: false},
+		},
+	}
+	runningRow := stranded
+	runningRow.Status = "running"
+
+	// planErr is the error returned by executePurchase (simulates a DB blip
+	// during plan lookup that makes the purchase fail).
+	planErr := errors.New("plan DB read timeout")
+	saveErr := errors.New("terminal save DB connection lost")
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// CAS claim succeeds: the row is now "running" with no terminal state yet.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-both-fail", []string{"approved"}, "running").
+		Return(&runningRow, nil)
+	// executePurchase calls GetPurchasePlan; make it fail so execErr != nil.
+	mockStore.On("GetPurchasePlan", ctx, "plan-aws-both-fail").Return(nil, planErr).Once()
+	// SavePurchaseExecution also fails: the row remains "running" in the DB.
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Return(saveErr)
+
+	manager := &Manager{
+		config:       mockStore,
+		email:        mockEmail,
+		dashboardURL: "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+
+	// The combined failure must surface -- neither the exec error nor the save
+	// error may be silently swallowed.
+	require.Error(t, err, "both exec and save failure must not be silently dropped")
+	assert.ErrorIs(t, err, config.ErrAuditLoss,
+		"error must wrap ErrAuditLoss so claimAndRedrive surfaces it to the sweep")
+
+	// The original execution error must remain reachable so operators can
+	// diagnose the root cause without reading logs.
+	assert.ErrorIs(t, err, planErr,
+		"original execution error (plan lookup failure) must be reachable via errors.Is")
+
+	assert.Equal(t, 0, recovered, "a row with both exec and save failures must not be counted as recovered")
+}
+
 // TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive verifies that when
 // the CAS claim (approved -> running) fails with ErrExecutionNotInExpectedStatus
 // the AWS re-drive path does NOT call executeAndFinalize. Only the sweep that
