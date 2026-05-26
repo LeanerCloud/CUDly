@@ -842,19 +842,11 @@ func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
 	assert.Contains(t, err.Error(), "pricing data unavailable")
 }
 
-// ---- applyPurchaseAutomationTag -------------------------------------------
-
-func TestApplyPurchaseAutomationTag_withSource(t *testing.T) {
-	body := map[string]interface{}{}
-	applyPurchaseAutomationTag(body, "api")
-	tags, ok := body["tags"].(map[string]string)
-	require.True(t, ok)
-	assert.Equal(t, "api", tags[common.PurchaseTagKey])
-}
-
-func TestApplyPurchaseAutomationTag_emptySource(t *testing.T) {
-	body := map[string]interface{}{}
-	applyPurchaseAutomationTag(body, "")
-	_, ok := body["tags"]
-	assert.False(t, ok)
-}
+// ---- reservation tag application ------------------------------------------
+//
+// The per-service applyPurchaseAutomationTag helper was removed when tag
+// application moved to reservations.ApplyPurchaseTags (issue #721, so the
+// idempotency-token tag rides alongside the purchase-automation tag). The
+// helper's contract is now exercised in providers/azure/services/internal/reservations
+// package tests; the synapse-side coverage is via the executor-level
+// PurchaseCommitment tests above.

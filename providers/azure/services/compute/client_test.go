@@ -925,7 +925,7 @@ func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
 
-	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb)
+	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, "")
 	require.NoError(t, err)
 
 	var got map[string]interface{}
@@ -935,17 +935,38 @@ func TestBuildReservationBody_IncludesPurchaseAutomationTag(t *testing.T) {
 	assert.Equal(t, common.PurchaseSourceWeb, tags[common.PurchaseTagKey])
 }
 
-func TestBuildReservationBody_OmitsTagsWhenSourceEmpty(t *testing.T) {
+func TestBuildReservationBody_OmitsTagsWhenSourceAndTokenEmpty(t *testing.T) {
 	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
 
-	body, err := c.buildReservationBody(rec, "")
+	body, err := c.buildReservationBody(rec, "", "")
 	require.NoError(t, err)
 
 	var got map[string]interface{}
 	require.NoError(t, json.Unmarshal(body, &got))
 	_, present := got["tags"]
-	assert.False(t, present, "tags must be absent when source is empty")
+	assert.False(t, present, "tags must be absent when both source and idempotency token are empty")
+}
+
+// TestBuildReservationBody_IncludesIdempotencyTokenTag pins the issue #721
+// fix: the cudly-idempotency-token tag MUST ride along with the
+// purchase-automation tag in the reservation body so a re-driven purchase
+// can find the prior reservation via FindReservationOrderByIdempotencyToken
+// and skip the duplicate buy.
+func TestBuildReservationBody_IncludesIdempotencyTokenTag(t *testing.T) {
+	c := &ComputeClient{region: "eastus", subscriptionID: "sub-abc"}
+	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"}
+	token := common.DeriveIdempotencyToken("exec-721-compute", 0)
+
+	body, err := c.buildReservationBody(rec, common.PurchaseSourceWeb, token)
+	require.NoError(t, err)
+
+	var got map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &got))
+	tags, ok := got["tags"].(map[string]interface{})
+	require.True(t, ok, "tags map missing from reservation body")
+	assert.Equal(t, common.PurchaseSourceWeb, tags[common.PurchaseTagKey])
+	assert.Equal(t, token, tags[common.IdempotencyTagKey], "idempotency tag must be stamped when token is supplied")
 }
 
 // --- Issue #148: VCPU/MemoryGB enrichment via cached SKU catalogue ---
