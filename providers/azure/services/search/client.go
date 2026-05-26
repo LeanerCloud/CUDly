@@ -247,14 +247,13 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		Timestamp:      time.Now(),
 	}
 
-	// Azure's reservation API mints the order ID server-side in calculatePrice,
-	// so the only stable dedupe signal we control is the purchase-automation tag
-	// derived from opts.Source. Without a non-empty Source the tag is dropped and
-	// a re-driven purchase cannot recognise the prior attempt, producing
-	// duplicate reservations. Fail fast at function entry rather than allowing
-	// an un-tagged, non-idempotent purchase to hit the cloud.
+	// Source is required so the resulting reservation is attributable to CUDly
+	// in the portal via the purchase-automation tag. The dedupe key for
+	// idempotent re-drives is now opts.IdempotencyToken (issue #721, applied
+	// in reservations.DoIdempotentPurchaseTwoStep); source remains mandatory
+	// for attribution.
 	if opts.Source == "" {
-		result.Error = fmt.Errorf("purchase source is required for idempotent Azure reservation purchases")
+		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
 
@@ -286,7 +285,7 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 			"renew":            false,
 		},
 	}
-	applyPurchaseAutomationTag(requestBody, opts.Source)
+	reservations.ApplyPurchaseTags(requestBody, opts.Source, opts.IdempotencyToken)
 
 	bodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -302,7 +301,7 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 		return result, result.Error
 	}
 
-	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
+	reservationOrderID, err := reservations.DoIdempotentPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token, opts.IdempotencyToken)
 	if err != nil {
 		result.Error = err
 		return result, result.Error
@@ -578,15 +577,4 @@ func (c *SearchClient) convertAzureSearchRecommendation(ctx context.Context, azu
 	}
 
 	return rec
-}
-
-// applyPurchaseAutomationTag attaches the purchase-automation tag to an Azure
-// reservation request body when source is non-empty. Extracted out of
-// PurchaseCommitment to keep the function under the cyclomatic-complexity
-// threshold enforced by the pre-commit hook.
-func applyPurchaseAutomationTag(body map[string]interface{}, source string) {
-	if source == "" {
-		return
-	}
-	body["tags"] = map[string]string{common.PurchaseTagKey: source}
 }

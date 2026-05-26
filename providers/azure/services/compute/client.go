@@ -363,9 +363,11 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 
 // buildReservationBody builds the JSON body for a reservation purchase request.
 // The same body is sent to both calculatePrice and purchase endpoints (issue #677).
-// When source is non-empty, a top-level tags map carrying purchase-automation
-// is attached so the resulting reservation is identifiable in the portal.
-func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source string) ([]byte, error) {
+// The purchase-automation and cudly-idempotency-token tags are attached via
+// reservations.ApplyPurchaseTags so the resulting reservation is identifiable
+// in the portal AND a re-driven purchase can find it via tag lookup before
+// buying a duplicate (issue #721).
+func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, idempotencyToken string) ([]byte, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3
@@ -391,9 +393,7 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source s
 			"renew":            false,
 		},
 	}
-	if source != "" {
-		requestBody["tags"] = map[string]string{common.PurchaseTagKey: source}
-	}
+	reservations.ApplyPurchaseTags(requestBody, source, idempotencyToken)
 	return json.Marshal(requestBody)
 }
 
@@ -407,9 +407,11 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source s
 //  2. POST reservationOrders/{id}/purchase -- commits the order.
 //
 // Idempotency: Azure mints the order ID in step 1, so client-supplied IDs are
-// no longer used. Re-drives are idempotent via tag-based deduplication at the
-// caller level (purchase execution checks for existing reservations tagged with
-// the (executionID, recIndex) identity before calling PurchaseCommitment).
+// no longer used. Re-drives are idempotent via tag-based deduplication
+// performed inside reservations.DoIdempotentPurchaseTwoStep: every purchase
+// body carries the cudly-idempotency-token tag derived from opts.IdempotencyToken,
+// and a re-drive lists existing reservation orders and short-circuits when an
+// order already carries the same tag (issue #721).
 func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -418,21 +420,20 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		Timestamp:      time.Now(),
 	}
 
-	// Azure's reservation API mints the order ID server-side in calculatePrice,
-	// so the only stable dedupe signal we control is the purchase-automation tag
-	// derived from opts.Source. Without a non-empty Source the tag is dropped and
-	// a re-driven purchase cannot recognise the prior attempt, producing
-	// duplicate reservations. Fail fast at function entry rather than allowing
-	// an un-tagged, non-idempotent purchase to hit the cloud.
+	// Source is required so the resulting reservation is attributable to CUDly
+	// in the portal via the purchase-automation tag. The dedupe key for
+	// idempotent re-drives is now opts.IdempotencyToken (issue #721, applied
+	// in reservations.DoIdempotentPurchaseTwoStep); source remains mandatory
+	// for attribution.
 	if opts.Source == "" {
-		result.Error = fmt.Errorf("purchase source is required for idempotent Azure reservation purchases")
+		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
 
 	// Ensure Microsoft.Capacity provider is registered (cached after first call).
 	c.ensureCapacityProviderRegistered(ctx)
 
-	bodyBytes, err := c.buildReservationBody(rec, opts.Source)
+	bodyBytes, err := c.buildReservationBody(rec, opts.Source, opts.IdempotencyToken)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to marshal request: %w", err)
 		return result, result.Error
@@ -446,7 +447,7 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	reservationOrderID, err := reservations.DoPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token)
+	reservationOrderID, err := reservations.DoIdempotentPurchaseTwoStep(ctx, c.httpClient, reservations.CalculatePriceURL(), bodyBytes, token.Token, opts.IdempotencyToken)
 	if err != nil {
 		result.Error = err
 		return result, result.Error
