@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
 
   "metadata": {
-    "description": "CUDly Cross-Subscription Role Assignments — deploy this in every target Azure subscription that CUDly should manage. It grants the CUDly service principal the permissions needed to query reservation recommendations and purchase Azure Reservations."
+    "description": "CUDly Cross-Subscription Role Assignments — deploy this in every target Azure subscription that CUDly should manage. It grants the CUDly service principal the permissions needed to query reservation recommendations and purchase Azure Reservations and Savings Plans."
   },
 
   "parameters": {
@@ -27,10 +27,58 @@
       "reader":               "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
       "costManagementReader": "/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3",
       "reservationPurchaser": "/providers/Microsoft.Authorization/roleDefinitions/f7b75c60-3036-4b75-91c3-6b41c27c1689"
-    }
+    },
+    "customRoleName": "[guid(subscription().subscriptionId, 'cudly-reservation-purchaser')]",
+    "customRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().subscriptionId, 'cudly-reservation-purchaser'))]"
   },
 
   "resources": [
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "[variables('customRoleName')]",
+      "properties": {
+        "roleName": "CUDly Reservation and Savings Plan Purchaser",
+        "description": "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions it calls at runtime. Complements the built-in Reservation Purchaser assignment (which covers catalog reads and recommendations) by adding the purchase and calculatePrice actions that the built-in role omits.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Capacity/calculateprice/action",
+              "Microsoft.Capacity/reservationorders/write",
+              "Microsoft.Capacity/reservationorders/read",
+              "Microsoft.Capacity/reservationorders/reservations/read",
+              "Microsoft.Capacity/register/action",
+              "Microsoft.Capacity/catalogs/read",
+              "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+              "Microsoft.BillingBenefits/savingsPlanOrders/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/action"
+            ],
+            "notActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[subscriptionResourceId('Microsoft.Resources/subscriptions', subscription().subscriptionId)]"
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'cudlyCustomRole', subscription().subscriptionId)]",
+      "dependsOn": [
+        "[variables('customRoleDefinitionId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('customRoleDefinitionId')]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — purchase reservations and savings plans via custom role that enumerates every required action explicitly"
+      }
+    },
+
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
@@ -42,6 +90,7 @@
         "description": "CUDly — enumerate subscription resources and locations"
       }
     },
+
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
@@ -53,6 +102,7 @@
         "description": "CUDly — read cost and reservation utilisation data"
       }
     },
+
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
@@ -61,9 +111,10 @@
         "roleDefinitionId": "[variables('roles').reservationPurchaser]",
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
-        "description": "CUDly — purchase Azure Reservations in this subscription"
+        "description": "CUDly — reservation catalog reads and recommendations via built-in Reservation Purchaser role (kept in addition to the custom role)"
       }
     },
+
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
@@ -91,6 +142,13 @@
       "value": "[subscription().tenantId]",
       "metadata": {
         "description": "Azure AD tenant ID to provide when registering this account in CUDly (azure_tenant_id field)."
+      }
+    },
+    "customRoleDefinitionId": {
+      "type": "string",
+      "value": "[variables('customRoleDefinitionId')]",
+      "metadata": {
+        "description": "Resource ID of the CUDly custom role definition created in this subscription."
       }
     }
   }

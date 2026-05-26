@@ -1,8 +1,33 @@
 # Known Issues
 
-The seven limitations previously listed here have been resolved or
-scoped-down with explicit follow-ups. This file tracks what's still
-outstanding so future work has a clear starting point.
+This file tracks outstanding limitations and things that require operator
+action. Resolved items are moved to the Resolved section at the bottom.
+
+## Outstanding
+
+### Azure ARM template re-deployment required for purchase support (issue #731)
+
+The built-in "Reservation Purchaser" role (f7b75c60-3036-4b75-91c3-6b41c27c1689)
+does not include `Microsoft.Capacity/calculateprice/action`,
+`Microsoft.Capacity/reservationorders/write`, or
+`Microsoft.BillingBenefits/savingsPlanOrderAliases/write`. Without these,
+the live purchase API returns 403.
+
+`arm/CUDly-CrossSubscription/template.json` has been updated (fix/731-arm-roles)
+to add a custom role "CUDly Reservation and Savings Plan Purchaser" that enumerates
+all required actions explicitly. Existing tenants who applied the ARM template before
+this fix MUST re-deploy it:
+
+```bash
+az deployment sub create \
+  --location eastus \
+  --template-file arm/CUDly-CrossSubscription/template.json \
+  --parameters servicePrincipalObjectId=<SP-object-id> \
+  --name CUDly-CrossSubscription
+```
+
+Until re-deployed, `PurchaseCommitment` and `ValidateOffering` for savings plans
+will continue to return 403.
 
 ## Resolved
 
@@ -184,10 +209,12 @@ outstanding so future work has a clear starting point.
 - **GCP account `serene-bazaar-666` deploy SA missing `compute.regions.list`**:
   Visible in production Lambda logs (`2026-04-21T16:28:22Z` and onward):
 
-      [ERROR] GCP account GCP serene-bazaar-666 (serene-bazaar-666):
-      get recommendations: failed to get regions: failed to list regions:
-      googleapi: Error 403: Required 'compute.regions.list' permission
-      for 'projects/serene-bazaar-666'
+  ```text
+  [ERROR] GCP account GCP serene-bazaar-666 (serene-bazaar-666):
+  get recommendations: failed to get regions: failed to list regions:
+  googleapi: Error 403: Required 'compute.regions.list' permission
+  for 'projects/serene-bazaar-666'
+  ```
 
   The deploy service account that CUDly impersonates for that project
   doesn't have `roles/compute.viewer` (or a custom role that includes
