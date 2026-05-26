@@ -55,7 +55,10 @@ describe('Savings History Module', () => {
       <div id="savings-history-container">
         <canvas id="savings-history-chart"></canvas>
       </div>
-      <div id="savings-history-empty" class="hidden">No data</div>
+      <div id="savings-history-empty" class="hidden">
+        <p>No savings history data available yet.</p>
+        <p class="help-text">Data will be collected hourly once you have active purchases.</p>
+      </div>
       <div id="savings-stats">
         <span id="period-savings">$0</span>
         <span id="avg-hourly-savings">$0/hr</span>
@@ -973,6 +976,90 @@ describe('Savings History Module', () => {
       await loadSavingsHistory();
 
       expect(mockChartInstance.destroy).toHaveBeenCalled();
+    });
+  });
+
+  // Issue #701: when the chart returns no data because a filter is active, the
+  // empty-state message must distinguish "nothing in this scope" from "no data
+  // at all". Without a filter the original message applies; with a filter the
+  // message should name the active filter so the user understands why the chart
+  // is blank.
+  describe('empty-state copy with active filter (issue #701)', () => {
+    test('shows filter name in empty-state heading when provider chip is set', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const heading = emptyEl?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('AWS');
+      expect(heading?.textContent).not.toContain('available yet');
+    });
+
+    test('shows help text asking to broaden filter when a filter is active', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('gcp');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const help = emptyEl?.querySelector('p.help-text');
+      expect(help?.textContent).toMatch(/broaden/i);
+    });
+
+    test('shows original message when no filter is active', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const heading = emptyEl?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('available yet');
+    });
+
+    test('shows filter name in empty-state heading when account chip is set', async () => {
+      const testUUID = 'aabbccdd-1234-5678-abcd-aabbccddee00';
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([testUUID]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const heading = emptyEl?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain(testUUID);
+    });
+
+    test('shows provider and account in heading when both chips are set', async () => {
+      const testUUID = 'aabbccdd-1234-5678-abcd-aabbccddee00';
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('azure');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([testUUID]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const heading = emptyEl?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('AZURE');
+      expect(heading?.textContent).toContain(testUUID);
+    });
+
+    test('shows filter-aware message on API error with active filter', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('network failure'));
+      console.error = jest.fn();
+
+      await loadSavingsHistory();
+
+      const emptyEl = document.getElementById('savings-history-empty');
+      const heading = emptyEl?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('AWS');
     });
   });
 });

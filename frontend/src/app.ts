@@ -12,7 +12,7 @@ import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePur
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
 import { initApiKeys } from './apikeys';
-import { loadHistory } from './history';
+import { loadHistory, setupHistoryHandlers } from './history';
 import { initSavingsHistory } from './modules/savings-history';
 import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
@@ -166,6 +166,12 @@ export function setupEventListeners(): void {
 
   // Setup savings history charts
   initSavingsHistory();
+
+  // Wire provider/account topbar filter chips to Purchase History +
+  // Approval Queue (issue #701). initSavingsHistory above subscribes
+  // the chart; setupHistoryHandlers subscribes the two list consumers
+  // so all three reload together when a chip changes.
+  setupHistoryHandlers();
 
   // Setup feedback link
   setupFeedbackLink();

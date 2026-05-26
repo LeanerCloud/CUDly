@@ -1,7 +1,7 @@
 /**
  * History module tests
  */
-import { initHistoryDateRange, viewPlanHistory, loadHistory } from '../history';
+import { initHistoryDateRange, viewPlanHistory, loadHistory, setupHistoryHandlers } from '../history';
 
 // Mock the dependent modules
 jest.mock('../api', () => ({
@@ -314,6 +314,53 @@ describe('History Module', () => {
         end: '',
         provider: undefined
       });
+    });
+  });
+
+  // Issue #701: setupHistoryHandlers must subscribe to the global topbar
+  // provider/account filter chips so the Purchase History table and
+  // Approval Queue reload when a chip changes. PR #716 fixed the backend
+  // filter params but the frontend subscription was never registered in
+  // app.ts -- adding this suite guards against a regression.
+  describe('setupHistoryHandlers (issue #701)', () => {
+    beforeEach(() => {
+      (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [] });
+    });
+
+    test('registers a callback with state.subscribeProvider', () => {
+      setupHistoryHandlers();
+      expect((require('../state').subscribeProvider as jest.Mock)).toHaveBeenCalledTimes(1);
+    });
+
+    test('registers a callback with state.subscribeAccount', () => {
+      setupHistoryHandlers();
+      expect((require('../state').subscribeAccount as jest.Mock)).toHaveBeenCalledTimes(1);
+    });
+
+    test('provider change triggers loadHistory', async () => {
+      setupHistoryHandlers();
+      const stateModule = require('../state');
+      const providerCb = (stateModule.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof providerCb).toBe('function');
+
+      (api.getHistory as jest.Mock).mockClear();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getHistory).toHaveBeenCalledTimes(1);
+    });
+
+    test('account change triggers loadHistory', async () => {
+      setupHistoryHandlers();
+      const stateModule = require('../state');
+      const accountCb = (stateModule.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+      expect(typeof accountCb).toBe('function');
+
+      (api.getHistory as jest.Mock).mockClear();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getHistory).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -49,7 +49,7 @@ jest.mock('../settings', () => ({
 }));
 jest.mock('../users', () => ({ setupUserHandlers: jest.fn() }));
 jest.mock('../apikeys', () => ({ initApiKeys: jest.fn() }));
-jest.mock('../history', () => ({ loadHistory: jest.fn() }));
+jest.mock('../history', () => ({ loadHistory: jest.fn(), setupHistoryHandlers: jest.fn() }));
 jest.mock('../modules/savings-history', () => ({ initSavingsHistory: jest.fn() }));
 jest.mock('../riexchange', () => ({
   setupRIExchangeHandlers: jest.fn(),
