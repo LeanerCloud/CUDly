@@ -83,16 +83,25 @@ variable "vpc_config" {
   default = null
 }
 
-variable "enable_function_url" {
-  description = "Enable Lambda Function URL"
-  type        = bool
-  default     = true
-}
 
 variable "function_url_auth_type" {
-  description = "Function URL authorization type (NONE or AWS_IAM)"
+  description = <<-EOT
+    Function URL authorization type. Use "AWS_IAM" (default, recommended) when a
+    CloudFront distribution with an OAC is deployed in front of the Function URL —
+    AWS then enforces SigV4 signing on every request so the Function URL is
+    unreachable without a valid AWS identity.
+    Use "NONE" only in environments where direct access without CloudFront is
+    acceptable (e.g. local dev, or environments not yet provisioned with CloudFront).
+    Pair with cloudfront_distribution_arn when switching to AWS_IAM so the module can
+    create the necessary resource-based policy granting CloudFront invocation rights.
+  EOT
   type        = string
-  default     = "NONE"
+  default     = "AWS_IAM"
+
+  validation {
+    condition     = contains(["NONE", "AWS_IAM"], var.function_url_auth_type)
+    error_message = "function_url_auth_type must be \"NONE\" or \"AWS_IAM\"."
+  }
 }
 
 variable "allowed_origins" {

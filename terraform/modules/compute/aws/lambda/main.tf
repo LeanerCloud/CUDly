@@ -115,8 +115,6 @@ resource "aws_lambda_function" "main" {
 # ==============================================
 
 resource "aws_lambda_function_url" "main" {
-  count = var.enable_function_url ? 1 : 0
-
   function_name      = aws_lambda_function.main.function_name
   authorization_type = var.function_url_auth_type
 
@@ -132,9 +130,9 @@ resource "aws_lambda_function_url" "main" {
 # Resource-based policy grant for the Function URL. Without this, every request
 # is rejected at the Lambda edge with HTTP 403 AccessDeniedException, even when
 # authorization_type = "NONE". The AWS provider used to create this implicitly
-# but stopped doing so in recent versions — it must be declared explicitly.
+# but stopped doing so in recent versions -- it must be declared explicitly.
 resource "aws_lambda_permission" "function_url" {
-  count = var.enable_function_url && var.function_url_auth_type == "NONE" ? 1 : 0
+  count = var.function_url_auth_type == "NONE" ? 1 : 0
 
   statement_id           = "FunctionURLAllowPublicAccess"
   action                 = "lambda:InvokeFunctionUrl"

@@ -2,6 +2,29 @@
 # Compute Platform: Lambda (default)
 # ==============================================
 
+# Lambda Function URL auth type is fully derived from enable_cdn. There is no
+# operator-facing variable for it: the two valid combinations are
+#
+#   enable_cdn = false  -> auth_type = "NONE"
+#     The SPA hits the Function URL directly. Browsers cannot SigV4-sign, so
+#     the URL must be unauthenticated at the AWS-IAM layer; auth is enforced
+#     at the application layer (login session, CSRF, API keys).
+#
+#   enable_cdn = true   -> auth_type = "AWS_IAM"
+#     CloudFront fronts the URL with an OAC that SigV4-signs every request
+#     (see frontend module's aws_cloudfront_origin_access_control.lambda).
+#     The Function URL rejects anything not signed by CloudFront's OAC,
+#     closing the public-internet exposure described in #424.
+#
+# Tying the two flags together prevents two specific mis-configurations:
+#   (a) enable_cdn = true with auth_type = "NONE" -> public Lambda URL behind
+#       a pointless CloudFront (security goal of #424 defeated).
+#   (b) enable_cdn = false with auth_type = "AWS_IAM" -> direct browser hits
+#       to Function URL return 403 (no way to sign), site is unreachable.
+locals {
+  lambda_function_url_auth_type = var.enable_cdn ? "AWS_IAM" : "NONE"
+}
+
 module "compute_lambda" {
   source = "../../modules/compute/aws/lambda"
   count  = var.compute_platform == "lambda" ? 1 : 0
@@ -37,8 +60,7 @@ module "compute_lambda" {
   }
 
   # Function URL
-  enable_function_url    = var.lambda_enable_function_url
-  function_url_auth_type = var.lambda_function_url_auth_type
+  function_url_auth_type = local.lambda_function_url_auth_type
   allowed_origins        = var.lambda_allowed_origins
 
   # Concurrency
@@ -203,4 +225,35 @@ module "compute_fargate" {
   # CRITICAL: Wait for resources before creating/updating Fargate
   # Build dependency must be explicit — image_uri is computed before docker push completes
   depends_on = [module.networking, module.database, module.secrets, module.build]
+}
+
+# ==============================================
+# Lambda Function URL: CloudFront OAC permission
+# ==============================================
+#
+# This permission lives at the environment layer (not inside the lambda module)
+# because both module.compute_lambda and module.frontend must be fully resolved
+# before the permission can reference both the Lambda function name and the
+# CloudFront distribution ARN. Placing it inside either module would create a
+# dependency cycle (Lambda URL is module.frontend's origin; distribution ARN
+# would need to feed back into the lambda module).
+#
+# Created only when:
+#   - compute platform is lambda (function URL is active)
+#   - enable_cdn is true (CloudFront distribution is deployed and provides the
+#     source ARN); when enable_cdn = true the local also flips auth_type to
+#     AWS_IAM so the IAM gate is enforced on the Function URL.
+#
+# When enable_cdn = false the Function URL stays NONE (no IAM gate) and this
+# resource is count = 0; the SPA hits the Function URL directly and auth is
+# enforced at the application layer.
+resource "aws_lambda_permission" "function_url_cloudfront" {
+  count = var.compute_platform == "lambda" && var.enable_cdn ? 1 : 0
+
+  statement_id           = "FunctionURLAllowCloudFront"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = module.compute_lambda[0].function_name
+  principal              = "cloudfront.amazonaws.com"
+  source_arn             = module.frontend[0].cloudfront_distribution_arn
+  function_url_auth_type = "AWS_IAM"
 }

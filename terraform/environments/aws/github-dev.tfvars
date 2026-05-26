@@ -18,12 +18,13 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build and push image via terraform apply on the runner
 
 # Lambda Configuration
-lambda_memory_size            = 2048
-lambda_timeout                = 300
-lambda_reserved_concurrency   = -1
-lambda_log_retention_days     = 7
-lambda_enable_function_url    = true
-lambda_function_url_auth_type = "NONE"
+lambda_memory_size          = 2048
+lambda_timeout              = 300
+lambda_reserved_concurrency = -1
+lambda_log_retention_days   = 7
+# Function URL auth_type is derived from enable_cdn (local in compute.tf):
+#   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
+#   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
 # Current deployed dev origin (Lambda Function URL) + local Webpack dev server.
 # Wildcard is rejected by the module (allow_credentials=true + * = any-origin CSRF).
 # Update the Lambda Function URL entry when the dev environment is redeployed.

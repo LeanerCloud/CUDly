@@ -18,15 +18,17 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Lambda Configuration
-lambda_memory_size            = 1024
-lambda_timeout                = 300
-lambda_reserved_concurrency   = -1
-lambda_log_retention_days     = 30
-lambda_enable_function_url    = true
-lambda_function_url_auth_type = "NONE"
+lambda_memory_size          = 1024
+lambda_timeout              = 300
+lambda_reserved_concurrency = -1
+lambda_log_retention_days   = 30
+# Function URL auth_type is derived from enable_cdn (local in compute.tf):
+#   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
+#   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
 # TODO(env-not-deployed): prod environment is not yet provisioned. Update this
 # to the actual prod origin (e.g. the customer-facing dashboard domain) when
-# the env exists. .invalid placeholder fails fast on accidental apply.
+# the env exists. .invalid placeholder ensures any accidental apply fails fast
+# on hostname resolution.
 lambda_allowed_origins = ["https://prod-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
