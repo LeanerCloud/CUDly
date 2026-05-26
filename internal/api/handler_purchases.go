@@ -1503,13 +1503,14 @@ func archeraEducationURL(dashboardBase string) string {
 
 // approvalResponseRecipient returns the email address to surface in the
 // approval_recipient API response field (and therefore in the post-submit toast).
-// It returns globalNotify when set, matching the address the History handler shows
-// for pending rows (resolvePendingApproverEmail also returns globalNotify first).
-// Falls back to to (the per-account contact_email) when globalNotify is empty.
+// It returns globalNotify when set (after trimming whitespace), matching the
+// address the History handler shows for pending rows (resolvePendingApproverEmail
+// also returns globalNotify first). Falls back to to (the per-account
+// contact_email) when globalNotify is empty or whitespace-only.
 // Extracted to keep sendPurchaseApprovalEmail under the cyclomatic-complexity ceiling.
 func approvalResponseRecipient(globalNotify, to string) string {
-	if globalNotify != "" {
-		return globalNotify
+	if trimmed := strings.TrimSpace(globalNotify); trimmed != "" {
+		return trimmed
 	}
 	return to
 }

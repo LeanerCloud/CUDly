@@ -2572,3 +2572,21 @@ func TestResolveOpsHint(t *testing.T) {
 		})
 	}
 }
+
+// TestHandler_approvalResponseRecipient_TrimsWhitespace verifies that a
+// whitespace-only notification_email does not count as set: the contact_email
+// fallback must be used instead, and no whitespace must appear in the response.
+func TestHandler_approvalResponseRecipient_TrimsWhitespace(t *testing.T) {
+	result := approvalResponseRecipient(" \t\n ", "contact@example.com")
+	assert.Equal(t, "contact@example.com", result,
+		"whitespace-only globalNotify must fall back to contact email")
+}
+
+// TestHandler_approvalResponseRecipient_TrimsNonEmptyValue verifies that when
+// notification_email has surrounding whitespace the returned value is trimmed,
+// so no stray spaces appear in the toast or email headers.
+func TestHandler_approvalResponseRecipient_TrimsNonEmptyValue(t *testing.T) {
+	result := approvalResponseRecipient("  cristi@example.com  ", "contact@example.com")
+	assert.Equal(t, "cristi@example.com", result,
+		"globalNotify with surrounding whitespace must be returned trimmed")
+}
