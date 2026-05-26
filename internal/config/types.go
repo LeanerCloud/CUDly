@@ -394,8 +394,9 @@ type RecommendationFilter struct {
 
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no
 // filter" (all plans are returned). Non-empty AccountIDs restricts the result
-// to plans that reference at least one of the given account IDs via the
-// plan_accounts join table.
+// to: (a) plans that reference at least one of the given account IDs via
+// plan_accounts, and (b) plans with no target accounts (universal plans)
+// whose provider matches any of the given accounts.
 type PurchasePlanFilter struct {
 	AccountIDs []string // nil/empty = all plans
 }

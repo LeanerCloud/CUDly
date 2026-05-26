@@ -584,9 +584,20 @@ func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) e
 }
 
 // buildListPlansQuery returns the SQL query and args for ListPurchasePlans.
-// When accountIDs is non-empty the query JOINs plan_accounts and filters
-// on account_id IN ($1, $2, …) using parameterised placeholders so the
-// result is bounded to plans that reference at least one of the given accounts.
+//
+// When accountIDs is empty, all plans are returned.
+//
+// When accountIDs is non-empty, the result includes two categories of plans:
+//  1. Plans explicitly linked to at least one of the given accounts via
+//     plan_accounts (targeted plans).
+//  2. Plans with NO rows in plan_accounts at all (universal plans, i.e. the
+//     Target Account field was left blank, meaning "all accounts of this
+//     provider"). A universal plan is included only when at least one of the
+//     given accounts has a provider that appears in the plan's services JSONB
+//     (each service value carries a "provider" field).
+//
+// The accountIDs slice is passed as a single $1 Postgres array argument so
+// that ANY($1) can be used in both sub-queries without repeating parameters.
 func buildListPlansQuery(accountIDs []string) (query string, args []any) {
 	if len(accountIDs) == 0 {
 		return `
@@ -597,27 +608,43 @@ func buildListPlansQuery(accountIDs []string) (query string, args []any) {
 			ORDER BY created_at DESC
 		`, nil
 	}
-	placeholders := make([]string, len(accountIDs))
-	args = make([]any, len(accountIDs))
-	for i, id := range accountIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-	query = fmt.Sprintf(`
-		SELECT DISTINCT pp.id, pp.name, pp.enabled, pp.auto_purchase, pp.notification_days_before,
+	// A single array argument lets both sub-queries reuse $1.
+	args = []any{accountIDs}
+	query = `
+		SELECT pp.id, pp.name, pp.enabled, pp.auto_purchase, pp.notification_days_before,
 		       pp.services, pp.ramp_schedule, pp.created_at, pp.updated_at,
 		       pp.next_execution_date, pp.last_execution_date, pp.last_notification_sent
 		FROM purchase_plans pp
-		JOIN plan_accounts pa ON pa.plan_id = pp.id
-		WHERE pa.account_id IN (%s)
+		WHERE pp.id IN (
+		    -- targeted plans: explicitly linked to one of the given accounts
+		    SELECT pa.plan_id
+		    FROM plan_accounts pa
+		    WHERE pa.account_id = ANY($1::uuid[])
+
+		    UNION
+
+		    -- universal plans: no target accounts set, provider matches
+		    SELECT pp2.id
+		    FROM purchase_plans pp2
+		    WHERE NOT EXISTS (
+		        SELECT 1 FROM plan_accounts pa2 WHERE pa2.plan_id = pp2.id
+		    )
+		    AND EXISTS (
+		        SELECT 1
+		        FROM cloud_accounts ca
+		        JOIN jsonb_each(pp2.services) AS svc(k, v) ON (v->>'provider') = ca.provider
+		        WHERE ca.id = ANY($1::uuid[])
+		    )
+		)
 		ORDER BY pp.created_at DESC
-	`, strings.Join(placeholders, ", "))
+	`
 	return query, args
 }
 
 // ListPurchasePlans lists purchase plans, optionally filtered by account IDs.
-// When filter.AccountIDs is non-empty the result is limited to plans that
-// reference at least one of those accounts via the plan_accounts join table.
+// When filter.AccountIDs is non-empty the result includes plans that reference
+// at least one of those accounts (via plan_accounts) and universal plans (no
+// target accounts) whose provider matches any of the given accounts.
 func (s *PostgresStore) ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error) {
 	query, args := buildListPlansQuery(filter.AccountIDs)
 	rows, err := s.db.Query(ctx, query, args...)

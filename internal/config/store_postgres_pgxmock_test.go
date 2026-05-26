@@ -320,6 +320,61 @@ func TestPGXMock_ListPurchasePlans_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestPGXMock_ListPurchasePlans_AccountFilter verifies that when AccountIDs is
+// set the query passes a single array arg (the $1 ANY-placeholder used by
+// both sub-queries) and returns the rows the DB produces.  The SQL shape is
+// tested at the query level; end-to-end provider-match logic requires a real
+// Postgres instance and is covered by the DB-integration test suite.
+func TestPGXMock_ListPurchasePlans_AccountFilter(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	accountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	now := time.Now().Truncate(time.Second)
+	svcJSON, _ := json.Marshal(map[string]ServiceConfig{
+		"aws:rds": {Provider: "aws", Service: "rds"},
+	})
+	rampJSON, _ := json.Marshal(RampSchedule{})
+	cols := []string{
+		"id", "name", "enabled", "auto_purchase", "notification_days_before",
+		"services", "ramp_schedule", "created_at", "updated_at",
+		"next_execution_date", "last_execution_date", "last_notification_sent",
+	}
+	rows := pgxmock.NewRows(cols).
+		AddRow("p1", "Targeted Plan", true, false, 3, svcJSON, rampJSON, now, now,
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}).
+		AddRow("p2", "Universal AWS Plan", true, false, 7, svcJSON, rampJSON, now, now,
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
+
+	// The refactored query passes a single array arg for $1.
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
+
+	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{AccountIDs: []string{accountID}})
+	require.NoError(t, err)
+	assert.Len(t, plans, 2)
+	assert.Equal(t, "Targeted Plan", plans[0].Name)
+	assert.Equal(t, "Universal AWS Plan", plans[1].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_ListPurchasePlans_AccountFilterError verifies error propagation
+// when the DB rejects the account-filtered query.
+func TestPGXMock_ListPurchasePlans_AccountFilterError(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).
+		WillReturnError(errors.New("db error"))
+
+	_, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{
+		AccountIDs: []string{"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list purchase plans")
+}
+
 // ─── UpdatePurchasePlan ───────────────────────────────────────────────────────
 
 func TestPGXMock_UpdatePurchasePlan_NotFound(t *testing.T) {
