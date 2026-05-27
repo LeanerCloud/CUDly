@@ -99,11 +99,13 @@ func (s *PostgresStore) ListAccountRegistrations(ctx context.Context, filter Acc
 		idx++
 	}
 	if filter.Search != "" {
+		// Escape ILIKE wildcards so user-supplied % and _ are treated as literals.
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filter.Search)
 		conditions = append(conditions, fmt.Sprintf(
-			"(account_name ILIKE $%d OR external_id ILIKE $%d OR contact_email ILIKE $%d)",
+			"(account_name ILIKE $%d ESCAPE '\\' OR external_id ILIKE $%d ESCAPE '\\' OR contact_email ILIKE $%d ESCAPE '\\')",
 			idx, idx, idx,
 		))
-		args = append(args, "%"+filter.Search+"%")
+		args = append(args, "%"+escaped+"%")
 		idx++
 	}
 
