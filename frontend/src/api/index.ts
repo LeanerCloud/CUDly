@@ -184,6 +184,7 @@ export {
   updateRIExchangeConfig,
   getRIExchangeHistory,
   listTargetOfferings,
+  approveRIExchange
 } from './riexchange';
 
 // Re-export registrations functions and types

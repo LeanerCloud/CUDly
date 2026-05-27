@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
@@ -250,7 +251,7 @@ func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
 		Return((*config.RIExchangeRecord)(nil), nil)
 
-	_, err := h.approveRIExchange(ctx, id, token)
+	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 	assert.Error(t, err)
 	ce, ok := IsClientError(err)
 	assert.True(t, ok)
@@ -280,7 +281,7 @@ func TestApproveRIExchange_DoubleApprove(t *testing.T) {
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
 		Return((*config.RIExchangeRecord)(nil), nil)
 
-	_, err := h.approveRIExchange(ctx, id, token)
+	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 	assert.Error(t, err)
 	ce, ok := IsClientError(err)
 	assert.True(t, ok)
@@ -302,12 +303,171 @@ func TestApproveRIExchange_InvalidToken(t *testing.T) {
 		Status:        "pending",
 	}, nil)
 
-	_, err := h.approveRIExchange(ctx, id, "wrong-token")
+	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, "wrong-token")
 	assert.Error(t, err)
 	ce, ok := IsClientError(err)
 	assert.True(t, ok)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, err.Error(), "invalid approval token")
+}
+
+// TestApproveRIExchange_SessionAdmin verifies that an admin session can approve
+// a pending RI exchange without an email token (issue #300).
+func TestApproveRIExchange_SessionAdmin(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	h := &Handler{config: mockStore, auth: mockAuth}
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440010"
+	creatorID := "creator-uuid"
+
+	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com", Role: "admin"}
+	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
+
+	// authorizeSessionApproveRIExchange: admin role short-circuits (no HasPermissionAPI call)
+
+	// approveRIExchangeViaSession fetches the record to check status
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:              id,
+		Status:          "pending",
+		ApprovalToken:   "tok",
+		SourceRIIDs:     []string{"ri-123"},
+		PaymentDue:      "100.00",
+		CreatedByUserID: &creatorID,
+	}, nil).Once()
+
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil)
+	// executeApprovedExchange calls GetRIExchangeDailySpend + GetGlobalConfig
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	// executeApprovedExchange will call failExchange (no real AWS SDK) which
+	// returns a non-error result map. Since execErr == nil, StampRIExchangeApprovedBy
+	// is called as best-effort audit trail.
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer admin-bearer"},
+	}
+	_, err := h.approveRIExchange(ctx, req, id, "")
+	require.NoError(t, err)
+	// The exchange execution will fail (no real AWS SDK) but we verify the
+	// dispatch reached the session-authed path.
+	mockStore.AssertCalled(t, "GetRIExchangeRecord", ctx, id)
+	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
+	mockStore.AssertCalled(t, "FailRIExchange", ctx, id, mock.AnythingOfType("string"))
+	mockStore.AssertCalled(t, "StampRIExchangeApprovedBy", ctx, id, adminSession.Email)
+}
+
+// TestApproveRIExchange_SessionApproveOwn verifies that a user with approve-own
+// can approve a pending exchange they created, but not one created by another user.
+func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440011"
+	ownerID := "owner-uuid"
+	otherID := "other-uuid"
+
+	t.Run("own exchange allowed", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockAuth := new(MockAuthService)
+		h := &Handler{config: mockStore, auth: mockAuth}
+
+		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com", Role: "user"}
+		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
+		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
+
+		// authorizeSessionApproveRIExchange fetches record for ownership check
+		mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+			ID:              id,
+			Status:          "pending",
+			SourceRIIDs:     []string{"ri-1"},
+			PaymentDue:      "50.00",
+			ApprovalToken:   "tok",
+			CreatedByUserID: &ownerID,
+		}, nil)
+
+		mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+			Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
+		mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+			RIExchangeMaxDailyUSD:       1000,
+			RIExchangeMaxPerExchangeUSD: 500,
+		}, nil)
+		mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+		mockStore.On("StampRIExchangeApprovedBy", ctx, id, ownerSession.Email).Return(nil)
+
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"authorization": "Bearer owner-bearer"},
+		}
+		_, err := h.approveRIExchange(ctx, req, id, "")
+		require.NoError(t, err)
+		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
+	})
+
+	t.Run("other user exchange rejected", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockAuth := new(MockAuthService)
+		h := &Handler{config: mockStore, auth: mockAuth}
+
+		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com", Role: "user"}
+		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
+		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
+		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
+
+		// authorizeSessionApproveRIExchange fetches record — creator does not match
+		mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+			ID:              id,
+			Status:          "pending",
+			ApprovalToken:   "tok",
+			CreatedByUserID: &otherID,
+		}, nil)
+
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"authorization": "Bearer owner-bearer"},
+		}
+		_, err := h.approveRIExchange(ctx, req, id, "")
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 403, ce.code)
+		assert.Contains(t, err.Error(), "cannot approve another user's pending exchange")
+	})
+}
+
+// TestApproveRIExchange_LegacyTokenStillWorks verifies that the token-only path
+// continues to work for non-session callers after the dual-auth refactor (backwards-compat).
+func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	h := &Handler{config: mockStore} // no auth configured -> tryGetSession returns nil
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-446655440012"
+	token := "legacy-token"
+
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID:            id,
+		ApprovalToken: token,
+		Status:        "pending",
+		SourceRIIDs:   []string{"ri-1"},
+		PaymentDue:    "10.00",
+	}, nil)
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+		Return(&config.RIExchangeRecord{ID: id, Status: "processing"}, nil)
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+
+	req := &events.LambdaFunctionURLRequest{}
+	_, err := h.approveRIExchange(ctx, req, id, token)
+	require.NoError(t, err)
+	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
 }
 
 func TestRejectRIExchange_MissingToken(t *testing.T) {

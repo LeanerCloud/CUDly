@@ -129,6 +129,18 @@ func TestPostgresStore_FailRIExchange_NilDB(t *testing.T) {
 	assert.True(t, panicked, "expected panic with nil db connection")
 }
 
+// TestPostgresStore_StampRIExchangeApprovedBy_NilDB exercises the method entry.
+func TestPostgresStore_StampRIExchangeApprovedBy_NilDB(t *testing.T) {
+	store := NewPostgresStore(nil)
+	ctx := context.Background()
+
+	panicked := callWithRecover(func() {
+		_ = store.StampRIExchangeApprovedBy(ctx, "ri-id", "approver@example.com")
+	})
+
+	assert.True(t, panicked, "expected panic with nil db connection")
+}
+
 // TestPostgresStore_GetRIExchangeDailySpend_NilDB exercises the method entry.
 func TestPostgresStore_GetRIExchangeDailySpend_NilDB(t *testing.T) {
 	store := NewPostgresStore(nil)

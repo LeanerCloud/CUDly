@@ -366,7 +366,7 @@ func TestHandler_approveRIExchange_AlreadyProcessed(t *testing.T) {
 		Return(nil, nil)
 
 	h := &Handler{config: mockStore}
-	_, err := h.approveRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
+	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, "11111111-1111-1111-1111-111111111111", "tok")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already processed")
 }
