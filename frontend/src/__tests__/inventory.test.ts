@@ -386,4 +386,27 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     await Promise.resolve();
     expect(api.getCoverageBreakdown).toHaveBeenCalledTimes(2);
   });
+
+  test('coverage bar <th> has non-empty text and aria-label for screen readers', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', [
+          { service: 'ec2', covered_monthly: 100, on_demand_monthly: 100, coverage_pct: 50 },
+        ], 50),
+        makeProviderSection('azure', null, null),
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const headers = Array.from(container.querySelectorAll('thead th'));
+    // The last header column is the coverage bar — it must have a visible
+    // label (not empty string) so screen readers announce the column purpose.
+    const barTh = headers[headers.length - 1];
+    expect(barTh).not.toBeNull();
+    expect(barTh!.textContent).toBe('Coverage bar');
+    expect(barTh!.getAttribute('aria-label')).toBe('Coverage bar');
+  });
 });

@@ -158,6 +158,14 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 		// will show covered-only totals rather than failing the whole page.
 		recs = nil
 	}
+	// Apply the same allowed-accounts scope as the commitments query above so
+	// restricted users cannot infer data from accounts they are not entitled to.
+	if recs != nil {
+		recs, err = h.filterRecommendationsByAllowedAccounts(ctx, session, recs)
+		if err != nil {
+			return nil, err
+		}
+	}
 	onDemandByKey := make(map[string]float64)
 	for _, rec := range recs {
 		onDemandByKey[rec.Provider+":"+rec.Service] += rec.Savings

@@ -10,7 +10,7 @@ package api
 // minimal: just enough to confirm the filter passes when accounts match so we
 // know the test would fail for the right reason if the enforcement were removed.
 //
-// Endpoints covered (8 total):
+// Endpoints covered (9 total):
 //   1. GET /recommendations          (filterRecommendationsByAllowedAccounts)
 //   2. GET /recommendations/:id      (getRecommendationDetail — cross-account rejection)
 //   3. GET /history                  (filterPurchaseHistoryByAllowedAccounts)
@@ -19,6 +19,7 @@ package api
 //   6. GET /dashboard/summary        (filterDashboardRecommendations — aggregate subset)
 //   7. POST /purchases/execute       (validatePurchaseRecommendationScope — 403)
 //   8. GET /purchases/planned list   (requireExecutionAccess / requirePlanAccess — 404)
+//   9. GET /inventory/coverage       (filterRecommendationsByAllowedAccounts on recs leg)
 
 import (
 	"context"
@@ -724,6 +725,161 @@ func TestPerAccountPerms_PlannedPurchase_CrossAccountPlanRejected404(t *testing.
 		"cross-account execution access must return 404; got: %v", err)
 
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+// ─── 9. GET /inventory/coverage ──────────────────────────────────────────────
+
+// TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts asserts
+// that a scoped user's coverage response aggregates on-demand savings only from
+// account-A recommendations — account-B savings must be excluded from the
+// onDemandByKey accumulation so the coverage% is not inflated by inaccessible data.
+//
+// Regression: if filterRecommendationsByAllowedAccounts is removed from
+// getCoverageBreakdown's recommendations leg, the account-B savings (200)
+// pollute onDemandByKey and the aws:ec2 on_demand_monthly in the response rises
+// from 200 to 400, lowering the coverage% from 50% to 33%.
+func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *testing.T) {
+	ctx := context.Background()
+
+	now := time.Now()
+	// Active commitment for account A: contributes to covered side.
+	purchaseA := config.PurchaseHistoryRecord{
+		AccountID:   permsAccA,
+		PurchaseID:  "p-cov-a",
+		Provider:    "aws",
+		Service:     "ec2",
+		Timestamp:   now.AddDate(0, -6, 0),
+		Term:        1,
+		MonthlyCost: 200.0,
+	}
+
+	// Recommendation for account A: on-demand gap the scoped user is allowed to see.
+	recA := config.RecommendationRecord{
+		ID:             "rec-cov-a",
+		Provider:       "aws",
+		Service:        "ec2",
+		CloudAccountID: permsPtr(permsAccA),
+		Savings:        200.0,
+	}
+	// Recommendation for account B: must be excluded for the scoped user.
+	recB := config.RecommendationRecord{
+		ID:             "rec-cov-b",
+		Provider:       "aws",
+		Service:        "ec2",
+		CloudAccountID: permsPtr(permsAccB),
+		Savings:        200.0,
+	}
+
+	mockSched := new(MockScheduler)
+	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+		Return([]config.RecommendationRecord{recA, recB}, nil)
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	handler := &Handler{
+		auth:      scopedAuthMock(ctx),
+		scheduler: mockSched,
+		config:    mockStore,
+	}
+
+	result, err := handler.getCoverageBreakdown(ctx, scopedReq(), map[string]string{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	resp, ok := result.(CoverageBreakdownResponse)
+	require.True(t, ok)
+
+	var aws *ProviderCoverageSection
+	for i := range resp.Providers {
+		if resp.Providers[i].Provider == "aws" {
+			aws = &resp.Providers[i]
+			break
+		}
+	}
+	require.NotNil(t, aws, "aws provider section must be present")
+	require.NotNil(t, aws.Services, "aws must have service rows")
+	require.Len(t, aws.Services, 1)
+
+	ec2 := aws.Services[0]
+	assert.Equal(t, "ec2", ec2.Service)
+	assert.Equal(t, 200.0, ec2.CoveredMonthly, "covered side must reflect account-A commitment")
+	assert.Equal(t, 200.0, ec2.OnDemandMonthly,
+		"on-demand side must include only account-A rec (200); account-B rec (200) must be excluded")
+	// coverage = 200/(200+200) * 100 = 50%
+	require.NotNil(t, ec2.CoveragePct)
+	assert.InDelta(t, 50.0, *ec2.CoveragePct, 0.001,
+		"coverage must be computed from account-A data only; account-B leak would give ~33%%")
+}
+
+// TestPerAccountPerms_CoverageBreakdown_AdminSeesAll confirms that an
+// unrestricted session aggregates both accounts — the positive path through
+// IsUnrestrictedAccess so the test above cannot pass by dropping all records.
+func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
+	ctx := context.Background()
+
+	now := time.Now()
+	purchaseA := config.PurchaseHistoryRecord{
+		AccountID:   permsAccA,
+		PurchaseID:  "p-cov-admin-a",
+		Provider:    "aws",
+		Service:     "ec2",
+		Timestamp:   now.AddDate(0, -6, 0),
+		Term:        1,
+		MonthlyCost: 200.0,
+	}
+	recA := config.RecommendationRecord{
+		Provider: "aws", Service: "ec2",
+		CloudAccountID: permsPtr(permsAccA), Savings: 200.0,
+	}
+	recB := config.RecommendationRecord{
+		Provider: "aws", Service: "ec2",
+		CloudAccountID: permsPtr(permsAccB), Savings: 200.0,
+	}
+
+	mockSched := new(MockScheduler)
+	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+		Return([]config.RecommendationRecord{recA, recB}, nil)
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockSched,
+		config:    mockStore,
+	}
+
+	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp, ok := result.(CoverageBreakdownResponse)
+	require.True(t, ok)
+
+	var aws *ProviderCoverageSection
+	for i := range resp.Providers {
+		if resp.Providers[i].Provider == "aws" {
+			aws = &resp.Providers[i]
+			break
+		}
+	}
+	require.NotNil(t, aws)
+	require.Len(t, aws.Services, 1)
+	// Admin sees both recs: on_demand = 200+200 = 400; coverage = 200/600 * 100 = 33.3%
+	assert.Equal(t, 400.0, aws.Services[0].OnDemandMonthly,
+		"admin must see both accounts' on-demand gap (200+200)")
+	require.NotNil(t, aws.Services[0].CoveragePct)
+	assert.InDelta(t, 33.333, *aws.Services[0].CoveragePct, 0.01,
+		"admin coverage = 200/(200+400) * 100 = 33.3%%")
 }
 
 // TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds is the paired

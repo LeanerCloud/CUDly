@@ -316,9 +316,12 @@ function buildServiceTable(rows: CoverageServiceRow[]): HTMLTableElement {
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Service', 'Covered/mo', 'On-demand gap/mo', 'Coverage %', '']) {
+  for (const label of ['Service', 'Covered/mo', 'On-demand gap/mo', 'Coverage %', 'Coverage bar']) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'Coverage bar') {
+      th.setAttribute('aria-label', 'Coverage bar');
+    }
     headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
