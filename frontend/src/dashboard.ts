@@ -33,6 +33,17 @@ let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 let upcomingPurchasesIndex: Map<string, UpcomingPurchase> = new Map();
 
 /**
+ * True when the Home tab is the currently-visible tab. Used by the
+ * reload-on-filter-change subscriptions below to skip the fetch (and
+ * the resulting skeleton flash) when the user is on another tab —
+ * switchTab('home') calls loadDashboard() on entry anyway.
+ * Mirrors the isPurchasesTabActive() guard in modules/savings-history.ts.
+ */
+function isHomeTabActive(): boolean {
+  return document.getElementById('home-tab')?.classList.contains('active') === true;
+}
+
+/**
  * Setup dashboard event handlers
  */
 export function setupDashboardHandlers(): void {
@@ -41,8 +52,27 @@ export function setupDashboardHandlers(): void {
   // the issue #185 ordering rule (clear accounts before refetching for a
   // new provider) is enforced by topbar-filters.ts at the source so the
   // dashboard's loadDashboard() always sees consistent state.
-  state.subscribeProvider(() => void loadDashboard());
-  state.subscribeAccount(() => void loadDashboard());
+  //
+  // Coalescing: the provider-change handler in topbar-filters.ts fires
+  // BOTH the account subscriber (setCurrentAccountIDs([])) AND the
+  // provider subscriber (setCurrentProvider(newProv)) synchronously.
+  // Without coalescing, two loadDashboard() calls race back-to-back.
+  // queueMicrotask defers the actual fetch to after the current call
+  // stack clears, so the two fires collapse into one reload.
+  // Active-tab guard: skip the fetch when the Home tab is not visible;
+  // switchTab('home') triggers loadDashboard() on entry.
+  // Mirrors the scheduleReload pattern in modules/savings-history.ts.
+  let dashboardReloadQueued = false;
+  const scheduleDashboardReload = (): void => {
+    if (!isHomeTabActive() || dashboardReloadQueued) return;
+    dashboardReloadQueued = true;
+    queueMicrotask(() => {
+      dashboardReloadQueued = false;
+      if (isHomeTabActive()) void loadDashboard();
+    });
+  };
+  state.subscribeProvider(scheduleDashboardReload);
+  state.subscribeAccount(scheduleDashboardReload);
 
   setupSavingsTrendHandlers();
 }
@@ -577,6 +607,19 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
 }
 
 /**
+ * Build a short human-readable description of the active topbar filter
+ * for use in the Savings Trend empty-state message. Returns '' when no
+ * filter is active so callers can distinguish "unfiltered empty" from
+ * "filtered empty". Mirrors buildFilterDesc() in modules/savings-history.ts.
+ */
+function buildTrendFilterDesc(provider: string, accountIDs: readonly string[]): string {
+  const parts: string[] = [];
+  if (provider && provider.toLowerCase() !== 'all') parts.push(provider.toUpperCase());
+  if (accountIDs.length > 0) parts.push(accountIDs[0] ?? '');
+  return parts.join(', ');
+}
+
+/**
  * Load the savings-over-time trend chart for the dashboard. Fetches the
  * history analytics endpoint with the currently-selected range and
  * renders a line chart of cumulative savings. Failure modes (analytics
@@ -597,6 +640,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // filter is single-select so we pass the only selected ID or omit to
     // query all accessible accounts.
     const accountIDs = state.getCurrentAccountIDs();
+    const currentProvider = state.getCurrentProvider();
     const data = await api.getSavingsAnalytics({
       start: start.toISOString(),
       end: end.toISOString(),
@@ -606,7 +650,16 @@ export async function loadSavingsTrendChart(): Promise<void> {
     if (!data.data_points || data.data_points.length === 0) {
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
       canvas.classList.add('hidden');
-      empty?.classList.remove('hidden');
+      if (empty) {
+        // Build a short description of the active filter so the empty-state
+        // copy distinguishes "no purchases exist yet" from "nothing in the
+        // selected scope". Mirrors modules/savings-history.ts showEmptyState().
+        const filterDesc = buildTrendFilterDesc(currentProvider, accountIDs);
+        empty.textContent = filterDesc
+          ? `No savings data for the selected filter (${filterDesc}).`
+          : 'No purchase history yet — the chart will populate once you start executing plans.';
+        empty.classList.remove('hidden');
+      }
       attachSparkline('ytd', []);
       return;
     }
