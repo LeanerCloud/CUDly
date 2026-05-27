@@ -273,17 +273,31 @@ func TestSQLPricingStructure(t *testing.T) {
 	assert.Equal(t, 50.0, pricing.SavingsPercentage)
 }
 
-func TestCloudSQLClient_ValidateOffering_NoCredentials(t *testing.T) {
+// TestCloudSQLClient_ValidateOffering_TierListError verifies that an error
+// from the SQLAdmin tier-list call propagates through ValidateOffering.
+//
+// The previous variant of this test relied on absent application-default
+// credentials to trigger the error path. That approach is environment-
+// sensitive: machines with ADC configured (CI runners, developer laptops with
+// gcloud auth) return nil from sqladmin.NewService, causing a false pass.
+// Using an injected mock that always errors is deterministic regardless of
+// the host environment. See issue #251.
+func TestCloudSQLClient_ValidateOffering_TierListError(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockService := &MockSQLAdminService{
+		err: errors.New("injected tier-list failure"),
+	}
+	client.SetSQLAdminService(mockService)
 
 	rec := common.Recommendation{
 		ResourceType: "db-n1-standard-1",
 	}
 
-	// Will fail without credentials
 	err := client.ValidateOffering(ctx, rec)
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list SQL tiers")
 }
 
 func TestCloudSQLClient_GetExistingCommitments_WithMock(t *testing.T) {

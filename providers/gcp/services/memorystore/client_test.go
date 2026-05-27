@@ -291,87 +291,36 @@ func TestMemorystoreClient_ValidateOffering_InvalidTier(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid Memorystore tier")
 }
 
-func TestMemorystoreClient_GetExistingCommitments_WithMockService(t *testing.T) {
-	tests := []struct {
-		name        string
-		instances   []*redispb.Instance
-		err         error
-		wantLen     int
-		wantErr     bool
-		errContains string
-	}{
-		{
-			name: "returns commitments for instances with reserved IP",
-			instances: []*redispb.Instance{
-				{
-					Name:            "projects/test/locations/us-central1/instances/redis-1",
-					ReservedIpRange: "10.0.0.0/29",
-					State:           redispb.Instance_READY,
-					Tier:            redispb.Instance_STANDARD_HA,
-				},
-				{
-					Name:            "projects/test/locations/us-central1/instances/redis-2",
-					ReservedIpRange: "", // No reserved IP, should be skipped
-					State:           redispb.Instance_READY,
-					Tier:            redispb.Instance_BASIC,
-				},
-				{
-					Name:            "projects/test/locations/us-central1/instances/redis-3",
-					ReservedIpRange: "10.0.0.8/29",
-					State:           redispb.Instance_CREATING,
-					Tier:            redispb.Instance_BASIC,
-				},
-			},
-			wantLen: 2,
-			wantErr: false,
-		},
-		{
-			name:      "returns empty when no instances",
-			instances: []*redispb.Instance{},
-			wantLen:   0,
-			wantErr:   false,
-		},
-		{
-			name:        "returns error when list fails",
-			instances:   nil,
-			err:         errors.New("list failed"),
-			wantLen:     0,
-			wantErr:     true,
-			errContains: "failed to list redis instances",
-		},
+// TestMemorystoreClient_GetExistingCommitments_Stub verifies the documented
+// stub behaviour: the GCP Memorystore Redis API does not expose commitment
+// status — ReservedIpRange is the VPC-peering CIDR, not a commitment
+// indicator. The production code returns (nil, nil) and the injected
+// redisService is intentionally never called from this path.
+//
+// If a future implementation adds real commitment detection here, this test
+// must be updated to match — do NOT silently swap in the mock-based variant
+// that was previously merged (it asserted behaviour the production code never
+// implemented, causing false CI failures).
+func TestMemorystoreClient_GetExistingCommitments_Stub(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Inject a service that would error if called — verifies the stub does
+	// not accidentally touch the redis service.
+	sentinel := &MockRedisService{
+		instancesErr: errors.New("redis service must not be called from stub"),
 	}
+	client.SetRedisService(sentinel)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			client, _ := NewClient(ctx, "test-project", "us-central1")
+	commitments, err := client.GetExistingCommitments(ctx)
 
-			mockService := &MockRedisService{
-				instances:    tt.instances,
-				instancesErr: tt.err,
-			}
-			client.SetRedisService(mockService)
+	require.NoError(t, err, "stub must not error")
+	assert.Nil(t, commitments, "stub must return nil until real detection is implemented")
 
-			commitments, err := client.GetExistingCommitments(ctx)
-
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
-			} else {
-				require.NoError(t, err)
-				assert.Len(t, commitments, tt.wantLen)
-
-				for _, c := range commitments {
-					assert.Equal(t, common.ProviderGCP, c.Provider)
-					assert.Equal(t, common.ServiceCache, c.Service)
-					assert.Equal(t, "test-project", c.Account)
-					assert.Equal(t, "us-central1", c.Region)
-				}
-			}
-
-			assert.True(t, mockService.closeCalled)
-		})
-	}
+	// Close must NOT have been called: the stub returns before creating any
+	// client, so there is nothing to close. Asserting false here documents
+	// that the stub owns the lifecycle correctly.
+	assert.False(t, sentinel.closeCalled, "stub must not close a service it never opened")
 }
 
 // TestMemorystoreClient_PurchaseCommitment_NotSupported is the regression test for
