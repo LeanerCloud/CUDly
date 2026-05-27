@@ -665,10 +665,15 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //     multi-rec basket that spans providers (e.g. aws+azure) matches any of
 //     them — dropping such an execution because its collapsed display label
 //     is "multiple" would hide real activity the user owns.
-//   - Account: matches when the execution's CloudAccountID is one of the
-//     filtered IDs. Executions with a NULL CloudAccountID are excluded once
-//     account_ids is non-empty, mirroring the SQL semantics on
-//     purchase_history.cloud_account_id (issue #211).
+//   - Account: matches when the execution's effective account ID is one of the
+//     filtered IDs. The effective account ID is exec.CloudAccountID when set;
+//     otherwise collapseRecommendationAccount(exec.Recommendations) provides
+//     the fallback, matching the same logic used in executionToHistoryRow.
+//     Web-initiated bulk purchases never set exec.CloudAccountID — only the
+//     per-rec field is populated — so without this fallback an account-filtered
+//     approval queue would silently drop all pending web purchases (issue #704).
+//     An execution whose effective account ID is "" (nil exec field AND recs
+//     disagree or have no account) is excluded once account_ids is non-empty.
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
 //     both sides; End is the end-of-day for YYYY-MM-DD inputs.
 func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
@@ -682,10 +687,18 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 		// LegacyAccountID is intentionally NOT folded here because it is a
 		// different (VARCHAR(20)) cloud-provider account number that the
 		// fast path applies on the SQL side.
-		if exec.CloudAccountID == nil {
-			return false
+		//
+		// Use the same two-level account resolution as executionToHistoryRow:
+		// exec.CloudAccountID first, then the rec-level fallback. This ensures
+		// web bulk-purchase executions (exec.CloudAccountID == nil) are not
+		// silently dropped when the caller filters by account.
+		var accountID string
+		if exec.CloudAccountID != nil {
+			accountID = *exec.CloudAccountID
+		} else {
+			accountID = collapseRecommendationAccount(exec.Recommendations)
 		}
-		if !stringInSlice(*exec.CloudAccountID, f.AccountIDs) {
+		if accountID == "" || !stringInSlice(accountID, f.AccountIDs) {
 			return false
 		}
 	}

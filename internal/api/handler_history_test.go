@@ -747,7 +747,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		}
 		assert.True(t, ids["exec-in-A"], "execution in account A must survive the filter")
 		assert.False(t, ids["exec-in-C"], "execution in unrelated account C must be filtered out")
-		assert.False(t, ids["exec-nil-account"], "execution with NULL CloudAccountID must be excluded once account_ids is non-empty")
+		assert.False(t, ids["exec-nil-account"], "execution with NULL exec.CloudAccountID AND no rec-level CloudAccountID must still be excluded (effective account is empty)")
 	})
 
 	t.Run("legacy singular account_id is ignored when combined with new filters", func(t *testing.T) {
@@ -1244,7 +1244,63 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 		require.Len(t, resp.Purchases, 1)
 		row := resp.Purchases[0]
 
-		assert.Empty(t, row.Payment, "Payment must collapse to empty when recs disagree — the dash fallback is more honest than a single arbitrary value (#733)")
+		assert.Empty(t, row.Payment, "Payment must collapse to empty when recs disagree - the dash fallback is more honest than a single arbitrary value (#733)")
+	})
+
+	t.Run("account_ids filter matches pending row via rec-level fallback when exec.CloudAccountID is nil", func(t *testing.T) {
+		// Regression: matchesExecution previously rejected executions with a nil
+		// exec.CloudAccountID even when the rec carried the matching UUID. Web
+		// bulk-purchase flows only populate the per-rec CloudAccountID, so an
+		// account-filtered approval queue would silently drop all web-initiated
+		// pending rows. The fix makes matchesExecution apply the same two-level
+		// fallback as executionToHistoryRow (issue #704, CR #738).
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		recAccountID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		monthly := 9.0
+		pending := []config.PurchaseExecution{
+			{
+				ExecutionID:   "pend-nil-exec-account",
+				Status:        "pending",
+				ScheduledDate: time.Now(),
+				// exec.CloudAccountID intentionally nil - mirrors web bulk-purchase
+				// flow. The rec carries the canonical account UUID.
+				Recommendations: []config.RecommendationRecord{
+					{
+						Provider:       "aws",
+						Service:        "ec2",
+						Region:         "us-east-1",
+						ResourceType:   "m5.large",
+						Term:           1,
+						Payment:        "no-upfront",
+						Count:          1,
+						UpfrontCost:    0.0,
+						MonthlyCost:    &monthly,
+						CloudAccountID: &recAccountID,
+					},
+				},
+			},
+		}
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
+		// account_ids is set, so fetchPurchaseHistory routes to GetPurchaseHistoryFiltered
+		// (not GetAllPurchaseHistory). No DB rows needed; we only care about the
+		// execution path.
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string{recAccountID}, (*time.Time)(nil), (*time.Time)(nil), 100).
+			Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": recAccountID})
+		require.NoError(t, err)
+		resp := result.(HistoryResponse)
+		require.Len(t, resp.Purchases, 1, "pending row must survive the account_ids filter via rec-level CloudAccountID fallback")
+		row := resp.Purchases[0]
+
+		assert.Equal(t, recAccountID, row.AccountID, "AccountID must be resolved from the rec when exec.CloudAccountID is nil (#704)")
 	})
 }
 
