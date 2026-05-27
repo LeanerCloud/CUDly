@@ -295,6 +295,38 @@ describe('History Module', () => {
       expect(html).not.toContain('>Completed<');
     });
 
+    // Issue #706: partially_completed rows counted in the Completed chip bucket
+    // but excluded from the chip filter. Clicking "Completed" must show ALL rows
+    // that the chip counted -- including partially_completed ones.
+    test('Completed chip shows partially_completed rows (issue #706)', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          { purchase_id: 'comp-1', status: 'completed', provider: 'aws', region: 'us-east-1' },
+          { purchase_id: 'part-1', status: 'partially_completed', provider: 'aws', region: 'us-east-1' },
+          { purchase_id: 'fail-1', status: 'failed', provider: 'aws', region: 'us-east-1' },
+        ],
+      });
+
+      await loadHistory();
+
+      const list = document.getElementById('history-list');
+
+      // Before clicking: verify the Completed chip counts 2 (comp-1 + part-1).
+      const completedChip = list?.querySelector<HTMLButtonElement>('[data-history-status="completed"]');
+      expect(completedChip?.textContent).toContain('2');
+
+      // Click the Completed chip -- triggers re-render via renderHistoryList.
+      completedChip?.click();
+
+      const html = list?.innerHTML || '';
+      // Both the clean success and the partial success must be visible.
+      expect(html).toContain('comp-1');
+      expect(html).toContain('part-1');
+      // The failed row must be hidden.
+      expect(html).not.toContain('fail-1');
+    });
+
     test('handles empty provider filter', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         summary: {},
