@@ -21,6 +21,27 @@ Chart.register(...registerables);
 let savingsTrendChart: Chart | null = null;
 let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 
+// Chart instance for the per-service savings-range bar chart (issue #765).
+let savingsByServiceChart: Chart | null = null;
+
+// Maximum number of services to show in the bar chart before truncating.
+const SAVINGS_BY_SERVICE_MAX = 10;
+
+// Default palette for per-service bars. Cycles if there are more services
+// than colours; alpha variant is computed inline so the array stays short.
+const SERVICE_BAR_COLORS = [
+  '#1a73e8', // blue
+  '#34a853', // green
+  '#fbbc04', // yellow
+  '#ea4335', // red
+  '#9c27b0', // purple
+  '#00bcd4', // cyan
+  '#ff5722', // deep-orange
+  '#607d8b', // blue-grey
+  '#795548', // brown
+  '#4caf50', // light-green
+];
+
 // In-memory index of the currently-rendered upcoming purchases, keyed by
 // execution_id. The "View Details" affordance renders from this — the
 // /api/dashboard/upcoming response already carries every field the
@@ -299,7 +320,7 @@ function attachSparkline(key: string, values: readonly number[]): void {
   svg.appendChild(polyline);
 }
 
-export const __test__ = { sparklinePoints, attachSparkline };
+export const __test__ = { sparklinePoints, attachSparkline, computeServiceStats };
 
 function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
   const ctx = document.getElementById('savings-chart') as HTMLCanvasElement | null;
@@ -613,6 +634,190 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
 }
 
 /**
+ * Per-service savings statistics derived from a window of data points.
+ * Exported for unit testing only.
+ */
+export interface ServiceSavingsStats {
+  min: number;
+  max: number;
+  sum: number;
+  count: number;
+  samples: number[];
+}
+
+/**
+ * Compute per-service savings stats from an array of data points. Each
+ * data point carries a by_service map of { serviceName: savingsValue }.
+ * Points with no by_service entry (omitempty from backend) are skipped.
+ * Exported for unit testing.
+ */
+export function computeServiceStats(
+  dataPoints: readonly SavingsDataPoint[],
+): Map<string, ServiceSavingsStats> {
+  const stats = new Map<string, ServiceSavingsStats>();
+  for (const dp of dataPoints) {
+    if (!dp.by_service) continue;
+    for (const [svc, val] of Object.entries(dp.by_service)) {
+      if (typeof val !== 'number') continue;
+      const existing = stats.get(svc);
+      if (existing) {
+        existing.min = Math.min(existing.min, val);
+        existing.max = Math.max(existing.max, val);
+        existing.sum += val;
+        existing.count += 1;
+        existing.samples.push(val);
+      } else {
+        stats.set(svc, { min: val, max: val, sum: val, count: 1, samples: [val] });
+      }
+    }
+  }
+  return stats;
+}
+
+/**
+ * Compute the median of a sorted sample array.
+ * Returns 0 for an empty array.
+ */
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+/**
+ * Render the per-service savings-range stacked bar chart (issue #765).
+ * Accepts the same data_points array as the trend line chart.
+ *
+ * Each bar is split into two stacked datasets:
+ *   - "Floor"  (solid): height = min savings observed across the window.
+ *   - "Range"  (translucent 35% opacity): height = max - min (the upside).
+ *
+ * Services are sorted by max savings descending; the top SAVINGS_BY_SERVICE_MAX
+ * are shown. When truncated, the section heading notes "+N more".
+ *
+ * Empty state: when no service has positive savings, the canvas is hidden and
+ * the empty-state paragraph is shown.
+ */
+export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]): void {
+  const canvas = document.getElementById('savings-by-service-chart') as HTMLCanvasElement | null;
+  const emptyEl = document.getElementById('savings-by-service-empty');
+  const section = document.getElementById('savings-by-service-section');
+  if (!canvas) return;
+
+  // Destroy existing chart before rebuilding.
+  if (savingsByServiceChart) {
+    savingsByServiceChart.destroy();
+    savingsByServiceChart = null;
+  }
+
+  const stats = computeServiceStats(dataPoints);
+  const heading = section?.querySelector('h3');
+
+  // Filter to services with positive savings, then sort by max desc.
+  const positive = Array.from(stats.entries()).filter(([, s]) => s.max > 0);
+  positive.sort((a, b) => b[1].max - a[1].max);
+
+  if (positive.length === 0) {
+    if (heading) heading.textContent = 'Savings range by service';
+    canvas.classList.add('hidden');
+    emptyEl?.classList.remove('hidden');
+    return;
+  }
+
+  canvas.classList.remove('hidden');
+  emptyEl?.classList.add('hidden');
+
+  // Cap at maximum and update heading with "+N more" if truncated.
+  const truncated = positive.length > SAVINGS_BY_SERVICE_MAX;
+  const visible = positive.slice(0, SAVINGS_BY_SERVICE_MAX);
+  if (heading) {
+    heading.textContent = truncated
+      ? `Savings range by service (+${positive.length - SAVINGS_BY_SERVICE_MAX} more)`
+      : 'Savings range by service';
+  }
+
+  const labels = visible.map(([svc]) => svc);
+  const floorData = visible.map(([, s]) => s.min);
+  const rangeData = visible.map(([, s]) => s.max - s.min);
+  const totalSavings = Array.from(stats.values()).reduce((acc, s) => acc + s.max, 0);
+
+  // Assign a colour per service (cycles if more than palette length).
+  const bgColors = visible.map((_, i) => SERVICE_BAR_COLORS[i % SERVICE_BAR_COLORS.length] ?? '#1a73e8');
+  const rangeColors = bgColors.map(c => {
+    // Convert solid hex to rgba at 0.35 opacity for the range segment.
+    const hex = c.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},0.35)`;
+  });
+
+  savingsByServiceChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Floor',
+          data: floorData,
+          backgroundColor: bgColors,
+          borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
+          stack: 'savings',
+        },
+        {
+          label: 'Range',
+          data: rangeData,
+          backgroundColor: rangeColors,
+          borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+          stack: 'savings',
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { boxWidth: 12 },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const svc = ctx.label ?? '';
+              const s = stats.get(svc);
+              if (!s) return '';
+              const pct = totalSavings > 0 ? ((s.max / totalSavings) * 100).toFixed(1) : '0.0';
+              const med = medianOf(s.samples);
+              return [
+                `Service: ${svc}`,
+                `Min: $${s.min.toLocaleString()}`,
+                `Median: $${med.toLocaleString()}`,
+                `Max: $${s.max.toLocaleString()}`,
+                `Samples: ${s.count}`,
+                `% of total: ${pct}%`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
+        },
+      },
+    },
+  });
+}
+
+/**
  * Format a millisecond timestamp for the savings-trend x-axis tick label.
  * Exported for unit testing.
  */
@@ -726,10 +931,17 @@ export async function loadSavingsTrendChart(): Promise<void> {
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
       attachSparkline('ytd', []);
+      // Show empty state for the per-service bar chart as well.
+      renderSavingsByService([]);
       return;
     }
     canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
+
+    // Per-service savings-range bar chart (issue #765). Shares the same
+    // data_points response so no extra fetch is needed. The YTD sparkline
+    // is already populated earlier in this function via attachSparkline.
+    renderSavingsByService(data.data_points);
 
     if (savingsTrendChart) savingsTrendChart.destroy();
 
@@ -786,6 +998,8 @@ export async function loadSavingsTrendChart(): Promise<void> {
       empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');
     }
+    // Degrade the per-service bar chart to its empty state too.
+    renderSavingsByService([]);
   }
 }
 
