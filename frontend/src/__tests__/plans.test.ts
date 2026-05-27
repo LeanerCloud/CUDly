@@ -838,6 +838,36 @@ describe('Plans Module', () => {
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to pause purchase: API Error' }));
     });
+
+    test('edit action calls getPlan with plan_id, not the purchase id (#773)', async () => {
+      // The purchase row has id="purchase-1" and plan_id="plan-1".
+      // Before the fix, editPlan received "purchase-1", causing GET /plans/purchase-1
+      // to return 404 and surfacing "Failed to load plan details".
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        id: 'plan-1',
+        name: 'Test Plan',
+        enabled: true,
+        auto_purchase: false,
+        notification_days_before: 3,
+        services: {
+          ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 80 },
+        },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 },
+      });
+
+      const editBtn = document.querySelector('[data-action="edit"]') as HTMLButtonElement;
+      editBtn?.click();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Must use the plan FK, not the purchase PK.
+      expect(api.getPlan).toHaveBeenCalledWith('plan-1');
+      expect(api.getPlan).not.toHaveBeenCalledWith('purchase-1');
+      // No error toast should fire.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Failed to load plan details' }),
+      );
+    });
   });
 
   describe('resume action for paused purchase', () => {
