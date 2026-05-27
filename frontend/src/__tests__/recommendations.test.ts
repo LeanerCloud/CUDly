@@ -336,13 +336,13 @@ describe('Recommendations Module', () => {
       // No selection: cards reflect the full visible set.
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
       await loadRecommendations();
-      expect(cardValue(/Recommendations/)).toBe('2'); // 2 cells, not 4 variants
+      expect(cardValue(/Recommendations/)).toBe('4'); // 4 variants (closes #748: KPI now matches "Showing of")
       expect(cardValue(/Monthly Savings/)).toMatch(/\$300\b/);
       expect(cardValue(/Monthly Savings/)).toMatch(/\$400\b/);
       expect(cardValue(/Upfront/)).toMatch(/\$0\b/);
       expect(cardValue(/Upfront/)).toMatch(/\$3,?000\b/);
       // Card titles reflect the "all visible" mode.
-      expect(cardTitle(/^2$/)).toBe('Total Recommendations');
+      expect(cardTitle(/^4$/)).toBe('Total Recommendations');
 
       // Tick one cell's pricey variant: cards narrow to that one rec.
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['cell1-pricey']));
@@ -360,6 +360,48 @@ describe('Recommendations Module', () => {
       expect(cardValue(/Recommendations/)).toBe('2');
       expect(cardValue(/Monthly Savings/)).toMatch(/^\$350$/); // 150 + 200
       expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/); // 1000 + 0
+    });
+
+    test('KPI "Total Recommendations" and "Showing X of X" agree on the same variant count (closes #748)', async () => {
+      // 2 cells, 2 variants each = 4 total variants.
+      // Before #748 the KPI showed 2 (cell count) while "Showing of" showed 4
+      // (variant count). After the fix both display 4.
+      const recs = [
+        { id: 'cell1-v1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-v2', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'cell2-v1', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 200, upfront_cost: 0 },
+        { id: 'cell2-v2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 250, upfront_cost: 2000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 700, total_upfront_cost: 3000, avg_payback_months: 2 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      await loadRecommendations();
+
+      // KPI card value.
+      const summary = document.getElementById('recommendations-summary');
+      const kpiCard = Array.from(summary?.querySelectorAll('.card') ?? [])
+        .find((c) => /Recommendations/.test(c.querySelector('h3')?.textContent ?? ''));
+      const kpiValue = kpiCard?.querySelector('.value')?.textContent ?? '';
+
+      // "Showing X of X" live region value.
+      const liveText = document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      const match = liveText.match(/Showing (\d+) of (\d+)/);
+      const showingVisible = match?.[1] ?? '';
+      const showingLoaded = match?.[2] ?? '';
+
+      // Both KPI and "Showing of" must report the same variant count (4).
+      expect(kpiValue).toBe('4');
+      expect(showingLoaded).toBe('4');
+      expect(kpiValue).toBe(showingLoaded);
+      // Parity between visible and loaded when no filter is active.
+      expect(showingVisible).toBe(showingLoaded);
     });
 
     test('row checkbox change event updates summary cards in place (PR #283 CR pass-2)', async () => {

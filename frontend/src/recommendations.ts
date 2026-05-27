@@ -492,17 +492,22 @@ function renderRecommendationsSummary(
   const period = state.getCostPeriod();
   const scaledSavingsMin = scaleCost(plr.savingsMin, period) ?? 0;
   const scaledSavingsMax = scaleCost(plr.savingsMax, period) ?? 0;
-  const savingsText = plr.cellCount > 0 && plr.savingsMax > 0
+  // Use target.length (variant count) for the guard conditions so they
+  // stay consistent with the new KPI value below (closes #748).
+  const hasRecs = target.length > 0;
+  const savingsText = hasRecs && plr.savingsMax > 0
     ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
     : formatCostForPeriod(0, period);
-  const upfrontText = plr.cellCount > 0 && plr.upfrontMax > 0
+  const upfrontText = hasRecs && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
-  const paybackText = plr.cellCount > 0 && plr.paybackMonthsMax > 0
+  const paybackText = hasRecs && plr.paybackMonthsMax > 0
     ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
     : '0 months';
-  // Total Recommendations counts CELLS not variants — each cell is the
-  // user's actual decision unit.
+  // issue #748: count VARIANTS (= target.length), not cells (= plr.cellCount).
+  // "Showing X of X" in the filter-status bar also counts variants, so both
+  // numbers now agree on the same dataset.
+  const variantCount = target.length;
   const countLabel = isSelectionView ? 'Selected Recommendations' : 'Total Recommendations';
   const savingsLabel = (() => {
     if (period === 'monthly') {
@@ -517,7 +522,7 @@ function renderRecommendationsSummary(
   container.innerHTML = `
     <div class="card">
       <h3>${countLabel}</h3>
-      <p class="value">${plr.cellCount}</p>
+      <p class="value">${variantCount}</p>
     </div>
     <div class="card">
       <h3>${savingsLabel}</h3>
