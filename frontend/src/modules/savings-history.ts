@@ -12,6 +12,64 @@ Chart.register(...registerables);
 // Chart instance
 let savingsChart: Chart | null = null;
 
+// Canonical unit the API returns for per-bucket and summary values.
+// estimated_savings in purchase_history is the monthly savings figure
+// (it sits alongside monthly_cost in the schema), so all totals summed
+// from that column are also monthly.
+const API_UNIT = 'monthly' as const;
+
+export type SavingsUnit = 'hourly' | 'monthly' | 'yearly';
+
+// Conversion factors relative to monthly as the canonical unit.
+const HOURS_PER_MONTH = 730;   // 365.25 * 24 / 12
+const MONTHS_PER_YEAR = 12;
+
+/**
+ * Convert a monthly savings value to the chosen display unit.
+ * The API always returns monthly values; this function converts for display only.
+ */
+export function convertFromMonthly(monthlyValue: number, unit: SavingsUnit): number {
+    switch (unit) {
+        case 'hourly':  return monthlyValue / HOURS_PER_MONTH;
+        case 'monthly': return monthlyValue;
+        case 'yearly':  return monthlyValue * MONTHS_PER_YEAR;
+    }
+}
+
+/**
+ * Return the short suffix string for the given unit (e.g. "/hr").
+ */
+export function unitSuffix(unit: SavingsUnit): string {
+    switch (unit) {
+        case 'hourly':  return '/hr';
+        case 'monthly': return '/mo';
+        case 'yearly':  return '/yr';
+    }
+}
+
+/**
+ * Return the adjective for use in stat-card headings (e.g. "Hourly").
+ */
+export function unitLabel(unit: SavingsUnit): string {
+    switch (unit) {
+        case 'hourly':  return 'Hourly';
+        case 'monthly': return 'Monthly';
+        case 'yearly':  return 'Yearly';
+    }
+}
+
+/**
+ * Read the current value of the #savings-unit dropdown.
+ * Falls back to the API's canonical unit when the element is absent (e.g. in tests
+ * that don't include the dropdown in their DOM fixture).
+ */
+function getSelectedUnit(): SavingsUnit {
+    const el = document.getElementById('savings-unit') as HTMLSelectElement | null;
+    const val = el?.value ?? API_UNIT;
+    if (val === 'hourly' || val === 'monthly' || val === 'yearly') return val;
+    return API_UNIT;
+}
+
 /**
  * Load savings history data based on selected period
  */
@@ -60,7 +118,7 @@ export async function loadSavingsHistory(): Promise<void> {
         if (statsEl) statsEl.classList.remove('hidden');
 
         renderSavingsStats(data);
-        renderSavingsChart(data.data_points, interval);
+        renderSavingsChart(data.data_points, interval, getSelectedUnit());
     } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error';
         console.error('Failed to load savings history:', msg);
@@ -190,13 +248,20 @@ function getPeriodDates(period: string): { start: Date; end: Date; interval: 'ho
  */
 function renderSavingsStats(data: SavingsAnalyticsResponse): void {
     const periodSavingsEl = document.getElementById('period-savings');
-    const avgHourlySavingsEl = document.getElementById('avg-hourly-savings');
+    const avgSavingsEl = document.getElementById('avg-hourly-savings');
     const peakSavingsEl = document.getElementById('peak-savings');
+    const avgLabelEl = document.getElementById('avg-savings-label');
+
+    const unit = getSelectedUnit();
+    const suffix = unitSuffix(unit);
+    const adjective = unitLabel(unit);
 
     const summary = data.summary;
     const dataPoints = data.data_points || [];
 
-    // Calculate totals from data points (sum of hourly savings)
+    // Calculate totals from data points when summary is absent.
+    // Each data point's total_savings is the sum of estimated_savings
+    // (a monthly figure) bucketed by the chosen interval.
     let totalSavings = 0;
     let peakSavings = 0;
 
@@ -210,19 +275,30 @@ function renderSavingsStats(data: SavingsAnalyticsResponse): void {
 
     const avgPerPeriod = dataPoints.length > 0 ? totalSavings / dataPoints.length : 0;
 
-    // Use summary if available, otherwise use calculated values
-    const displayTotal = summary?.total_period_savings ?? totalSavings;
-    const displayAvg = summary?.average_savings_per_period ?? avgPerPeriod;
-    const displayPeak = summary?.peak_savings ?? peakSavings;
+    // Use summary if available, otherwise fall back to calculated values.
+    // All three values are in the API's canonical monthly unit.
+    const monthlyTotal = summary?.total_period_savings ?? totalSavings;
+    const monthlyAvg = summary?.average_savings_per_period ?? avgPerPeriod;
+    const monthlyPeak = summary?.peak_savings ?? peakSavings;
+
+    // Convert to the user-chosen display unit.
+    const displayTotal = convertFromMonthly(monthlyTotal, unit);
+    const displayAvg = convertFromMonthly(monthlyAvg, unit);
+    const displayPeak = convertFromMonthly(monthlyPeak, unit);
 
     if (periodSavingsEl) {
+        // Period Savings is the cumulative total over the selected date range
+        // (no per-unit rate suffix -- it is already a dollar total).
         periodSavingsEl.textContent = formatCurrency(displayTotal);
     }
-    if (avgHourlySavingsEl) {
-        avgHourlySavingsEl.textContent = `${formatCurrency(displayAvg)}/hr`;
+    if (avgLabelEl) {
+        avgLabelEl.textContent = `Avg ${adjective} Savings`;
+    }
+    if (avgSavingsEl) {
+        avgSavingsEl.textContent = `${formatCurrency(displayAvg)}${suffix}`;
     }
     if (peakSavingsEl) {
-        peakSavingsEl.textContent = `${formatCurrency(displayPeak)}/hr`;
+        peakSavingsEl.textContent = `${formatCurrency(displayPeak)}${suffix}`;
     }
 }
 
@@ -239,7 +315,7 @@ function formatCurrency(value: number): string {
 /**
  * Render savings chart using Chart.js
  */
-function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): void {
+function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string, unit: SavingsUnit = 'monthly'): void {
     const ctx = document.getElementById('savings-history-chart') as HTMLCanvasElement;
 
     if (!ctx) {
@@ -261,7 +337,8 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): v
         });
     });
 
-    const savingsData = dataPoints.map(dp => dp.total_savings || 0);
+    const suffix = unitSuffix(unit);
+    const savingsData = dataPoints.map(dp => convertFromMonthly(dp.total_savings || 0, unit));
     const cumulativeSavings = dataPoints.map(dp => dp.cumulative_savings || 0);
 
     if (savingsChart) {
@@ -332,7 +409,7 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): v
                     },
                     title: {
                         display: true,
-                        text: 'Savings per Period',
+                        text: `Savings per Period (${unitLabel(unit)})`,
                     },
                 },
                 y1: {
@@ -371,10 +448,10 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string): v
                         label: function(context) {
                             const value = context.raw as number || 0;
                             if (context.datasetIndex === 1) {
-                                // Cumulative savings
+                                // Cumulative savings -- raw total, no rate suffix
                                 return `${context.dataset.label}: $${value.toFixed(2)}`;
                             }
-                            return `${context.dataset.label}: $${value.toFixed(4)}/hr`;
+                            return `${context.dataset.label}: $${value.toFixed(4)}${suffix}`;
                         },
                     },
                 },
@@ -418,6 +495,7 @@ function isPurchasesTabActive(): boolean {
 export function initSavingsHistory(): void {
     const periodSelect = document.getElementById('savings-period');
     const refreshBtn = document.getElementById('refresh-savings-btn');
+    const unitSelect = document.getElementById('savings-unit');
 
     if (periodSelect) {
         periodSelect.addEventListener('change', loadSavingsHistory);
@@ -425,6 +503,19 @@ export function initSavingsHistory(): void {
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', loadSavingsHistory);
+    }
+
+    // Wire unit dropdown. Using a named handler stored as a property so that
+    // repeated calls to initSavingsHistory() don't stack duplicate listeners
+    // (feedback_event_listener_dedup pattern).
+    if (unitSelect) {
+        const prevHandler = (unitSelect as HTMLSelectElement & { _unitChangeHandler?: () => void })._unitChangeHandler;
+        if (prevHandler) {
+            unitSelect.removeEventListener('change', prevHandler);
+        }
+        const unitChangeHandler = (): void => { void loadSavingsHistory(); };
+        (unitSelect as HTMLSelectElement & { _unitChangeHandler?: () => void })._unitChangeHandler = unitChangeHandler;
+        unitSelect.addEventListener('change', unitChangeHandler);
     }
 
     let reloadQueued = false;
