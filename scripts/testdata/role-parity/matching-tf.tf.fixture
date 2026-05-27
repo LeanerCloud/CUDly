@@ -1,0 +1,25 @@
+# Fixture: TF module fragment used by check-azure-role-parity.sh tests.
+# Must stay in sync with matching-arm.json.
+resource "azurerm_role_definition" "cudly_reservation_purchaser" {
+  name  = "CUDly Test Role"
+  scope = "/subscriptions/00000000-0000-0000-0000-000000000001"
+
+  permissions {
+    actions = [
+      "Microsoft.Capacity/register/action",
+      "Microsoft.Capacity/calculatePrice/action",
+      "Microsoft.Capacity/catalogs/read",
+      "Microsoft.Capacity/reservationOrders/read",
+      "Microsoft.Capacity/reservationOrders/write",
+      "Microsoft.Capacity/reservationOrders/purchase/action",
+      "Microsoft.Capacity/reservationOrders/reservations/read",
+      "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+      "Microsoft.BillingBenefits/savingsPlanOrders/read",
+      "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+      "Microsoft.BillingBenefits/savingsPlanOrders/action",
+    ]
+    not_actions = []
+  }
+
+  assignable_scopes = ["/subscriptions/00000000-0000-0000-0000-000000000001"]
+}
