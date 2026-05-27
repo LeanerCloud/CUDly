@@ -1168,8 +1168,7 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
       coverageTd.appendChild(buildCoverageOverrideInput(accountId, o, panel));
 
       // Enabled cell: per-row checkbox toggling account_service_overrides.enabled.
-      // AWS-editable, disabled (with tooltip) for non-AWS to keep the column
-      // alignment consistent across provider types. Issue #110.
+      // Editable for all providers. Issue `#110`, extended to Azure/GCP in `#109`.
       const enabledTd = tr.insertCell();
       enabledTd.appendChild(buildEnabledOverrideCheckbox(accountId, o, panel, tr));
 
