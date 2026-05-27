@@ -7,7 +7,7 @@
  */
 
 import { apiRequest } from '../api/client';
-import { listActiveCommitments } from '../api/inventory';
+import { listActiveCommitments, getCoverageBreakdown } from '../api/inventory';
 
 jest.mock('../api/client', () => ({
   apiRequest: jest.fn(),
@@ -66,5 +66,35 @@ describe('listActiveCommitments', () => {
 
     const result = await listActiveCommitments();
     expect(result).toEqual([]);
+  });
+});
+
+describe('getCoverageBreakdown', () => {
+  beforeEach(() => {
+    (apiRequest as jest.Mock).mockReset();
+  });
+
+  test('calls /inventory/coverage', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ providers: [] });
+
+    await getCoverageBreakdown();
+
+    expect(apiRequest).toHaveBeenCalledWith('/inventory/coverage');
+  });
+
+  test('returns the full response envelope including providers array', async () => {
+    const payload = {
+      providers: [
+        { provider: 'aws', services: null, overall_coverage_pct: null },
+        { provider: 'azure', services: null, overall_coverage_pct: null },
+        { provider: 'gcp', services: null, overall_coverage_pct: null },
+      ],
+    };
+    (apiRequest as jest.Mock).mockResolvedValue(payload);
+
+    const result = await getCoverageBreakdown();
+
+    expect(result).toEqual(payload);
+    expect(result.providers).toHaveLength(3);
   });
 });

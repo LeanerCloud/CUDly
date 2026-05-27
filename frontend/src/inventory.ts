@@ -1,19 +1,17 @@
 /**
- * Inventory & Coverage section (issue #340 T4).
+ * Inventory & Coverage section (issue #340 T4, #754).
  *
  * Umbrella section that folds the former top-level "RI Exchange" tab into
  * a sub-section of a broader Inventory & Coverage view. Sub-sections:
  *   - active-commitments — per-commitment list backed by
  *                          /api/inventory/commitments
- *   - coverage           — placeholder until per-provider donuts land
+ *   - coverage           — per-provider coverage breakdowns backed by
+ *                          /api/inventory/coverage (issue #754)
  *   - ri-exchange        — hosts the existing RI Exchange UI unchanged
- *
- * The coverage sub-section is still an intentional empty state — its
- * backend endpoint isn't in scope for #340 and remains a deferred
- * sub-task.
  */
 
 import * as api from './api';
+import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { formatCurrency, formatDate } from './utils';
@@ -58,6 +56,8 @@ export function switchInventorySubSection(name: string): void {
     void loadRIExchange();
   } else if (target === 'active-commitments') {
     void loadActiveCommitments();
+  } else if (target === 'coverage') {
+    void loadCoverageBreakdown();
   }
 
   currentSubSection = target;
@@ -209,6 +209,158 @@ function buildAccountCell(c: api.InventoryCommitment): HTMLTableCellElement {
     td.appendChild(id);
   }
   return td;
+}
+
+// ──────────────────────────────────────────────
+// Coverage breakdown
+// ──────────────────────────────────────────────
+
+const COVERAGE_CONTAINER_ID = 'coverage-providers';
+const COVERAGE_REFRESH_BTN_ID = 'coverage-refresh-btn';
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  aws: 'AWS',
+  azure: 'Azure',
+  gcp: 'GCP',
+};
+
+/**
+ * Fetch and render per-provider coverage breakdowns into #coverage-providers.
+ * Shows a skeleton on entry, then either the rendered sections or an error.
+ * Idempotent — safe to call on every sub-tab switch and on every refresh click.
+ */
+export async function loadCoverageBreakdown(): Promise<void> {
+  const container = document.getElementById(COVERAGE_CONTAINER_ID);
+  if (!container) return;
+
+  wireCoverageRefreshButton();
+
+  // One skeleton row per known provider while loading.
+  showSkeletonRows(container, 3, 1);
+
+  try {
+    const data = await api.getCoverageBreakdown();
+    renderCoverageBreakdown(container, data.providers);
+  } catch (error) {
+    teardownSkeleton(container);
+    const err = error as Error;
+    renderErrorParagraph(container, `Failed to load coverage data: ${err.message}`);
+  }
+}
+
+function wireCoverageRefreshButton(): void {
+  const btn = document.getElementById(COVERAGE_REFRESH_BTN_ID);
+  if (!btn) return;
+  if (btn.dataset['wired'] === '1') return;
+  btn.addEventListener('click', () => {
+    void loadCoverageBreakdown();
+  });
+  btn.dataset['wired'] = '1';
+}
+
+/**
+ * Render coverage sections. Each provider gets its own card. Providers
+ * with services=null show an empty-state paragraph. All text is set via
+ * textContent -- no innerHTML -- so no escaping helper is needed (XSS posture
+ * matches the active-commitments section per issue #340).
+ */
+function renderCoverageBreakdown(container: HTMLElement, providers: ProviderCoverageSection[]): void {
+  clearChildren(container);
+
+  if (!providers || providers.length === 0) {
+    renderEmptyParagraph(container, 'No coverage data available.');
+    return;
+  }
+
+  for (const section of providers) {
+    container.appendChild(buildProviderSection(section));
+  }
+}
+
+function buildProviderSection(section: ProviderCoverageSection): HTMLElement {
+  const card = document.createElement('section');
+  card.className = 'card coverage-provider-card';
+
+  // Header row: provider name + overall coverage badge.
+  const header = document.createElement('div');
+  header.className = 'section-header';
+
+  const title = document.createElement('h3');
+  title.textContent = PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider.toUpperCase();
+  header.appendChild(title);
+
+  if (section.overall_coverage_pct !== null && section.overall_coverage_pct !== undefined) {
+    const badge = document.createElement('span');
+    badge.className = 'coverage-overall-badge';
+    badge.textContent = `Overall: ${section.overall_coverage_pct.toFixed(1)}% covered`;
+    header.appendChild(badge);
+  }
+  card.appendChild(header);
+
+  // Body: empty-state or per-service table.
+  if (!section.services || section.services.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = `No usage detected for ${PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider}.`;
+    card.appendChild(empty);
+    return card;
+  }
+
+  card.appendChild(buildServiceTable(section.services));
+  return card;
+}
+
+function buildServiceTable(rows: CoverageServiceRow[]): HTMLTableElement {
+  const table = document.createElement('table');
+  table.className = 'coverage-service-table';
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  for (const label of ['Service', 'Covered/mo', 'On-demand gap/mo', 'Coverage %', 'Coverage bar']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    if (label === 'Coverage bar') {
+      th.setAttribute('aria-label', 'Coverage bar');
+    }
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const row of rows) {
+    tbody.appendChild(buildServiceRow(row));
+  }
+  table.appendChild(tbody);
+  return table;
+}
+
+function buildServiceRow(row: CoverageServiceRow): HTMLTableRowElement {
+  const tr = document.createElement('tr');
+
+  appendCell(tr, row.service);
+  appendCell(tr, formatCurrency(row.covered_monthly));
+  appendCell(tr, formatCurrency(row.on_demand_monthly));
+  appendCell(tr, row.coverage_pct !== null && row.coverage_pct !== undefined
+    ? `${row.coverage_pct.toFixed(1)}%`
+    : 'N/A');
+  // Bar cell: visual coverage indicator.
+  const barTd = document.createElement('td');
+  barTd.className = 'coverage-bar-cell';
+  if (row.coverage_pct !== null && row.coverage_pct !== undefined) {
+    const bar = document.createElement('div');
+    bar.className = 'coverage-bar';
+    const fill = document.createElement('div');
+    fill.className = 'coverage-bar-fill';
+    // Clamp to [0, 100] so a misconfigured value can't overflow.
+    const pct = Math.min(100, Math.max(0, row.coverage_pct));
+    fill.style.width = `${pct}%`;
+    bar.appendChild(fill);
+    barTd.appendChild(bar);
+  }
+  tr.appendChild(barTd);
+
+  return tr;
 }
 
 /**

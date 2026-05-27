@@ -265,3 +265,145 @@ func TestHandler_isActiveCommitment_Predicate(t *testing.T) {
 	assert.False(t, isActiveCommitment(expired, now),
 		"a commitment whose term ended a year ago must be inactive")
 }
+
+// ──────────────────────────────────────────────
+// buildCoverageBreakdown unit tests (issue #754)
+// ──────────────────────────────────────────────
+
+// TestBuildCoverageBreakdown_SingleProvider verifies that covered/on-demand
+// sums are correctly attributed per service and the overall coverage% is
+// computed across all services in the provider.
+func TestBuildCoverageBreakdown_SingleProvider(t *testing.T) {
+	covered := map[string]float64{
+		"aws:ec2": 200.0,
+		"aws:rds": 100.0,
+	}
+	onDemand := map[string]float64{
+		"aws:ec2": 300.0, // ec2 coverage = 200/(200+300) = 40%
+		// rds has no on-demand gap, so rds coverage = 100%
+	}
+
+	resp := buildCoverageBreakdown(covered, onDemand)
+
+	require.Len(t, resp.Providers, 3, "always 3 known providers")
+	aws := resp.Providers[0]
+	assert.Equal(t, "aws", aws.Provider)
+	require.NotNil(t, aws.Services, "AWS has usage so Services must be non-nil")
+	require.Len(t, aws.Services, 2)
+
+	// Services are sorted alphabetically; ec2 < rds.
+	ec2 := aws.Services[0]
+	assert.Equal(t, "ec2", ec2.Service)
+	assert.Equal(t, 200.0, ec2.CoveredMonthly)
+	assert.Equal(t, 300.0, ec2.OnDemandMonthly)
+	require.NotNil(t, ec2.CoveragePct)
+	assert.InDelta(t, 40.0, *ec2.CoveragePct, 0.001, "ec2 coverage = 200/500 * 100")
+
+	rds := aws.Services[1]
+	assert.Equal(t, "rds", rds.Service)
+	assert.Equal(t, 100.0, rds.CoveredMonthly)
+	assert.Equal(t, 0.0, rds.OnDemandMonthly)
+	require.NotNil(t, rds.CoveragePct)
+	assert.InDelta(t, 100.0, *rds.CoveragePct, 0.001, "rds coverage = 100/100 * 100")
+
+	// Overall: (200+100) / (200+100+300+0) * 100 = 300/600 = 50%
+	require.NotNil(t, aws.OverallCoveragePct)
+	assert.InDelta(t, 50.0, *aws.OverallCoveragePct, 0.001, "AWS overall coverage = 300/600 * 100")
+}
+
+// TestBuildCoverageBreakdown_EmptyProvider verifies that a provider with no
+// data in either map gets Services=nil and OverallCoveragePct=nil — not
+// a zero — per feedback_nullable_not_zero.
+func TestBuildCoverageBreakdown_EmptyProvider(t *testing.T) {
+	covered := map[string]float64{"aws:ec2": 100.0}
+	onDemand := map[string]float64{"aws:ec2": 100.0}
+
+	resp := buildCoverageBreakdown(covered, onDemand)
+
+	require.Len(t, resp.Providers, 3)
+	for _, p := range resp.Providers {
+		if p.Provider == "aws" {
+			continue
+		}
+		assert.Nil(t, p.Services, "provider %s has no data, Services must be nil", p.Provider)
+		assert.Nil(t, p.OverallCoveragePct, "provider %s has no data, OverallCoveragePct must be nil", p.Provider)
+	}
+}
+
+// TestBuildCoverageBreakdown_ZeroBothSides verifies that a service with
+// both covered=0 and on_demand=0 produces a nil CoveragePct, not 0.
+func TestBuildCoverageBreakdown_ZeroBothSides(t *testing.T) {
+	assert.Nil(t, coveragePct(0, 0), "no usage: coverage% must be nil, not 0")
+}
+
+// TestBuildCoverageBreakdown_OnlyOnDemand verifies that a provider with
+// recommendations but no commitments shows 0% coverage (not nil).
+func TestBuildCoverageBreakdown_OnlyOnDemand(t *testing.T) {
+	covered := map[string]float64{}
+	onDemand := map[string]float64{"azure:compute": 500.0}
+
+	resp := buildCoverageBreakdown(covered, onDemand)
+
+	var azure *ProviderCoverageSection
+	for i := range resp.Providers {
+		if resp.Providers[i].Provider == "azure" {
+			azure = &resp.Providers[i]
+			break
+		}
+	}
+	require.NotNil(t, azure)
+	require.NotNil(t, azure.Services)
+	require.Len(t, azure.Services, 1)
+	require.NotNil(t, azure.Services[0].CoveragePct)
+	assert.InDelta(t, 0.0, *azure.Services[0].CoveragePct, 0.001, "0 covered / 500 on-demand = 0%")
+}
+
+// TestHandler_getCoverageBreakdown_Integration exercises the full handler
+// path including auth and purchase-history filtering.
+func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockScheduler.AssertExpectations(t)
+	})
+
+	now := time.Now()
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-1",
+			Provider:    "aws",
+			Service:     "ec2",
+			Timestamp:   now.AddDate(-1, 0, 1), // active: 1y term started ~1y ago
+			Term:        1,
+			MonthlyCost: 150.0,
+		},
+	}
+	recs := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Savings: 350.0},
+	}
+
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{}, nil
+	}
+	mockScheduler.On("ListRecommendations", ctx, config.RecommendationFilter{}).Return(recs, nil)
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
+
+	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp, ok := result.(CoverageBreakdownResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Providers, 3)
+
+	aws := resp.Providers[0]
+	assert.Equal(t, "aws", aws.Provider)
+	require.NotNil(t, aws.OverallCoveragePct)
+	// coverage = 150 / (150+350) * 100 = 30%
+	assert.InDelta(t, 30.0, *aws.OverallCoveragePct, 0.001)
+}

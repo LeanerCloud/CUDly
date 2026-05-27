@@ -239,12 +239,18 @@
                     </section>
                 </section>
 
-                <!-- Coverage — placeholder until T7 wires per-provider donuts. -->
+                <!-- Coverage — per-provider breakdowns (issue #754). -->
                 <section id="inventory-coverage" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-coverage">
-                    <div class="empty-state">
-                        <h3>Coverage</h3>
-                        <p>Per-provider coverage breakdowns are coming soon. Your overall coverage rate is on the Home dashboard.</p>
-                    </div>
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Coverage</h2>
+                            <div class="section-header-actions">
+                                <button id="coverage-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
+                    </section>
+                    <div id="coverage-providers"></div>
                 </section>
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
