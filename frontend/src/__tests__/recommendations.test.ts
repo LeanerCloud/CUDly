@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -2713,6 +2713,25 @@ describe('Bundle B: sticky bottom action box', () => {
     const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
     expect(purchaseBtn.disabled).toBe(true);
     expect(planBtn.disabled).toBe(true);
+  });
+
+  test('plan button disabled on heterogeneous selection; purchase button still enabled (#769)', async () => {
+    // The fixture recs differ in term (1 vs 3), so selecting both makes the
+    // selection heterogeneous for the plan button but not the purchase button.
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r1', 'r2']));
+    await loadRecommendations();
+    const purchaseBtn = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    const planBtn = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    const hint = document.getElementById('recommendations-action-disabled-hint') as HTMLSpanElement;
+    // Purchase button is unaffected by homogeneity.
+    expect(purchaseBtn.disabled).toBe(false);
+    expect(purchaseBtn.textContent).toBe('Purchase 2 selected');
+    // Plan button must be disabled.
+    expect(planBtn.disabled).toBe(true);
+    expect(planBtn.textContent).toBe('Plan from 2 selected');
+    // Hint is visible with the heterogeneous explanation.
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toContain('Plans require one provider, service, term, and payment');
   });
 
   test('Capacity input value persists across re-render (mount-once-then-update)', async () => {
@@ -6400,5 +6419,77 @@ describe('Issue #484: numeric filter matches the displayed rounded value', () =>
       expect(displayPrecision('on_demand_monthly', 'daily')).toBe(2);
       expect(displayPrecision('on_demand_monthly', 'yearly')).toBe(0);
     });
+  });
+});
+
+// Helpers shared by the isHomogeneousSelection describe block below.
+function makeRec(overrides: Partial<{
+  id: string;
+  provider: string;
+  service: string;
+  term: number;
+  payment: string;
+}>): { id: string; provider: string; service: string; resource_type: string; region: string; count: number; term: number; payment: string; savings: number; upfront_cost: number } {
+  return {
+    id: overrides.id ?? 'r1',
+    provider: overrides.provider ?? 'aws',
+    service: overrides.service ?? 'ec2',
+    resource_type: 't3.medium',
+    region: 'us-east-1',
+    count: 1,
+    term: overrides.term ?? 1,
+    payment: overrides.payment ?? 'all_upfront',
+    savings: 100,
+    upfront_cost: 500,
+  };
+}
+
+describe('isHomogeneousSelection (#769)', () => {
+  test('empty slice is homogeneous', () => {
+    expect(isHomogeneousSelection([])).toBe(true);
+  });
+
+  test('single-item slice is always homogeneous', () => {
+    expect(isHomogeneousSelection([makeRec({}) as never])).toBe(true);
+  });
+
+  test('two recs with identical provider/service/term/payment are homogeneous', () => {
+    const recs = [
+      makeRec({ id: 'r1' }),
+      makeRec({ id: 'r2' }),
+    ];
+    expect(isHomogeneousSelection(recs as never[])).toBe(true);
+  });
+
+  test('heterogeneous on provider axis', () => {
+    const recs = [
+      makeRec({ id: 'r1', provider: 'aws' }),
+      makeRec({ id: 'r2', provider: 'azure' }),
+    ];
+    expect(isHomogeneousSelection(recs as never[])).toBe(false);
+  });
+
+  test('heterogeneous on service axis', () => {
+    const recs = [
+      makeRec({ id: 'r1', service: 'ec2' }),
+      makeRec({ id: 'r2', service: 'rds' }),
+    ];
+    expect(isHomogeneousSelection(recs as never[])).toBe(false);
+  });
+
+  test('heterogeneous on term axis', () => {
+    const recs = [
+      makeRec({ id: 'r1', term: 1 }),
+      makeRec({ id: 'r2', term: 3 }),
+    ];
+    expect(isHomogeneousSelection(recs as never[])).toBe(false);
+  });
+
+  test('heterogeneous on payment axis', () => {
+    const recs = [
+      makeRec({ id: 'r1', payment: 'all_upfront' }),
+      makeRec({ id: 'r2', payment: 'no_upfront' }),
+    ];
+    expect(isHomogeneousSelection(recs as never[])).toBe(false);
   });
 });

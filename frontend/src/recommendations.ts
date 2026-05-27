@@ -3034,6 +3034,23 @@ function resolvePurchaseTarget(): LocalRecommendation[] {
   return visible.filter((r) => selected.has(r.id));
 }
 
+// isHomogeneousSelection returns true iff every recommendation in the slice
+// shares the same (provider, service, term, payment). A single-item slice
+// always passes. An empty slice returns true (vacuously homogeneous).
+// Plans require a homogeneous selection because the plan's scheduling
+// parameters (provider, service, term, payment) must be unambiguous.
+// Exported so unit tests can cover it directly without a full DOM setup.
+export function isHomogeneousSelection(recs: readonly LocalRecommendation[]): boolean {
+  if (recs.length <= 1) return true;
+  // recs is non-empty here; the non-null assertion is safe.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const first = recs[0]!;
+  const { provider, service, term, payment } = first;
+  return recs.every(
+    (r) => r.provider === provider && r.service === service && r.term === term && r.payment === payment,
+  );
+}
+
 // updateBottomActionBox refreshes labels and disabled state on every
 // renderRecommendationsList call without rebuilding the input/select DOM,
 // preserving any in-progress typing in the Capacity input.
@@ -3095,21 +3112,11 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
       ? 'No rows visible — adjust filters'
       : 'Select at least one cell to enable';
 
-  // a11y: the disabled-state explanation lives on a sibling hint span,
-  // not on the buttons' `title` attribute. Disabled <button> elements are
-  // non-focusable per HTML spec and don't reliably surface `title`
-  // tooltips across browsers, so keyboard users would never see the
-  // hint and mouse users only sometimes would. The sibling element +
-  // aria-describedby pattern works for both. See #273 CR follow-up.
-  if (disabledHint) {
-    if (hasSelection) {
-      disabledHint.hidden = true;
-      disabledHint.textContent = '';
-    } else {
-      disabledHint.hidden = false;
-      disabledHint.textContent = disabledMessage;
-    }
-  }
+  // Compute the selected-visible slice once; both the plan-button gating and
+  // the hint span need it.
+  const selectedVisible = visible.filter((r) => selected.has(r.id));
+  const planHomogeneous = isHomogeneousSelection(selectedVisible);
+  const planEnabled = hasSelection && planHomogeneous;
 
   if (purchaseBtn) {
     purchaseBtn.disabled = !hasSelection;
@@ -3127,16 +3134,39 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     }
   }
   if (planBtn) {
-    planBtn.disabled = !hasSelection;
+    planBtn.disabled = !planEnabled;
     planBtn.textContent = hasSelection
       ? `Plan from ${selectedVisibleCount} selected`
       : 'Create Plan';
-    if (hasSelection) {
+    if (planEnabled) {
       planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
       planBtn.removeAttribute('aria-describedby');
     } else {
       planBtn.removeAttribute('title');
       planBtn.setAttribute('aria-describedby', 'recommendations-action-disabled-hint');
+    }
+  }
+
+  // a11y: the disabled-state explanation lives on a sibling hint span, not on
+  // the buttons' `title` attribute. Disabled <button> elements are non-focusable
+  // per HTML spec and don't reliably surface `title` tooltips across browsers, so
+  // keyboard users would never see the hint and mouse users only sometimes would.
+  // The sibling element + aria-describedby pattern works for both (#273 CR follow-up).
+  // The hint also carries the heterogeneous-selection explanation for the plan
+  // button (#769): when a selection spans multiple providers/services/terms/payment
+  // options the plan button is disabled and the hint explains why.
+  if (disabledHint) {
+    const heterogeneousPlanBlock = hasSelection && planBtn != null && !planHomogeneous;
+    if (!hasSelection) {
+      disabledHint.hidden = false;
+      disabledHint.textContent = disabledMessage;
+    } else if (heterogeneousPlanBlock) {
+      disabledHint.hidden = false;
+      disabledHint.textContent =
+        'Plans require one provider, service, term, and payment. Refine your selection.';
+    } else {
+      disabledHint.hidden = true;
+      disabledHint.textContent = '';
     }
   }
 }
