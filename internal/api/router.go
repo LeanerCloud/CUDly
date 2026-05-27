@@ -261,6 +261,10 @@ func (r *Router) registerRoutes() {
 		// handler also filters by the session's allowed_accounts list
 		// so a restricted-access user sees only their entitled rows.
 		{ExactPath: "/api/inventory/commitments", Method: "GET", Handler: r.listInventoryCommitmentsHandler, Auth: AuthUser},
+		// Per-provider, per-service coverage breakdown for the Coverage
+		// sub-tab (issue #754). AuthUser + allowed_accounts filter applied
+		// inside the handler, matching commitments endpoint precedent.
+		{ExactPath: "/api/inventory/coverage", Method: "GET", Handler: r.getCoverageBreakdownHandler, Auth: AuthUser},
 
 		// RI Exchange endpoints — GETs are AuthUser (Convertible RIs,
 		// Reshape Recommendations, Exchange History pages all need this).
@@ -681,6 +685,10 @@ func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLR
 
 func (r *Router) listInventoryCommitmentsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.listActiveCommitments(ctx, req, req.QueryStringParameters)
+}
+
+func (r *Router) getCoverageBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getCoverageBreakdown(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) listExchangeableAzureRIsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

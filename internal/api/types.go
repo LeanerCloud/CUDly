@@ -522,6 +522,38 @@ type InventoryCommitmentsResponse struct {
 	Commitments []InventoryCommitment `json:"commitments"`
 }
 
+// CoverageServiceRow is one service row within a provider's coverage
+// section. CoveredMonthly is the sum of active-commitment MonthlyCost
+// values for the (provider, service) pair. OnDemandMonthly is the sum
+// of recommendation Savings values — i.e. the portion of on-demand
+// spend that is NOT yet committed. CoveragePct is nil when both sums
+// are zero (no usage detected), not 0, to preserve the "absent"
+// semantic per feedback_nullable_not_zero.
+type CoverageServiceRow struct {
+	Service         string   `json:"service"`
+	CoveredMonthly  float64  `json:"covered_monthly"`
+	OnDemandMonthly float64  `json:"on_demand_monthly"`
+	CoveragePct     *float64 `json:"coverage_pct"`
+}
+
+// ProviderCoverageSection is the per-provider block returned by
+// GET /api/inventory/coverage. Services is nil (not []) when the
+// provider has no usage data, which the frontend uses to distinguish
+// "no usage detected" from "usage exists but all services are 0%".
+// OverallCoveragePct follows the same null-vs-zero contract as
+// CoverageServiceRow.CoveragePct.
+type ProviderCoverageSection struct {
+	Provider           string               `json:"provider"`
+	Services           []CoverageServiceRow `json:"services"`
+	OverallCoveragePct *float64             `json:"overall_coverage_pct"`
+}
+
+// CoverageBreakdownResponse is the envelope returned by
+// GET /api/inventory/coverage.
+type CoverageBreakdownResponse struct {
+	Providers []ProviderCoverageSection `json:"providers"`
+}
+
 // UpcomingPurchaseResponse holds upcoming purchase data
 type UpcomingPurchaseResponse struct {
 	Purchases []UpcomingPurchase `json:"purchases"`

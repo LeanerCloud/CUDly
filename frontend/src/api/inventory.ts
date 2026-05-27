@@ -8,7 +8,7 @@
  */
 
 import { apiRequest } from './client';
-import type { InventoryCommitment } from './types';
+import type { CoverageBreakdownResponse, InventoryCommitment } from './types';
 
 /**
  * List active (non-expired) commitments across the user's accessible
@@ -20,4 +20,13 @@ export async function listActiveCommitments(accountID?: string): Promise<Invento
   const qs = accountID ? `?account_id=${encodeURIComponent(accountID)}` : '';
   const resp = await apiRequest<{ commitments: InventoryCommitment[] }>(`/inventory/commitments${qs}`);
   return resp.commitments ?? [];
+}
+
+/**
+ * Fetch per-provider, per-service coverage breakdowns.
+ * Returns one section per known provider (aws, azure, gcp). A provider
+ * with no usage data has services=null and overall_coverage_pct=null.
+ */
+export async function getCoverageBreakdown(): Promise<CoverageBreakdownResponse> {
+  return apiRequest<CoverageBreakdownResponse>('/inventory/coverage');
 }

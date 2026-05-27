@@ -670,6 +670,36 @@ export interface InventoryCommitment {
   status: string;
 }
 
+// Coverage breakdown types (issue #754)
+
+/**
+ * One service row within a provider's coverage section.
+ * coverage_pct is null when both covered_monthly and on_demand_monthly
+ * are zero (no usage detected) -- do not coerce null to 0.
+ */
+export interface CoverageServiceRow {
+  service: string;
+  covered_monthly: number;
+  on_demand_monthly: number;
+  coverage_pct: number | null;
+}
+
+/**
+ * Per-provider coverage section returned by GET /api/inventory/coverage.
+ * services is null when the provider has no usage data. Render "No usage
+ * detected" rather than an empty table in that case.
+ */
+export interface ProviderCoverageSection {
+  provider: string;
+  services: CoverageServiceRow[] | null;
+  overall_coverage_pct: number | null;
+}
+
+/** Envelope returned by GET /api/inventory/coverage. */
+export interface CoverageBreakdownResponse {
+  providers: ProviderCoverageSection[];
+}
+
 // Internal types
 export interface ApiError extends Error {
   status?: number;

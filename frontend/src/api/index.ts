@@ -54,7 +54,10 @@ export type {
   ExchangeResult,
   RIExchangeConfig,
   RIExchangeHistoryRecord,
-  InventoryCommitment
+  InventoryCommitment,
+  CoverageServiceRow,
+  ProviderCoverageSection,
+  CoverageBreakdownResponse
 } from './types';
 
 // Re-export client functions
@@ -170,7 +173,8 @@ export {
 
 // Re-export inventory functions
 export {
-  listActiveCommitments
+  listActiveCommitments,
+  getCoverageBreakdown
 } from './inventory';
 
 // Re-export RI exchange functions

@@ -1,10 +1,8 @@
 /**
- * Inventory & Coverage section tests (issue #340 T4 + deferred sub-task
- * for the Active commitments table).
+ * Inventory & Coverage section tests (issue #340 T4, #754).
  *
  * Verifies the sub-tab switching machinery for the umbrella section AND
- * the per-commitment table fetch+render flow (skeleton → table | empty |
- * error). The coverage sub-section remains an intentional placeholder.
+ * the per-commitment / coverage fetch+render flows.
  */
 
 // loadRIExchange is a side-effect import from a module that touches the
@@ -14,16 +12,18 @@ jest.mock('../riexchange', () => ({
   loadRIExchange: jest.fn(),
 }));
 
-// The active-commitments load path hits the API. Mock the entire api
-// barrel so we don't need to stand up fetch — tests exercise the render
-// machinery, not the network shape.
+// The active-commitments and coverage load paths hit the API. Mock the
+// entire api barrel so we don't need to stand up fetch — tests exercise
+// the render machinery, not the network shape.
 jest.mock('../api', () => ({
   listActiveCommitments: jest.fn(),
+  getCoverageBreakdown: jest.fn(),
 }));
 
-import { loadInventory, switchInventorySubSection, loadActiveCommitments } from '../inventory';
+import { loadInventory, switchInventorySubSection, loadActiveCommitments, loadCoverageBreakdown } from '../inventory';
 import { loadRIExchange } from '../riexchange';
 import * as api from '../api';
+import type { ProviderCoverageSection } from '../api';
 
 function buildInventoryDOM(): void {
   // Build the inventory tab + sub-nav via DOM methods rather than an
@@ -66,16 +66,24 @@ function buildInventoryDOM(): void {
   ac.appendChild(list);
   tab.appendChild(ac);
 
-  for (const [id, hidden, body] of [
-    ['inventory-coverage', true, 'coverage'],
-    ['inventory-ri-exchange', false, 'ri-exchange'],
-  ] as const) {
-    const section = document.createElement('section');
-    section.id = id;
-    if (hidden) section.classList.add('hidden');
-    section.textContent = body;
-    tab.appendChild(section);
-  }
+  // coverage section: matches the real HTML structure with refresh button +
+  // providers container that loadCoverageBreakdown renders into.
+  const coverageSection = document.createElement('section');
+  coverageSection.id = 'inventory-coverage';
+  coverageSection.classList.add('hidden');
+  const coverageRefresh = document.createElement('button');
+  coverageRefresh.id = 'coverage-refresh-btn';
+  coverageRefresh.textContent = 'Refresh';
+  coverageSection.appendChild(coverageRefresh);
+  const coverageProviders = document.createElement('div');
+  coverageProviders.id = 'coverage-providers';
+  coverageSection.appendChild(coverageProviders);
+  tab.appendChild(coverageSection);
+
+  const riSection = document.createElement('section');
+  riSection.id = 'inventory-ri-exchange';
+  riSection.textContent = 'ri-exchange';
+  tab.appendChild(riSection);
 
   document.body.appendChild(tab);
 }
@@ -115,6 +123,9 @@ describe('Inventory & Coverage sub-section switching', () => {
     // switching tests don't need to care about the fetch outcome.
     (api.listActiveCommitments as jest.Mock).mockReset();
     (api.listActiveCommitments as jest.Mock).mockResolvedValue([]);
+    // getCoverageBreakdown is invoked when switching to the coverage sub-tab.
+    (api.getCoverageBreakdown as jest.Mock).mockReset();
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({ providers: [] });
   });
 
   afterEach(() => {
@@ -262,5 +273,117 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     const accountCell = list.querySelector('tbody tr td:nth-child(2)');
     expect(accountCell?.textContent).toContain('acc-no-name');
     expect(accountCell?.querySelector('.monospace')).not.toBeNull();
+  });
+});
+
+// ──────────────────────────────────────────────
+// loadCoverageBreakdown — fetch + render flow (issue #754)
+// ──────────────────────────────────────────────
+
+function makeProviderSection(
+  provider: string,
+  services: ProviderCoverageSection['services'],
+  overallPct: number | null
+): ProviderCoverageSection {
+  return { provider, services, overall_coverage_pct: overallPct };
+}
+
+describe('loadCoverageBreakdown — fetch + render flow', () => {
+  beforeEach(() => {
+    buildInventoryDOM();
+    (api.getCoverageBreakdown as jest.Mock).mockReset();
+  });
+
+  afterEach(() => {
+    clearDOM();
+  });
+
+  test('renders per-provider sections with service rows', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', [
+          { service: 'ec2', covered_monthly: 200, on_demand_monthly: 300, coverage_pct: 40 },
+          { service: 'rds', covered_monthly: 100, on_demand_monthly: 0, coverage_pct: 100 },
+        ], 50),
+        makeProviderSection('azure', null, null),
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const cards = container.querySelectorAll('.coverage-provider-card');
+    expect(cards.length).toBe(3);
+
+    // AWS card: has service table rows.
+    const awsCard = cards[0]!;
+    expect(awsCard.textContent).toContain('AWS');
+    expect(awsCard.textContent).toContain('50.0% covered');
+    const rows = awsCard.querySelectorAll('tbody tr');
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.textContent).toContain('ec2');
+    expect(rows[0]!.textContent).toContain('40.0%');
+    expect(rows[1]!.textContent).toContain('rds');
+    expect(rows[1]!.textContent).toContain('100.0%');
+  });
+
+  test('renders "No usage detected" for providers with null services', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', null, null),
+        makeProviderSection('azure', null, null),
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const empties = container.querySelectorAll('.empty');
+    expect(empties.length).toBe(3);
+    expect(empties[0]!.textContent).toContain('AWS');
+  });
+
+  test('renders N/A for null coverage_pct (no usage signal on that service)', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', [
+          { service: 'ec2', covered_monthly: 0, on_demand_monthly: 0, coverage_pct: null },
+        ], null),
+        makeProviderSection('azure', null, null),
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const row = container.querySelector('tbody tr');
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toContain('N/A');
+  });
+
+  test('renders an error paragraph when the API rejects', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockRejectedValue(new Error('network failure'));
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const err = container.querySelector('.error');
+    expect(err).not.toBeNull();
+    expect(err!.textContent).toContain('network failure');
+  });
+
+  test('refresh button re-invokes the fetch', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({ providers: [] });
+
+    await loadCoverageBreakdown();
+    expect(api.getCoverageBreakdown).toHaveBeenCalledTimes(1);
+
+    const btn = document.getElementById('coverage-refresh-btn')!;
+    btn.click();
+    await Promise.resolve();
+    expect(api.getCoverageBreakdown).toHaveBeenCalledTimes(2);
   });
 });
