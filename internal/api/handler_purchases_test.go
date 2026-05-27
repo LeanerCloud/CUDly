@@ -976,6 +976,46 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+// TestHandler_pausePlannedPurchase_IneligibleStatus verifies that attempting to
+// pause an execution whose current status is not in the allowed set (e.g.
+// 'completed') surfaces a 409 with a clear message rather than leaking the raw
+// Postgres CHECK constraint error (SQLSTATE 23514). This is the regression test
+// for issue #772.
+func TestHandler_pausePlannedPurchase_IneligibleStatus(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// Store returns ErrExecutionNotInExpectedStatus when the row is 'completed'
+	// and cannot be transitioned to 'paused'.
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused").
+		Return(nil, fmt.Errorf("%w: execution 11111111-1111-1111-1111-111111111111 cannot transition from %q to %q",
+			config.ErrExecutionNotInExpectedStatus, "completed", "paused"))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.pausePlannedPurchase(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err, "pausing a completed execution must fail")
+	assert.Nil(t, result)
+
+	// Must be a 409 client error, not a 500.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code, "ineligible-status pause must return 409")
+	assert.Contains(t, ce.message, "cannot be paused", "error message must name the action")
+}
+
 func TestHandler_resumePlannedPurchase_NilExecution(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
