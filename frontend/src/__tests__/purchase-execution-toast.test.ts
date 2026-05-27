@@ -77,6 +77,7 @@ jest.mock('../apikeys', () => ({
 
 jest.mock('../history', () => ({
   loadHistory: jest.fn(),
+  setupHistoryHandlers: jest.fn(),
 }));
 
 jest.mock('../modules/savings-history', () => ({

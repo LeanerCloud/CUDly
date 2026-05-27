@@ -35,6 +35,11 @@ export async function loadSavingsHistory(): Promise<void> {
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
 
+    // Build a human-readable description of the active filter so the
+    // empty-state message distinguishes "no data yet" from "nothing in
+    // the selected scope". Used when the API returns 0 data points.
+    const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
+
     try {
         const data = await getSavingsAnalytics({
             start: start.toISOString(),
@@ -45,7 +50,7 @@ export async function loadSavingsHistory(): Promise<void> {
         });
 
         if (!data.data_points || data.data_points.length === 0) {
-            showEmptyState(chartContainer, emptyEl, statsEl);
+            showEmptyState(chartContainer, emptyEl, statsEl, filterDesc);
             return;
         }
 
@@ -57,21 +62,48 @@ export async function loadSavingsHistory(): Promise<void> {
         renderSavingsStats(data);
         renderSavingsChart(data.data_points, interval);
     } catch (error) {
-        console.error('Failed to load savings history:', error instanceof Error ? error.message : 'Unknown error');
-        showEmptyState(chartContainer, emptyEl, statsEl);
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Failed to load savings history:', msg);
+        showErrorState(chartContainer, emptyEl, statsEl, msg);
     }
 }
 
 /**
- * Show empty state when no data is available
+ * Show empty state when no data is available.
+ *
+ * filterDesc is a short human-readable description of the active
+ * topbar filter (e.g. "AWS" or "account abc-123"). When non-empty
+ * the empty-state copy says "no data for the selected filter" so
+ * the user understands the chart is hidden because of scoping, not
+ * because no purchases exist at all (issue #701).
  */
 function showEmptyState(
     chartContainer: HTMLElement | null | undefined,
     emptyEl: HTMLElement | null,
-    statsEl: HTMLElement | null
+    statsEl: HTMLElement | null,
+    filterDesc: string = '',
 ): void {
     if (chartContainer) chartContainer.classList.add('hidden');
-    if (emptyEl) emptyEl.classList.remove('hidden');
+    if (emptyEl) {
+        emptyEl.classList.remove('hidden');
+        // Update the copy inside the empty-state element so the message
+        // reflects whether a filter is active. The element is always
+        // present in the DOM (hidden by CSS class, not removed), so we
+        // can safely write innerHTML here — this is the only place that
+        // mutates it and the content is built from trusted constants.
+        const heading = emptyEl.querySelector('p:first-child');
+        const help = emptyEl.querySelector('p.help-text');
+        if (heading) {
+            heading.textContent = filterDesc
+                ? `No savings data for the selected filter (${filterDesc}).`
+                : 'No savings history data available yet.';
+        }
+        if (help) {
+            help.textContent = filterDesc
+                ? 'Try broadening the filter or selecting a different period.'
+                : 'Data will be collected hourly once you have active purchases.';
+        }
+    }
     if (statsEl) statsEl.classList.add('hidden');
 
     // Clear any existing chart
@@ -79,6 +111,45 @@ function showEmptyState(
         savingsChart.destroy();
         savingsChart = null;
     }
+}
+
+/**
+ * Show an explicit error state when the API call fails. Reuses the empty-state
+ * DOM element but sets copy that makes clear this is a fetch failure, not
+ * simply a lack of data (issue #701 CR finding).
+ */
+function showErrorState(
+    chartContainer: HTMLElement | null | undefined,
+    emptyEl: HTMLElement | null,
+    statsEl: HTMLElement | null,
+    message: string,
+): void {
+    if (chartContainer) chartContainer.classList.add('hidden');
+    if (statsEl) statsEl.classList.add('hidden');
+    if (emptyEl) {
+        emptyEl.classList.remove('hidden');
+        const heading = emptyEl.querySelector('p:first-child');
+        const help = emptyEl.querySelector('p.help-text');
+        if (heading) heading.textContent = 'Failed to load savings history.';
+        if (help) help.textContent = `Please retry. (${message})`;
+    }
+    if (savingsChart) {
+        savingsChart.destroy();
+        savingsChart = null;
+    }
+}
+
+/**
+ * Build a short human-readable description of the active topbar filter
+ * for use in the Savings History empty-state message. Returns '' when
+ * no filter is active (no chip selected) so callers can distinguish
+ * "unfiltered empty" from "filtered empty".
+ */
+function buildFilterDesc(provider: string, accountIDs: readonly string[]): string {
+    const parts: string[] = [];
+    if (provider && provider.toLowerCase() !== 'all') parts.push(provider.toUpperCase());
+    if (accountIDs.length > 0) parts.push(accountIDs[0] ?? '');
+    return parts.join(', ');
 }
 
 /**

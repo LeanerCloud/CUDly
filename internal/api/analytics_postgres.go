@@ -93,6 +93,13 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 	// both the top-line bucket totals and the by_service / by_provider
 	// breakdowns without a second trip to the DB.
 	//
+	// account_id is the legacy VARCHAR(20) external-account identifier
+	// (e.g. a 12-digit AWS account number) written by older code paths.
+	// cloud_account_id is the UUID FK to cloud_accounts added in migration
+	// 000011 and written by all current purchase flows. The topbar Account
+	// chip sends the cloud_accounts.id UUID, so we match BOTH columns so
+	// that rows written by either path are included (issue #701).
+	//
 	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above.
 	query := fmt.Sprintf(`
 		SELECT date_trunc('%s', timestamp) AS bucket,
@@ -104,7 +111,7 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND ($3 = '' OR account_id = $3)
+		  AND ($3 = '' OR account_id = $3 OR cloud_account_id::text = $3)
 		GROUP BY bucket, service, provider
 		ORDER BY bucket ASC
 	`, unit)
@@ -186,6 +193,9 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 		return nil, err
 	}
 
+	// account_id / cloud_account_id dual-column match: see QueryHistory
+	// comment for rationale (issue #701).
+	//
 	// #nosec G201 — `column` is allowlisted by dimensionToColumn above.
 	query := fmt.Sprintf(`
 		SELECT %s AS bucket,
@@ -195,7 +205,7 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND ($3 = '' OR account_id = $3)
+		  AND ($3 = '' OR account_id = $3 OR cloud_account_id::text = $3)
 		GROUP BY bucket
 		ORDER BY savings DESC
 	`, column)

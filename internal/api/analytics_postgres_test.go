@@ -164,3 +164,56 @@ func TestQueryBreakdown_ZeroTotalYieldsZeroPct(t *testing.T) {
 	assert.Equal(t, 0.0, out["ec2"].Percentage, "percentage must be 0 when total savings is 0")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestQueryHistory_CloudAccountIDFilter verifies that QueryHistory accepts a
+// cloud_accounts UUID as the accountID parameter (issue #701). The WHERE
+// clause matches on BOTH account_id (legacy VARCHAR(20) external ID) and
+// cloud_account_id::text (UUID FK), so rows written by either code path are
+// included. pgxmock validates the SQL shape and arg binding.
+func TestQueryHistory_CloudAccountIDFilter(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+	uuid := "aabbccdd-1234-5678-abcd-aabbccddee00"
+
+	bucket := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
+		AddRow(bucket, "ec2", "aws", 50.0, 20.0, 1)
+
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(\$3 = '' OR account_id = \$3 OR cloud_account_id::text = \$3\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), uuid).
+		WillReturnRows(rows)
+
+	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	points, summary, err := client.QueryHistory(ctx, uuid, start, end, "daily")
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.InDelta(t, 50.0, points[0].TotalSavings, 1e-9)
+	require.NotNil(t, summary)
+	assert.Equal(t, 1, summary.TotalPurchases)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestQueryBreakdown_CloudAccountIDFilter verifies that QueryBreakdown accepts
+// a UUID as the accountID (issue #701). Mirrors TestQueryHistory_CloudAccountIDFilter.
+func TestQueryBreakdown_CloudAccountIDFilter(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+	uuid := "aabbccdd-1234-5678-abcd-aabbccddee00"
+
+	rows := mock.NewRows([]string{"bucket", "savings", "upfront", "purchases"}).
+		AddRow("rds", 200.0, 80.0, 3)
+
+	mock.ExpectQuery(`(?s)SELECT service AS bucket.*AND \(\$3 = '' OR account_id = \$3 OR cloud_account_id::text = \$3\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), uuid).
+		WillReturnRows(rows)
+
+	out, err := client.QueryBreakdown(ctx, uuid,
+		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		"service")
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.InDelta(t, 200.0, out["rds"].TotalSavings, 1e-9)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

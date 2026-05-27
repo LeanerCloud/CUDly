@@ -19,7 +19,8 @@ jest.mock('../recommendations', () => ({
 }));
 
 jest.mock('../history', () => ({
-  loadHistory: jest.fn()
+  loadHistory: jest.fn(),
+  setupHistoryHandlers: jest.fn(),
 }));
 
 jest.mock('../settings', () => ({
