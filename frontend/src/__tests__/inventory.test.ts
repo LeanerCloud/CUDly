@@ -37,9 +37,9 @@ function buildInventoryDOM(): void {
   subnav.classList.add('inventory-subnav');
 
   for (const [name, label, isActive] of [
-    ['active-commitments', 'Active commitments', false],
+    ['active-commitments', 'Active commitments', true],
     ['coverage', 'Coverage', false],
-    ['ri-exchange', 'RI Exchange', true],
+    ['ri-exchange', 'RI Exchange', false],
   ] as const) {
     const btn = document.createElement('button');
     btn.classList.add('sub-tab-btn');
@@ -56,7 +56,6 @@ function buildInventoryDOM(): void {
   // container (matches index.html shape).
   const ac = document.createElement('section');
   ac.id = 'inventory-active-commitments';
-  ac.classList.add('hidden');
   const refresh = document.createElement('button');
   refresh.id = 'active-commitments-refresh-btn';
   refresh.textContent = 'Refresh';
@@ -82,6 +81,7 @@ function buildInventoryDOM(): void {
 
   const riSection = document.createElement('section');
   riSection.id = 'inventory-ri-exchange';
+  riSection.classList.add('hidden');
   riSection.textContent = 'ri-exchange';
   tab.appendChild(riSection);
 
@@ -165,25 +165,28 @@ describe('Inventory & Coverage sub-section switching', () => {
     expect(loadRIExchange).toHaveBeenCalledTimes(1);
   });
 
-  test('switchInventorySubSection falls back to ri-exchange for unknown sub-section', () => {
+  test('switchInventorySubSection falls back to active-commitments for unknown sub-section', () => {
     switchInventorySubSection('something-unknown');
 
-    expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(false);
-    expect(loadRIExchange).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(true);
+    expect(api.listActiveCommitments).toHaveBeenCalledTimes(1);
   });
 
   test('loadInventory wires sub-nav click handlers and lands on default', () => {
     loadInventory();
 
-    // Default landing is ri-exchange.
-    expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(false);
+    // Default landing is active-commitments (issue #751).
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(true);
 
     // Clicking a sub-tab button switches the section.
     const coverageBtn = document.querySelector<HTMLButtonElement>('[data-inv-subtab="coverage"]')!;
     coverageBtn.click();
     expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(false);
-    expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(true);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
   });
+
 });
 
 describe('loadActiveCommitments — fetch + render flow', () => {
