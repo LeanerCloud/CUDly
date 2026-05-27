@@ -79,6 +79,13 @@ describe('isSavingsPlanService (issue #132)', () => {
     expect(isSavingsPlanService(SAVINGS_PLANS_BUCKET_KEY)).toBe(true);
   });
 
+  // Issue #658: Azure SP client reports service = "savingsplans" (no hyphen),
+  // mirroring common.ServiceSavingsPlans. The Go IsSavingsPlan function
+  // handles this via an explicit equality check; we mirror it here.
+  test('matches the Azure SP umbrella slug "savingsplans" (issue #658)', () => {
+    expect(isSavingsPlanService('savingsplans')).toBe(true);
+  });
+
   test('rejects non-SP slugs', () => {
     expect(isSavingsPlanService('ec2')).toBe(false);
     expect(isSavingsPlanService('rds')).toBe(false);
@@ -140,6 +147,20 @@ describe('savingsPlansBucketLabel (issue #132)', () => {
     ).toBe('Savings Plans');
     expect(
       savingsPlansBucketLabel([SAVINGS_PLANS_BUCKET_KEY, 'savings-plans-compute']),
+    ).toBe('Savings Plans (Compute)');
+  });
+
+  // Issue #658: Azure SP rows use the umbrella slug "savingsplans" (no
+  // hyphen). It is treated as a family marker (like SAVINGS_PLANS_BUCKET_KEY),
+  // so it is excluded from the parenthetical plan-type list and the label
+  // gracefully falls back to "Savings Plans".
+  test('skips the Azure SP umbrella slug "savingsplans" and falls back (issue #658)', () => {
+    expect(savingsPlansBucketLabel(['savingsplans'])).toBe('Savings Plans');
+  });
+
+  test('mixed Azure SP and named AWS SP slugs: umbrella excluded from label', () => {
+    expect(
+      savingsPlansBucketLabel(['savingsplans', 'savings-plans-compute']),
     ).toBe('Savings Plans (Compute)');
   });
 });

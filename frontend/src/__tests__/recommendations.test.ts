@@ -2487,6 +2487,100 @@ describe('Bundle B: column header filter triggers', () => {
       expect((lastCall[1]?.values as string[]).sort()).toEqual(['savings-plans-compute', 'savings-plans-ec2instance']);
     });
   });
+
+  // Issue #658: Azure SP rows use service = "savingsplans" (no hyphen). Verify
+  // they appear in the rendered table and are recognized by the SP group toggle.
+  describe('Issue #658: Azure Savings Plans row rendering and SP group toggle', () => {
+    const azureSpRecs = [
+      { id: 'rec-aws-ec2',  provider: 'aws',   cloud_account_id: 'a1', service: 'ec2',           resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'rec-az-sp-1',  provider: 'azure',  cloud_account_id: 'sub1', service: 'savingsplans', resource_type: 'Compute',   region: 'eastus',    count: 2, term: 1, savings: 300, upfront_cost: 1200 },
+      { id: 'rec-sp-c',     provider: 'aws',   cloud_account_id: 'a1', service: 'savings-plans-compute', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+    ];
+
+    beforeEach(() => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: azureSpRecs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(azureSpRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(azureSpRecs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    });
+
+    test('Azure SP rows (service="savingsplans") appear in the rendered table', async () => {
+      await loadRecommendations();
+      // The table should contain a row with service badge "savingsplans".
+      const serviceBadges = Array.from(
+        document.querySelectorAll<HTMLElement>('td .service-badge'),
+      ).map((el) => el.textContent ?? '');
+      expect(serviceBadges).toContain('savingsplans');
+    });
+
+    test('service popover renders All Savings Plans toggle when Azure SP + AWS SP slugs are present', async () => {
+      // "savingsplans" + "savings-plans-compute" = 2 distinct SP slugs -> toggle should appear.
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>(
+        'th .column-filter-btn[data-column="service"]',
+      );
+      serviceBtn?.click();
+      const groupBox = document.querySelector<HTMLInputElement>(
+        '.column-filter-popover input[data-role="sp-group"]',
+      );
+      expect(groupBox).not.toBeNull();
+      const groupLabel = groupBox?.closest('label');
+      expect(groupLabel?.textContent).toContain('All Savings Plans');
+    });
+
+    test('clicking All Savings Plans toggle selects both Azure SP and AWS SP slugs', async () => {
+      // Use 4 distinct service values (ec2, rds, savingsplans, savings-plans-compute)
+      // so that selecting ec2+rds (2 of 4) gives an active filter, and then toggling
+      // the SP group on (adding savingsplans + savings-plans-compute) yields 4 of 4 = all,
+      // which we avoid by keeping ec2 only (1 of 4 + 2 SPs = 3 of 4, stays partial).
+      const widerRecs = [
+        { id: 'rec-ec2',    provider: 'aws',   cloud_account_id: 'a1',   service: 'ec2',                  resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { id: 'rec-rds',    provider: 'aws',   cloud_account_id: 'a1',   service: 'rds',                  resource_type: 'db.t3',     region: 'us-east-1', count: 1, term: 1, savings: 120, upfront_cost: 600 },
+        { id: 'rec-az-sp',  provider: 'azure', cloud_account_id: 'sub1', service: 'savingsplans',         resource_type: 'Compute',   region: 'eastus',    count: 2, term: 1, savings: 300, upfront_cost: 1200 },
+        { id: 'rec-aws-sp', provider: 'aws',   cloud_account_id: 'a1',   service: 'savings-plans-compute', resource_type: 'sp',       region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: widerRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(widerRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(widerRecs);
+      // Start with ec2 selected only; SP slugs are not in the active filter.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>(
+        'th .column-filter-btn[data-column="service"]',
+      );
+      serviceBtn?.click();
+
+      // SP group toggle should be unchecked (no SP slugs are in the active filter).
+      const groupBox = document.querySelector<HTMLInputElement>(
+        '.column-filter-popover input[data-role="sp-group"]',
+      );
+      expect(groupBox).not.toBeNull();
+      expect(groupBox?.checked).toBe(false);
+
+      // Tick the SP group toggle (browser flips -> checked on click).
+      groupBox!.checked = true;
+      groupBox!.dispatchEvent(new Event('change'));
+
+      // Commit includes ec2 (already checked) + savingsplans + savings-plans-compute
+      // = 3 of 4 distinct values -> persisted as a set (not collapsed to null).
+      const calls = (state.setRecommendationsColumnFilter as jest.Mock).mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[0]).toBe('service');
+      expect(lastCall[1]?.kind).toBe('set');
+      const values = (lastCall[1]?.values as string[]).sort();
+      // Both the Azure SP umbrella slug and the AWS SP plan-type slug should be selected.
+      expect(values).toContain('savingsplans');
+      expect(values).toContain('savings-plans-compute');
+      // ec2 remains in the selection.
+      expect(values).toContain('ec2');
+    });
+  });
 });
 
 describe('Bundle B: sticky bottom action box', () => {
@@ -3291,6 +3385,84 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     expect(sectionTitles.some((t) => t.includes('Savings Plans (Compute + SageMaker)'))).toBe(true);
     // Non-SP bucket title still uses the raw service slug.
     expect(sectionTitles.some((t) => t.includes('AWS / ec2'))).toBe(true);
+  });
+});
+
+// Issue #658: Azure SP rows (service="savingsplans") must collapse into
+// the same bulk-buy bucket as other SP types (savings-plans-*), matching
+// the Go IsSavingsPlan umbrella semantics.
+describe('Issue #658: Azure SP bulk-buy bucketing', () => {
+  beforeEach(async () => {
+    document.body.replaceChildren();
+    const recsTab = document.createElement('div');
+    recsTab.id = 'opportunities-tab';
+    recsTab.className = 'tab-content active';
+    const summary = document.createElement('div');
+    summary.id = 'recommendations-summary';
+    const list = document.createElement('div');
+    list.id = 'recommendations-list';
+    recsTab.appendChild(summary);
+    recsTab.appendChild(list);
+    document.body.appendChild(recsTab);
+    const purchaseModal = document.createElement('div');
+    purchaseModal.id = 'purchase-modal';
+    purchaseModal.className = 'hidden';
+    const purchaseDetails = document.createElement('div');
+    purchaseDetails.id = 'purchase-details';
+    purchaseModal.appendChild(purchaseDetails);
+    document.body.appendChild(purchaseModal);
+    jest.clearAllMocks();
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    const { clearFanOutBuckets, clearPurchaseModalRecommendations } = await import('../recommendations');
+    clearFanOutBuckets();
+    clearPurchaseModalRecommendations();
+  });
+
+  test('single Azure SP rec at term=1 lands in the single-bucket happy path', async () => {
+    const recs = [
+      { id: 'az-sp-1', provider: 'azure', cloud_account_id: 'sub1', service: 'savingsplans', resource_type: 'Compute', region: 'eastus', count: 2, term: 1, savings: 300, upfront_cost: 1200, payment: 'monthly' },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+
+    const { getFanOutBuckets, getPurchaseModalRecommendations } = await import('../recommendations');
+    // Single bucket -> happy path (no fan-out modal).
+    expect(getFanOutBuckets()).toBeNull();
+    const modalRecs = getPurchaseModalRecommendations();
+    expect(modalRecs).toHaveLength(1);
+    expect(modalRecs[0]!.service).toBe('savingsplans');
+  });
+
+  test('Azure SP + AWS SP-compute at same term collapse into one bucket', async () => {
+    const recs = [
+      { id: 'az-sp-1', provider: 'azure', cloud_account_id: 'sub1', service: 'savingsplans',       resource_type: 'Compute', region: 'eastus',    count: 2, term: 1, savings: 300, upfront_cost: 1200, payment: 'monthly' },
+      { id: 'aws-sp-1', provider: 'aws',  cloud_account_id: 'a1',   service: 'savings-plans-compute', resource_type: 'sp',   region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost:  500, payment: 'no-upfront' },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    // Both selected — but different providers mean different bucket keys
+    // (bucket key includes provider), so they land in separate buckets.
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    // Two separate providers -> two buckets even though both are SP service types.
+    expect(buckets!.length).toBe(2);
+    // Both buckets use the canonical SP bucket service key.
+    expect(buckets!.every((b) => b.service === 'savings-plans')).toBe(true);
   });
 });
 
