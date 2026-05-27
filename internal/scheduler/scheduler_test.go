@@ -2172,3 +2172,324 @@ func TestScheduler_ResolveAmbientHostAccountID_STSTimeout(t *testing.T) {
 	assert.Less(t, elapsed, 4*time.Second, "resolveAmbientHostAccountID must not block beyond its internal 3s deadline")
 	mockStore.AssertNotCalled(t, "GetCloudAccountByExternalID", mock.Anything, mock.Anything, mock.Anything)
 }
+
+// Issue #662: Azure ambient-path tagging fix — when AZURE_SUBSCRIPTION_ID
+// matches a registered cloud_accounts row the ambient path must tag every
+// rec with that account's UUID instead of nil.
+func TestScheduler_CollectAzureRecommendations_AmbientTagging_HappyPath(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-abc-123")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	// No enabled Azure accounts — ambient fallback fires.
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{
+			Provider:         common.ProviderAzure,
+			Service:          common.ServiceCompute,
+			Region:           "eastus",
+			ResourceType:     "Standard_D2s_v3",
+			Count:            1,
+			Term:             "1yr",
+			EstimatedSavings: 20.0,
+		},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+		return cfg != nil && cfg.AzureSubscriptionID == "sub-abc-123"
+	})).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	// Registered host account (disabled on purpose — registration alone is the signal).
+	registered := &config.CloudAccount{
+		ID:                  "az-uuid-001",
+		Provider:            "azure",
+		ExternalID:          "sub-abc-123",
+		AzureSubscriptionID: "sub-abc-123",
+		Enabled:             false,
+	}
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "azure", "sub-abc-123").Return(registered, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered Azure account UUID, not nil")
+	assert.Equal(t, "az-uuid-001", *recs[0].CloudAccountID)
+	assert.Equal(t, []string{"az-uuid-001"}, acctIDs,
+		"eviction account-keys must be the registered UUID, not the ambient sentinel")
+}
+
+// Issue #662: Azure ambient path — subscription not in cloud_accounts table
+// must keep CloudAccountID = nil (truly-orphan case preserved).
+func TestScheduler_CollectAzureRecommendations_AmbientTagging_NoRegisteredAccount(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-unregistered")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderAzure, Service: common.ServiceCompute, Region: "westus", ResourceType: "Standard_B2s", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+		return cfg != nil && cfg.AzureSubscriptionID == "sub-unregistered"
+	})).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	// Store has no matching row.
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "azure", "sub-unregistered").Return(nil, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan Azure deployment must keep CloudAccountID = nil")
+	assert.Equal(t, []string{""}, acctIDs, "eviction account-keys must keep the ambient sentinel")
+}
+
+// Issue #662: Azure ambient path — store error must NOT fail the collection;
+// recs are returned with the pre-fix nil tagging.
+func TestScheduler_CollectAzureRecommendations_AmbientTagging_StoreError(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-abc-123")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderAzure, Service: common.ServiceCompute, Region: "eastus", ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+		return cfg != nil && cfg.AzureSubscriptionID == "sub-abc-123"
+	})).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "azure", "sub-abc-123").
+		Return(nil, errors.New("db unreachable"))
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	require.NoError(t, err, "store error must NOT fail the Azure collection")
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "store error must leave the pre-fix nil tagging in place")
+	assert.Equal(t, []string{""}, acctIDs)
+}
+
+// Issue #662: when AZURE_SUBSCRIPTION_ID is not set, collectAzureRecommendations
+// must return empty without attempting an ambient provider call.
+func TestScheduler_CollectAzureRecommendations_NoEnvVar_Skips(t *testing.T) {
+	// Ensure the env var is absent for this test.
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, recs)
+	assert.Empty(t, acctIDs)
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Issue #662: GCP ambient-path tagging fix — when GCP_PROJECT_ID matches a
+// registered cloud_accounts row the ambient path must tag every rec with
+// that account's UUID instead of nil.
+func TestScheduler_CollectGCPRecommendations_AmbientTagging_HappyPath(t *testing.T) {
+	t.Setenv("GCP_PROJECT_ID", "my-gcp-project")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	// No enabled GCP accounts — ambient fallback fires.
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{
+			Provider:         common.ProviderGCP,
+			Service:          common.ServiceCompute,
+			Region:           "us-central1",
+			ResourceType:     "n2-standard-4",
+			Count:            1,
+			Term:             "1yr",
+			EstimatedSavings: 30.0,
+		},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	// Registered host account.
+	registered := &config.CloudAccount{
+		ID:           "gcp-uuid-001",
+		Provider:     "gcp",
+		ExternalID:   "my-gcp-project",
+		GCPProjectID: "my-gcp-project",
+		Enabled:      false,
+	}
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "gcp", "my-gcp-project").Return(registered, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered GCP account UUID, not nil")
+	assert.Equal(t, "gcp-uuid-001", *recs[0].CloudAccountID)
+	assert.Equal(t, []string{"gcp-uuid-001"}, acctIDs,
+		"eviction account-keys must be the registered UUID, not the ambient sentinel")
+}
+
+// Issue #662: GCP ambient path — project not in cloud_accounts table must
+// keep CloudAccountID = nil (truly-orphan case preserved).
+func TestScheduler_CollectGCPRecommendations_AmbientTagging_NoRegisteredAccount(t *testing.T) {
+	t.Setenv("GCP_PROJECT_ID", "unregistered-project")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderGCP, Service: common.ServiceCompute, Region: "us-central1", ResourceType: "n2-standard-2", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	// Store has no matching row.
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "gcp", "unregistered-project").Return(nil, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan GCP deployment must keep CloudAccountID = nil")
+	assert.Equal(t, []string{""}, acctIDs, "eviction account-keys must keep the ambient sentinel")
+}
+
+// Issue #662: GCP ambient path — store error must NOT fail the collection;
+// recs are returned with the pre-fix nil tagging.
+func TestScheduler_CollectGCPRecommendations_AmbientTagging_StoreError(t *testing.T) {
+	t.Setenv("GCP_PROJECT_ID", "my-gcp-project")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	recommendations := []common.Recommendation{
+		{Provider: common.ProviderGCP, Service: common.ServiceCompute, Region: "us-central1", ResourceType: "n2-standard-4", Count: 1, Term: "1yr"},
+	}
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", mock.Anything).Return(recommendations, nil)
+
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "gcp", "my-gcp-project").
+		Return(nil, errors.New("db unreachable"))
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	require.NoError(t, err, "store error must NOT fail the GCP collection")
+	require.Len(t, recs, 1)
+	assert.Nil(t, recs[0].CloudAccountID, "store error must leave the pre-fix nil tagging in place")
+	assert.Equal(t, []string{""}, acctIDs)
+}
+
+// Issue #662: when GCP_PROJECT_ID is not set, collectGCPRecommendations
+// must return empty without attempting an ambient provider call.
+func TestScheduler_CollectGCPRecommendations_NoEnvVar_Skips(t *testing.T) {
+	t.Setenv("GCP_PROJECT_ID", "")
+
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+
+	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
+
+	sched := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, recs)
+	assert.Empty(t, acctIDs)
+	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Issue #662: resolveAmbientAccountID must return "" when externalID is empty.
+func TestScheduler_ResolveAmbientAccountID_EmptyExternalID(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	sched := &Scheduler{config: mockStore}
+	got := sched.resolveAmbientAccountID(context.Background(), "azure", "")
+	assert.Empty(t, got, "empty externalID must return empty without a store call")
+	mockStore.AssertNotCalled(t, "GetCloudAccountByExternalID", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Issue #662: resolveAmbientAccountID must return "" and swallow the error
+// when the store call fails.
+func TestScheduler_ResolveAmbientAccountID_StoreError(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "gcp", "some-project").
+		Return(nil, errors.New("store down"))
+	sched := &Scheduler{config: mockStore}
+	got := sched.resolveAmbientAccountID(context.Background(), "gcp", "some-project")
+	assert.Empty(t, got, "store error must collapse to empty (don't fail the collection)")
+}

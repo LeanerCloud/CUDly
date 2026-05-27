@@ -644,6 +644,72 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 	return acct.ID
 }
 
+// resolveAmbientAccountID is the provider-agnostic counterpart to
+// resolveAmbientHostAccountID: given the host's external identifier (subscription
+// ID for Azure, project ID for GCP) it checks whether a registered cloud_accounts
+// row exists for (provider, externalID) and returns its UUID. Returns "" on any
+// error or when no row matches, preserving the pre-fix nil-tagging behaviour so
+// truly-orphan deployments are unaffected. All errors are intentionally swallowed
+// (logged at warn) — this is a best-effort UX improvement on the ambient path
+// and must not break the collection.
+func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, externalID string) string {
+	if externalID == "" {
+		return ""
+	}
+	acct, err := s.config.GetCloudAccountByExternalID(ctx, provider, externalID)
+	if err != nil {
+		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", provider, externalID, err)
+		return ""
+	}
+	if acct == nil {
+		// Truly orphan deployment — preserve pre-fix nil tagging.
+		return ""
+	}
+	return acct.ID
+}
+
+// collectAzureAmbient collects Azure recommendations using the host's managed
+// identity (DefaultAzureCredential / ambient credentials). Used by the ambient
+// fallback path in collectAzureRecommendations when no accounts are registered.
+// subscriptionID is passed explicitly to avoid an unnecessary Azure API round-trip
+// to auto-discover subscriptions — the caller already resolved it from env.
+func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, error) {
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.ProviderConfig{
+		AzureSubscriptionID: subscriptionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create ambient Azure provider: %w", err)
+	}
+	recClient, err := prov.GetRecommendationsClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get Azure recommendations client: %w", err)
+	}
+	recs, err := recClient.GetAllRecommendations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get Azure recommendations: %w", err)
+	}
+	return s.convertRecommendations(recs, "azure"), nil
+}
+
+// collectGCPAmbient collects GCP recommendations using Application Default
+// Credentials. Used by the ambient fallback path in collectGCPRecommendations
+// when no accounts are registered.
+func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.RecommendationRecord, error) {
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create ambient GCP provider: %w", err)
+	}
+	recClient, err := prov.GetRecommendationsClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get GCP recommendations client: %w", err)
+	}
+	recs, err := recClient.GetAllRecommendations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get GCP recommendations: %w", err)
+	}
+	return s.convertRecommendations(recs, "gcp"), nil
+}
+
 func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
 	// Self-account (role_arn with no role ARN) or ambient modes use ambient credentials
 	if acct.AWSRoleARN == "" {
@@ -667,11 +733,31 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,
 // resolving per-account federated credentials via the KMS signer.
+// When no accounts are registered but AZURE_SUBSCRIPTION_ID is set (CUDly
+// running natively on Azure with managed identity), falls back to ambient
+// credentials and tags recommendations with the registered subscription's
+// UUID if found in cloud_accounts.
 func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "azure")
 	if len(accounts) == 0 {
-		logging.Info("No enabled Azure accounts — skipping Azure recommendations")
-		return nil, nil, nil
+		// Issue #662: mirror the AWS ambient-path tagging fix for Azure.
+		// When the host subscription matches a registered cloud_accounts row,
+		// tag recs with that account's UUID instead of returning nil.
+		// Best-effort: env lookup or store errors must not fail the collection.
+		subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
+		if subscriptionID == "" {
+			logging.Info("No enabled Azure accounts — skipping Azure recommendations")
+			return nil, nil, nil
+		}
+		recs, err := s.collectAzureAmbient(ctx, subscriptionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
+			recs = s.tagAccount(recs, acctID)
+			return recs, []string{acctID}, nil
+		}
+		return recs, []string{""}, nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
@@ -708,11 +794,31 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 
 // collectGCPRecommendations fans out across all enabled GCP accounts,
 // resolving per-account federated credentials via the KMS signer.
+// When no accounts are registered but GCP_PROJECT_ID is set (CUDly
+// running natively on GCP with ADC), falls back to ambient credentials
+// and tags recommendations with the registered project's UUID if found
+// in cloud_accounts.
 func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "gcp")
 	if len(accounts) == 0 {
-		logging.Info("No enabled GCP accounts — skipping GCP recommendations")
-		return nil, nil, nil
+		// Issue #662: mirror the AWS ambient-path tagging fix for GCP.
+		// When the host project matches a registered cloud_accounts row,
+		// tag recs with that account's UUID instead of returning nil.
+		// Best-effort: env lookup or store errors must not fail the collection.
+		projectID := os.Getenv("GCP_PROJECT_ID")
+		if projectID == "" {
+			logging.Info("No enabled GCP accounts — skipping GCP recommendations")
+			return nil, nil, nil
+		}
+		recs, err := s.collectGCPAmbient(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
+			recs = s.tagAccount(recs, acctID)
+			return recs, []string{acctID}, nil
+		}
+		return recs, []string{""}, nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
