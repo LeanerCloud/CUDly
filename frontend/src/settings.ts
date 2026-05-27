@@ -9,7 +9,7 @@ import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
-import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel } from './commitmentOptions';
+import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
 import { canAccess } from './permissions';
@@ -574,17 +574,10 @@ function renderAccountsList(
   // unambiguous.
 }
 
-// AWS payment-option choices, kept in sync with the per-service Purchasing
-// selectors in frontend/src/index.html (e.g. #aws-ec2-payment). Centralised
-// here so the override editor and the global selectors can't drift.
-const AWS_PAYMENT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'no-upfront',      label: 'No Upfront' },
-  { value: 'partial-upfront', label: 'Partial Upfront' },
-  { value: 'all-upfront',     label: 'All Upfront' },
-];
-
 // AWS services that can carry a per-account override. Mirrors the AWS-only
-// entries in SERVICE_FIELDS \u2014 Azure/GCP override creation is a follow-up
+// entries in SERVICE_FIELDS. Issue #109 adds AZURE_OVERRIDE_SERVICES and
+// GCP_OVERRIDE_SERVICES below; getOverrideServicesForProvider dispatches to
+// the right list so the create modal is provider-aware.
 // (issue #104) since the backend payment/term semantics differ per provider.
 const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'ec2',                       label: 'EC2 (Reserved Instances)' },
@@ -603,6 +596,29 @@ const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'savings-plans-database',    label: 'Database Savings Plans' },
 ];
 
+// Human-readable labels for Azure and GCP services used in the override
+// service dropdown. AWS labels are carried by AWS_OVERRIDE_SERVICES above.
+const AZURE_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'vm',        label: 'Virtual Machines' },
+  { value: 'sql',       label: 'SQL Database' },
+  { value: 'cosmosdb',  label: 'Cosmos DB' },
+  { value: 'redis',     label: 'Cache for Redis' },
+  { value: 'search',    label: 'AI Search' },
+];
+
+const GCP_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'compute',     label: 'Compute Engine' },
+  { value: 'sql',         label: 'Cloud SQL' },
+  { value: 'memorystore', label: 'Memorystore' },
+  { value: 'storage',     label: 'Cloud Storage' },
+];
+
+/** Return the service list for the given provider's override modal. */
+function getOverrideServicesForProvider(provider: string): ReadonlyArray<{ value: string; label: string }> {
+  if (provider === 'azure') return AZURE_OVERRIDE_SERVICES;
+  if (provider === 'gcp')   return GCP_OVERRIDE_SERVICES;
+  return AWS_OVERRIDE_SERVICES;
+}
 
 /**
  * Build the per-row Payment <select> for the overrides panel. Issue #23.
@@ -634,15 +650,16 @@ function buildPaymentOverrideSelect(
   select.appendChild(inheritOpt);
 
   // Filter the payment dropdown to only the (term, payment) combinations
-  // AWS actually supports for THIS service. e.g. RDS rejects 3yr no-upfront,
-  // so an RDS override with term=3 must not list no-upfront. Per #107.
-  // Falls back to the full AWS list when term is missing (override row was
-  // saved without a term) — the global default's term will resolve at
+  // the provider/service actually supports. e.g. RDS rejects 3yr no-upfront;
+  // Azure has upfront/monthly only; GCP has monthly only. Per #107.
+  // Falls back to the full provider payment list when term is missing (override
+  // row was saved without a term) — the global default's term will resolve at
   // recommendation time, and we can't pre-validate without it.
   const overrideTerm = override.term ?? 0;
+  const providerPayments = getCommitmentConfig(override.provider).payments;
   const validPayments = overrideTerm > 0
     ? getValidPaymentOptions(override.provider, override.service, overrideTerm)
-    : AWS_PAYMENT_OPTIONS.map(p => ({ value: p.value, label: p.label }));
+    : providerPayments.map(p => ({ value: p.value, label: p.label }));
 
   for (const { value, label } of validPayments) {
     const opt = document.createElement('option');
@@ -710,9 +727,6 @@ async function handlePaymentOverrideChange(
       message: `Payment override updated for ${override.provider}/${override.service}.`,
       kind: 'success',
     });
-    // The inline payment selector only renders for AWS rows (per the
-    // o.provider === 'aws' guard in loadOverridesPanel's row loop), so
-    // override.provider is always 'aws' at this call site — cast is safe.
     await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
     await refreshRecommendationsAfterOverrideChange();
   } catch (err) {
@@ -974,12 +988,6 @@ function buildEnabledOverrideCheckbox(
     `Enable ${override.provider}/${override.service} override`,
   );
 
-  if (override.provider !== 'aws') {
-    input.disabled = true;
-    input.title = 'Per-provider override editing is AWS-only — Azure/GCP coming with the provider-aware modal';
-    return input;
-  }
-
   input.addEventListener('change', () => {
     void handleEnabledOverrideChange(accountId, override, input, panel, row);
   });
@@ -1036,9 +1044,10 @@ async function handleEnabledOverrideChange(
  * Populated state: render the existing table + an "Add override" button at
  * the top so users can add another override for a different service.
  *
- * The Add Override flow is AWS-only for now; Azure/GCP keep the read-only
- * empty-state text since their per-product term/payment semantics differ
- * (issue #104 follow-up tracks Azure/GCP modal support).
+ * Issue #109: Azure and GCP accounts now also get the "Add override" button
+ * and full inline editing (term, payment, coverage, enabled) on existing rows.
+ * Provider-specific payment options are derived via getCommitmentConfig so
+ * GCP shows "Monthly only" and Azure shows "Upfront / Monthly".
  */
 /**
  * Open the per-account overrides modal (issue #122). Replaces the inline
@@ -1085,14 +1094,13 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     const overrides = await api.listAccountServiceOverrides(accountId);
     panel.textContent = '';
 
-    const canCreate = provider === 'aws';
+    // Issue #109: all providers can now create overrides.
+    const canCreate = true;
 
     if (!overrides || overrides.length === 0) {
       const msg = document.createElement('p');
       msg.className = 'help-text';
-      msg.textContent = canCreate
-        ? 'No service overrides yet for this account.'
-        : 'No service overrides set. All services use global defaults.';
+      msg.textContent = 'No service overrides yet for this account.';
       panel.appendChild(msg);
       if (canCreate) {
         // No overrides yet \u2014 auto-open the modal so the user lands directly
@@ -1148,37 +1156,24 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
       const serviceTd = tr.insertCell();
       serviceTd.textContent = `${o.provider}/${o.service}`;
 
-      // Term cell: editable <select> for AWS (issue #110); read-only text
-      // for Azure/GCP until the provider-aware modal lands.
+      // Term cell: editable <select> for all providers (issue #109 extends
+      // the AWS-only #110 inline editing to Azure/GCP).
       const termTd = tr.insertCell();
-      if (o.provider === 'aws') {
-        termTd.appendChild(buildTermOverrideSelect(accountId, o, panel));
-      } else {
-        termTd.textContent = o.term !== undefined ? `${o.term}yr` : '\u2014';
-      }
+      termTd.appendChild(buildTermOverrideSelect(accountId, o, panel));
 
-      // Payment cell: editable <select> for AWS (the only provider whose
-      // reservations support distinct payment options); read-only text for
-      // Azure/GCP. Issue #23.
+      // Payment cell: editable <select> for all providers. GCP's payment
+      // dropdown only shows "Monthly"; Azure shows upfront/monthly. The
+      // underlying getValidPaymentOptions already handles per-provider
+      // filtering, so the same builder works for all three clouds.
       const paymentTd = tr.insertCell();
-      if (o.provider === 'aws') {
-        paymentTd.appendChild(buildPaymentOverrideSelect(accountId, o, panel));
-      } else {
-        paymentTd.textContent = o.payment ?? '\u2014';
-      }
+      paymentTd.appendChild(buildPaymentOverrideSelect(accountId, o, panel));
 
-      // Coverage cell: editable numeric <input> for AWS (issue #110);
-      // read-only text for Azure/GCP.
+      // Coverage cell: editable numeric <input> for all providers (issue #109).
       const coverageTd = tr.insertCell();
-      if (o.provider === 'aws') {
-        coverageTd.appendChild(buildCoverageOverrideInput(accountId, o, panel));
-      } else {
-        coverageTd.textContent = o.coverage !== undefined ? `${o.coverage}%` : '\u2014';
-      }
+      coverageTd.appendChild(buildCoverageOverrideInput(accountId, o, panel));
 
       // Enabled cell: per-row checkbox toggling account_service_overrides.enabled.
-      // AWS-editable, disabled (with tooltip) for non-AWS to keep the column
-      // alignment consistent across provider types. Issue #110.
+      // Editable for all providers. Issue `#110`, extended to Azure/GCP in `#109`.
       const enabledTd = tr.insertCell();
       enabledTd.appendChild(buildEnabledOverrideCheckbox(accountId, o, panel, tr));
 
@@ -1456,9 +1451,9 @@ export function openOverrideModal(
   const errEl = document.getElementById('override-form-error');
   if (errEl) errEl.textContent = '';
 
-  // Populate the service dropdown, excluding services this account already
-  // has an override for. AWS-only for now (issue #104 follow-up tracks
-  // Azure/GCP).
+  // Populate the service dropdown with provider-specific services, excluding
+  // any that already have an override for this account. Issue #109 extends
+  // this to Azure and GCP (previously AWS-only per issue #104 follow-up).
   const used = new Set(
     existingOverrides
       .filter(o => o.provider === provider)
@@ -1467,7 +1462,7 @@ export function openOverrideModal(
   const select = document.getElementById('override-service') as HTMLSelectElement | null;
   if (select) {
     select.replaceChildren();
-    const available = AWS_OVERRIDE_SERVICES.filter(s => !used.has(s.value));
+    const available = getOverrideServicesForProvider(provider).filter(s => !used.has(s.value));
     if (available.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
@@ -1527,11 +1522,12 @@ function syncOverridePaymentOptions(provider: string): void {
   paymentSel.appendChild(inheritOpt);
 
   // When service or term is unset, can't run the validity check yet —
-  // show the full AWS payment list so the user can choose; the
+  // show the full provider payment list so the user can choose; the
   // submit-side guard will catch any invalid combo on Save.
+  const provPayments = getCommitmentConfig(provider).payments;
   const candidates = (service && Number.isFinite(term) && term > 0)
     ? getValidPaymentOptions(provider, service, term).map(p => ({ value: p.value, label: p.label }))
-    : AWS_PAYMENT_OPTIONS.map(p => ({ value: p.value, label: p.label }));
+    : provPayments.map(p => ({ value: p.value, label: p.label }));
 
   for (const { value, label } of candidates) {
     const opt = document.createElement('option');
