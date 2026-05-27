@@ -83,15 +83,21 @@ export async function loadDashboard(): Promise<void> {
     // api.Recommendation and LocalRecommendation are structurally identical
     // except for provider: string vs provider: Provider. The provider values
     // from the API are always the union members at runtime, so this cast is safe.
-    // Defensive Array.isArray guard: apiRequest's catch block returns `null` when
-    // response.json() fails (HTTP 2xx with empty/non-JSON body), so the settled
-    // value may be null or a non-array shape even when status === 'fulfilled'.
-    // #304: that non-array value reaches groupRecsByCell which iterates via
-    // `for...of`, throwing "X is not iterable" and blanking the dashboard.
+    // Defensive extraction: the backend always returns the envelope shape
+    //   { recommendations: [...], summary: {...}, regions: [...] }
+    // so the real runtime value is never a flat array. We unwrap it here to
+    // match what the Opportunities page does (cast to RecommendationsResponse
+    // and read .recommendations). A flat-array result is also accepted so
+    // test fixtures that resolve with a plain array continue to work.
+    // #304: apiRequest's catch block returns `null` on a 2xx with empty/non-JSON
+    // body; guard against null / unexpected shapes to avoid "X is not iterable".
     const rawRecs = recsResult.status === 'fulfilled' ? recsResult.value : null;
-    const recs: readonly LocalRecommendation[] = Array.isArray(rawRecs)
-      ? (rawRecs as unknown as LocalRecommendation[])
-      : [];
+    const recsArray = Array.isArray(rawRecs)
+      ? rawRecs
+      : (rawRecs != null && typeof rawRecs === 'object' && Array.isArray((rawRecs as { recommendations?: unknown }).recommendations))
+        ? (rawRecs as { recommendations: unknown[] }).recommendations
+        : [];
+    const recs: readonly LocalRecommendation[] = recsArray as unknown as LocalRecommendation[];
 
     if (summaryResult.status === 'rejected') {
       throw summaryResult.reason as Error;

@@ -662,6 +662,43 @@ describe('Dashboard Module', () => {
       expect(savingsCard?.innerHTML).toContain('$0');
     });
 
+    // #749: the real backend always returns the envelope shape
+    // { recommendations: [...], summary: {...}, regions: [...] }, not a flat
+    // array. The dashboard must unwrap .recommendations so the savings range
+    // is computed from the actual recs rather than falling back to $0.
+    test('#749: getRecommendations returning envelope shape populates savings card', async () => {
+      const mockRecs = [
+        { id: 'r1', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 't3.medium', term: 1, savings: 150, upfront_cost: 0, count: 1 },
+        { id: 'r2', provider: 'aws', service: 'rds', region: 'us-east-1', resource_type: 'db.t3.medium', term: 1, savings: 62, upfront_cost: 0, count: 1 },
+      ];
+      // Simulate the real API response shape (envelope, not flat array).
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        recommendations: mockRecs,
+        summary: { total_count: 2, total_monthly_savings: 212, total_upfront_cost: 0, avg_payback_months: 0 },
+        regions: ['us-east-1'],
+      } as unknown);
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0, // would be $0 if the flat-sum path were used
+        total_recommendations: 2,
+        active_commitments: 0,
+        committed_monthly: 0,
+        current_coverage: 0,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const savingsCard = document.querySelector('#summary .card');
+      // mockGroupRecsByCell / mockPageLevelRange return savingsMin=300,
+      // savingsMax=400 for any non-empty recs array. The card must NOT be $0.
+      expect(savingsCard?.textContent).toContain('$300');
+      expect(savingsCard?.textContent).toContain('$400');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
+    });
+
     // #304: summaryData.by_service missing entirely (null/undefined from
     // backend). renderSavingsChart receives `undefined || {}` = {} which
     // is safe; verify no throw and the error banner does not appear.
