@@ -62,8 +62,9 @@ export async function loadSavingsHistory(): Promise<void> {
         renderSavingsStats(data);
         renderSavingsChart(data.data_points, interval);
     } catch (error) {
-        console.error('Failed to load savings history:', error instanceof Error ? error.message : 'Unknown error');
-        showEmptyState(chartContainer, emptyEl, statsEl, filterDesc);
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Failed to load savings history:', msg);
+        showErrorState(chartContainer, emptyEl, statsEl, msg);
     }
 }
 
@@ -113,6 +114,32 @@ function showEmptyState(
 }
 
 /**
+ * Show an explicit error state when the API call fails. Reuses the empty-state
+ * DOM element but sets copy that makes clear this is a fetch failure, not
+ * simply a lack of data (issue #701 CR finding).
+ */
+function showErrorState(
+    chartContainer: HTMLElement | null | undefined,
+    emptyEl: HTMLElement | null,
+    statsEl: HTMLElement | null,
+    message: string,
+): void {
+    if (chartContainer) chartContainer.classList.add('hidden');
+    if (statsEl) statsEl.classList.add('hidden');
+    if (emptyEl) {
+        emptyEl.classList.remove('hidden');
+        const heading = emptyEl.querySelector('p:first-child');
+        const help = emptyEl.querySelector('p.help-text');
+        if (heading) heading.textContent = 'Failed to load savings history.';
+        if (help) help.textContent = `Please retry. (${message})`;
+    }
+    if (savingsChart) {
+        savingsChart.destroy();
+        savingsChart = null;
+    }
+}
+
+/**
  * Build a short human-readable description of the active topbar filter
  * for use in the Savings History empty-state message. Returns '' when
  * no filter is active (no chip selected) so callers can distinguish
@@ -120,7 +147,7 @@ function showEmptyState(
  */
 function buildFilterDesc(provider: string, accountIDs: readonly string[]): string {
     const parts: string[] = [];
-    if (provider) parts.push(provider.toUpperCase());
+    if (provider && provider.toLowerCase() !== 'all') parts.push(provider.toUpperCase());
     if (accountIDs.length > 0) parts.push(accountIDs[0] ?? '');
     return parts.join(', ');
 }

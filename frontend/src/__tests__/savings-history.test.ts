@@ -1049,7 +1049,12 @@ describe('Savings History Module', () => {
       expect(heading?.textContent).toContain(testUUID);
     });
 
-    test('shows filter-aware message on API error with active filter', async () => {
+    test('shows distinct error copy on API failure (not the filter-aware empty state)', async () => {
+      // CR feedback on PR #741: a fetch failure used to fall through to the
+      // "no data for the selected filter" empty state, which masked real
+      // outages (network/5xx/auth). The error path must now render its own
+      // copy so the user can tell "filter matched nothing" from "the fetch
+      // never completed".
       (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
       (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
       (getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('network failure'));
@@ -1059,7 +1064,78 @@ describe('Savings History Module', () => {
 
       const emptyEl = document.getElementById('savings-history-empty');
       const heading = emptyEl?.querySelector('p:first-child');
-      expect(heading?.textContent).toContain('AWS');
+      const help = emptyEl?.querySelector('p.help-text');
+      expect(heading?.textContent).toBe('Failed to load savings history.');
+      expect(help?.textContent).toContain('network failure');
+      // Error copy is NOT the empty-state copy — it does not name the filter.
+      expect(heading?.textContent).not.toContain('AWS');
+      expect(heading?.textContent).not.toContain('available yet');
+    });
+
+    test('error state hides chart container and stats', async () => {
+      (getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('boom'));
+      console.error = jest.fn();
+
+      await loadSavingsHistory();
+
+      const chartContainer = document.getElementById('savings-history-chart')?.parentElement;
+      const statsEl = document.getElementById('savings-stats');
+      expect(chartContainer?.classList.contains('hidden')).toBe(true);
+      expect(statsEl?.classList.contains('hidden')).toBe(true);
+    });
+
+    test('error state handles non-Error rejection with "Unknown error"', async () => {
+      // Generic reject value (e.g. a thrown string from a non-Error catch path)
+      // must still surface a helpful message rather than `[object Object]`.
+      (getSavingsAnalytics as jest.Mock).mockRejectedValue('something broke');
+      console.error = jest.fn();
+
+      await loadSavingsHistory();
+
+      const help = document.getElementById('savings-history-empty')?.querySelector('p.help-text');
+      expect(help?.textContent).toContain('Unknown error');
+    });
+  });
+
+  // CR feedback on PR #741 F2: a provider chip set to the "all" sentinel
+  // is the user explicitly choosing unfiltered, so buildFilterDesc must not
+  // include "ALL" in the empty-state copy.
+  describe('buildFilterDesc — "all" sentinel handling (PR #741 F2)', () => {
+    test('treats provider === "all" as unfiltered (no provider clause in heading)', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('all');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const heading = document.getElementById('savings-history-empty')?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('available yet');
+      expect(heading?.textContent).not.toMatch(/all/i);
+    });
+
+    test('treats provider === "ALL" (case-insensitive) as unfiltered', async () => {
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('ALL');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const heading = document.getElementById('savings-history-empty')?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain('available yet');
+      expect(heading?.textContent).not.toContain('ALL');
+    });
+
+    test('still shows account clause when provider === "all" but account chip is set', async () => {
+      const testUUID = 'aabbccdd-1234-5678-abcd-aabbccddee00';
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('all');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([testUUID]);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsHistory();
+
+      const heading = document.getElementById('savings-history-empty')?.querySelector('p:first-child');
+      expect(heading?.textContent).toContain(testUUID);
+      expect(heading?.textContent).not.toMatch(/all,/i);
     });
   });
 });

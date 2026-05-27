@@ -179,7 +179,7 @@ func TestQueryHistory_CloudAccountIDFilter(t *testing.T) {
 	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
 		AddRow(bucket, "ec2", "aws", 50.0, 20.0, 1)
 
-	mock.ExpectQuery(`SELECT date_trunc\('day', timestamp\)`).
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(\$3 = '' OR account_id = \$3 OR cloud_account_id::text = \$3\)`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), uuid).
 		WillReturnRows(rows)
 
@@ -204,7 +204,7 @@ func TestQueryBreakdown_CloudAccountIDFilter(t *testing.T) {
 	rows := mock.NewRows([]string{"bucket", "savings", "upfront", "purchases"}).
 		AddRow("rds", 200.0, 80.0, 3)
 
-	mock.ExpectQuery(`SELECT service AS bucket`).
+	mock.ExpectQuery(`(?s)SELECT service AS bucket.*AND \(\$3 = '' OR account_id = \$3 OR cloud_account_id::text = \$3\)`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), uuid).
 		WillReturnRows(rows)
 
