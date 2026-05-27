@@ -61,3 +61,9 @@
     font-weight: var(--cudly-fw-bold);
     color: var(--cudly-primary);
 }
+
+.stat-unit-context {
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+    margin-top: 0.25rem;
+}
