@@ -248,12 +248,13 @@ function getPeriodDates(period: string): { start: Date; end: Date; interval: 'ho
  */
 function renderSavingsStats(data: SavingsAnalyticsResponse): void {
     const periodSavingsEl = document.getElementById('period-savings');
-    // The unit indicator belongs on the label, not appended to the value.
+    // The unit indicator belongs below the value, not inside the label.
     // Period Savings is a cumulative dollar total over the selected date range,
-    // not a per-unit rate -- appending /mo, /hr, /yr would misrepresent it as
-    // a rate.  The label "Period Savings (monthly)" shows which view mode is
-    // active without implying a rate.
+    // not a per-unit rate -- the label stays plain ("Period Savings") and the
+    // sub-line (#period-savings-unit) shows which view mode is active without
+    // implying a rate.
     const periodSavingsLabelEl = document.getElementById('period-savings-label');
+    const periodSavingsUnitEl = document.getElementById('period-savings-unit');
     const avgSavingsEl = document.getElementById('avg-hourly-savings');
     const peakSavingsEl = document.getElementById('peak-savings');
     const avgLabelEl = document.getElementById('avg-savings-label');
@@ -298,7 +299,10 @@ function renderSavingsStats(data: SavingsAnalyticsResponse): void {
         periodSavingsEl.textContent = formatCurrency(displayTotal);
     }
     if (periodSavingsLabelEl) {
-        periodSavingsLabelEl.textContent = `Period Savings (${adjective.toLowerCase()})`;
+        periodSavingsLabelEl.textContent = 'Period Savings';
+    }
+    if (periodSavingsUnitEl) {
+        periodSavingsUnitEl.textContent = `shown in ${adjective.toLowerCase()} equivalents`;
     }
     if (avgLabelEl) {
         avgLabelEl.textContent = `Avg ${adjective} Savings`;
