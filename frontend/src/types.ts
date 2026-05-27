@@ -152,6 +152,11 @@ export interface SavePlanData {
   custom_step_percent?: number;
   custom_interval_days?: number;
   recommendations?: api.Recommendation[];
+  // UUIDs of cloud accounts the plan will purchase for. The server now
+  // requires at least one (universal-plans fix). The modal renders selected
+  // accounts as chips; savePlan reads them out of the hidden #plan-account-
+  // ids field and stamps the array here before POST /plans.
+  target_accounts?: string[];
 }
 
 // History types

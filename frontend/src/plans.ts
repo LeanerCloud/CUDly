@@ -625,6 +625,22 @@ export async function savePlan(e: Event): Promise<void> {
     plan.recommendations = [...pendingPlanRecommendations];
   }
 
+  // Universal-plans fix: read the selected account chips and reject submit
+  // when the list is empty. The Save button is also disabled in the same
+  // condition via refreshPlanSaveButtonState() so this branch is mostly a
+  // belt-and-suspenders against scripted form submission; the toast keeps
+  // the failure mode loud either way.
+  const accountIdsField = document.getElementById('plan-account-ids') as HTMLInputElement | null;
+  const accountIds = accountIdsField?.value ? accountIdsField.value.split(',').filter(Boolean) : [];
+  if (accountIds.length === 0) {
+    showToast({
+      message: 'Target Accounts is required: pick at least one account before saving the plan.',
+      kind: 'error',
+    });
+    return;
+  }
+  plan.target_accounts = accountIds;
+
   try {
     let savedPlanId = planId;
     if (planId) {
@@ -634,8 +650,12 @@ export async function savePlan(e: Event): Promise<void> {
       savedPlanId = created.id;
     }
 
-    const accountIdsField = document.getElementById('plan-account-ids') as HTMLInputElement | null;
-    const accountIds = accountIdsField?.value ? accountIdsField.value.split(',').filter(Boolean) : [];
+    // On update, the create path's atomic plan_accounts insert doesn't fire
+    // (we only POST /plans on create). For updates we still need to push the
+    // selected account list via the dedicated endpoint. On create, we also
+    // re-push here so that subsequent reselection is reflected even if the
+    // backend later opens an "atomic-create-only" path that diverges from
+    // PUT semantics — same call already handles dedupe via DELETE+INSERT.
     if (savedPlanId) {
       await api.setPlanAccounts(savedPlanId, accountIds);
     }
@@ -648,6 +668,21 @@ export async function savePlan(e: Event): Promise<void> {
     const err = error as Error;
     showToast({ message: `Failed to save plan: ${err.message}`, kind: 'error' });
   }
+}
+
+// refreshPlanSaveButtonState toggles the Save button's disabled state based
+// on whether at least one Target Account is selected. Universal plans (rows
+// in purchase_plans with no plan_accounts row) are no longer allowed by the
+// API; surfacing the failure in the disabled state is friendlier than
+// letting the user fill in every other field and get rejected at submit.
+function refreshPlanSaveButtonState(): void {
+  const form = document.getElementById('plan-form') as HTMLFormElement | null;
+  if (!form) return;
+  const submitBtn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (!submitBtn) return;
+  const hasAccounts = planSelectedAccounts.length > 0;
+  submitBtn.disabled = !hasAccounts;
+  submitBtn.title = hasAccounts ? '' : 'Select at least one Target Account to save the plan';
 }
 
 /**
@@ -697,6 +732,9 @@ function renderPlanAccountChips(): void {
 function updatePlanAccountIdsField(): void {
   const field = document.getElementById('plan-account-ids') as HTMLInputElement | null;
   if (field) field.value = planSelectedAccounts.map(a => a.id).join(',');
+  // Recalc Save-button disabled state every time the account list changes
+  // so the user gets immediate feedback when they remove the last chip.
+  refreshPlanSaveButtonState();
 }
 
 let planAccountSearchTimer: ReturnType<typeof setTimeout> | null = null;
