@@ -1384,22 +1384,12 @@ describe('Dashboard Module', () => {
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(false);
       });
 
-      test('forwards provider filter to getSavingsAnalytics when a provider chip is selected', async () => {
-        (state.getCurrentProvider as jest.Mock).mockReturnValue('azure');
-        (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-          data_points: [
-            { timestamp: 't1', total_savings: 100, total_upfront: 0, purchase_count: 1, cumulative_savings: 100,
-              by_service: { 'azure-vm': 100 } },
-          ],
-        });
-
-        await loadSavingsTrendChart();
-
-        expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
-          expect.objectContaining({ provider: 'azure' }),
-        );
-        (state.getCurrentProvider as jest.Mock).mockReturnValue('');
-      });
+      // Note: provider is intentionally NOT forwarded to getSavingsAnalytics
+      // because the /history/analytics handler does not yet support a
+      // provider-scoped query (see dashboard.ts comment near the fetch call
+      // for the original CR finding and the deliberate decision). A test
+      // asserting the negative would be brittle; the comment in the
+      // production code is the source of truth.
     });
   });
 });
