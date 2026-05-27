@@ -58,9 +58,45 @@ resource "azuread_application_federated_identity_credential" "cudly" {
   subject        = var.cudly_federated_subject
 }
 
-# Reservation Purchaser is the built-in Azure role for purchasing and managing reservations.
+# Custom role: grants the exact Microsoft.Capacity and Microsoft.BillingBenefits actions
+# used by the calculatePrice -> purchase flow (introduced in PR #680). The built-in
+# Reservation Purchaser role lacks reservationOrders/purchase/action, which causes 403 on
+# production reservation purchases.
+resource "azurerm_role_definition" "cudly_reservation_purchaser" {
+  name        = "CUDly Reservation Purchaser (custom) - ${local.subscription_id}"
+  scope       = data.azurerm_subscription.current.id
+  description = "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/purchase/action."
+
+  permissions {
+    actions = [
+      "Microsoft.Capacity/register/action",
+      "Microsoft.Capacity/calculatePrice/action",
+      "Microsoft.Capacity/catalogs/read",
+      "Microsoft.Capacity/reservationOrders/read",
+      "Microsoft.Capacity/reservationOrders/write",
+      "Microsoft.Capacity/reservationOrders/purchase/action",
+      "Microsoft.Capacity/reservationOrders/reservations/read",
+      "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+      "Microsoft.BillingBenefits/savingsPlanOrders/read",
+      "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+      "Microsoft.BillingBenefits/savingsPlanOrders/action",
+    ]
+    not_actions = []
+  }
+
+  assignable_scopes = [
+    data.azurerm_subscription.current.id,
+    "/providers/Microsoft.Capacity",
+  ]
+}
+
+# Assign the custom role at subscription scope.
+# depends_on ensures the role definition is fully propagated before the assignment
+# is created (Azure RBAC propagation can take up to 10 minutes).
 resource "azurerm_role_assignment" "cudly_reservations" {
-  scope                = "/subscriptions/${local.subscription_id}"
-  role_definition_name = "Reservation Purchaser"
-  principal_id         = azuread_service_principal.cudly.object_id
+  scope              = "/subscriptions/${local.subscription_id}"
+  role_definition_id = azurerm_role_definition.cudly_reservation_purchaser.role_definition_resource_id
+  principal_id       = azuread_service_principal.cudly.object_id
+
+  depends_on = [azurerm_role_definition.cudly_reservation_purchaser]
 }

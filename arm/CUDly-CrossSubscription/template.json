@@ -25,8 +25,7 @@
   "variables": {
     "roles": {
       "reader":               "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
-      "costManagementReader": "/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3",
-      "reservationPurchaser": "/providers/Microsoft.Authorization/roleDefinitions/f7b75c60-3036-4b75-91c3-6b41c27c1689"
+      "costManagementReader": "/providers/Microsoft.Authorization/roleDefinitions/72fafb9e-0641-4937-9268-a91bfd8191a3"
     },
     "customRoleName": "[guid(subscription().subscriptionId, 'cudly-reservation-purchaser')]",
     "customRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().subscriptionId, 'cudly-reservation-purchaser'))]"
@@ -38,28 +37,32 @@
       "apiVersion": "2022-04-01",
       "name": "[variables('customRoleName')]",
       "properties": {
-        "roleName": "CUDly Reservation and Savings Plan Purchaser",
-        "description": "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions it calls at runtime. Complements the built-in Reservation Purchaser assignment (which covers catalog reads and recommendations) by adding the purchase and calculatePrice actions that the built-in role omits.",
+        "roleName": "CUDly Reservation Purchaser (custom)",
+        "description": "Custom role granting CUDly exactly the Microsoft.Capacity and Microsoft.BillingBenefits actions required by the calculatePrice -> purchase flow. Replaces the built-in Reservation Purchaser, which lacks reservationOrders/purchase/action.",
         "type": "CustomRole",
         "permissions": [
           {
             "actions": [
-              "Microsoft.Capacity/calculateprice/action",
-              "Microsoft.Capacity/reservationorders/write",
-              "Microsoft.Capacity/reservationorders/read",
-              "Microsoft.Capacity/reservationorders/reservations/read",
               "Microsoft.Capacity/register/action",
+              "Microsoft.Capacity/calculatePrice/action",
               "Microsoft.Capacity/catalogs/read",
+              "Microsoft.Capacity/reservationOrders/read",
+              "Microsoft.Capacity/reservationOrders/write",
+              "Microsoft.Capacity/reservationOrders/purchase/action",
+              "Microsoft.Capacity/reservationOrders/reservations/read",
               "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
               "Microsoft.BillingBenefits/savingsPlanOrders/read",
               "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
               "Microsoft.BillingBenefits/savingsPlanOrders/action"
             ],
-            "notActions": []
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
           }
         ],
         "assignableScopes": [
-          "[subscription().id]"
+          "[concat('/subscriptions/', subscription().subscriptionId)]",
+          "/providers/Microsoft.Capacity"
         ]
       }
     },
@@ -75,7 +78,23 @@
         "roleDefinitionId": "[variables('customRoleDefinitionId')]",
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
-        "description": "CUDly — purchase reservations and savings plans via custom role that enumerates every required action explicitly"
+        "description": "CUDly — subscription-scope assignment of custom role; grants calculatePrice + purchase/action required by the two-step reservation purchase flow"
+      }
+    },
+
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "/providers/Microsoft.Capacity",
+      "name": "[guid(parameters('servicePrincipalObjectId'), 'cudlyCustomRoleCapacity')]",
+      "dependsOn": [
+        "[variables('customRoleDefinitionId')]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('customRoleDefinitionId')]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal",
+        "description": "CUDly — tenant-capacity-scope assignment of custom role; required for reservationOrders/purchase/action at /providers/Microsoft.Capacity scope"
       }
     },
 
@@ -100,31 +119,6 @@
         "principalId": "[parameters('servicePrincipalObjectId')]",
         "principalType": "ServicePrincipal",
         "description": "CUDly — read cost and reservation utilisation data"
-      }
-    },
-
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationPurchaser', subscription().subscriptionId)]",
-      "properties": {
-        "roleDefinitionId": "[variables('roles').reservationPurchaser]",
-        "principalId": "[parameters('servicePrincipalObjectId')]",
-        "principalType": "ServicePrincipal",
-        "description": "CUDly — reservation catalog reads and recommendations via built-in Reservation Purchaser role (kept in addition to the custom role)"
-      }
-    },
-
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "/providers/Microsoft.Capacity",
-      "name": "[guid(parameters('servicePrincipalObjectId'), 'reservationPurchaserCapacity')]",
-      "properties": {
-        "roleDefinitionId": "[variables('roles').reservationPurchaser]",
-        "principalId": "[parameters('servicePrincipalObjectId')]",
-        "principalType": "ServicePrincipal",
-        "description": "CUDly — read + purchase Azure Reservations at tenant capacity scope. Supersets Reservation Reader (582fc458-8989-419f-a480-75249a578f9d), which is not provisioned in every tenant and would otherwise fail with RoleDefinitionDoesNotExist on those tenants."
       }
     }
   ],
