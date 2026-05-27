@@ -289,7 +289,7 @@ function renderSavingsStats(data: SavingsAnalyticsResponse): void {
     if (periodSavingsEl) {
         // Period Savings is the cumulative total over the selected date range
         // (no per-unit rate suffix -- it is already a dollar total).
-        periodSavingsEl.textContent = formatCurrency(displayTotal);
+        periodSavingsEl.textContent = formatCurrency(displayTotal) + ' ' + suffix;
     }
     if (avgLabelEl) {
         avgLabelEl.textContent = `Avg ${adjective} Savings`;
