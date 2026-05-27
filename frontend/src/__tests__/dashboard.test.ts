@@ -767,19 +767,25 @@ describe('Dashboard Module', () => {
     });
 
     // QA row 405, step 3.1 — x-axis windowing behaviour.
+    // Policy (aligned with QA 2.3 tests below): a successful-but-empty
+    // response shows the empty-state banner, not blank axes. The original
+    // QA 3.1 intent was to avoid showing a broken chart widget; QA 2.3
+    // superseded that with an explicit "show a friendly message" policy
+    // (see tests 'empty-state shows filter name' and 'empty-state shows
+    // generic message' at the end of this describe block).
 
-    test('renders chart with visible canvas even when there are no data points (QA 3.1)', async () => {
-      // Empty window must show axes, NOT the "no data" stub.
+    test('shows empty-state (not canvas) when there are no data points and no filter is active (QA 3.1 / QA 2.3 policy)', async () => {
+      // No active account or provider filter (default mock state: [] and '').
+      // Expect the empty-state banner with generic text, canvas hidden.
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
       await loadSavingsTrendChart();
 
       const canvas = document.getElementById('savings-trend-chart');
       const empty = document.getElementById('savings-trend-empty');
-      expect(canvas?.classList.contains('hidden')).toBe(false);
-      expect(empty?.classList.contains('hidden')).toBe(true);
-      // Chart.js must still be instantiated so axes are drawn.
-      expect(Chart).toHaveBeenCalled();
+      expect(canvas?.classList.contains('hidden')).toBe(true);
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      expect(empty?.textContent).toContain('No purchase history yet');
     });
 
     test('x-axis min/max spans the selected window regardless of data point dates (QA 3.1)', async () => {
@@ -968,6 +974,23 @@ describe('Dashboard Module', () => {
 
       expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
         expect.objectContaining({ account_ids: ['uuid-acct-2'] })
+      );
+    });
+
+    test('loadSavingsTrendChart forwards account_ids for multi-account filter (filter parity with KPI tiles)', async () => {
+      // Regression: previously the chart omitted account_ids when length > 1,
+      // causing the chart data to diverge from the KPI tiles above it which
+      // always forward all selected accounts. The fix passes account_ids
+      // unconditionally when any accounts are selected.
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-a', 'uuid-b']);
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 50, total_savings: 5, total_upfront: 100, purchase_count: 1 }],
+      });
+
+      await loadSavingsTrendChart();
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ account_ids: ['uuid-a', 'uuid-b'] })
       );
     });
 

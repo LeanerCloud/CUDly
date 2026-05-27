@@ -639,23 +639,30 @@ export async function loadSavingsTrendChart(): Promise<void> {
 
   const now = new Date();
   const nowMs = now.getTime();
-  const days = savingsTrendRange === 'all' ? 365 : parseInt(savingsTrendRange, 10);
+  const isAllRange = savingsTrendRange === 'all';
+  // For 'all', request the maximum history the backend holds (10 years as a
+  // safe sentinel — parseDateRange accepts any RFC3339 start). The 365-day
+  // cap was a placeholder; removing it lets the chart show full purchase
+  // history when the "All" button is active.
+  const days = isAllRange ? 3650 : parseInt(savingsTrendRange, 10);
   // windowStart is the left edge of the axis; for 'all' it is overridden
-  // below to the earliest purchase timestamp (or now-365d if no purchases).
+  // below to the earliest purchase timestamp (or now-3650d if no purchases).
   const windowStartMs = nowMs - days * 86400_000;
   const interval: 'hourly' | 'daily' | 'weekly' = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
 
   try {
-    // Q5: honour the account-filter dropdown. Backend's /history/analytics
-    // takes a single account_id (see handler_analytics.go). The dashboard
-    // filter is single-select so we pass the only selected ID or omit to
-    // query all accessible accounts.
+    // Always forward account_ids to the chart so its data scope matches the
+    // KPI tiles above it. The backend /history/analytics handler accepts a
+    // single `account_id`; api.getSavingsAnalytics also sets the singular
+    // param for single-account requests (see api/history.ts).
+    // provider is not forwarded: the analytics backend does not yet support
+    // provider-scoped queries (handler_analytics.go has no provider param).
     const accountIDs = state.getCurrentAccountIDs();
     const data = await api.getSavingsAnalytics({
       start: new Date(windowStartMs).toISOString(),
       end: now.toISOString(),
       interval,
-      ...(accountIDs.length === 1 ? { account_ids: accountIDs } : {}),
+      ...(accountIDs.length > 0 ? { account_ids: accountIDs } : {}),
     });
 
     const points = data.data_points ?? [];
@@ -685,9 +692,30 @@ export async function loadSavingsTrendChart(): Promise<void> {
       y: p.cumulative_savings || 0,
     }));
 
-    // Always show the canvas with axes spanning [axisMinMs, nowMs].
-    // A window with no purchases renders empty axes (per QA finding 3.1)
-    // rather than a "no data" stub. The stub is reserved for fetch errors.
+    // Policy (QA 2.3, supersedes QA 3.1 empty-axis approach):
+    // - No data + active account filter: show empty-state with the filter
+    //   name so the user understands why the chart is blank.
+    // - No data + no filter active: show a generic "No purchase history yet"
+    //   message rather than blank axes.
+    // - Data present: always show the chart (hide empty-state).
+    // The stub is also shown on fetch errors (catch block below).
+    if (points.length === 0) {
+      canvas.classList.add('hidden');
+      if (empty) {
+        const provider = state.getCurrentProvider();
+        if (accountIDs.length > 0) {
+          empty.textContent = `No savings history for ${accountIDs.join(', ')}.`;
+        } else if (provider) {
+          empty.textContent = `No savings history for ${provider}.`;
+        } else {
+          empty.textContent = 'No purchase history yet.';
+        }
+        empty.classList.remove('hidden');
+      }
+      if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      attachSparkline('ytd', []);
+      return;
+    }
     canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
 
