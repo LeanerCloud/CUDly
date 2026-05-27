@@ -1,6 +1,6 @@
 -- list_universal_plans.sql
 --
--- Read-only diagnostic for the "universal plans" cleanup (PR #739 follow-up):
+-- Read-only diagnostic for the "universal plans" cleanup (issue #742):
 -- enumerates every row in purchase_plans that has no matching row in
 -- plan_accounts. After PR "fix(plans): eliminate universal plans" lands the
 -- API can no longer create such rows, but pre-existing rows from the legacy
@@ -29,7 +29,9 @@
 --         SELECT pp.id, ca.id
 --         FROM purchase_plans pp
 --         CROSS JOIN LATERAL jsonb_each(pp.services) AS svc(k, v)
---         JOIN cloud_accounts ca ON ca.provider = v->>'provider'
+--         JOIN cloud_accounts ca
+--           ON ca.provider = v->>'provider'
+--          AND ca.enabled = true
 --         WHERE pp.id = '<uuid>'
 --         ON CONFLICT DO NOTHING;
 --
