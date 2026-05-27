@@ -547,4 +547,21 @@ describe('RI Exchange filter subscriptions (issue #186)', () => {
     await new Promise(r => setTimeout(r, 0));
     expect(api.listConvertibleRIs).not.toHaveBeenCalled();
   });
+
+  it('an account change triggers loadRIExchange when the sub-tab is active', async () => {
+    setupRIExchangeHandlers();
+    _accountListeners.forEach(cb => cb());
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.listConvertibleRIs).toHaveBeenCalled();
+  });
+
+  it('coalesces provider and account changes into a single reload', async () => {
+    setupRIExchangeHandlers();
+    // Simulate topbar filter cascade: provider change triggers account reset
+    _providerListeners.forEach(cb => cb());
+    _accountListeners.forEach(cb => cb());
+    await new Promise(r => setTimeout(r, 0));
+    // Should be called once, not twice
+    expect(api.listConvertibleRIs).toHaveBeenCalledTimes(1);
+  });
 });
