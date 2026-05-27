@@ -58,9 +58,26 @@ resource "azuread_application_federated_identity_credential" "cudly" {
   subject        = var.cudly_federated_subject
 }
 
-# Reservation Purchaser is the built-in Azure role for purchasing and managing reservations.
+# Custom role: grants the exact Microsoft.Capacity and Microsoft.BillingBenefits actions
+# used by the calculatePrice -> purchase flow (introduced in PR #680). The built-in
+# Reservation Purchaser role lacks reservationOrders/purchase/action, which causes 403 on
+# production reservation purchases.
+#
+# The role definition is factored into a shared module so the customer-side (here) and
+# host-side (terraform/modules/compute/azure/container-apps) definitions stay in lockstep.
+module "cudly_reservation_role" {
+  source      = "../../../../terraform/modules/iam/azure/cudly-reservation-role"
+  scope       = data.azurerm_subscription.current.id
+  name_suffix = local.subscription_id
+}
+
+# Assign the custom role at subscription scope.
+# depends_on ensures the role definition is fully propagated before the assignment
+# is created (Azure RBAC propagation can take up to 10 minutes).
 resource "azurerm_role_assignment" "cudly_reservations" {
-  scope                = "/subscriptions/${local.subscription_id}"
-  role_definition_name = "Reservation Purchaser"
-  principal_id         = azuread_service_principal.cudly.object_id
+  scope              = "/subscriptions/${local.subscription_id}"
+  role_definition_id = module.cudly_reservation_role.role_definition_resource_id
+  principal_id       = azuread_service_principal.cudly.object_id
+
+  depends_on = [module.cudly_reservation_role]
 }

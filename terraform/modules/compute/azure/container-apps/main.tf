@@ -249,14 +249,33 @@ resource "azurerm_role_assignment" "cost_management_reader" {
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 
-# Reservation Purchaser: allows writing reservationOrders so CUDly can
-# purchase/exchange Azure reservations on behalf of users.
-# Note: "Reservations Reader" does not exist as a built-in Azure role.
-# Read access to reservations is covered by the Reservation Purchaser role itself.
-resource "azurerm_role_assignment" "reservations_purchaser" {
+# Reader: allows the host container-app identity to enumerate VMs, Redis,
+# Cosmos, Search, SQL, and compute SKUs in the host subscription when the host
+# account is ingested as a "Self" account. Without this, every per-service SDK
+# list call against the host subscription returns 403.
+resource "azurerm_role_assignment" "subscription_reader" {
   scope                = data.azurerm_subscription.current.id
-  role_definition_name = "Reservation Purchaser"
+  role_definition_name = "Reader"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# Custom reservation-purchaser role: same role as customer-side but scoped to
+# the host subscription. The built-in Reservation Purchaser lacks
+# reservationOrders/purchase/action (same gap fixed customer-side by PR #744).
+# The role definition is factored into a shared module so both sides stay in
+# lockstep with the ARM template.
+module "cudly_reservation_role" {
+  source      = "../../../iam/azure/cudly-reservation-role"
+  scope       = data.azurerm_subscription.current.id
+  name_suffix = data.azurerm_subscription.current.subscription_id
+}
+
+resource "azurerm_role_assignment" "reservations_purchaser" {
+  scope              = data.azurerm_subscription.current.id
+  role_definition_id = module.cudly_reservation_role.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.container_app.principal_id
+
+  depends_on = [module.cudly_reservation_role]
 }
 
 # Key Vault Crypto User: allows the container app's managed identity
