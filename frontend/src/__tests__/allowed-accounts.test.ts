@@ -68,6 +68,7 @@ jest.mock('../state', () => ({
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
+import { waitFor } from '@testing-library/dom';
 import { initTopbarFilters } from '../topbar-filters';
 import { loadHistory } from '../history';
 import * as api from '../api';
@@ -257,7 +258,7 @@ describe('History list - allowed_accounts enforcement (issue #313)', () => {
   });
 
   test('403 on Cancel surfaces a user-friendly error toast, not an unhandled exception', async () => {
-    // Silence the expected console.error from history.ts's catch block.
+    // Silence the expected console.error from the cancel button handler's catch block.
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
     (api.getHistory as jest.Mock).mockResolvedValue({
@@ -274,12 +275,13 @@ describe('History list - allowed_accounts enforcement (issue #313)', () => {
 
     const btn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
 
     // A toast with kind:'error' must surface — not a blank crash.
-    expect(showToast).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'error' }),
-    );
+    await waitFor(() => {
+      expect(showToast).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error' }),
+      );
+    });
 
     spy.mockRestore();
   });
