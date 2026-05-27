@@ -640,15 +640,20 @@ export async function loadSavingsTrendChart(): Promise<void> {
   const now = new Date();
   const nowMs = now.getTime();
   const isAllRange = savingsTrendRange === 'all';
-  // For 'all', request the maximum history the backend holds (10 years as a
-  // safe sentinel — parseDateRange accepts any RFC3339 start). The 365-day
-  // cap was a placeholder; removing it lets the chart show full purchase
-  // history when the "All" button is active.
-  const days = isAllRange ? 3650 : parseInt(savingsTrendRange, 10);
+  // For 'all', pass the Unix epoch as the start sentinel so the backend
+  // returns every data point it holds. parseDateRange on the backend
+  // defaults a missing start to (end - 7d), so we must send an explicit
+  // floor rather than omitting the param — epoch is the lowest valid
+  // RFC3339 value and has no practical upper bound on history length.
+  // A client-side 3650-day ceiling would silently truncate accounts with
+  // purchase history older than ~10 years.
+  const epochStart = '1970-01-01T00:00:00Z';
+  const days = isAllRange ? null : parseInt(savingsTrendRange, 10);
   // windowStart is the left edge of the axis; for 'all' it is overridden
-  // below to the earliest purchase timestamp (or now-3650d if no purchases).
-  const windowStartMs = nowMs - days * 86400_000;
-  const interval: 'hourly' | 'daily' | 'weekly' = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
+  // below to the earliest purchase timestamp (or now-365d if no purchases).
+  const windowStartMs = isAllRange ? nowMs - 365 * 86400_000 : nowMs - (days as number) * 86400_000;
+  const intervalDays = isAllRange ? 3650 : (days as number);
+  const interval: 'hourly' | 'daily' | 'weekly' = intervalDays <= 7 ? 'hourly' : intervalDays <= 90 ? 'daily' : 'weekly';
 
   try {
     // Always forward account_ids to the chart so its data scope matches the
@@ -659,7 +664,10 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // provider-scoped queries (handler_analytics.go has no provider param).
     const accountIDs = state.getCurrentAccountIDs();
     const data = await api.getSavingsAnalytics({
-      start: new Date(windowStartMs).toISOString(),
+      // For 'all': send the epoch sentinel so the backend returns unbounded
+      // history. Omitting start would cause parseDateRange to default to
+      // (end - 7d), silently clipping the chart (see handler_analytics.go).
+      start: isAllRange ? epochStart : new Date(windowStartMs).toISOString(),
       end: now.toISOString(),
       interval,
       ...(accountIDs.length > 0 ? { account_ids: accountIDs } : {}),
@@ -702,12 +710,16 @@ export async function loadSavingsTrendChart(): Promise<void> {
     if (points.length === 0) {
       canvas.classList.add('hidden');
       if (empty) {
-        const provider = state.getCurrentProvider();
         if (accountIDs.length > 0) {
+          // Account IDs are forwarded to the backend (see call above), so
+          // mentioning them in the empty-state is accurate.
           empty.textContent = `No savings history for ${accountIDs.join(', ')}.`;
-        } else if (provider) {
-          empty.textContent = `No savings history for ${provider}.`;
         } else {
+          // Provider is intentionally NOT mentioned here: the analytics
+          // endpoint does not accept a provider param yet (tracked in #764),
+          // so the query always returns all-provider data regardless of the
+          // topbar provider filter. Claiming provider scope would be
+          // misleading — drop it until #764 lands.
           empty.textContent = 'No purchase history yet.';
         }
         empty.classList.remove('hidden');

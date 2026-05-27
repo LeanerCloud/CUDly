@@ -766,6 +766,25 @@ describe('Dashboard Module', () => {
       expect(Math.round(span / 86400_000)).toBe(30);
     });
 
+    test('All range sends epoch sentinel as start (not a client-side 3650d ceiling)', async () => {
+      // Add an 'all' button and make it active.
+      const bAll = document.createElement('button');
+      bAll.className = 'trend-range';
+      bAll.dataset['range'] = 'all';
+      bAll.textContent = 'All';
+      document.body.appendChild(bAll);
+      setupSavingsTrendHandlers();
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+
+      bAll.click();
+      await new Promise(r => setTimeout(r, 0));
+
+      const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
+      // Must send the epoch sentinel so the backend returns unbounded history.
+      // A computed 'now - 3650d' would silently cap accounts with older data.
+      expect(call.start).toBe('1970-01-01T00:00:00Z');
+    });
+
     // QA row 405, step 3.1 — x-axis windowing behaviour.
     // Policy (aligned with QA 2.3 tests below): a successful-but-empty
     // response shows the empty-state banner, not blank axes. The original
@@ -1014,6 +1033,23 @@ describe('Dashboard Module', () => {
 
       const empty = document.getElementById('savings-trend-empty');
       expect(empty?.classList.contains('hidden')).toBe(false);
+      expect(empty?.textContent).toContain('No purchase history yet');
+    });
+
+    test('empty-state does NOT mention provider even when a provider filter is active (#764)', async () => {
+      // The analytics endpoint ignores the provider param until #764 lands.
+      // Showing "No savings history for aws." would imply the query was
+      // scoped to that provider, which is false. Generic copy is used instead.
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      const empty = document.getElementById('savings-trend-empty');
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      // Provider name must not appear in the message.
+      expect(empty?.textContent).not.toContain('aws');
       expect(empty?.textContent).toContain('No purchase history yet');
     });
   });
