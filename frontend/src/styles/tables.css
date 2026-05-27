@@ -33,6 +33,28 @@ tr.medium-savings {
     border-left: 3px solid var(--cudly-warn);
 }
 
+/* Deep-link target highlight: applied by applyExecutionDeepLink() in
+   history.ts when the URL hash carries ?execution=<id>. The class is
+   removed after ~4s (see history.ts) so the row fades back to normal.
+   `animation` runs once on add for a brief pulse, then `background`
+   keeps a steady highlight tint until the class is removed. */
+tr.history-row-highlight {
+    background: #fff8c4;
+    animation: history-row-flash 1.2s ease-out 1;
+}
+
+tr.history-row-highlight:hover {
+    /* Override the table-wide `tr:hover` so the deep-link highlight
+       stays visible while the user mouses over the row. */
+    background: #fff3a0;
+}
+
+@keyframes history-row-flash {
+    0%   { background: #fff080; }
+    50%  { background: #fff8c4; }
+    100% { background: #fff8c4; }
+}
+
 /* Summary sections */
 #recommendations-summary,
 #history-summary {
