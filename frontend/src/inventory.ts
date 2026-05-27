@@ -24,7 +24,7 @@ const SUB_SECTION_IDS: Record<InventorySubSection, string> = {
   'ri-exchange': 'inventory-ri-exchange',
 };
 
-const DEFAULT_SUB_SECTION: InventorySubSection = 'ri-exchange';
+const DEFAULT_SUB_SECTION: InventorySubSection = 'active-commitments';
 
 let currentSubSection: InventorySubSection | undefined;
 let listenersWired = false;
@@ -382,8 +382,8 @@ function wireSubNavListeners(): void {
 
 /**
  * Initialize the Inventory & Coverage section. Called by navigation.ts'
- * switchTab when 'inventory' is selected. Defaults to the ri-exchange
- * sub-section if the user hasn't selected one this session.
+ * switchTab when 'inventory' is selected. Defaults to active-commitments
+ * if the user hasn't selected a sub-section this session.
  */
 export function loadInventory(): void {
   wireSubNavListeners();

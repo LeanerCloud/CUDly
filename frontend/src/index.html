@@ -214,16 +214,16 @@
             <!-- Inventory & Coverage Tab (umbrella section folding in RI Exchange, issue #340 T4) -->
             <div id="inventory-tab" class="tab-content" role="tabpanel" aria-labelledby="inventory-tab-btn">
                 <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
-                    <button class="sub-tab-btn" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="false" aria-controls="inventory-active-commitments">Active commitments</button>
+                    <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" aria-controls="inventory-active-commitments">Active commitments</button>
                     <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
-                    <button class="sub-tab-btn active" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="true" aria-controls="inventory-ri-exchange">RI Exchange</button>
+                    <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" aria-controls="inventory-ri-exchange">RI Exchange</button>
                 </div>
 
                 <!-- Active commitments — per-commitment list backed by
                      /api/inventory/commitments (issue #340 deferred sub-task).
                      The table is rendered into #active-commitments-list by
                      loadActiveCommitments in inventory.ts. -->
-                <section id="inventory-active-commitments" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
+                <section id="inventory-active-commitments" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
                     <section class="card page-hero">
                         <div class="section-header">
                             <h2>Active commitments</h2>
@@ -254,7 +254,7 @@
                 </section>
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
-                <section id="inventory-ri-exchange" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
+                <section id="inventory-ri-exchange" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
                     <section class="card page-hero">
                         <div class="section-header">
                             <h2>Convertible RI Exchange</h2>
