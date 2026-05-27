@@ -1508,6 +1508,20 @@ func archeraEducationURL(dashboardBase string) string {
 	return dashboardBase + "/archera-insurance"
 }
 
+// approvalResponseRecipient returns the email address to surface in the
+// approval_recipient API response field (and therefore in the post-submit toast).
+// It returns globalNotify when set (after trimming whitespace), matching the
+// address the History handler shows for pending rows (resolvePendingApproverEmail
+// also returns globalNotify first). Falls back to to (the per-account
+// contact_email) when globalNotify is empty or whitespace-only.
+// Extracted to keep sendPurchaseApprovalEmail under the cyclomatic-complexity ceiling.
+func approvalResponseRecipient(globalNotify, to string) string {
+	if trimmed := strings.TrimSpace(globalNotify); trimmed != "" {
+		return trimmed
+	}
+	return to
+}
+
 // sendPurchaseApprovalEmail sends an approval-request email for a newly created
 // execution and returns a structured outcome:
 //   - (true, "", recipient) on successful send
@@ -1515,9 +1529,13 @@ func archeraEducationURL(dashboardBase string) string {
 //   - (false, "<reason>", recipient) when send failed AFTER recipient resolution
 //     (so the response can still surface who would have been notified)
 //
-// `recipient` is the resolved To address per `resolveApprovalRecipients` —
-// surfaced in the response so the post-submit toast can name the approver
-// per CR pass on PR #294 / issue #288.
+// `recipient` is the address surfaced in the post-submit toast. It is the
+// Admin notification email (Settings -> General) when configured, matching the
+// value the History UI shows for pending rows via resolvePendingApproverEmail.
+// When no notification email is set, it falls back to the per-account
+// contact_email (the actual To address). This fixes issue #735 where the toast
+// named the per-account contact_email instead of the Admin notification email,
+// creating a discrepancy with the History "awaiting approval from X" display.
 //
 // Errors are also logged at Errorf level so they show up in CloudWatch, but
 // the reason string is what the API response surfaces to the UI.
@@ -1542,6 +1560,12 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 	if to == "" {
 		return false, "no notification email set in Settings → General and no account contact emails configured", ""
 	}
+	// responseRecipient is the email address surfaced in the UI toast (approval_recipient
+	// API field). It matches what the History handler shows for pending rows via
+	// resolvePendingApproverEmail, which always returns globalNotify when set. Using
+	// globalNotify here keeps both displays consistent. When globalNotify is empty,
+	// fall back to to (the per-account contact_email). See issue #735.
+	responseRecipient := approvalResponseRecipient(globalNotify, to)
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
 	for _, rec := range recs {
 		summaries = append(summaries, email.RecommendationSummary{
@@ -1572,12 +1596,12 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		case errors.Is(err, email.ErrNoRecipient):
 			return false, "no notification email set in Settings → General", ""
 		case errors.Is(err, email.ErrNoFromEmail):
-			return false, "FROM_EMAIL not configured for this deployment", to
+			return false, "FROM_EMAIL not configured for this deployment", responseRecipient
 		default:
-			return false, fmt.Sprintf("send failed: %v", err), to
+			return false, fmt.Sprintf("send failed: %v", err), responseRecipient
 		}
 	}
-	return true, "", to
+	return true, "", responseRecipient
 }
 
 // resolveDashboardURL returns the absolute base URL to embed in email
