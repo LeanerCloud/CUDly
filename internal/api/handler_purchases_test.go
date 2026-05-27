@@ -950,6 +950,103 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 	assert.Equal(t, "cancelled", result.Status)
 }
 
+// TestHandler_deletePlannedPurchase_DisablesPlan is a regression test for
+// issue #774: disabling a plan from the scheduled-purchase row must set the
+// plan's enabled flag to false in the same handler call.
+func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	planID := "22222222-2222-2222-2222-222222222222"
+	execID := "11111111-1111-1111-1111-111111111111"
+
+	cancelled := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      "cancelled",
+	}
+	plan := &config.PurchasePlan{
+		ID:      planID,
+		Name:    "Test Plan",
+		Enabled: true,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	// Assert that UpdatePurchasePlan is called with enabled=false.
+	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
+		return p.ID == planID && !p.Enabled
+	})).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.Status)
+	// Plan struct is mutated in place; confirm the flag was flipped.
+	assert.False(t, plan.Enabled, "plan.Enabled must be false after disable")
+}
+
+// TestHandler_deletePlannedPurchase_AlreadyDisabledPlan verifies that if the
+// plan is already disabled (enabled=false) the handler skips the UpdatePurchasePlan
+// call and still returns success.
+func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	planID := "33333333-3333-3333-3333-333333333333"
+	execID := "44444444-4444-4444-4444-444444444444"
+
+	cancelled := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      "cancelled",
+	}
+	// Plan already disabled - UpdatePurchasePlan must NOT be called.
+	plan := &config.PurchasePlan{
+		ID:      planID,
+		Name:    "Already Disabled Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer admin-token",
+		},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.Status)
+}
+
 func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

@@ -259,9 +259,31 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Atomically transition to cancelled
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled"); err != nil {
+	// Cancel the scheduled execution. The RETURNING clause gives us the
+	// parent plan_id so we can disable the plan in the same handler call.
+	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
+	if err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+	}
+
+	// Set the parent plan's enabled flag to false so the Plans page toggle
+	// reflects the disable action immediately. Issue #774: previously the
+	// execution was cancelled but plan.enabled was left true, causing
+	// inconsistent state between the Scheduled Purchases and Plans views.
+	if cancelled.PlanID != "" {
+		plan, err := h.config.GetPurchasePlan(ctx, cancelled.PlanID)
+		if err != nil {
+			return nil, fmt.Errorf("disable plan: failed to fetch plan %s: %w", cancelled.PlanID, err)
+		}
+		if plan == nil {
+			return nil, NewClientError(404, fmt.Sprintf("disable plan: plan %s not found", cancelled.PlanID))
+		}
+		if plan.Enabled {
+			plan.Enabled = false
+			if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
+				return nil, fmt.Errorf("disable plan: failed to update plan %s: %w", cancelled.PlanID, err)
+			}
+		}
 	}
 
 	return &StatusResponse{Status: "cancelled"}, nil

@@ -814,6 +814,10 @@ describe('Plans Module', () => {
 
       expect(window.confirm).toHaveBeenCalled();
       expect(api.deletePlannedPurchase).toHaveBeenCalledWith('purchase-1');
+      // Issue #774: after disable the Plans page must refresh so the toggle
+      // reflects the backend's new enabled=false. getPlans is the API call
+      // that loadPlans() fires to repopulate the Plans list.
+      expect(api.getPlans).toHaveBeenCalled();
     });
 
     test('disable action cancelled by user', async () => {
