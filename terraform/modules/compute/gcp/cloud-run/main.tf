@@ -326,9 +326,9 @@ resource "google_cloud_scheduler_job" "recommendations" {
 
     # Auth: oidc_token below is signed by the scheduler's service
     # account at invocation time. Two complementary defences:
-    #   1. Cloud Run's IAM gate via roles/run.invoker (when
-    #      cloud_run_allow_unauthenticated = false; tracked separately
-    #      in #78).
+    #   1. Cloud Run's IAM gate via roles/run.invoker (active when
+    #      allow_unauthenticated = false; in the GCP env layer this
+    #      is derived from enable_cdn — see #384).
     #   2. App-level OIDC validation on /api/scheduled/* — the Go
     #      validator (internal/server/scheduledauth) checks the JWT
     #      signature, issuer, audience, and pins the subject to this
