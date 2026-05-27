@@ -1,0 +1,31 @@
+{
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "name": "test-role",
+      "properties": {
+        "roleName": "CUDly Test Role",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.Capacity/register/action",
+              "Microsoft.Capacity/calculatePrice/action",
+              "Microsoft.Capacity/catalogs/read",
+              "Microsoft.Capacity/reservationOrders/read",
+              "Microsoft.Capacity/reservationOrders/write",
+              "Microsoft.Capacity/reservationOrders/reservations/read",
+              "Microsoft.BillingBenefits/savingsPlanOrderAliases/write",
+              "Microsoft.BillingBenefits/savingsPlanOrders/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/savingsPlans/read",
+              "Microsoft.BillingBenefits/savingsPlanOrders/action"
+            ],
+            "notActions": []
+          }
+        ],
+        "assignableScopes": ["/subscriptions/00000000-0000-0000-0000-000000000001"]
+      }
+    }
+  ]
+}
