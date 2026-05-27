@@ -146,18 +146,18 @@ The GCP deployment creates:
 
 ## Security: Cloud Run ingress
 
-Two variables control how external callers reach the Cloud Run service:
+Two settings control how external callers reach the Cloud Run service:
 
-| Variable | Default | What it does |
+| Setting | Source | What it does |
 | --- | --- | --- |
-| `cloud_run_allow_unauthenticated` | `false` | IAM gate. `false` = only callers with `roles/run.invoker` can hit the URL. |
-| `cloud_run_ingress` | `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` | Network gate. Restricts the `*.run.app` URL to VPC + LB traffic only. |
+| `allow_unauthenticated` | Derived from `enable_cdn` (in `compute.tf` as `local.cloud_run_allow_unauthenticated = !var.enable_cdn`) | IAM gate. `false` = only callers with `roles/run.invoker` can hit the URL. Flips with the LB so the IAM door stays closed exactly when the LB SA can sign upstream calls. |
+| `cloud_run_ingress` | Operator-overridable variable, default `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` | Network gate. Restricts the `*.run.app` URL to VPC + LB traffic only. |
 
 The defaults are **defence-in-depth**: even if a bad IAM binding ever grants `roles/run.invoker` to `allUsers`, the network gate keeps direct internet callers out of the `*.run.app` URL — only requests that come through the external HTTPS load balancer (and therefore Cloud Armor's WAF) can reach the service.
 
 ### When to override
 
-`cloud_run_ingress` MUST be overridden to `INGRESS_TRAFFIC_ALL` whenever the supporting LB stack is not provisioned (`enable_cdn = false`), or the service becomes unreachable. All shipped tfvars (`dev.tfvars.example`, `github-dev.tfvars`, `github-staging.tfvars`, `github-prod.tfvars`) currently set `enable_cdn = false` and override `cloud_run_ingress` accordingly. When an environment flips `enable_cdn = true` (and provisions the LB + Cloud Armor + DNS), drop the `cloud_run_ingress` override so the service falls back to the secure default.
+`cloud_run_ingress` MUST be overridden to `INGRESS_TRAFFIC_ALL` whenever the supporting LB stack is not provisioned (`enable_cdn = false`), or the service becomes unreachable. All shipped tfvars (`dev.tfvars.example`, `github-dev.tfvars`, `github-staging.tfvars`, `github-prod.tfvars`) currently set `enable_cdn = false` and override `cloud_run_ingress` accordingly. When an environment flips `enable_cdn = true` (and provisions the LB + Cloud Armor + DNS), drop the `cloud_run_ingress` override so the service falls back to the secure default — `allow_unauthenticated` automatically flips to `false` in the same step because both are derived from `enable_cdn`.
 
 ### Verify
 

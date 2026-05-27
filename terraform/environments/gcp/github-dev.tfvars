@@ -18,14 +18,19 @@ compute_platform    = "cloud-run"
 enable_docker_build = true # Build and push image via terraform apply on the runner
 
 # Cloud Run Configuration
-cloud_run_cpu                   = "1"
-cloud_run_memory                = "512Mi"
-cloud_run_min_instances         = 0
-cloud_run_max_instances         = 10
-cloud_run_request_timeout       = 300
-cloud_run_allow_unauthenticated = true
-# github-dev runs without the external HTTPS LB (`enable_cdn = false`), so
-# the *.run.app URL must accept direct traffic — override the secure default.
+cloud_run_cpu             = "1"
+cloud_run_memory          = "512Mi"
+cloud_run_min_instances   = 0
+cloud_run_max_instances   = 10
+cloud_run_request_timeout = 300
+# github-dev: enable_cdn = false means no external HTTPS LB is provisioned
+# yet, so direct *.run.app traffic must still be accepted — override the
+# secure ingress default until the LB stack (enable_cdn = true + DNS + cert)
+# lands. Once enable_cdn flips to true, remove this line so
+# INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER takes effect. See issues #78 + #384.
+# (allow_unauthenticated is no longer an operator-facing tfvar — it is derived
+# from enable_cdn in compute.tf so the IAM gate and ingress door flip in lock-
+# step with the LB stack landing.)
 cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
 
 # ==============================================

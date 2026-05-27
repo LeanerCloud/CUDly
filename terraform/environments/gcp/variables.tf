@@ -226,28 +226,16 @@ variable "cloud_run_request_timeout" {
   default     = 300
 }
 
-variable "cloud_run_allow_unauthenticated" {
-  description = <<-EOT
-    Whether to expose the Cloud Run service publicly without IAM-level
-    authentication. The default is `false` (least-privilege): only callers
-    with the `roles/run.invoker` IAM binding can hit the URL. Application-
-    layer auth (sessions, RBAC, OIDC federation) still runs on top.
-
-    Set to `true` to allow direct browser access on the *.run.app URL —
-    useful for dev/preview environments where the only consumer is the
-    bundled frontend hitting the Cloud Run URL directly without an HTTPS
-    load balancer in front.
-
-    For production, prefer `false` plus the external HTTPS load balancer
-    with Cloud Armor in front (see `cloud_run_ingress` and `enable_cdn`).
-    The two defences are complementary: `allow_unauthenticated = false`
-    closes the IAM door, `cloud_run_ingress = "..._INTERNAL_LOAD_BALANCER"`
-    closes the network door so a misconfigured `roles/run.invoker` binding
-    on `allUsers` can't blow it open.
-  EOT
-  type        = bool
-  default     = false
-}
+# Cloud Run allow_unauthenticated is derived from var.enable_cdn (see
+# local.cloud_run_allow_unauthenticated in compute.tf). When enable_cdn = true
+# the *.run.app URL is fronted by the external HTTPS LB + Cloud Armor, which
+# attaches a Google-signed identity to upstream calls, so the IAM gate locks
+# allUsers out (roles/run.invoker restricted to the LB SA). When enable_cdn =
+# false the SPA / clients hit *.run.app directly and the browser cannot present
+# a signed identity, so allow_unauthenticated stays true and the application
+# layer (login session, CSRF, OIDC for scheduled tasks) is the gate. The
+# `cloud_run_ingress` knob is the complementary network-layer defence — see
+# `cloud_run_ingress` below and #78 for its lifecycle.
 
 variable "cloud_run_ingress" {
   description = <<-EOT
@@ -268,10 +256,11 @@ variable "cloud_run_ingress" {
       the service.
 
     The default is `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` (defence-in-
-    depth) — pair it with `allow_unauthenticated = false` so neither the
-    network nor the IAM door is open by accident. Environments that
-    don't yet provision the LB (`enable_cdn = false`) MUST override to
-    `INGRESS_TRAFFIC_ALL` or the service becomes unreachable.
+    depth) — pairs with `allow_unauthenticated = false` (also derived from
+    `enable_cdn`) so neither the network nor the IAM door is open by
+    accident. Environments that don't yet provision the LB (`enable_cdn
+    = false`) MUST override to `INGRESS_TRAFFIC_ALL` or the service
+    becomes unreachable.
   EOT
   type        = string
   default     = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"

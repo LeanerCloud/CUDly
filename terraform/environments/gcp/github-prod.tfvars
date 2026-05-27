@@ -18,17 +18,19 @@ compute_platform    = "cloud-run"
 enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Cloud Run Configuration
-cloud_run_cpu                   = "2"
-cloud_run_memory                = "2Gi"
-cloud_run_min_instances         = 2
-cloud_run_max_instances         = 50
-cloud_run_request_timeout       = 300
-cloud_run_allow_unauthenticated = true
-# Prod still has `enable_cdn = false` — the LB stack lands separately.
-# Until then, override the secure default so the *.run.app URL stays reachable.
-# When `enable_cdn` flips to `true`, drop this override (or set
-# `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` explicitly) to lock direct access
-# out and force all traffic through Cloud Armor's WAF.
+cloud_run_cpu             = "2"
+cloud_run_memory          = "2Gi"
+cloud_run_min_instances   = 2
+cloud_run_max_instances   = 50
+cloud_run_request_timeout = 300
+# Prod: enable_cdn = false — LB + Cloud Armor stack not yet provisioned.
+# Override the secure ingress default to keep the *.run.app URL reachable
+# until DNS + cert + LB + Cloud Armor land. When enable_cdn flips to true,
+# drop this line so all traffic routes through Cloud Armor's WAF.
+# See issues #78 + #384.
+# (allow_unauthenticated is no longer an operator-facing tfvar — it is derived
+# from enable_cdn in compute.tf so the IAM gate and ingress door flip in lock-
+# step with the LB stack landing.)
 cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
 
 # ==============================================

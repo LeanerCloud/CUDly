@@ -2,6 +2,36 @@
 # Compute Platform: Cloud Run (Serverless)
 # ==============================================
 
+# Cloud Run allow_unauthenticated is fully derived from enable_cdn. There is no
+# operator-facing variable for it: the two valid combinations are
+#
+#   enable_cdn = false -> allow_unauthenticated = true
+#     The SPA / clients hit the *.run.app URL directly. Browsers cannot present
+#     a Google-signed identity token, so the IAM gate must accept allUsers; auth
+#     is enforced at the application layer (login session, CSRF, OIDC for
+#     scheduled tasks).
+#
+#   enable_cdn = true  -> allow_unauthenticated = false
+#     The external HTTPS LB (with Cloud Armor) fronts the service. The LB
+#     attaches a Google-signed identity to upstream calls, so Cloud Run can
+#     enforce roles/run.invoker on the LB's service account only and lock
+#     allUsers out at the IAM layer (closes #384).
+#
+# Tying the two flags together prevents two specific mis-configurations:
+#   (a) enable_cdn = true with allow_unauthenticated = true -> public *.run.app
+#       URL behind a pointless LB (security goal of #384 defeated; bypassing
+#       Cloud Armor's WAF is a single curl away).
+#   (b) enable_cdn = false with allow_unauthenticated = false -> direct browser
+#       hits to *.run.app return 403 (no way to present a signed identity), the
+#       service is unreachable.
+#
+# This mirrors the AWS-side pattern in #574 (Lambda Function URL auth_type
+# derived from enable_cdn). The AWS analog is the CloudFront OAC's SigV4 signing
+# of upstream calls; the GCP analog is the LB SA's identity token.
+locals {
+  cloud_run_allow_unauthenticated = !var.enable_cdn
+}
+
 module "compute_cloud_run" {
   source = "../../modules/compute/gcp/cloud-run"
   count  = var.compute_platform == "cloud-run" ? 1 : 0
@@ -24,7 +54,7 @@ module "compute_cloud_run" {
   request_timeout = var.cloud_run_request_timeout
 
   # Access
-  allow_unauthenticated = var.cloud_run_allow_unauthenticated
+  allow_unauthenticated = local.cloud_run_allow_unauthenticated
   ingress               = var.cloud_run_ingress
 
   # Database connection
@@ -54,8 +84,8 @@ module "compute_cloud_run" {
   # ID token with the scheduler SA, and the CUDly app validates that
   # token at /api/scheduled/* via internal/server/scheduledauth
   # (signature, issuer, audience, sub-pin). Cloud Run's IAM gate
-  # (roles/run.invoker, gated by cloud_run_allow_unauthenticated —
-  # tracked separately in #78) acts as defence in depth on top.
+  # (roles/run.invoker, derived from enable_cdn via the local above
+  # — see #384) acts as defence in depth on top.
   # Azure stays on bearer + Key Vault because Logic Apps' HTTP
   # Connector does not emit Entra OIDC tokens.
   enable_scheduled_tasks  = var.enable_scheduled_tasks
