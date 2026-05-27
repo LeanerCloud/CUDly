@@ -1,4 +1,4 @@
--- Migration 000053: add approved_by and created_by_user_id to ri_exchange_history
+-- Migration 000054: add approved_by and created_by_user_id to ri_exchange_history
 -- Mirrors the same columns on purchase_executions added for issues #286 and #46.
 -- Both columns are nullable so existing rows are unaffected.
 ALTER TABLE ri_exchange_history
