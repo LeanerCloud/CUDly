@@ -793,7 +793,15 @@ func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunct
 		// through to the token branch so email-link holders can still approve.
 		switch err := h.sessionHasApproveRight(ctx, session); {
 		case err == nil:
-			return h.approveRIExchangeViaSession(ctx, req, id, session)
+			result, sessErr := h.approveRIExchangeViaSession(ctx, req, id, session)
+			if sessErr == nil {
+				return result, nil
+			}
+			// Record-level RBAC denied (e.g. approve-own user is not the creator).
+			// If a token is present, preserve legacy token flow; otherwise surface the error.
+			if !(token != "" && isPermissionDenied(sessErr)) {
+				return nil, sessErr
+			}
 		case isPermissionDenied(err):
 			// Logged-in user without approve-* may still hold a valid email token.
 		default:
@@ -802,23 +810,30 @@ func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunct
 	}
 
 	if token != "" {
-		record, err := h.validateExchangeApproval(ctx, id, token)
-		if err != nil {
-			return nil, err
-		}
-
-		transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
-		if err != nil {
-			return nil, fmt.Errorf("failed to transition exchange status: %w", err)
-		}
-		if transitioned == nil {
-			return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
-		}
-
-		return h.executeApprovedExchange(ctx, id, record)
+		return h.approveRIExchangeViaToken(ctx, id, token)
 	}
 
 	return h.approveRIExchangeViaSession(ctx, req, id, nil)
+}
+
+// approveRIExchangeViaToken is the legacy email-link branch of approveRIExchange.
+// It validates the approval token, transitions the exchange to processing, and
+// executes it. Extracted to keep approveRIExchange within cyclomatic-complexity limits.
+func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token string) (any, error) {
+	record, err := h.validateExchangeApproval(ctx, id, token)
+	if err != nil {
+		return nil, err
+	}
+
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+	}
+	if transitioned == nil {
+		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+	}
+
+	return h.executeApprovedExchange(ctx, id, record)
 }
 
 // approveRIExchangeViaSession is the session-authed branch of approveRIExchange

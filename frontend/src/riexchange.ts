@@ -1014,9 +1014,9 @@ function canApproveRIExchangeRow(rec: RIExchangeHistoryRecord): boolean {
   if ((rec.status || '').toLowerCase() !== 'pending') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (canAccess('admin', '*') || canAccess('approve-any', 'purchases')) return true;
   if (!rec.created_by_user_id) return false;
-  return rec.created_by_user_id === user.id;
+  return canAccess('approve-own', 'purchases') && rec.created_by_user_id === user.id;
 }
 
 async function loadExchangeHistory(): Promise<void> {
@@ -1118,10 +1118,16 @@ async function handleRIExchangeApproveClick(btn: HTMLButtonElement): Promise<voi
   try {
     await api.approveRIExchange(id);
     showToast({ kind: 'success', message: 'RI exchange approved and executing.' });
-    await loadExchangeHistory();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast({ kind: 'error', message: 'Failed to approve exchange: ' + msg });
     btn.disabled = false;
+    return;
+  }
+  try {
+    await loadExchangeHistory();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast({ kind: 'error', message: 'Approved, but failed to refresh history: ' + msg });
   }
 }

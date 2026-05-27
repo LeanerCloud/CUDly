@@ -353,7 +353,8 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer admin-bearer"},
 	}
-	_, _ = h.approveRIExchange(ctx, req, id, "")
+	_, err := h.approveRIExchange(ctx, req, id, "")
+	require.NoError(t, err)
 	// The exchange execution will fail (no real AWS SDK) but we verify the
 	// dispatch reached the session-authed path.
 	mockStore.AssertCalled(t, "GetRIExchangeRecord", ctx, id)
@@ -403,7 +404,8 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"authorization": "Bearer owner-bearer"},
 		}
-		_, _ = h.approveRIExchange(ctx, req, id, "")
+		_, err := h.approveRIExchange(ctx, req, id, "")
+		require.NoError(t, err)
 		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
 	})
 
@@ -463,7 +465,8 @@ func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
 	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
 
 	req := &events.LambdaFunctionURLRequest{}
-	_, _ = h.approveRIExchange(ctx, req, id, token)
+	_, err := h.approveRIExchange(ctx, req, id, token)
+	require.NoError(t, err)
 	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
 }
 
