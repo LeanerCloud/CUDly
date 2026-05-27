@@ -36,7 +36,7 @@ jest.mock('../state', () => ({
 }));
 
 // Now import after mocking
-import { loadSavingsHistory, initSavingsHistory, savingsChart } from '../modules/savings-history';
+import { loadSavingsHistory, initSavingsHistory, savingsChart, convertFromMonthly, unitSuffix, unitLabel } from '../modules/savings-history';
 import { getSavingsAnalytics } from '../api';
 import * as state from '../state';
 import { Chart } from 'chart.js';
@@ -51,6 +51,11 @@ describe('Savings History Module', () => {
         <option value="30d">Last 30 Days</option>
         <option value="90d" selected>Last 90 Days</option>
       </select>
+      <select id="savings-unit">
+        <option value="hourly">Hourly</option>
+        <option value="monthly" selected>Monthly</option>
+        <option value="yearly">Yearly</option>
+      </select>
       <button id="refresh-savings-btn">Refresh</button>
       <div id="savings-history-container">
         <canvas id="savings-history-chart"></canvas>
@@ -61,8 +66,9 @@ describe('Savings History Module', () => {
       </div>
       <div id="savings-stats">
         <span id="period-savings">$0</span>
-        <span id="avg-hourly-savings">$0/hr</span>
-        <span id="peak-savings">$0/hr</span>
+        <h4 id="avg-savings-label">Avg Monthly Savings</h4>
+        <span id="avg-hourly-savings">$0/mo</span>
+        <span id="peak-savings">$0/mo</span>
       </div>
     `;
 
@@ -226,8 +232,8 @@ describe('Savings History Module', () => {
       const peakSavingsEl = document.getElementById('peak-savings');
 
       expect(periodSavingsEl?.textContent).toContain('$1.50K');
-      expect(avgSavingsEl?.textContent).toContain('$75.00/hr');
-      expect(peakSavingsEl?.textContent).toContain('$200.00/hr');
+      expect(avgSavingsEl?.textContent).toContain('$75.00/mo');
+      expect(peakSavingsEl?.textContent).toContain('$200.00/mo');
     });
 
     test('calculates stats from data points when summary missing', async () => {
@@ -799,7 +805,7 @@ describe('Savings History Module', () => {
       expect(y1AxisCallback('500')).toBe('$500');
     });
 
-    test('tooltip label callback formats period savings with /hr suffix', async () => {
+    test('tooltip label callback formats period savings with unit suffix (default monthly)', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -818,10 +824,10 @@ describe('Savings History Module', () => {
         datasetIndex: 0,
         dataset: { label: 'Period Savings' }
       };
-      expect(tooltipLabelCallback(periodContext)).toBe('Period Savings: $25.5678/hr');
+      expect(tooltipLabelCallback(periodContext)).toBe('Period Savings: $25.5678/mo');
     });
 
-    test('tooltip label callback formats cumulative savings without /hr suffix', async () => {
+    test('tooltip label callback formats cumulative savings without unit suffix', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -862,7 +868,7 @@ describe('Savings History Module', () => {
         datasetIndex: 0,
         dataset: { label: 'Period Savings' }
       };
-      expect(tooltipLabelCallback(nullContext)).toBe('Period Savings: $0.0000/hr');
+      expect(tooltipLabelCallback(nullContext)).toBe('Period Savings: $0.0000/mo');
 
       const undefinedContext = {
         raw: undefined,
@@ -957,7 +963,7 @@ describe('Savings History Module', () => {
 
       const peakSavingsEl = document.getElementById('peak-savings');
       // Peak should be 150
-      expect(peakSavingsEl?.textContent).toBe('$150.00/hr');
+      expect(peakSavingsEl?.textContent).toBe('$150.00/mo');
     });
 
     test('destroys chart when showing empty state', async () => {
@@ -1136,6 +1142,169 @@ describe('Savings History Module', () => {
       const heading = document.getElementById('savings-history-empty')?.querySelector('p:first-child');
       expect(heading?.textContent).toContain(testUUID);
       expect(heading?.textContent).not.toMatch(/all,/i);
+    });
+  });
+
+  // Issue #750: unit conversion helpers + dropdown behavior
+  describe('unit conversion helpers', () => {
+    describe('convertFromMonthly', () => {
+      test('monthly -> monthly is identity', () => {
+        expect(convertFromMonthly(100, 'monthly')).toBe(100);
+        expect(convertFromMonthly(0, 'monthly')).toBe(0);
+        expect(convertFromMonthly(1.15, 'monthly')).toBe(1.15);
+      });
+
+      test('monthly -> hourly divides by 730', () => {
+        expect(convertFromMonthly(730, 'hourly')).toBe(1);
+        expect(convertFromMonthly(1.15, 'hourly')).toBeCloseTo(1.15 / 730, 6);
+      });
+
+      test('monthly -> yearly multiplies by 12', () => {
+        expect(convertFromMonthly(100, 'yearly')).toBe(1200);
+        expect(convertFromMonthly(1.15, 'yearly')).toBeCloseTo(1.15 * 12, 6);
+      });
+    });
+
+    describe('unitSuffix', () => {
+      test('returns correct suffix for each unit', () => {
+        expect(unitSuffix('hourly')).toBe('/hr');
+        expect(unitSuffix('monthly')).toBe('/mo');
+        expect(unitSuffix('yearly')).toBe('/yr');
+      });
+    });
+
+    describe('unitLabel', () => {
+      test('returns correct label for each unit', () => {
+        expect(unitLabel('hourly')).toBe('Hourly');
+        expect(unitLabel('monthly')).toBe('Monthly');
+        expect(unitLabel('yearly')).toBe('Yearly');
+      });
+    });
+  });
+
+  // Issue #750: unit dropdown wires + KPI display per unit
+  describe('unit dropdown (issue #750)', () => {
+    const mockData = {
+      summary: {
+        total_period_savings: 730,       // $730/mo cumulative total
+        average_savings_per_period: 730, // $730/mo avg per bucket
+        peak_savings: 730                // $730/mo peak bucket
+      },
+      data_points: [
+        { timestamp: '2024-01-01T00:00:00Z', total_savings: 730, cumulative_savings: 730, total_upfront: 100, purchase_count: 1 }
+      ]
+    };
+
+    test('default unit is monthly -- avg and peak show /mo suffix', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      await loadSavingsHistory();
+
+      const avgEl = document.getElementById('avg-hourly-savings');
+      const peakEl = document.getElementById('peak-savings');
+      expect(avgEl?.textContent).toContain('/mo');
+      expect(peakEl?.textContent).toContain('/mo');
+    });
+
+    test('hourly unit -- avg and peak show /hr suffix and value is monthly/730', async () => {
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      await loadSavingsHistory();
+
+      const avgEl = document.getElementById('avg-hourly-savings');
+      expect(avgEl?.textContent).toContain('/hr');
+      // 730 / 730 = $1.00/hr
+      expect(avgEl?.textContent).toContain('$1.00');
+    });
+
+    test('yearly unit -- avg and peak show /yr suffix and value is monthly*12', async () => {
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'yearly';
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      await loadSavingsHistory();
+
+      const avgEl = document.getElementById('avg-hourly-savings');
+      expect(avgEl?.textContent).toContain('/yr');
+      // 730 * 12 = $8760.00 -> formatted as $8.76K
+      expect(avgEl?.textContent).toContain('$8.76K');
+    });
+
+    test('avg-savings-label heading changes to reflect selected unit', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      // Monthly (default)
+      await loadSavingsHistory();
+      expect(document.getElementById('avg-savings-label')?.textContent).toBe('Avg Monthly Savings');
+
+      // Switch to hourly
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      await loadSavingsHistory();
+      expect(document.getElementById('avg-savings-label')?.textContent).toBe('Avg Hourly Savings');
+
+      // Switch to yearly
+      unitSelect.value = 'yearly';
+      await loadSavingsHistory();
+      expect(document.getElementById('avg-savings-label')?.textContent).toBe('Avg Yearly Savings');
+    });
+
+    test('unit dropdown change triggers loadSavingsHistory via initSavingsHistory', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+      initSavingsHistory();
+
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      unitSelect.dispatchEvent(new Event('change'));
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getSavingsAnalytics).toHaveBeenCalled();
+    });
+
+    test('initSavingsHistory called twice does not stack duplicate unit-change handlers', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+      initSavingsHistory();
+      initSavingsHistory();
+
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      unitSelect.dispatchEvent(new Event('change'));
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Should fire exactly once (no stacked duplicate listeners)
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('period savings (cumulative total) also converts with unit toggle', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+
+      // Monthly
+      await loadSavingsHistory();
+      const periodElMonthly = document.getElementById('period-savings');
+      expect(periodElMonthly?.textContent).toBe('$730.00');
+
+      // Hourly: 730 / 730 = 1.00
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      await loadSavingsHistory();
+      expect(document.getElementById('period-savings')?.textContent).toBe('$1.00');
+
+      // Yearly: 730 * 12 = 8760 -> $8.76K
+      unitSelect.value = 'yearly';
+      await loadSavingsHistory();
+      expect(document.getElementById('period-savings')?.textContent).toBe('$8.76K');
+    });
+
+    test('chart tooltip uses selected unit suffix for period savings dataset', async () => {
+      const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
+      unitSelect.value = 'hourly';
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      await loadSavingsHistory();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const tooltipCb = chartCall[1].options.plugins.tooltip.callbacks.label;
+      const ctx = { raw: 1.0, datasetIndex: 0, dataset: { label: 'Period Savings' } };
+      expect(tooltipCb(ctx)).toContain('/hr');
     });
   });
 });

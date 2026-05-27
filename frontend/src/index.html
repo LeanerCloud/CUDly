@@ -161,6 +161,13 @@
                                     <option value="90d" selected>Last 90 Days</option>
                                 </select>
                             </label>
+                            <label>Unit:
+                                <select id="savings-unit">
+                                    <option value="hourly">Hourly</option>
+                                    <option value="monthly" selected>Monthly</option>
+                                    <option value="yearly">Yearly</option>
+                                </select>
+                            </label>
                             <button id="refresh-savings-btn" class="btn-small">Refresh</button>
                         </div>
                     </div>
@@ -172,12 +179,12 @@
                             <p id="period-savings" class="stat-value">$0.00</p>
                         </div>
                         <div class="stat-card">
-                            <h4>Avg Hourly Savings</h4>
-                            <p id="avg-hourly-savings" class="stat-value">$0.00/hr</p>
+                            <h4 id="avg-savings-label">Avg Monthly Savings</h4>
+                            <p id="avg-hourly-savings" class="stat-value">$0.00/mo</p>
                         </div>
                         <div class="stat-card">
-                            <h4>Peak Savings</h4>
-                            <p id="peak-savings" class="stat-value">$0.00/hr</p>
+                            <h4 id="peak-savings-label">Peak Savings</h4>
+                            <p id="peak-savings" class="stat-value">$0.00/mo</p>
                         </div>
                     </div>
 
