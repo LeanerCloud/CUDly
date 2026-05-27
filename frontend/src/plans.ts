@@ -823,6 +823,58 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
 }
 
 /**
+ * Prefill the Purchase Configuration section (provider / service / term /
+ * payment) from a single selected commitment. Called after form.reset() so
+ * the defaults are already in place; each field is still editable. (#770)
+ */
+function prefillPurchaseConfigFromCommitment(rec: api.Recommendation): void {
+  const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
+  const serviceSelect = document.getElementById('plan-service') as HTMLSelectElement | null;
+  const termSelect = document.getElementById('plan-term') as HTMLSelectElement | null;
+  const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement | null;
+
+  if (!providerSelect || !serviceSelect || !termSelect || !paymentSelect) return;
+
+  const provider = rec.provider ?? '';
+  const service = rec.service ?? '';
+
+  if (provider) providerSelect.value = provider;
+  if (service) serviceSelect.value = service;
+
+  // Repopulate term/payment options for the chosen provider+service, then
+  // apply the commitment's own values so the dropdowns are consistent.
+  if (provider && service) {
+    populateTermSelect(termSelect, provider, service);
+    populatePaymentSelect(paymentSelect, provider, service);
+  }
+
+  if (rec.term != null) termSelect.value = String(rec.term);
+  const normalizedPayment = rec.payment ? normalizePaymentValue(rec.payment, provider) : '';
+  if (normalizedPayment) paymentSelect.value = normalizedPayment;
+}
+
+/**
+ * Fetch the account with the given internal UUID and add it as a pre-selected
+ * chip in the plan modal accounts section. Runs after setupPlanAccountsSection
+ * has reset the chip list for the create flow. Silently no-ops on failure so
+ * the user can still pick the account manually. (#770)
+ */
+async function prefillAccountChipFromId(accountId: string): Promise<void> {
+  try {
+    const account = await api.getAccount(accountId);
+    // Guard: only add if the chip is not already present (e.g. a concurrent
+    // edit flow somehow set it) and the account record is usable.
+    if (account && account.id && !planSelectedAccounts.some(a => a.id === account.id)) {
+      planSelectedAccounts.push({ id: account.id, name: account.name, external_id: account.external_id });
+      renderPlanAccountChips();
+      updatePlanAccountIdsField();
+    }
+  } catch {
+    // Non-critical: the user can still search and add the account manually.
+  }
+}
+
+/**
  * Open create plan modal with selected recommendations.
  *
  * When the user has no selection (issue #17 reproducer: filter
@@ -847,6 +899,13 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   (document.getElementById('plan-id') as HTMLInputElement).value = '';
   (document.getElementById('plan-form') as HTMLFormElement | null)?.reset();
 
+  // When exactly one commitment is selected, prefill the Purchase
+  // Configuration fields so the user does not have to re-enter them.
+  // Fields are still fully editable after prefill. (#770)
+  if (pendingPlanRecommendations.length === 1) {
+    prefillPurchaseConfigFromCommitment(pendingPlanRecommendations[0]!);
+  }
+
   // Set up ramp schedule change handlers for dynamic plan name
   setupRampScheduleHandlers();
 
@@ -856,7 +915,16 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   // Generate initial plan name
   updatePlanNameFromSchedule();
 
+  // setupPlanAccountsSection clears planSelectedAccounts and re-renders.
+  // When a single commitment carries a cloud_account_id, we look up that
+  // account after the section has reset and add it as a pre-selected chip.
   void setupPlanAccountsSection();
+  if (pendingPlanRecommendations.length === 1) {
+    const accountId = pendingPlanRecommendations[0]!.cloud_account_id;
+    if (accountId) {
+      void prefillAccountChipFromId(accountId);
+    }
+  }
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
