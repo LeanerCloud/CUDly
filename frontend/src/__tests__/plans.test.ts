@@ -148,6 +148,13 @@ describe('Plans Module', () => {
             <input type="number" id="ramp-step-percent" value="20">
             <input type="number" id="ramp-interval-days" value="7">
           </div>
+          <!-- Target Accounts section (universal-plans fix). The hidden
+               plan-account-ids field is the contract between renderPlan
+               AccountChips and savePlan; the submit button's disabled
+               state is recomputed every time the chip list changes. -->
+          <div id="plan-accounts-selected" class="selected-accounts"></div>
+          <input type="hidden" id="plan-account-ids" value="">
+          <button type="submit">Save Plan</button>
         </form>
       </div>
       <div id="purchase-modal" class="hidden"></div>
@@ -885,6 +892,11 @@ describe('Plans Module', () => {
       (document.getElementById('plan-auto-purchase') as HTMLInputElement).checked = true;
       (document.getElementById('plan-notify-days') as HTMLInputElement).value = '3';
       (document.getElementById('plan-enabled') as HTMLInputElement).checked = true;
+      // Universal-plans fix: savePlan rejects an empty Target Accounts list,
+      // so default the hidden field to a single account UUID for every test
+      // in this block. Tests that exercise the empty-accounts rejection set
+      // it back to '' explicitly inside the test.
+      (document.getElementById('plan-account-ids') as HTMLInputElement).value = '11111111-1111-1111-1111-111111111111';
     });
 
     test('prevents default form submission', async () => {
@@ -943,6 +955,15 @@ describe('Plans Module', () => {
       }));
     });
 
+    // Helper: openCreatePlanModal/openNewPlanModal call form.reset(), which
+    // clears the hidden plan-account-ids field stamped by the beforeEach.
+    // Universal-plans fix requires that field to be non-empty at savePlan
+    // time, so any test that opens the modal must re-stamp it before submit.
+    const stampAccountIds = () => {
+      (document.getElementById('plan-account-ids') as HTMLInputElement).value
+        = '11111111-1111-1111-1111-111111111111';
+    };
+
     test('includes the snapshot stamped by openCreatePlanModal (#273 CR)', async () => {
       // #273 CR follow-up: savePlan now reads the snapshot stamped at
       // Plan-button click time via openCreatePlanModal(snapshot), instead
@@ -956,6 +977,7 @@ describe('Plans Module', () => {
         { id: 'rec-2', service: 'rds' },
       ] as unknown as readonly api.Recommendation[];
       openCreatePlanModal(snapshot);
+      stampAccountIds();
 
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
@@ -980,6 +1002,7 @@ describe('Plans Module', () => {
         { id: 'rec-2', service: 'rds' },
       ] as unknown as readonly api.Recommendation[];
       openCreatePlanModal(snapshotAtClickTime);
+      stampAccountIds();
 
       // Now simulate post-modal-open state mutations: deselection,
       // refresh-replaced visible set, etc. None of these should affect
@@ -1015,6 +1038,7 @@ describe('Plans Module', () => {
       // (the New-Plan-from-scratch path explicitly clears the cache so a
       // subsequent New-Plan submit doesn't inherit a previous flow's recs).
       openNewPlanModal();
+      stampAccountIds();
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
@@ -1032,6 +1056,7 @@ describe('Plans Module', () => {
       // time was empty for some reason), savePlan must still submit without
       // a recommendations field, not blow up.
       openCreatePlanModal([] as unknown as readonly api.Recommendation[]);
+      stampAccountIds();
       (api.createPlan as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
@@ -1129,6 +1154,49 @@ describe('Plans Module', () => {
       // Guard against false positives: confirm the update actually ran.
       expect(api.updatePlan).toHaveBeenCalledWith('plan-123', expect.any(Object));
       expect(mockOpenArcheraOfferModal).not.toHaveBeenCalled();
+    });
+
+    test('rejects submit and never calls createPlan when Target Accounts is empty (universal-plans fix)', async () => {
+      // Universal plans (purchase_plans rows with no plan_accounts row) are
+      // no longer allowed. The Save Plan button is also disabled in this
+      // state via refreshPlanSaveButtonState; this assertion is the defence-
+      // in-depth at the savePlan layer for scripted submissions or any
+      // future regression that bypasses the disabled UI.
+      (document.getElementById('plan-account-ids') as HTMLInputElement).value = '';
+      (api.createPlan as jest.Mock).mockResolvedValue({ id: 'p1' });
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      expect(api.createPlan).not.toHaveBeenCalled();
+      expect(api.setPlanAccounts).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'error',
+        message: expect.stringContaining('Target Accounts'),
+      }));
+    });
+
+    test('forwards selected target_accounts on createPlan (universal-plans fix)', async () => {
+      // Verifies the new wire contract: savePlan stamps the selected account
+      // chip IDs onto the request body so the backend can validate and
+      // persist plan_accounts in the same call. The 2-step PUT remains a
+      // belt-and-suspenders write for update flows, but the create path
+      // must include target_accounts inline.
+      (document.getElementById('plan-account-ids') as HTMLInputElement).value
+        = '11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222';
+      (api.createPlan as jest.Mock).mockResolvedValue({ id: 'p1' });
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      const event = { preventDefault: jest.fn() } as unknown as Event;
+      await savePlan(event);
+
+      expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
+        target_accounts: [
+          '11111111-1111-1111-1111-111111111111',
+          '22222222-2222-2222-2222-222222222222',
+        ],
+      }));
     });
   });
 

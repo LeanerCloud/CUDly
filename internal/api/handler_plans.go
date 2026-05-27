@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -72,6 +73,16 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// target_accounts is required: a plan must be tied to at least one
+	// cloud_account row. The historical "leave blank to mean all accounts of
+	// this provider" behaviour created "universal plans" (rows in
+	// purchase_plans with no matching plan_accounts row) that were hard to
+	// scope, hard to filter, and hard to govern. Reject early with a clear
+	// 400 so the frontend can surface the error before any DB write.
+	if err := validateTargetAccounts(req.TargetAccounts); err != nil {
+		return nil, err
+	}
+
 	plan := req.toPurchasePlan()
 
 	// Validate the plan
@@ -83,7 +94,51 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
+	// Provider-match validation + plan_accounts insert. SetPlanAccounts is
+	// transactional internally, but the plan-row insert above is not part of
+	// that tx. If either step here fails we roll the plan row back so the
+	// invariant "every purchase_plans row has at least one plan_accounts
+	// row" holds end-to-end — otherwise a validation failure would leave a
+	// fresh universal plan behind, which is exactly the bug class we're
+	// eliminating.
+	//
+	// rollbackPlan undoes the partial CreatePurchasePlan insert. If the
+	// rollback delete itself errors (DB blip, row already gone, etc.), log
+	// at WARN with the plan ID so an operator can clean up manually — we
+	// still surface the original cause to the caller so the user-facing
+	// error is unchanged.
+	rollbackPlan := func() {
+		if delErr := h.config.DeletePurchasePlan(ctx, plan.ID); delErr != nil {
+			logging.Warnf("createPlan rollback: failed to delete partial plan %s: %v (manual cleanup may be required)", plan.ID, delErr)
+		}
+	}
+	if err := h.validatePlanAccountProviders(ctx, plan.ID, req.TargetAccounts); err != nil {
+		rollbackPlan()
+		return nil, err
+	}
+	if err := h.config.SetPlanAccounts(ctx, plan.ID, req.TargetAccounts); err != nil {
+		rollbackPlan()
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+
 	return plan, nil
+}
+
+// validateTargetAccounts rejects a missing/empty target_accounts payload and
+// rejects entries that are not valid UUIDs. Mirrors the validation the
+// dedicated PUT /plans/:id/accounts endpoint already performs (see
+// setPlanAccounts in handler_accounts.go) so a request that gets past
+// createPlan would also get past that endpoint.
+func validateTargetAccounts(ids []string) error {
+	if len(ids) == 0 {
+		return NewClientError(400, "target_accounts is required: a plan must be tied to at least one account")
+	}
+	for _, aid := range ids {
+		if err := validateUUID(aid); err != nil {
+			return NewClientError(400, fmt.Sprintf("invalid target_account %q: must be a valid UUID", aid))
+		}
+	}
+	return nil
 }
 
 func (h *Handler) getPlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (any, error) {

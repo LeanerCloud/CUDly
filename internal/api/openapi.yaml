@@ -271,7 +271,17 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanRequest'
+              # target_accounts is required ONLY on plan creation. The shared
+              # PlanRequest schema is reused by PUT/PATCH where omitting the
+              # field means "leave the existing account list unchanged"; only
+              # POST enforces non-empty target_accounts to prevent universal
+              # plans. Scoping the requirement here (instead of in the shared
+              # schema) keeps the update payload contract loose while still
+              # advertising the create contract correctly to client codegen.
+              allOf:
+                - $ref: '#/components/schemas/PlanRequest'
+                - type: object
+                  required: [target_accounts]
       responses:
         '200':
           description: Created plan
@@ -2006,6 +2016,16 @@ components:
           type: integer
         custom_interval_days:
           type: integer
+        target_accounts:
+          type: array
+          minItems: 1
+          description: >
+            UUIDs of cloud accounts the plan will purchase for. Required on
+            POST /plans — a plan must be tied to at least one account. Sending
+            an empty array returns HTTP 400.
+          items:
+            type: string
+            format: uuid
 
     PurchasePlan:
       type: object

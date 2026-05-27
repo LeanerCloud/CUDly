@@ -93,12 +93,22 @@ func TestHandler_createPlan(t *testing.T) {
 		Role:   "admin",
 	}
 
+	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("SetPlanAccounts", ctx, mock.AnythingOfType("string"), []string{targetAccountID}).Return(nil)
+
+	// validatePlanAccountProviders looks up each target account and checks
+	// its provider matches the plan's. Stub GetCloudAccount to return an
+	// aws account so the provider-match passes (plan service is aws:rds).
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "test-aws", Provider: "aws"}, nil
+	}
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	body := `{"name": "New Plan", "enabled": true, "auto_purchase": false, "provider": "aws", "service": "rds"}`
+	body := `{"name": "New Plan", "enabled": true, "auto_purchase": false, "provider": "aws", "service": "rds", "target_accounts": ["` + targetAccountID + `"]}`
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
 			"Authorization": "Bearer admin-token",
@@ -111,6 +121,7 @@ func TestHandler_createPlan(t *testing.T) {
 	plan := result.(*config.PurchasePlan)
 	assert.Equal(t, "New Plan", plan.Name)
 	assert.True(t, plan.Enabled)
+	mockStore.AssertCalled(t, "SetPlanAccounts", ctx, mock.AnythingOfType("string"), []string{targetAccountID})
 }
 
 func TestHandler_createPlan_InvalidBody(t *testing.T) {
@@ -137,6 +148,133 @@ func TestHandler_createPlan_InvalidBody(t *testing.T) {
 	result, err := handler.createPlan(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
+}
+
+// TestHandler_createPlan_RejectsEmptyTargetAccounts verifies the universal-plan
+// fix: a POST /plans without target_accounts (or with an empty list) returns
+// HTTP 400 and never reaches CreatePurchasePlan. This is the design invariant
+// every purchase_plans row must have at least one matching plan_accounts row.
+func TestHandler_createPlan_RejectsEmptyTargetAccounts(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing field", `{"name": "P", "provider": "aws", "service": "rds"}`},
+		{"empty array", `{"name": "P", "provider": "aws", "service": "rds", "target_accounts": []}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Fresh store per case: AssertNotCalled below would otherwise
+			// see the previous case's setup; tests share nothing.
+			mockStore := new(MockConfigStore)
+			handler := &Handler{config: mockStore, auth: mockAuth}
+			req := &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"Authorization": "Bearer admin-token"},
+				Body:    tc.body,
+			}
+			result, err := handler.createPlan(ctx, req)
+			assert.Nil(t, result)
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, ce.Error(), "target_accounts")
+			mockStore.AssertNotCalled(t, "CreatePurchasePlan", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError verifies
+// that when SetPlanAccounts fails after CreatePurchasePlan succeeds, AND the
+// rollback DeletePurchasePlan also fails, the caller still receives the
+// original SetPlanAccounts error (wrapped as "accounts: …") rather than the
+// rollback error. The rollback failure is logged at WARN so an operator can
+// clean up manually — see handler_plans.go createPlan rollbackPlan closure.
+// Regression guard for CR #743 finding F1: rollback errors must not be
+// silently discarded.
+func TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	setAccountsErr := errors.New("setplanaccounts boom")
+	mockStore.On("SetPlanAccounts", ctx, mock.AnythingOfType("string"), []string{targetAccountID}).Return(setAccountsErr)
+	// Rollback DeletePurchasePlan also fails — caller must still get the
+	// original SetPlanAccounts error, not the rollback error.
+	deleteErr := errors.New("rollback delete boom")
+	mockStore.On("DeletePurchasePlan", ctx, mock.AnythingOfType("string")).Return(deleteErr)
+
+	// Stub GetCloudAccount so provider-match validation passes — we want to
+	// reach the SetPlanAccounts step.
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "test-aws", Provider: "aws"}, nil
+	}
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	body := `{"name": "New Plan", "enabled": true, "provider": "aws", "service": "rds", "target_accounts": ["` + targetAccountID + `"]}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.createPlan(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	// Original error from SetPlanAccounts is what reaches the caller —
+	// wrapped as "accounts: …" per the handler. The rollback error is logged
+	// (not returned), so it must NOT appear in the user-facing error chain.
+	assert.Contains(t, err.Error(), "accounts:")
+	assert.True(t, errors.Is(err, setAccountsErr), "expected wrapped SetPlanAccounts error, got %v", err)
+	assert.NotContains(t, err.Error(), "rollback delete boom", "rollback error must not leak into user-facing error")
+	mockStore.AssertCalled(t, "DeletePurchasePlan", ctx, mock.AnythingOfType("string"))
+}
+
+// TestHandler_createPlan_RejectsInvalidTargetAccountUUID verifies that a
+// malformed UUID in target_accounts is rejected before any DB write — same
+// validation contract as PUT /plans/:id/accounts (handler_accounts.go).
+func TestHandler_createPlan_RejectsInvalidTargetAccountUUID(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	body := `{"name": "P", "provider": "aws", "service": "rds", "target_accounts": ["not-a-uuid"]}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.createPlan(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertNotCalled(t, "CreatePurchasePlan", mock.Anything, mock.Anything)
 }
 
 func TestHandler_getPlan(t *testing.T) {

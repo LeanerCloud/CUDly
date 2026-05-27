@@ -112,7 +112,12 @@ func TestRouterDispatch_PlanAccountsPUT_CorrectDispatch(t *testing.T) {
 	r := setupRouterForDispatch(ctx)
 
 	planID := "22222222-2222-2222-2222-222222222222"
-	req, method, path := routerReq("PUT", "/api/plans/"+planID+"/accounts", `{"account_ids":[]}`)
+	// Body uses a single valid UUID — universal-plans fix rejects empty
+	// account_ids as a 400, which would mask a routing-misdispatch bug we
+	// actually want this test to catch. Dispatch verification still works
+	// with any well-formed body.
+	body := `{"account_ids":["11111111-1111-1111-1111-111111111111"]}`
+	req, method, path := routerReq("PUT", "/api/plans/"+planID+"/accounts", body)
 	_, err := r.Route(ctx, method, path, req)
 	require.NoError(t, err, "plan/accounts PUT should not error — invalid ID means wrong handler")
 }

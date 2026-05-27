@@ -168,6 +168,11 @@ export interface CreatePlanRequest {
   notification_days_before: number;
   services: Record<string, ServiceConfig>;
   ramp_schedule: PlanRampSchedule;
+  // Required server-side (universal-plans fix): a plan must be tied to at
+  // least one cloud account. The frontend bundles the selected account IDs
+  // here so the backend receives plan creation + account assignment in a
+  // single request and can validate atomically.
+  target_accounts: string[];
 }
 
 // History types

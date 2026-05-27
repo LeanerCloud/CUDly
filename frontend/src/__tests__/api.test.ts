@@ -767,6 +767,7 @@ describe('Plans API', () => {
         notification_days_before: 3,
         services: { 'aws:ec2': { provider: 'aws', service: 'ec2', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 } },
         ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+        target_accounts: ['11111111-1111-1111-1111-111111111111'],
       };
       await createPlan(plan);
 
@@ -789,6 +790,7 @@ describe('Plans API', () => {
         notification_days_before: 5,
         services: { 'aws:rds': { provider: 'aws', service: 'rds', enabled: true, term: 1, payment: 'no-upfront', coverage: 70 } },
         ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, current_step: 0, total_steps: 4 },
+        target_accounts: ['22222222-2222-2222-2222-222222222222'],
       };
       await updatePlan('plan-123', plan);
 
