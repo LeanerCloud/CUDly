@@ -1136,7 +1136,7 @@ describe('Dashboard Module', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { renderSavingsByService, computeServiceStats } = require('../dashboard') as {
       renderSavingsByService: (dataPoints: unknown[]) => void;
-      computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number }>;
+      computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
     };
 
     function buildDOM(): void {
@@ -1218,6 +1218,20 @@ describe('Dashboard Module', () => {
         const result = computeServiceStats(points);
         expect(result.get('ec2')?.count).toBe(1);
       });
+
+      test('stores raw sample values for median computation', () => {
+        const points = [
+          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 50 } },
+          { timestamp: 't2', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 200 } },
+          { timestamp: 't3', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 100 } },
+        ];
+        const result = computeServiceStats(points);
+        const ec2 = result.get('ec2');
+        expect(ec2?.samples).toHaveLength(3);
+        expect(ec2?.samples).toContain(50);
+        expect(ec2?.samples).toContain(100);
+        expect(ec2?.samples).toContain(200);
+      });
     });
 
     // renderSavingsByService DOM behaviour tests.
@@ -1238,6 +1252,21 @@ describe('Dashboard Module', () => {
         ]);
         expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(true);
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(false);
+      });
+
+      test('resets heading text to default when dataset becomes empty after a truncated render', () => {
+        buildDOM();
+        // First render with 2 services to get the default heading.
+        const points = [
+          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0,
+            by_service: { ec2: 100, rds: 50 } },
+        ];
+        renderSavingsByService(points);
+        const h3 = document.querySelector('#savings-by-service-section h3') as HTMLElement;
+        h3.textContent = 'Savings range by service (+3 more)'; // simulate stale suffix
+        // Second render with empty data -- heading must be reset.
+        renderSavingsByService([]);
+        expect(h3.textContent).toBe('Savings range by service');
       });
 
       test('renders chart with exactly two services when two services have positive savings', () => {
@@ -1353,6 +1382,23 @@ describe('Dashboard Module', () => {
 
         expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(true);
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(false);
+      });
+
+      test('forwards provider filter to getSavingsAnalytics when a provider chip is selected', async () => {
+        (state.getCurrentProvider as jest.Mock).mockReturnValue('azure');
+        (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+          data_points: [
+            { timestamp: 't1', total_savings: 100, total_upfront: 0, purchase_count: 1, cumulative_savings: 100,
+              by_service: { 'azure-vm': 100 } },
+          ],
+        });
+
+        await loadSavingsTrendChart();
+
+        expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+          expect.objectContaining({ provider: 'azure' }),
+        );
+        (state.getCurrentProvider as jest.Mock).mockReturnValue('');
       });
     });
   });

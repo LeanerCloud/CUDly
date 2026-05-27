@@ -642,6 +642,7 @@ export interface ServiceSavingsStats {
   max: number;
   sum: number;
   count: number;
+  samples: number[];
 }
 
 /**
@@ -664,12 +665,24 @@ export function computeServiceStats(
         existing.max = Math.max(existing.max, val);
         existing.sum += val;
         existing.count += 1;
+        existing.samples.push(val);
       } else {
-        stats.set(svc, { min: val, max: val, sum: val, count: 1 });
+        stats.set(svc, { min: val, max: val, sum: val, count: 1, samples: [val] });
       }
     }
   }
   return stats;
+}
+
+/**
+ * Compute the median of a sorted sample array.
+ * Returns 0 for an empty array.
+ */
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
 /**
@@ -699,12 +712,14 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
   }
 
   const stats = computeServiceStats(dataPoints);
+  const heading = section?.querySelector('h3');
 
   // Filter to services with positive savings, then sort by max desc.
   const positive = Array.from(stats.entries()).filter(([, s]) => s.max > 0);
   positive.sort((a, b) => b[1].max - a[1].max);
 
   if (positive.length === 0) {
+    if (heading) heading.textContent = 'Savings range by service';
     canvas.classList.add('hidden');
     emptyEl?.classList.remove('hidden');
     return;
@@ -716,7 +731,6 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
   // Cap at maximum and update heading with "+N more" if truncated.
   const truncated = positive.length > SAVINGS_BY_SERVICE_MAX;
   const visible = positive.slice(0, SAVINGS_BY_SERVICE_MAX);
-  const heading = section?.querySelector('h3');
   if (heading) {
     heading.textContent = truncated
       ? `Savings range by service (+${positive.length - SAVINGS_BY_SERVICE_MAX} more)`
@@ -776,11 +790,11 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
               const s = stats.get(svc);
               if (!s) return '';
               const pct = totalSavings > 0 ? ((s.max / totalSavings) * 100).toFixed(1) : '0.0';
-              const median = s.count > 0 ? (s.sum / s.count).toFixed(2) : '0.00';
+              const med = medianOf(s.samples);
               return [
                 `Service: ${svc}`,
                 `Min: $${s.min.toLocaleString()}`,
-                `Median: $${Number(median).toLocaleString()}`,
+                `Median: $${med.toLocaleString()}`,
                 `Max: $${s.max.toLocaleString()}`,
                 `Samples: ${s.count}`,
                 `% of total: ${pct}%`,
