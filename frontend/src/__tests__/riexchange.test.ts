@@ -24,6 +24,29 @@ jest.mock('../navigation', () => ({
   switchSettingsSubTab: jest.fn(),
 }));
 
+// Capture subscription callbacks so tests can fire them directly.
+// These arrays are populated by the mock factory below. Declared with
+// `let` so the reference is stable across the hoisted jest.mock call.
+let _providerListeners: Array<() => void> = [];
+let _accountListeners: Array<() => void> = [];
+jest.mock('../state', () => ({
+  subscribeProvider: jest.fn((cb: () => void) => {
+    // _providerListeners may not be initialised yet at hoist time —
+    // access it lazily via the closure over the outer `let`.
+    _providerListeners = _providerListeners ?? [];
+    _providerListeners.push(cb);
+    return () => undefined;
+  }),
+  subscribeAccount: jest.fn((cb: () => void) => {
+    _accountListeners = _accountListeners ?? [];
+    _accountListeners.push(cb);
+    return () => undefined;
+  }),
+  getCurrentProvider: jest.fn(() => 'aws'),
+  getCurrentAccountIDs: jest.fn(() => []),
+  getCurrentUser: jest.fn(() => ({ id: 'u', email: 'u@example.com', role: 'admin' })),
+}));
+
 import {
   fillQuoteFromRI,
   loadReshapeRecommendations,
@@ -563,5 +586,97 @@ describe('⚙︎ Exchange settings deep-link', () => {
     btn.click();
     expect(navigation.switchTab).toHaveBeenCalledWith('settings');
     expect(navigation.switchSettingsSubTab).toHaveBeenCalledWith('purchasing');
+  });
+});
+
+// issue #186: provider/account subscriptions on the RI Exchange tab
+describe('RI Exchange filter subscriptions (issue #186)', () => {
+  let instancesEl: HTMLDivElement;
+  let recsEl: HTMLDivElement;
+  let historyEl: HTMLDivElement;
+  let riExchangePanel: HTMLDivElement;
+
+  beforeEach(() => {
+    instancesEl = document.createElement('div');
+    instancesEl.id = 'ri-exchange-instances-list';
+    recsEl = document.createElement('div');
+    recsEl.id = 'ri-exchange-recommendations-list';
+    historyEl = document.createElement('div');
+    historyEl.id = 'ri-exchange-history-list';
+    // The sub-tab panel must exist and be visible for the guard to pass.
+    riExchangePanel = document.createElement('div');
+    riExchangePanel.id = 'inventory-ri-exchange';
+    document.body.append(instancesEl, recsEl, historyEl, riExchangePanel);
+
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([]);
+    (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([]);
+    _providerListeners.length = 0;
+    _accountListeners.length = 0;
+    // Re-apply the implementation after jest.resetAllMocks() from a prior
+    // describe block may have cleared it.
+    const stateMod = jest.requireMock('../state') as {
+      subscribeProvider: jest.Mock;
+      subscribeAccount: jest.Mock;
+    };
+    stateMod.subscribeProvider.mockImplementation((cb: () => void) => {
+      _providerListeners.push(cb);
+      return () => undefined;
+    });
+    stateMod.subscribeAccount.mockImplementation((cb: () => void) => {
+      _accountListeners.push(cb);
+      return () => undefined;
+    });
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    // Use clearAllMocks rather than resetAllMocks so the subscribeProvider/
+    // subscribeAccount mock implementations (which push to _providerListeners)
+    // are preserved across tests in this block.
+    jest.clearAllMocks();
+  });
+
+  it('setupRIExchangeHandlers registers subscribeProvider and subscribeAccount', () => {
+    const stateMod = jest.requireMock('../state');
+    setupRIExchangeHandlers();
+    expect(stateMod.subscribeProvider).toHaveBeenCalled();
+    expect(stateMod.subscribeAccount).toHaveBeenCalled();
+  });
+
+  it('a provider change triggers loadRIExchange when the sub-tab is active', async () => {
+    setupRIExchangeHandlers();
+    // Fire the provider listener (simulates topbar provider change).
+    _providerListeners.forEach(cb => cb());
+    // Flush the microtask queue: queueMicrotask fires after all pending
+    // micro-ticks; wrapping in a resolved promise ensures we drain it.
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.listConvertibleRIs).toHaveBeenCalled();
+  });
+
+  it('a provider change does NOT trigger loadRIExchange when the sub-tab is hidden', async () => {
+    riExchangePanel.classList.add('hidden');
+    setupRIExchangeHandlers();
+    _providerListeners.forEach(cb => cb());
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.listConvertibleRIs).not.toHaveBeenCalled();
+  });
+
+  it('an account change triggers loadRIExchange when the sub-tab is active', async () => {
+    setupRIExchangeHandlers();
+    _accountListeners.forEach(cb => cb());
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.listConvertibleRIs).toHaveBeenCalled();
+  });
+
+  it('coalesces provider and account changes into a single reload', async () => {
+    setupRIExchangeHandlers();
+    // Simulate topbar filter cascade: provider change triggers account reset
+    _providerListeners.forEach(cb => cb());
+    _accountListeners.forEach(cb => cb());
+    await new Promise(r => setTimeout(r, 0));
+    // Should be called once, not twice
+    expect(api.listConvertibleRIs).toHaveBeenCalledTimes(1);
   });
 });

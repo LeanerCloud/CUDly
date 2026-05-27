@@ -4,6 +4,7 @@
  */
 
 import * as api from './api';
+import * as state from './state';
 import { formatDate, formatDateTime, escapeHtml, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
@@ -52,7 +53,25 @@ export async function loadRIExchange(): Promise<void> {
 }
 
 /**
- * Setup RI Exchange event handlers
+ * True when the RI Exchange sub-tab is the currently visible panel.
+ * The sub-tab panel id is "inventory-ri-exchange" (see index.html).
+ * Used by the provider/account change subscriptions below to avoid
+ * unnecessary fetches while the user is on a different tab.
+ */
+function isRIExchangeSubtabActive(): boolean {
+  const panel = document.getElementById('inventory-ri-exchange');
+  return panel !== null && !panel.classList.contains('hidden');
+}
+
+/**
+ * Setup RI Exchange event handlers.
+ *
+ * Wires the refresh button, the settings deep-link, and
+ * provider/account state subscriptions so the convertible-RI list
+ * and reshape recommendations reload when the operator switches the
+ * global account filter (issue #186). An active-subtab guard
+ * mirrors the Recommendations tab pattern to avoid redundant fetches
+ * while the panel is off-screen.
  */
 export function setupRIExchangeHandlers(): void {
   // Refresh button. Quote + execute flow lives in the per-row "Exchange"
@@ -75,6 +94,22 @@ export function setupRIExchangeHandlers(): void {
       }
     });
   }
+
+  // issue #186: reload when the global provider/account filter changes
+  // so the RI Exchange tables stay consistent with the rest of the UI.
+  // Coalesce the two events into a single reload (provider change also
+  // fires an account change via the topbar-filters.ts clearing logic).
+  let reloadQueued = false;
+  const scheduleReload = (): void => {
+    if (!isRIExchangeSubtabActive() || reloadQueued) return;
+    reloadQueued = true;
+    queueMicrotask(() => {
+      reloadQueued = false;
+      if (isRIExchangeSubtabActive()) void loadRIExchange();
+    });
+  };
+  state.subscribeProvider(scheduleReload);
+  state.subscribeAccount(scheduleReload);
 }
 
 // ──────────────────────────────────────────────
