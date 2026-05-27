@@ -714,10 +714,10 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 	summary := HistorySummary{TotalPurchases: len(purchases)}
 	for _, p := range purchases {
 		// Non-completed rows count toward TotalPurchases and their specific
-		// bucket (pending / in-progress / failed / expired) but are excluded
-		// from the dollar totals — the money hasn't been committed for any of
-		// those states. "completed" and unset (legacy DB rows that pre-date
-		// the status field) both count as completed.
+		// bucket (pending / in-progress / failed / expired / cancelled) but
+		// are excluded from the dollar totals — the money hasn't been committed
+		// for any of those states. "completed" and unset (legacy DB rows that
+		// pre-date the status field) both count as completed.
 		switch p.Status {
 		case "pending", "notified":
 			summary.TotalPending++
@@ -733,6 +733,11 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 			continue
 		case "expired":
 			summary.TotalExpired++
+			continue
+		case "cancelled":
+			// A cancelled purchase represents zero committed spend and zero
+			// realized savings (issue #736). Exclude from all dollar KPIs and
+			// from TotalCompleted — the money was never committed.
 			continue
 		}
 		summary.TotalCompleted++

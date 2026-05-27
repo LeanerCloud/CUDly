@@ -1157,3 +1157,69 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 	assert.Equal(t, 1, resp.Summary.TotalCompleted)
 	assert.Equal(t, 400.0, resp.Summary.TotalUpfront)
 }
+
+// TestSummarizePurchaseHistory_CancelledExcludedFromKPIs is the regression
+// test for issue #736. Cancelling a pending purchase must not add its upfront
+// cost or savings to the KPI totals. Specifically:
+//   - TotalUpfront, TotalMonthlySavings, TotalAnnualSavings must reflect only
+//     the approved/completed rows.
+//   - TotalCompleted must not include cancelled rows.
+//   - A pre-existing cancelled row in the dataset must also be excluded.
+func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
+	purchases := []config.PurchaseHistoryRecord{
+		// Three completed rows that should contribute to the KPI totals.
+		{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
+		{Status: "completed", UpfrontCost: 200.0, EstimatedSavings: 20.0},
+		{Status: "", UpfrontCost: 50.0, EstimatedSavings: 5.0}, // legacy row, no status
+		// One pending row that should be counted as pending, not completed.
+		{Status: "pending", UpfrontCost: 999.0, EstimatedSavings: 99.0},
+		// Two cancelled rows — the regression case from issue #736.
+		// Neither must appear in the dollar KPIs or TotalCompleted.
+		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0},
+		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0},
+	}
+
+	summary := summarizePurchaseHistory(purchases)
+
+	assert.Equal(t, 6, summary.TotalPurchases, "all rows count toward TotalPurchases")
+	assert.Equal(t, 3, summary.TotalCompleted, "cancelled rows must not inflate TotalCompleted")
+	assert.Equal(t, 1, summary.TotalPending)
+
+	assert.InDelta(t, 350.0, summary.TotalUpfront, 0.001,
+		"cancelled upfront cost must not be included in TotalUpfront (issue #736)")
+	assert.InDelta(t, 35.0, summary.TotalMonthlySavings, 0.001,
+		"cancelled savings must not be included in TotalMonthlySavings (issue #736)")
+	assert.InDelta(t, 420.0, summary.TotalAnnualSavings, 0.001,
+		"TotalAnnualSavings = TotalMonthlySavings * 12 and must exclude cancelled (issue #736)")
+}
+
+// TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs mirrors the
+// QA reproduction scenario from issue #736: start with N approved purchases,
+// observe KPI totals, then add a cancelled execution and assert the totals
+// are unchanged.
+func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
+	// Baseline: three approved (completed) rows.
+	baseline := []config.PurchaseHistoryRecord{
+		{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
+		{Status: "completed", UpfrontCost: 200.0, EstimatedSavings: 20.0},
+		{Status: "completed", UpfrontCost: 300.0, EstimatedSavings: 30.0},
+	}
+	before := summarizePurchaseHistory(baseline)
+
+	// After: same rows plus one cancelled execution (the pending that got cancelled).
+	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
+		Status:           "cancelled",
+		UpfrontCost:      999.0,
+		EstimatedSavings: 99.0,
+	})
+	after := summarizePurchaseHistory(withCancelled)
+
+	assert.Equal(t, before.TotalUpfront, after.TotalUpfront,
+		"cancelling a pending purchase must not change TotalUpfront (issue #736)")
+	assert.Equal(t, before.TotalMonthlySavings, after.TotalMonthlySavings,
+		"cancelling a pending purchase must not change TotalMonthlySavings (issue #736)")
+	assert.Equal(t, before.TotalAnnualSavings, after.TotalAnnualSavings,
+		"cancelling a pending purchase must not change TotalAnnualSavings (issue #736)")
+	assert.Equal(t, before.TotalCompleted, after.TotalCompleted,
+		"cancelling a pending purchase must not change TotalCompleted (issue #736)")
+}
