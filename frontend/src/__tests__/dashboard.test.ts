@@ -71,7 +71,7 @@ jest.mock('../api', () => ({
   // value don't need to be updated.
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
-import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers } from '../dashboard';
+import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -764,6 +764,101 @@ describe('Dashboard Module', () => {
       const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
       const span = new Date(call.end).getTime() - new Date(call.start).getTime();
       expect(Math.round(span / 86400_000)).toBe(30);
+    });
+
+    // QA row 405, step 3.1 — x-axis windowing behaviour.
+
+    test('renders chart with visible canvas even when there are no data points (QA 3.1)', async () => {
+      // Empty window must show axes, NOT the "no data" stub.
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      const canvas = document.getElementById('savings-trend-chart');
+      const empty = document.getElementById('savings-trend-empty');
+      expect(canvas?.classList.contains('hidden')).toBe(false);
+      expect(empty?.classList.contains('hidden')).toBe(true);
+      // Chart.js must still be instantiated so axes are drawn.
+      expect(Chart).toHaveBeenCalled();
+    });
+
+    test('x-axis min/max spans the selected window regardless of data point dates (QA 3.1)', async () => {
+      // Add a 7d button before wiring handlers so setupSavingsTrendHandlers
+      // attaches a click listener to it. Drive it to '7' for a deterministic
+      // window size independent of prior test state.
+      const b7 = document.createElement('button');
+      b7.className = 'trend-range';
+      b7.dataset['range'] = '7';
+      b7.textContent = '7d';
+      document.body.appendChild(b7);
+      setupSavingsTrendHandlers();
+
+      // Single purchase at the very start of the 7-day window.
+      const now = Date.now();
+      const purchaseTs = new Date(now - 6 * 86400_000).toISOString();
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: purchaseTs, cumulative_savings: 100, total_savings: 5, total_upfront: 200, purchase_count: 1 }],
+      });
+
+      (Chart as unknown as jest.Mock).mockClear();
+      b7.click();
+      await new Promise(r => setTimeout(r, 0));
+
+      const chartCalls = (Chart as unknown as jest.Mock).mock.calls;
+      expect(chartCalls.length).toBeGreaterThan(0);
+      const chartCall = chartCalls[chartCalls.length - 1];
+      const xScale = chartCall[1].options.scales.x;
+      // min must be ~7 days before max; allow 60-second clock skew in tests.
+      expect(xScale.max - xScale.min).toBeGreaterThanOrEqual(6 * 86400_000);
+      expect(xScale.max - xScale.min).toBeLessThanOrEqual(8 * 86400_000);
+    });
+
+    test('data points use {x: timestamp_ms, y: value} so they are positioned by real date (QA 3.1)', async () => {
+      const purchaseTs = '2024-06-15T12:00:00Z';
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+      });
+
+      await loadSavingsTrendChart();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const dataset = chartCall[1].data.datasets[0];
+      expect(dataset.data[0]).toMatchObject({ x: new Date(purchaseTs).getTime(), y: 250 });
+    });
+
+    test('fetch error shows error stub and hides canvas (not the empty-axes path) (QA 3.1)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('503'));
+
+      await loadSavingsTrendChart();
+
+      const canvas = document.getElementById('savings-trend-chart');
+      const empty = document.getElementById('savings-trend-empty');
+      expect(canvas?.classList.contains('hidden')).toBe(true);
+      expect(empty?.classList.contains('hidden')).toBe(false);
+    });
+  });
+
+  describe('formatTrendAxisTick (QA 3.1)', () => {
+    test('formats hourly ticks with date + time', () => {
+      // Use a fixed UTC timestamp: 2024-03-15 14:30 UTC.
+      const ts = new Date('2024-03-15T14:30:00Z').getTime();
+      const label = formatTrendAxisTick(ts, 'hourly');
+      // Expect something like "Mar 15, 14:30" — locale-dependent but must contain the date.
+      expect(label).toMatch(/Mar\s+\d+/);
+    });
+
+    test('formats daily ticks with short date only', () => {
+      const ts = new Date('2024-03-15T00:00:00Z').getTime();
+      const label = formatTrendAxisTick(ts, 'daily');
+      expect(label).toMatch(/Mar\s+\d+/);
+      // No colon (no time component).
+      expect(label).not.toMatch(/:/);
+    });
+
+    test('formats weekly ticks with short date only', () => {
+      const ts = new Date('2024-03-15T00:00:00Z').getTime();
+      const label = formatTrendAxisTick(ts, 'weekly');
+      expect(label).not.toMatch(/:/);
     });
   });
 

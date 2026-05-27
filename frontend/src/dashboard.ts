@@ -613,32 +613,38 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
 }
 
 /**
- * Build a short human-readable description of the active topbar filter
- * for use in the Savings Trend empty-state message. Returns '' when no
- * filter is active so callers can distinguish "unfiltered empty" from
- * "filtered empty". Mirrors buildFilterDesc() in modules/savings-history.ts.
+ * Format a millisecond timestamp for the savings-trend x-axis tick label.
+ * Exported for unit testing.
  */
-function buildTrendFilterDesc(provider: string, accountIDs: readonly string[]): string {
-  const parts: string[] = [];
-  if (provider && provider.toLowerCase() !== 'all') parts.push(provider.toUpperCase());
-  if (accountIDs.length > 0) parts.push(accountIDs[0] ?? '');
-  return parts.join(', ');
+export function formatTrendAxisTick(tsMs: number, intervalHint: 'hourly' | 'daily' | 'weekly'): string {
+  const d = new Date(tsMs);
+  if (intervalHint === 'hourly') {
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 }
 
 /**
  * Load the savings-over-time trend chart for the dashboard. Fetches the
  * history analytics endpoint with the currently-selected range and
- * renders a line chart of cumulative savings. Failure modes (analytics
- * not configured, empty data) degrade gracefully to an empty-state note.
+ * renders a line chart of cumulative savings spanning the full selected
+ * window on the x-axis (QA row 405, step 3.1). Empty windows render
+ * labelled axes rather than a "no data" stub; only fetch failures use
+ * the error stub.
  */
 export async function loadSavingsTrendChart(): Promise<void> {
   const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
   const empty = document.getElementById('savings-trend-empty');
   if (!canvas) return;
-  const end = new Date();
+
+  const now = new Date();
+  const nowMs = now.getTime();
   const days = savingsTrendRange === 'all' ? 365 : parseInt(savingsTrendRange, 10);
-  const start = new Date(end.getTime() - days * 86400_000);
-  const interval = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
+  // windowStart is the left edge of the axis; for 'all' it is overridden
+  // below to the earliest purchase timestamp (or now-365d if no purchases).
+  const windowStartMs = nowMs - days * 86400_000;
+  const interval: 'hourly' | 'daily' | 'weekly' = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
 
   try {
     // Q5: honour the account-filter dropdown. Backend's /history/analytics
@@ -646,54 +652,54 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // filter is single-select so we pass the only selected ID or omit to
     // query all accessible accounts.
     const accountIDs = state.getCurrentAccountIDs();
-    const currentProvider = state.getCurrentProvider();
     const data = await api.getSavingsAnalytics({
-      start: start.toISOString(),
-      end: end.toISOString(),
+      start: new Date(windowStartMs).toISOString(),
+      end: now.toISOString(),
       interval,
       ...(accountIDs.length === 1 ? { account_ids: accountIDs } : {}),
     });
-    if (!data.data_points || data.data_points.length === 0) {
-      if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-      canvas.classList.add('hidden');
-      if (empty) {
-        // Build a short description of the active filter so the empty-state
-        // copy distinguishes "no purchases exist yet" from "nothing in the
-        // selected scope". Mirrors modules/savings-history.ts showEmptyState().
-        const filterDesc = buildTrendFilterDesc(currentProvider, accountIDs);
-        empty.textContent = filterDesc
-          ? `No savings data for the selected filter (${filterDesc}).`
-          : 'No purchase history yet — the chart will populate once you start executing plans.';
-        empty.classList.remove('hidden');
-      }
-      attachSparkline('ytd', []);
-      return;
-    }
-    canvas.classList.remove('hidden');
-    empty?.classList.add('hidden');
+
+    const points = data.data_points ?? [];
 
     // YTD Savings KPI tile sparkline (issue #340 T6) — uses the same
     // cumulative_savings series the main chart renders. Skips silently
     // when the tile isn't in the DOM (e.g. a different layout is mounted).
-    const cumulativeForSpark = data.data_points.map((p: SavingsDataPoint) => p.cumulative_savings || 0);
-    attachSparkline('ytd', cumulativeForSpark);
+    attachSparkline('ytd', points.map((p: SavingsDataPoint) => p.cumulative_savings || 0));
+
+    // Determine the left edge of the x-axis.
+    // For 'all': anchor to the earliest purchase so the line fills the
+    // chart rather than clustering at the right end. Fall back to now-365d
+    // when there are no purchases.
+    let axisMinMs = windowStartMs;
+    if (savingsTrendRange === 'all' && points.length > 0) {
+      const earliest = points.reduce(
+        (min: number, p: SavingsDataPoint) => Math.min(min, new Date(p.timestamp).getTime()),
+        Infinity,
+      );
+      axisMinMs = earliest;
+    }
+
+    // Map each data point to {x: timestamp_ms, y: cumulative_savings} so
+    // Chart.js positions it by its real date, not by label index.
+    const chartData = points.map((p: SavingsDataPoint) => ({
+      x: new Date(p.timestamp).getTime(),
+      y: p.cumulative_savings || 0,
+    }));
+
+    // Always show the canvas with axes spanning [axisMinMs, nowMs].
+    // A window with no purchases renders empty axes (per QA finding 3.1)
+    // rather than a "no data" stub. The stub is reserved for fetch errors.
+    canvas.classList.remove('hidden');
+    empty?.classList.add('hidden');
 
     if (savingsTrendChart) savingsTrendChart.destroy();
-    const labels = data.data_points.map((p: SavingsDataPoint) => {
-      const d = new Date(p.timestamp);
-      return interval === 'hourly'
-        ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    });
-    const cumulative = data.data_points.map((p: SavingsDataPoint) => p.cumulative_savings || 0);
 
     savingsTrendChart = new Chart(canvas, {
       type: 'line',
       data: {
-        labels,
         datasets: [{
           label: 'Cumulative savings',
-          data: cumulative,
+          data: chartData,
           borderColor: '#1a73e8',
           backgroundColor: 'rgba(26, 115, 232, 0.1)',
           fill: true,
@@ -708,11 +714,20 @@ export async function loadSavingsTrendChart(): Promise<void> {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: (ctx) => `Cumulative savings: $${(ctx.raw as number).toLocaleString()}`,
+              label: (ctx) => `Cumulative savings: $${((ctx.raw as { x: number; y: number }).y).toLocaleString()}`,
             },
           },
         },
         scales: {
+          x: {
+            type: 'linear',
+            min: axisMinMs,
+            max: nowMs,
+            ticks: {
+              maxTicksLimit: 6,
+              callback: (value) => formatTrendAxisTick(value as number, interval),
+            },
+          },
           y: {
             beginAtZero: true,
             ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
