@@ -225,6 +225,15 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
+	} else {
+		// Web-initiated bulk-purchase executions (handler_purchases.go's
+		// buildPendingExecution) never populate exec.CloudAccountID — the
+		// per-rec CloudAccountID is the canonical source. Fall back to that
+		// so the Approval queue's Account cell shows the actual account ID
+		// instead of "-". Returns "" when recs disagree (a basket that
+		// genuinely spans accounts honestly renders as the dash fallback
+		// rather than a misleading single account).
+		accountID = collapseRecommendationAccount(exec.Recommendations)
 	}
 	var createdBy string
 	if exec.CreatedByUserID != nil {
@@ -368,6 +377,7 @@ func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.
 		row.ResourceType = r.ResourceType
 		row.Region = r.Region
 		row.Term = r.Term
+		row.Payment = r.Payment
 		row.UpfrontCost = r.UpfrontCost
 		row.EstimatedSavings = r.Savings
 		if r.MonthlyCost != nil {
@@ -379,6 +389,8 @@ func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.
 	row.ResourceType = fmt.Sprintf("%d commitment(s)", len(recs))
 	row.Service = collapseRecommendationService(recs)
 	row.Term = collapseRecommendationTerm(recs)
+	row.Payment = collapseRecommendationPayment(recs)
+	row.MonthlyCost = sumRecommendationMonthlyCost(recs)
 	row.UpfrontCost = exec.TotalUpfrontCost
 	row.EstimatedSavings = exec.EstimatedSavings
 }
@@ -430,6 +442,65 @@ func collapseRecommendationProvider(recs []config.RecommendationRecord) string {
 		}
 	}
 	return p
+}
+
+// collapseRecommendationPayment returns the payment option shared by every
+// recommendation in an execution, or "" when they disagree (or the slice is
+// empty). Empty renders as the dash fallback in the Approval queue rather
+// than a misleading single payment string for a basket that mixes options.
+func collapseRecommendationPayment(recs []config.RecommendationRecord) string {
+	if len(recs) == 0 {
+		return ""
+	}
+	p := recs[0].Payment
+	for _, r := range recs[1:] {
+		if r.Payment != p {
+			return ""
+		}
+	}
+	return p
+}
+
+// collapseRecommendationAccount returns the cloud-account ID shared by every
+// recommendation in an execution, or "" when they disagree (or none have one
+// set). Used as the Account fallback when exec.CloudAccountID is nil —
+// notably for web-initiated bulk purchases, which only populate the per-rec
+// CloudAccountID and leave the execution-level field blank.
+func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
+	if len(recs) == 0 {
+		return ""
+	}
+	var first string
+	if recs[0].CloudAccountID != nil {
+		first = *recs[0].CloudAccountID
+	}
+	for _, r := range recs[1:] {
+		var cur string
+		if r.CloudAccountID != nil {
+			cur = *r.CloudAccountID
+		}
+		if cur != first {
+			return ""
+		}
+	}
+	return first
+}
+
+// sumRecommendationMonthlyCost adds up the per-rec MonthlyCost values in a
+// multi-rec execution so the Approval queue's Monthly Cost cell shows the
+// committed recurring spend for the full basket. Nil per-rec entries
+// contribute 0 (the provider API did not return a monthly breakdown for
+// that rec) — the same treatment as the single-rec branch, which only
+// copies MonthlyCost when non-nil and otherwise leaves the row's field at
+// the zero value.
+func sumRecommendationMonthlyCost(recs []config.RecommendationRecord) float64 {
+	var total float64
+	for _, r := range recs {
+		if r.MonthlyCost != nil {
+			total += *r.MonthlyCost
+		}
+	}
+	return total
 }
 
 // MaxHistoryDateRangeDays caps the inclusive start/end window the History
