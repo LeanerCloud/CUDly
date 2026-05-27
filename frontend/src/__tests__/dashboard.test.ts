@@ -71,7 +71,7 @@ jest.mock('../api', () => ({
   // value don't need to be updated.
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
-import { loadSavingsTrendChart, setupSavingsTrendHandlers } from '../dashboard';
+import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers } from '../dashboard';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -764,6 +764,139 @@ describe('Dashboard Module', () => {
       const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
       const span = new Date(call.end).getTime() - new Date(call.start).getTime();
       expect(Math.round(span / 86400_000)).toBe(30);
+    });
+  });
+
+  // QA row 384 step 2.3: Home page Savings-over-time chart must honor the
+  // global Account filter (issue #701). These tests verify that:
+  //   1. setupDashboardHandlers subscribes to both filter chips.
+  //   2. An account-chip change re-fetches when Home tab is active.
+  //   3. No re-fetch fires when Home tab is inactive.
+  //   4. Back-to-back provider+account fires coalesce into one reload.
+  //   5. The account_id is forwarded to getSavingsAnalytics.
+  //   6. Filter-aware empty-state copy is shown when a filter is active.
+  describe('setupDashboardHandlers — filter chip subscriptions (QA 2.3)', () => {
+    function addHomeTab(active: boolean): void {
+      const div = document.createElement('div');
+      div.id = 'home-tab';
+      if (active) div.classList.add('active');
+      document.body.appendChild(div);
+    }
+
+    beforeEach(() => {
+      (state.subscribeProvider as jest.Mock).mockClear();
+      (state.subscribeAccount as jest.Mock).mockClear();
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0, total_recommendations: 0,
+        active_commitments: 0, committed_monthly: 0, current_coverage: 0,
+        target_coverage: 80, ytd_savings: 0, by_service: {},
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getRecommendations as jest.Mock).mockResolvedValue([]);
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      // Ensure a canvas for savings-trend-chart exists so loadSavingsTrendChart
+      // does not bail out at the early-return guard.
+      const canvas = document.createElement('canvas');
+      canvas.id = 'savings-trend-chart';
+      const empty = document.createElement('p');
+      empty.id = 'savings-trend-empty';
+      empty.className = 'hidden';
+      document.body.appendChild(canvas);
+      document.body.appendChild(empty);
+    });
+
+    test('registers one callback each with subscribeProvider and subscribeAccount', () => {
+      setupDashboardHandlers();
+
+      expect(state.subscribeProvider).toHaveBeenCalledTimes(1);
+      expect(state.subscribeAccount).toHaveBeenCalledTimes(1);
+      expect(typeof (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+      expect(typeof (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+    });
+
+    test('account chip change triggers loadDashboard (and getSavingsAnalytics) when home tab is active', async () => {
+      addHomeTab(true);
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-1']);
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ account_ids: ['uuid-acct-1'] })
+      );
+    });
+
+    test('does NOT fire when home tab is inactive (active-tab guard)', async () => {
+      addHomeTab(false);
+
+      setupDashboardHandlers();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getSavingsAnalytics as jest.Mock).mockClear();
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      accountCb();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).not.toHaveBeenCalled();
+    });
+
+    test('back-to-back provider+account fires coalesce into one reload', async () => {
+      addHomeTab(true);
+
+      setupDashboardHandlers();
+      const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+      (api.getDashboardSummary as jest.Mock).mockClear();
+      // Simulate topbar provider-change: clears accounts then sets provider,
+      // per the #185 ordering rule — both fire synchronously.
+      accountCb();
+      providerCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(api.getDashboardSummary).toHaveBeenCalledTimes(1);
+    });
+
+    test('loadSavingsTrendChart forwards account_id to the analytics API', async () => {
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-2']);
+
+      await loadSavingsTrendChart();
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ account_ids: ['uuid-acct-2'] })
+      );
+    });
+
+    test('empty-state shows filter name when account chip is active (QA 2.3)', async () => {
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-3']);
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      const empty = document.getElementById('savings-trend-empty');
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      expect(empty?.textContent).toContain('uuid-acct-3');
+    });
+
+    test('empty-state shows generic message when no filter is active', async () => {
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      const empty = document.getElementById('savings-trend-empty');
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      expect(empty?.textContent).toContain('No purchase history yet');
     });
   });
 
