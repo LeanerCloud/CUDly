@@ -576,6 +576,13 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("CreatePurchasePlan", mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("SetPlanAccounts", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("[]string")).Return(nil)
+	// Universal-plans fix: createPlan now validates target_accounts'
+	// providers match the plan's. Stub the cloud-account lookup so the
+	// provider-match passes (plan has aws:rds, account returns aws).
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "test-aws", Provider: "aws"}, nil
+	}
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 
@@ -586,7 +593,10 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 			"X-CSRF-Token":  "test-csrf",
 			"Content-Type":  "application/json",
 		},
-		Body: `{"name": "New Plan"}`,
+		// target_accounts is required (universal-plans fix). Provider must
+		// also be set so DerivePlanProviders returns non-empty; otherwise
+		// the validation skip-branch would mask the contract.
+		Body: `{"name": "New Plan", "provider": "aws", "service": "rds", "target_accounts": ["11111111-1111-1111-1111-111111111111"]}`,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "POST",

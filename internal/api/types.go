@@ -596,6 +596,14 @@ type PlanRequest struct {
 	RampSchedule       string `json:"ramp_schedule,omitempty"`
 	CustomStepPercent  int    `json:"custom_step_percent,omitempty"`
 	CustomIntervalDays int    `json:"custom_interval_days,omitempty"`
+
+	// TargetAccounts is the list of cloud_account UUIDs the plan will purchase
+	// for. Required (non-empty) on POST /plans — a plan with no rows in
+	// plan_accounts is a "universal plan", which the design no longer allows:
+	// every plan must be tied to at least one explicit account. The handler
+	// inserts the plan_accounts rows immediately after CreatePurchasePlan so
+	// the two writes are observed together by downstream consumers.
+	TargetAccounts []string `json:"target_accounts,omitempty"`
 }
 
 // toPurchasePlan converts a PlanRequest to a config.PurchasePlan

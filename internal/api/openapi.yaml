@@ -1977,7 +1977,7 @@ components:
 
     PlanRequest:
       type: object
-      required: [name]
+      required: [name, target_accounts]
       properties:
         name:
           type: string
@@ -2006,6 +2006,16 @@ components:
           type: integer
         custom_interval_days:
           type: integer
+        target_accounts:
+          type: array
+          minItems: 1
+          description: >
+            UUIDs of cloud accounts the plan will purchase for. Required on
+            POST /plans — a plan must be tied to at least one account. Sending
+            an empty array returns HTTP 400.
+          items:
+            type: string
+            format: uuid
 
     PurchasePlan:
       type: object

@@ -1224,6 +1224,14 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// Reject empty account_ids: a plan must remain tied to at least one
+	// cloud_account row. Allowing the PUT to clear all rows would recreate
+	// the universal-plan bug class (purchase_plans row with no matching
+	// plan_accounts row) that createPlan now refuses at insert time.
+	if len(body.AccountIDs) == 0 {
+		return nil, NewClientError(400, "account_ids is required: a plan must be tied to at least one account")
+	}
+
 	for _, aid := range body.AccountIDs {
 		if err := validateUUID(aid); err != nil {
 			return nil, NewClientError(400, fmt.Sprintf("invalid account_id %q: must be a valid UUID", aid))

@@ -1028,6 +1028,33 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	assert.Equal(t, []string{azureAcct1}, capturedIDs, "empty services map → validation skipped → write proceeds")
 }
 
+// TestSetPlanAccounts_RejectsEmpty verifies the universal-plans fix:
+// PUT /api/plans/:id/accounts with an empty account_ids returns HTTP 400
+// and never reaches the store. Eliminates the back-door for re-creating a
+// universal plan by updating an existing one to have zero target accounts.
+func TestSetPlanAccounts_RejectsEmpty(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":[]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "account_ids is required")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when account_ids is empty")
+}
+
 func TestListPlanAccounts_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

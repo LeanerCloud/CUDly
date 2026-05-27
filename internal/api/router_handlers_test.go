@@ -364,9 +364,12 @@ func TestRouter_setPlanAccountsHandler(t *testing.T) {
 	h := &Handler{auth: mockAuth, config: store}
 	r := newTestRouter(h)
 
+	// Universal-plans fix: setPlanAccounts now rejects empty account_ids.
+	// This router-dispatch test uses a single valid UUID to exercise the
+	// success path — empty body is covered by handler-level rejection tests.
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
-		Body:    `{"account_ids": []}`,
+		Body:    `{"account_ids": ["11111111-1111-1111-1111-111111111111"]}`,
 	}
 	_, err := r.setPlanAccountsHandler(ctx, req, map[string]string{"id": "22222222-2222-2222-2222-222222222222"})
 	require.NoError(t, err)
