@@ -543,11 +543,17 @@ func TestSender_SendPurchaseFailedNotification_MultipleFailures(t *testing.T) {
 // require an authenticated dashboard session; only the Cancel link carries
 // the token, and it must use the direct API path (not the SPA root) to
 // avoid loading third-party scripts with the token in the Referer header.
+//
+// It also covers the #581-followup deeplink shape: Review & Edit and
+// Pause Plan must include the execution / plan ID so the SPA can scroll
+// the user to the relevant row instead of dumping them at the dashboard
+// root.
 func TestRenderScheduledPurchaseEmail_TokenNotInReviewEditLinks(t *testing.T) {
 	data := NotificationData{
 		DashboardURL:      "https://dashboard.example.com",
 		ApprovalToken:     "super-secret-token",
 		ExecutionID:       "exec-abc-123",
+		PlanID:            "plan-xyz-789",
 		TotalSavings:      500.00,
 		PurchaseDate:      "March 1, 2025",
 		DaysUntilPurchase: 7,
@@ -559,6 +565,15 @@ func TestRenderScheduledPurchaseEmail_TokenNotInReviewEditLinks(t *testing.T) {
 
 	// The cancel link must use the direct API path with the execution ID and token.
 	assert.Contains(t, body, "/purchases/cancel/exec-abc-123?token=super-secret-token")
+
+	// Review & Edit must deeplink to the Purchase History row matching
+	// ExecutionID (non-sensitive UUID; auth still required via session cookie).
+	assert.Contains(t, body, "/purchases#history?execution=exec-abc-123",
+		"Review & Edit link must deeplink to the matching execution row")
+
+	// Pause Plan must deeplink to the Plans tab with the matching plan ID.
+	assert.Contains(t, body, "/plans?plan=plan-xyz-789",
+		"Pause Plan link must deeplink to the matching plan")
 
 	// The token must not appear in the review/edit or pause lines.
 	for _, line := range splitTestLines(body) {

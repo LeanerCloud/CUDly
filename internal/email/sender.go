@@ -374,9 +374,15 @@ func dedupeCCAgainstTo(to string, cc []string) []string {
 
 // NotificationData holds data for rendering email templates
 type NotificationData struct {
-	DashboardURL      string
-	ApprovalToken     string
-	ExecutionID       string
+	DashboardURL  string
+	ApprovalToken string
+	ExecutionID   string
+	// PlanID is the parent purchase plan's UUID. Used by the Pause Plan
+	// deeplink in scheduledPurchaseTemplate to route the user to the
+	// Plans tab with the matching plan highlighted. The plan UUID is
+	// non-sensitive (the user already needs an authenticated session
+	// cookie to act on the plan), so embedding it in the URL is safe.
+	PlanID            string
 	TotalSavings      float64
 	TotalUpfrontCost  float64
 	Recommendations   []RecommendationSummary

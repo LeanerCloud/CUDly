@@ -521,6 +521,12 @@ func TestTemplateContent_HasRequiredSections(t *testing.T) {
 		assert.Contains(t, scheduledPurchaseTemplate, "/purchases/cancel/{{.ExecutionID}}")
 		assert.Contains(t, scheduledPurchaseTemplate, ".ApprovalToken")
 		assert.Contains(t, scheduledPurchaseTemplate, ".PlanName")
+		// Review & Edit and Pause Plan deeplinks (#581 follow-up) carry
+		// the non-sensitive ExecutionID / PlanID so the SPA can scroll
+		// the user to the relevant row instead of landing on the
+		// dashboard root.
+		assert.Contains(t, scheduledPurchaseTemplate, "/purchases#history?execution={{.ExecutionID}}")
+		assert.Contains(t, scheduledPurchaseTemplate, "/plans?plan={{.PlanID}}")
 	})
 
 	t.Run("purchaseConfirmationTemplate has history link", func(t *testing.T) {

@@ -48,9 +48,9 @@ Estimated Monthly Savings: ${{printf "%.2f" .TotalSavings}}
 
 Actions:
 --------
-[Review & Edit] {{.DashboardURL}}
+[Review & Edit] {{.DashboardURL}}/purchases#history?execution={{.ExecutionID}}
 
-[Pause Plan] {{.DashboardURL}}
+[Pause Plan] {{.DashboardURL}}/plans?plan={{.PlanID}}
 
 [Cancel This Purchase] {{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
 
