@@ -5713,47 +5713,105 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
   // distinct score (or, if genuinely tied, a stable cellKey tiebreaker), so
   // repeated invocations MUST produce the same order.
   // -------------------------------------------------------------------------
+  // Selection-independent Term sort: cells with different term distributions
+  // must sort correctly by cellSummary score (termMin*100+termMax) regardless
+  // of which variants the user has selected. Fix for Issue #768: the previous
+  // "selected-variant short-circuit" in cellScoreFor() switched the score to
+  // the selected variant's individual term value, which caused rows to reorder
+  // on every checkbox toggle.
   // -------------------------------------------------------------------------
-  // Selected-variant interaction: when a cell has a selected variant, the
-  // cell's sort score must use that variant's value but must remain on the
-  // same scale as non-selected cells (otherwise a selected term=1 ranks
-  // above a non-selected mixed cell when it should rank below the
-  // 1yr-only non-selected cell).
-  // -------------------------------------------------------------------------
-  test('Selected-variant cell sorts on the same scale as non-selected cells (Term)', async () => {
-    // Non-selected mixed (1, 3) cell.
+  test('Term sort is selection-independent: cells rank by term distribution not by selected variant', async () => {
+    // cell-1y-only: both variants are term=1 (termMin=1, termMax=1, score=101)
+    const cell1yOnly: LocalRecommendation[] = [
+      { id: '1yonly-nu', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        resource_type: '1y-only', region: 'us-east-1', count: 1, term: 1,
+        payment: 'no-upfront', savings: 100, upfront_cost: 0, monthly_cost: 50 } as unknown as LocalRecommendation,
+      { id: '1yonly-au', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        resource_type: '1y-only', region: 'us-east-1', count: 1, term: 1,
+        payment: 'all-upfront', savings: 110, upfront_cost: 800, monthly_cost: 0 } as unknown as LocalRecommendation,
+    ];
+    // cell-mixed: term=1 and term=3 variants (termMin=1, termMax=3, score=103)
     const cellMixed = multiVariantCell({
-      resourceType: 'mixed-cell', payment1y: 'no-upfront', payment3y: 'no-upfront',
+      resourceType: 'mixed', payment1y: 'no-upfront', payment3y: 'no-upfront',
       upfront1y: 0, upfront3y: 0,
     });
-    // Selected cell: user picked the 3yr variant inside a (1, 3) cell.
-    const cellSel3y = multiVariantCell({
-      resourceType: 'sel3y-cell', payment1y: 'no-upfront', payment3y: 'no-upfront',
-      upfront1y: 0, upfront3y: 0,
-    });
-    // Selected cell: user picked the 1yr variant inside a (1, 3) cell.
-    const cellSel1y = multiVariantCell({
-      resourceType: 'sel1y-cell', payment1y: 'no-upfront', payment3y: 'no-upfront',
-      upfront1y: 0, upfront3y: 0,
-    });
-    const recs = [...cellMixed, ...cellSel3y, ...cellSel1y];
+    // cell-3y-only: both variants are term=3 (termMin=3, termMax=3, score=303)
+    const cell3yOnly: LocalRecommendation[] = [
+      { id: '3yonly-nu', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        resource_type: '3y-only', region: 'us-east-1', count: 1, term: 3,
+        payment: 'no-upfront', savings: 300, upfront_cost: 0, monthly_cost: 40 } as unknown as LocalRecommendation,
+      { id: '3yonly-au', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        resource_type: '3y-only', region: 'us-east-1', count: 1, term: 3,
+        payment: 'all-upfront', savings: 320, upfront_cost: 2400, monthly_cost: 0 } as unknown as LocalRecommendation,
+    ];
+    const recs = [...cell3yOnly, ...cellMixed, ...cell1yOnly];
 
+    // Select the 3yr variant from the mixed cell. Under the old (buggy) code
+    // this caused mixed-cell's score to become 3*100+3=303, tying it with
+    // 3y-only and pushing it behind 1y-only in asc order.
     setupTestFixture(recs, { column: 'term', direction: 'asc' });
-    // Override selection mock AFTER setupTestFixture so it sticks.
     (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(
-      new Set(['sel3ycell-3y', 'sel1ycell-1y']),
+      new Set(['mixed-3y']),
     );
     await loadRecommendations();
 
     const order = renderedCellOrder();
-    // Expected under term asc:
-    //   selected-1y cell  (score = 1*100+1 = 101)
-    //   mixed cell        (score = 1*100+3 = 103)
-    //   selected-3y cell  (score = 3*100+3 = 303)
-    expect(indexOrFail(order, 'sel1y-cell'))
-      .toBeLessThan(indexOrFail(order, 'mixed-cell'));
-    expect(indexOrFail(order, 'mixed-cell'))
-      .toBeLessThan(indexOrFail(order, 'sel3y-cell'));
+    // Expected under term asc (selection must NOT affect order):
+    //   1y-only (score=101) < mixed (score=103) < 3y-only (score=303)
+    expect(indexOrFail(order, '1y-only'))
+      .toBeLessThan(indexOrFail(order, 'mixed'));
+    expect(indexOrFail(order, 'mixed'))
+      .toBeLessThan(indexOrFail(order, '3y-only'));
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #768: toggling checkboxes must not change row sort order.
+  //
+  // Before the fix, cellScoreFor() switched to the selected variant's
+  // individual value when selectedRecs contained a variant id, causing
+  // groupsInSortOrder() to produce a different order after a checkbox toggle.
+  // -------------------------------------------------------------------------
+  test('Issue #768: row order is identical before and after toggling checkboxes', async () => {
+    // Three cells with distinct savings so they sort in a predictable order.
+    // Cell A: savings = 10 (lowest) → should be last under desc
+    // Cell B: savings = 50 (middle)
+    // Cell C: savings = 90 (highest) → should be first under desc
+    const cellA = multiVariantCell({
+      resourceType: 'cell-A', payment1y: 'no-upfront', payment3y: 'no-upfront',
+      upfront1y: 0, upfront3y: 0, savings1y: 10, savings3y: 15,
+    });
+    const cellB = multiVariantCell({
+      resourceType: 'cell-B', payment1y: 'no-upfront', payment3y: 'no-upfront',
+      upfront1y: 0, upfront3y: 0, savings1y: 50, savings3y: 55,
+    });
+    const cellC = multiVariantCell({
+      resourceType: 'cell-C', payment1y: 'no-upfront', payment3y: 'no-upfront',
+      upfront1y: 0, upfront3y: 0, savings1y: 90, savings3y: 95,
+    });
+    const recs = [...cellA, ...cellB, ...cellC];
+
+    // --- render with no selection ---
+    setupTestFixture(recs, { column: 'savings', direction: 'desc' });
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set<string>());
+    await loadRecommendations();
+    const orderBefore = renderedCellOrder();
+
+    // Verify base order (desc: C > B > A).
+    expect(indexOrFail(orderBefore, 'cell-C'))
+      .toBeLessThan(indexOrFail(orderBefore, 'cell-B'));
+    expect(indexOrFail(orderBefore, 'cell-B'))
+      .toBeLessThan(indexOrFail(orderBefore, 'cell-A'));
+
+    // --- simulate toggling two checkboxes (select 1yr variant of A and 3yr of C) ---
+    setupTestFixture(recs, { column: 'savings', direction: 'desc' });
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(
+      new Set(['cellA-1y', 'cellC-3y']),
+    );
+    await loadRecommendations();
+    const orderAfter = renderedCellOrder();
+
+    // Row order must be identical after selection change.
+    expect(orderAfter).toEqual(orderBefore);
   });
 
   test('Sort is deterministic across repeated renders for each affected column', async () => {
