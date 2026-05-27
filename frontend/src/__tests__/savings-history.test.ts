@@ -65,6 +65,7 @@ describe('Savings History Module', () => {
         <p class="help-text">Data will be collected hourly once you have active purchases.</p>
       </div>
       <div id="savings-stats">
+        <h4 id="period-savings-label">Period Savings</h4>
         <span id="period-savings">$0</span>
         <h4 id="avg-savings-label">Avg Monthly Savings</h4>
         <span id="avg-hourly-savings">$0/mo</span>
@@ -1278,21 +1279,24 @@ describe('Savings History Module', () => {
     test('period savings (cumulative total) also converts with unit toggle', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
 
-      // Monthly
+      // Monthly: value is clean dollar total; label reflects view mode
       await loadSavingsHistory();
       const periodElMonthly = document.getElementById('period-savings');
       expect(periodElMonthly?.textContent).toBe('$730.00');
+      expect(document.getElementById('period-savings-label')?.textContent).toContain('monthly');
 
-      // Hourly: 730 / 730 = 1.00
+      // Hourly: 730 / 730 = 1.00; label updates to 'hourly'
       const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
       unitSelect.value = 'hourly';
       await loadSavingsHistory();
       expect(document.getElementById('period-savings')?.textContent).toBe('$1.00');
+      expect(document.getElementById('period-savings-label')?.textContent).toContain('hourly');
 
-      // Yearly: 730 * 12 = 8760 -> $8.76K
+      // Yearly: 730 * 12 = 8760 -> $8.76K; label updates to 'yearly'
       unitSelect.value = 'yearly';
       await loadSavingsHistory();
       expect(document.getElementById('period-savings')?.textContent).toBe('$8.76K');
+      expect(document.getElementById('period-savings-label')?.textContent).toContain('yearly');
     });
 
     test('chart tooltip uses selected unit suffix for period savings dataset', async () => {
