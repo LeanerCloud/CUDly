@@ -623,7 +623,6 @@ export function formatTrendAxisTick(tsMs: number, intervalHint: 'hourly' | 'dail
   }
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
-}
 
 /**
  * Load the savings-over-time trend chart for the dashboard. Fetches the
