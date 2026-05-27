@@ -140,24 +140,24 @@ describe('Plans page permission gating (issue #365)', () => {
       expect(btn.hidden).toBe(false);
     });
 
-    test('shows manage actions but hides Delete (user lacks delete:plans)', async () => {
+    test('shows manage actions including Delete (user has delete:plans since PR #660)', async () => {
       await loadPlans();
       const list = document.getElementById('plans-list') as HTMLElement;
       const html = list.innerHTML;
       expect(html).toContain('data-action="add-purchases"');
       expect(html).toContain('data-action="edit-plan"');
       expect(html).toContain('data-action="toggle-plan"');
-      expect(html).not.toContain('data-action="delete-plan"');
+      expect(html).toContain('data-action="delete-plan"');
     });
 
-    test('shows row Run/Pause/Edit but hides Disable on planned purchases', async () => {
+    test('shows row Run/Pause/Edit/Disable on planned purchases (user has delete:plans since PR #660)', async () => {
       await loadPlans();
       const pp = document.getElementById('planned-purchases-list') as HTMLElement;
       const html = pp.innerHTML;
       expect(html).toContain('data-action="run"');
       expect(html).toContain('data-action="pause"');
       expect(html).toContain('data-action="edit"');
-      expect(html).not.toContain('data-action="disable"');
+      expect(html).toContain('data-action="disable"');
     });
   });
 

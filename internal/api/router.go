@@ -140,20 +140,28 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/recommendations/", PathSuffix: "/detail", Method: "GET", Handler: r.getRecommendationDetailHandler, Auth: AuthUser},
 
 		// Purchase plans endpoints — GETs are AuthUser (anyone signed in
-		// can see plans they're entitled to), writes stay AuthAdmin.
+		// can see plans they're entitled to). Mutating routes are also
+		// AuthUser now (PR-A of #660): the router-level gate drops to
+		// "must be signed in" and each handler calls requirePermission with
+		// the specific verb+resource so the per-handler check is the real
+		// gate. Without the flip the requirePermission call inside the
+		// handler is never reached for non-admins.
 		{ExactPath: "/api/plans", Method: "GET", Handler: r.listPlansHandler, Auth: AuthUser},
-		{ExactPath: "/api/plans", Method: "POST", Handler: r.createPlanHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/plans", Method: "POST", Handler: r.createPlanHandler, Auth: AuthUser},
 		// Suffix routes must precede generic prefix routes so they are matched first.
-		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", PathSuffix: "/purchases", Method: "POST", Handler: r.createPlannedPurchasesHandler, Auth: AuthUser},
 		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "GET", Handler: r.listPlanAccountsHandler, Auth: AuthUser},
-		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", PathSuffix: "/accounts", Method: "PUT", Handler: r.setPlanAccountsHandler, Auth: AuthUser},
 		{PathPrefix: "/api/plans/", Method: "GET", Handler: r.getPlanHandler, Auth: AuthUser},
-		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler, Auth: AuthAdmin},
-		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler, Auth: AuthAdmin},
-		{PathPrefix: "/api/plans/", Method: "DELETE", Handler: r.deletePlanHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/plans/", Method: "PUT", Handler: r.updatePlanHandler, Auth: AuthUser},
+		{PathPrefix: "/api/plans/", Method: "PATCH", Handler: r.patchPlanHandler, Auth: AuthUser},
+		{PathPrefix: "/api/plans/", Method: "DELETE", Handler: r.deletePlanHandler, Auth: AuthUser},
 
-		// Purchase actions
-		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler, Auth: AuthAdmin},
+		// Purchase actions. AuthUser so requirePermission inside each
+		// handler is the real gate (PR-A of #660 — same rationale as plans
+		// above). Approve + Cancel stay AuthPublic (token-based paths that
+		// are deliberately unauthenticated).
+		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler, Auth: AuthUser},
 		// Approve + Cancel also accept GET so the one-click links in the
 		// approval email (rendered as <a href>) land on the correct
 		// handler instead of falling through to the catch-all 401 that
@@ -170,14 +178,14 @@ func (r *Router) registerRoutes() {
 		// the retry-any/retry-own RBAC matrix.
 		{PathPrefix: "/api/purchases/retry/", Method: "POST", Handler: r.retryPurchaseHandler, Auth: AuthUser},
 
-		// Planned purchases endpoints (must come before generic /api/purchases/{id})
-		// — GET list is AuthUser; the action endpoints (pause/resume/run/delete)
-		// stay AuthAdmin.
+		// Planned purchases endpoints (must come before generic /api/purchases/{id}).
+		// All now AuthUser (PR-A of #660): handler-level requirePermission
+		// is the actual gate for pause/resume/run/delete.
 		{ExactPath: "/api/purchases/planned", Method: "GET", Handler: r.getPlannedPurchasesHandler, Auth: AuthUser},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/pause", Method: "POST", Handler: r.pausePlannedPurchaseHandler, Auth: AuthAdmin},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/resume", Method: "POST", Handler: r.resumePlannedPurchaseHandler, Auth: AuthAdmin},
-		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/run", Method: "POST", Handler: r.runPlannedPurchaseHandler, Auth: AuthAdmin},
-		{PathPrefix: "/api/purchases/planned/", Method: "DELETE", Handler: r.deletePlannedPurchaseHandler, Auth: AuthAdmin},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/pause", Method: "POST", Handler: r.pausePlannedPurchaseHandler, Auth: AuthUser},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/resume", Method: "POST", Handler: r.resumePlannedPurchaseHandler, Auth: AuthUser},
+		{PathPrefix: "/api/purchases/planned/", PathSuffix: "/run", Method: "POST", Handler: r.runPlannedPurchaseHandler, Auth: AuthUser},
+		{PathPrefix: "/api/purchases/planned/", Method: "DELETE", Handler: r.deletePlannedPurchaseHandler, Auth: AuthUser},
 
 		// Generic purchase details (must come after more specific routes)
 		// — read-only; AuthUser so the history detail view works for everyone.
@@ -255,17 +263,19 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/inventory/commitments", Method: "GET", Handler: r.listInventoryCommitmentsHandler, Auth: AuthUser},
 
 		// RI Exchange endpoints — GETs are AuthUser (Convertible RIs,
-		// Reshape Recommendations, Exchange History pages all need this);
-		// quote / execute / config writes stay AuthAdmin.
+		// Reshape Recommendations, Exchange History pages all need this).
+		// quote / execute / config writes are now AuthUser (PR-A of #660):
+		// each handler calls requirePermission so the per-handler check is
+		// the real gate. approve/reject stay AuthPublic (token-based).
 		{ExactPath: "/api/ri-exchange/azure-instances", Method: "GET", Handler: r.listExchangeableAzureRIsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/instances", Method: "GET", Handler: r.listConvertibleRIsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/target-offerings", Method: "GET", Handler: r.listTargetOfferingsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/utilization", Method: "GET", Handler: r.getRIUtilizationHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/reshape-recommendations", Method: "GET", Handler: r.getReshapeRecommendationsHandler, Auth: AuthUser},
-		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler, Auth: AuthAdmin},
-		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/ri-exchange/quote", Method: "POST", Handler: r.getExchangeQuoteHandler, Auth: AuthUser},
+		{ExactPath: "/api/ri-exchange/execute", Method: "POST", Handler: r.executeExchangeHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/config", Method: "GET", Handler: r.getRIExchangeConfigHandler, Auth: AuthUser},
-		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler, Auth: AuthAdmin},
+		{ExactPath: "/api/ri-exchange/config", Method: "PUT", Handler: r.updateRIExchangeConfigHandler, Auth: AuthUser},
 		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler, Auth: AuthUser},
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
