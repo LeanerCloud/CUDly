@@ -14,7 +14,7 @@
  * but the digits-only regex ^\d+$ rejects the exponent form.
  */
 
-import { openNewPlanModal, closePlanModal } from '../plans';
+import { openNewPlanModal, closePlanModal, openAddPurchasesModal } from '../plans';
 import type { ToastOptions } from '../toast';
 
 jest.mock('../api', () => ({
@@ -416,5 +416,190 @@ describe('plan numeric inputs: live range validation (#702)', () => {
 
     const describedBy = input.getAttribute('aria-describedby') ?? '';
     expect(describedBy).toContain('plan-coverage-range-error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Add Purchases modal: inline range validation on Number of Purchases (#771)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire live range validation on the "Number of Purchases" field
+ * in the Add Purchases modal (issue #771).
+ *
+ * The field has min=1 max=52 (weekly cadence cap). Mirrors the same
+ * wireRangeInput pattern as the plan-creation modal (#702/#714):
+ *   - aria-invalid + sibling .field-error on out-of-range / non-integer
+ *     input / blur
+ *   - Submit button is disabled while the field is invalid
+ *   - Save-time guard uses Number() + Number.isInteger() (not parseInt)
+ *     so fractional values like 2.5 are rejected before reaching the API
+ */
+describe('Add Purchases modal: inline range validation (#771)', () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    // Provide a minimal body with the plans-list container that
+    // openAddPurchasesModal's DOM-removal path expects.
+    const plansList = document.createElement('div');
+    plansList.id = 'plans-list';
+    const ppList = document.createElement('div');
+    ppList.id = 'planned-purchases-list';
+    document.body.replaceChildren(plansList, ppList);
+
+    await openAddPurchasesModal('plan-xyz', 'My Test Plan');
+  });
+
+  function countInput(): HTMLInputElement {
+    return document.getElementById('add-purchases-count') as HTMLInputElement;
+  }
+
+  function submitBtn(): HTMLButtonElement {
+    return document.querySelector<HTMLButtonElement>('#add-purchases-modal button[type="submit"]') as HTMLButtonElement;
+  }
+
+  function errorEl(): HTMLElement | null {
+    return document.getElementById('add-purchases-count-range-error');
+  }
+
+  // --- out-of-range values show inline error --------------------------------
+
+  it('typing 0 (below min) sets aria-invalid and shows the error span', () => {
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    const err = errorEl();
+    expect(err).not.toBeNull();
+    expect(err!.classList.contains('hidden')).toBe(false);
+    expect(err!.textContent).toBe('Must be a whole number between 1 and 52');
+  });
+
+  it('typing 53 (above max) sets aria-invalid and shows the error span', () => {
+    const input = countInput();
+    input.value = '53';
+    input.dispatchEvent(new Event('input'));
+
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    const err = errorEl();
+    expect(err).not.toBeNull();
+    expect(err!.classList.contains('hidden')).toBe(false);
+    expect(err!.textContent).toBe('Must be a whole number between 1 and 52');
+  });
+
+  // --- submit button disabled while field is invalid -----------------------
+
+  it('submit button is disabled when value is 0', () => {
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+
+    expect(submitBtn().disabled).toBe(true);
+  });
+
+  it('submit button is disabled when value is 53', () => {
+    const input = countInput();
+    input.value = '53';
+    input.dispatchEvent(new Event('input'));
+
+    expect(submitBtn().disabled).toBe(true);
+  });
+
+  it('submit button is re-enabled when value comes back in range', () => {
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+    expect(submitBtn().disabled).toBe(true);
+
+    input.value = '4';
+    input.dispatchEvent(new Event('input'));
+    expect(submitBtn().disabled).toBe(false);
+  });
+
+  // --- valid boundary values clear the error --------------------------------
+
+  it.each([['1'], ['26'], ['52']])(
+    'valid value %s clears aria-invalid and hides the error span',
+    (value) => {
+      const input = countInput();
+      // First trigger an error.
+      input.value = '0';
+      input.dispatchEvent(new Event('input'));
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      expect(input.getAttribute('aria-invalid')).toBeNull();
+      const err = errorEl();
+      expect(err).not.toBeNull();
+      expect(err!.classList.contains('hidden')).toBe(true);
+    },
+  );
+
+  // --- fractional input rejected (feedback_strict_int_parse) ---------------
+
+  it('fractional value 2.5 is rejected as non-integer', () => {
+    const input = countInput();
+    input.value = '2.5';
+    input.dispatchEvent(new Event('input'));
+
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl()!.classList.contains('hidden')).toBe(false);
+  });
+
+  // --- error span a11y attributes ------------------------------------------
+
+  it('error span has role=status and aria-live=polite', () => {
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+
+    const err = errorEl();
+    expect(err).not.toBeNull();
+    expect(err!.getAttribute('role')).toBe('status');
+    expect(err!.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('input aria-describedby references the error span id', () => {
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+
+    expect(input.getAttribute('aria-describedby')).toContain('add-purchases-count-range-error');
+  });
+
+  // --- save-time guard prevents API call on out-of-range value -------------
+
+  it('submitting count=0 is blocked by save-time guard without calling the API', async () => {
+    (require('../api').createPlannedPurchases as jest.Mock).mockResolvedValue({});
+
+    const input = countInput();
+    input.value = '0';
+    input.dispatchEvent(new Event('input'));
+
+    const form = document.getElementById('add-purchases-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit'));
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
+    const errDiv = document.getElementById('add-purchases-error');
+    expect(errDiv?.classList.contains('hidden')).toBe(false);
+    expect(errDiv?.textContent).toMatch(/whole number between 1 and 52/i);
+  });
+
+  it('submitting count=53 is blocked by save-time guard without calling the API', async () => {
+    (require('../api').createPlannedPurchases as jest.Mock).mockResolvedValue({});
+
+    const input = countInput();
+    input.value = '53';
+    input.dispatchEvent(new Event('input'));
+
+    const form = document.getElementById('add-purchases-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit'));
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
   });
 });
