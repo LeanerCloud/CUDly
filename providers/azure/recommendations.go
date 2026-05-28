@@ -19,6 +19,7 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
 )
 
 // RecommendationsClientAdapter aggregates Azure reservation recommendations across all services.
@@ -60,14 +61,14 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // (see known_issues/10_azure_provider.md CRITICAL "Recommendation converters
 // ignore the API response entirely" for the matching converter work).
 //
-// All five service calls run concurrently under errgroup. Each goroutine captures
+// All six service calls run concurrently under errgroup. Each goroutine captures
 // its own error and returns nil to the group so that a single service failure
 // does not cancel sibling calls. Results are appended in a deterministic order
-// (compute → database → cache → cosmosdb → advisor) after all goroutines finish.
+// (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
 	var (
-		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs []common.Recommendation
-		computeErr, dbErr, cacheErr, cosmosErr, advisorErr      error
+		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
+		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -128,6 +129,18 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		})
 	}
 
+	// Savings Plans — Azure has no stable public API for SP purchase
+	// recommendations (Benefits Recommendations API is still in preview).
+	// The call returns an empty slice so the service appears in the fan-out
+	// and will start returning data once the API stabilises without requiring
+	// a scheduler change.
+	if shouldIncludeService(params, common.ServiceSavingsPlans) {
+		goService(&spErr, func() {
+			spClient := savingsplans.NewClient(r.cred, r.subscriptionID, "")
+			spRecs, spErr = spClient.GetRecommendations(gctx, params)
+		})
+	}
+
 	// Azure Advisor adds cross-cutting cost recommendations independent of the
 	// per-service Reservation API. Failures here are non-fatal — the per-service
 	// results above are still useful on their own.
@@ -151,6 +164,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		serviceResult{"database", dbRecs, dbErr},
 		serviceResult{"cache", cacheRecs, cacheErr},
 		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
+		serviceResult{"savingsplans", spRecs, spErr},
 		serviceResult{"advisor", advisorRecs, advisorErr}), nil
 }
 
@@ -167,9 +181,9 @@ type serviceResult struct {
 // mergeServiceResults logs per-service errors (matches the previous sequential
 // behaviour where each error was logged inline via logging.Warnf) and appends
 // successful results in the order the slice is passed — callers must preserve
-// the canonical compute → database → cache → cosmosdb → advisor order so that
-// order-sensitive consumers remain stable. The advisor entry's error is logged
-// via logging.Errorf to match the pre-parallelisation severity.
+// the canonical compute → database → cache → cosmosdb → savingsplans → advisor
+// order so that order-sensitive consumers remain stable. The advisor entry's
+// error is logged via logging.Errorf to match the pre-parallelisation severity.
 func mergeServiceResults(results ...serviceResult) []common.Recommendation {
 	total := 0
 	for _, r := range results {
