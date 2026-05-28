@@ -1085,9 +1085,28 @@
                     <input type="hidden" id="override-account-id">
                     <input type="hidden" id="override-provider" value="aws">
 
-                    <label>Service:
-                        <select id="override-service" required></select>
+                    <!-- Single-service mode (default) -->
+                    <div id="override-single-service-row">
+                        <label>Service:
+                            <select id="override-service" required></select>
+                        </label>
+                    </div>
+
+                    <!-- Multi-service toggle (issue #119) -->
+                    <label class="toggle-row">
+                        Apply to multiple services:
+                        <label class="toggle-label">
+                            <input type="checkbox" id="override-bulk-toggle">
+                            <span class="slider"></span>
+                        </label>
                     </label>
+
+                    <!-- Checkbox list shown only in bulk mode (issue #119) -->
+                    <div id="override-bulk-services" class="hidden" role="group" aria-labelledby="override-bulk-services-legend">
+                        <span id="override-bulk-services-legend" class="form-label">Services:</span>
+                        <div id="override-bulk-services-list"></div>
+                    </div>
+
                     <label>Term:
                         <select id="override-term">
                             <option value="">Inherit (use global default)</option>
@@ -1111,7 +1130,7 @@
 
                     <div class="modal-buttons">
                         <button type="button" id="close-override-modal-btn">Cancel</button>
-                        <button type="submit" class="primary">Save override</button>
+                        <button type="submit" class="primary" id="override-submit-btn">Save override</button>
                     </div>
                 </form>
             </div>

@@ -1436,7 +1436,13 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
 // State carried from openOverrideModal → submitOverrideForm so the form
 // handler knows which account/provider/panel it belongs to without
 // inspecting the DOM. Cleared on close so it can't leak across opens.
-let overrideModalContext: { accountId: string; provider: string; panel: HTMLElement } | null = null;
+let overrideModalContext: {
+  accountId: string;
+  provider: string;
+  panel: HTMLElement;
+  /** Services available for bulk selection (excludes already-overridden). */
+  availableServices: ReadonlyArray<{ value: string; label: string }>;
+} | null = null;
 let overridePaymentOptionsController: AbortController | null = null;
 
 /**
@@ -1459,7 +1465,16 @@ export function openOverrideModal(
   const modal = document.getElementById('override-modal');
   if (!modal) return;
 
-  overrideModalContext = { accountId, provider, panel };
+  // Populate available-services list before writing context so bulk mode can
+  // reference it from the start.
+  const used = new Set(
+    existingOverrides
+      .filter(o => o.provider === provider)
+      .map(o => o.service),
+  );
+  const available = getOverrideServicesForProvider(provider).filter(s => !used.has(s.value));
+
+  overrideModalContext = { accountId, provider, panel, availableServices: available };
 
   setInputValue('override-account-id', accountId);
   setInputValue('override-provider', provider);
@@ -1486,25 +1501,25 @@ export function openOverrideModal(
     coverageInput.placeholder = inheritCurrentlyLabel(`${cachedGlobalDefaults.coverage}%`);
   }
 
-  // Populate the service dropdown with provider-specific services, excluding
-  // any that already have an override for this account. Issue #109 extends
-  // this to Azure and GCP (previously AWS-only per issue #104 follow-up).
-  const used = new Set(
-    existingOverrides
-      .filter(o => o.provider === provider)
-      .map(o => o.service),
-  );
+  // Reset bulk-mode toggle to off so the modal always opens in single-service
+  // mode (issue #119).
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  if (bulkToggle) bulkToggle.checked = false;
+  applyOverrideBulkMode(false, available);
+
+  // Populate the single-service dropdown with provider-specific services,
+  // excluding any that already have an override for this account. Issue #109
+  // extends this to Azure and GCP (previously AWS-only per issue #104 follow-up).
   const select = document.getElementById('override-service') as HTMLSelectElement | null;
   if (select) {
     select.replaceChildren();
-    const available = getOverrideServicesForProvider(provider).filter(s => !used.has(s.value));
     if (available.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
       opt.textContent = 'All services already have overrides';
       opt.disabled = true;
       select.appendChild(opt);
-      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
       if (submitBtn) submitBtn.disabled = true;
     } else {
       for (const { value, label } of available) {
@@ -1513,7 +1528,7 @@ export function openOverrideModal(
         opt.textContent = label;
         select.appendChild(opt);
       }
-      const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
       if (submitBtn) submitBtn.disabled = false;
     }
   }
@@ -1531,7 +1546,73 @@ export function openOverrideModal(
   const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
   termSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
 
+  // Wire the bulk-mode toggle (issue #119). AbortController cleans it up on close.
+  bulkToggle?.addEventListener(
+    'change',
+    () => {
+      const ctx = overrideModalContext;
+      applyOverrideBulkMode(bulkToggle.checked, ctx?.availableServices ?? []);
+    },
+    { signal: overridePaymentOptionsController.signal },
+  );
+
   modal.classList.remove('hidden');
+}
+
+/**
+ * Switch the override modal between single-service and bulk-service mode.
+ *
+ * In single mode the normal <select id="override-service"> is shown.
+ * In bulk mode it is hidden and a checkbox group is shown instead (issue #119).
+ * Uses DOM APIs throughout — no innerHTML — so no XSS risk from service values.
+ */
+function applyOverrideBulkMode(
+  bulk: boolean,
+  available: ReadonlyArray<{ value: string; label: string }>,
+): void {
+  const singleRow = document.getElementById('override-single-service-row');
+  const bulkDiv   = document.getElementById('override-bulk-services');
+  const listDiv   = document.getElementById('override-bulk-services-list');
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+
+  if (singleRow) singleRow.classList.toggle('hidden', bulk);
+  if (bulkDiv)   bulkDiv.classList.toggle('hidden', !bulk);
+
+  if (!bulk) {
+    // Returning to single-service mode: the single <select> controls submit state.
+    return;
+  }
+
+  // Rebuild the checkbox list using DOM APIs (no innerHTML).
+  if (listDiv) {
+    listDiv.replaceChildren();
+    for (const { value, label } of available) {
+      const checkLabel = document.createElement('label');
+      checkLabel.className = 'bulk-service-checkbox-label';
+
+      const cb = document.createElement('input');
+      cb.type  = 'checkbox';
+      cb.name  = 'bulk-service';
+      cb.value = value;
+      // Re-evaluate submit-button state whenever a checkbox changes.
+      cb.addEventListener('change', () => {
+        if (submitBtn) {
+          const anyChecked = listDiv.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+          submitBtn.disabled = !anyChecked;
+        }
+      });
+
+      const span = document.createElement('span');
+      span.textContent = label;
+
+      checkLabel.appendChild(cb);
+      checkLabel.appendChild(span);
+      listDiv.appendChild(checkLabel);
+    }
+  }
+
+  // In bulk mode start with submit disabled until at least one box is checked.
+  if (submitBtn) submitBtn.disabled = true;
 }
 
 // syncOverridePaymentOptions filters the override-payment <select> down to
@@ -1584,6 +1665,10 @@ function closeOverrideModal(): void {
   overrideModalContext = null;
   overridePaymentOptionsController?.abort();
   overridePaymentOptionsController = null;
+  // Reset bulk toggle so next open always starts in single-service mode.
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  if (bulkToggle) bulkToggle.checked = false;
+  applyOverrideBulkMode(false, []);
 }
 
 /**
@@ -1595,9 +1680,6 @@ async function submitOverrideForm(e: Event): Promise<void> {
   e.preventDefault();
   const ctx = overrideModalContext;
   if (!ctx) return;
-
-  const service = (byId<HTMLSelectElement>('override-service')?.value ?? '').trim();
-  if (!service) return;
 
   const termRaw = (byId<HTMLSelectElement>('override-term')?.value ?? '').trim();
   const paymentRaw = (byId<HTMLSelectElement>('override-payment')?.value ?? '').trim();
@@ -1625,6 +1707,19 @@ async function submitOverrideForm(e: Event): Promise<void> {
     return;
   }
 
+  // Determine which services to save to.
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  const isBulk = bulkToggle?.checked ?? false;
+
+  if (isBulk) {
+    await submitBulkOverrideForm(ctx, req);
+    return;
+  }
+
+  // Single-service path (original behaviour).
+  const service = (byId<HTMLSelectElement>('override-service')?.value ?? '').trim();
+  if (!service) return;
+
   // Submit-side validation per #107: when both term and payment are
   // explicitly set, refuse to save invalid (service, term, payment)
   // combinations even if a stale select option somehow leaked through
@@ -1640,7 +1735,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     }
   }
 
-  const submitBtn = document.querySelector<HTMLButtonElement>('#override-form button[type="submit"]');
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
   if (submitBtn) submitBtn.disabled = true;
   try {
     await api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req);
@@ -1656,6 +1751,65 @@ async function submitOverrideForm(e: Event): Promise<void> {
     if (errEl) errEl.textContent = `Failed to create override: ${(err as Error).message}`;
   } finally {
     if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+/**
+ * Fan out save calls for all checked services (issue #119).
+ *
+ * Uses Promise.allSettled so a failure on one service does not abort the
+ * others. Shows one aggregated toast on completion summarising how many
+ * succeeded and which failed.
+ */
+async function submitBulkOverrideForm(
+  ctx: NonNullable<typeof overrideModalContext>,
+  req: api.AccountServiceOverrideRequest,
+): Promise<void> {
+  const listDiv = document.getElementById('override-bulk-services-list');
+  const checked = Array.from(
+    listDiv?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked') ?? [],
+  ).map(cb => cb.value);
+
+  if (checked.length === 0) {
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = 'Select at least one service.';
+    return;
+  }
+
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) submitBtn.disabled = true;
+  const errEl = document.getElementById('override-form-error');
+  if (errEl) errEl.textContent = '';
+
+  const results = await Promise.allSettled(
+    checked.map(service => api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req)),
+  );
+
+  const failed = checked.filter((_, i) => results[i]?.status === 'rejected');
+  const succeeded = checked.length - failed.length;
+
+  if (failed.length === 0) {
+    showToast({
+      message: `Created ${succeeded} override${succeeded !== 1 ? 's' : ''}.`,
+      kind: 'success',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } else if (succeeded === 0) {
+    if (submitBtn) submitBtn.disabled = false;
+    if (errEl) {
+      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed. Check your connection and try again.`;
+    }
+  } else {
+    // Partial success: close and reload, surface the failures in a toast.
+    showToast({
+      message: `Created ${succeeded} override${succeeded !== 1 ? 's' : ''}; failed for: ${failed.join(', ')}.`,
+      kind: 'warning',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
   }
 }
 
