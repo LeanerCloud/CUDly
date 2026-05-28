@@ -1342,7 +1342,7 @@ export function closePurchaseModal(): void {
 /**
  * Open modal to add planned purchases for a plan
  */
-async function openAddPurchasesModal(planId: string, planName: string): Promise<void> {
+export async function openAddPurchasesModal(planId: string, planName: string): Promise<void> {
   // Remove existing modal if present
   document.getElementById('add-purchases-modal')?.remove();
 
@@ -1389,6 +1389,27 @@ async function openAddPurchasesModal(planId: string, planName: string): Promise<
   document.getElementById('add-purchases-cancel')?.addEventListener('click', closeAddPurchasesModal);
   document.getElementById('add-purchases-form')?.addEventListener('submit', (e) => void handleAddPurchases(e));
 
+  // Inline range validation on the count field: surfaces a
+  // "Must be a whole number between 1 and 52" message under the input
+  // as the user types, instead of waiting for the API call to reject
+  // the value (mirrors the wireRangeInput pattern from #702/#714,
+  // closes #771). The modal is built fresh on every open so no
+  // data-range-wired guard is needed here.
+  wireRangeInput('add-purchases-count', 1, 52);
+
+  // Keep the submit button disabled while the count field is invalid.
+  // Checked after every input/blur so the button reflects the live
+  // validation state set by wireRangeInput above.
+  const countInput = document.getElementById('add-purchases-count') as HTMLInputElement | null;
+  const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (countInput && submitBtn) {
+    const syncSubmitBtn = (): void => {
+      submitBtn.disabled = countInput.getAttribute('aria-invalid') === 'true';
+    };
+    countInput.addEventListener('input', syncSubmitBtn);
+    countInput.addEventListener('blur', syncSubmitBtn);
+  }
+
   // Engage focus trap + Escape handler. The modal element itself is
   // removed from the DOM on close (see closeAddPurchasesModal) instead
   // of just toggling .hidden, so the closeModal call there is what
@@ -1416,7 +1437,18 @@ async function handleAddPurchases(e: Event): Promise<void> {
 
   try {
     const planId = (document.getElementById('add-purchases-plan-id') as HTMLInputElement).value;
-    const count = parseInt((document.getElementById('add-purchases-count') as HTMLInputElement).value, 10);
+    // Use Number() (not parseInt) so fractional input like "2.5" fails
+    // Number.isInteger() instead of silently truncating to 2. Mirrors
+    // the strict parse pattern from #471/#702 (feedback_strict_int_parse).
+    const rawCount = Number((document.getElementById('add-purchases-count') as HTMLInputElement).value);
+    if (!Number.isFinite(rawCount) || !Number.isInteger(rawCount) || rawCount < 1 || rawCount > 52) {
+      if (errorDiv) {
+        errorDiv.textContent = 'Number of Purchases must be a whole number between 1 and 52';
+        errorDiv.classList.remove('hidden');
+      }
+      return;
+    }
+    const count = rawCount;
     const startDate = (document.getElementById('add-purchases-start-date') as HTMLInputElement).value;
 
     await api.createPlannedPurchases(planId, count, startDate);
