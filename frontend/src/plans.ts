@@ -240,6 +240,10 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
       case 'edit':
         // Open edit modal for the parent plan using plan_id, not the purchase id.
         // The purchase row's data-plan-id attribute carries the plan FK (#773).
+        if (!planId) {
+          console.warn('edit action ignored: missing plan id');
+          return;
+        }
         await editPlan(planId);
         return;
       case 'disable':

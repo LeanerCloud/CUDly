@@ -868,6 +868,23 @@ describe('Plans Module', () => {
         expect.objectContaining({ message: 'Failed to load plan details' }),
       );
     });
+
+    test('edit action with empty plan id is a no-op (defensive guard)', async () => {
+      // Simulate a button whose data-plan-id attribute is missing/empty by
+      // directly injecting a button without the attribute and clicking it.
+      const container = document.getElementById('planned-purchases-list');
+      const btn = document.createElement('button');
+      btn.dataset.action = 'edit';
+      btn.dataset.id = 'purchase-1';
+      // intentionally omit data-plan-id so planId defaults to ''
+      container?.appendChild(btn);
+      btn.click();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // getPlan must NOT be called when planId is empty.
+      expect(api.getPlan).not.toHaveBeenCalled();
+    });
   });
 
   describe('resume action for paused purchase', () => {
