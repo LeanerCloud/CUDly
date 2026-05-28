@@ -33,7 +33,8 @@ import {
   executePurchase,
   getPurchaseDetails,
   cancelPurchase,
-  getPublicInfo
+  getPublicInfo,
+  getDeploymentInfo
 } from '../api';
 import type { CreatePlanRequest, Config, Recommendation } from '../api';
 
@@ -963,14 +964,18 @@ describe('Purchase API', () => {
 
 describe('Public Info API', () => {
   describe('getPublicInfo', () => {
-    test('fetches public info without auth', async () => {
+    test('fetches version and admin_exists without auth (#633: no sensitive fields)', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ version: '1.0.0', admin_exists: true, api_key_secret_url: 'https://...' })
+        json: () => Promise.resolve({ version: '1.0.0', admin_exists: true })
       });
 
       const info = await getPublicInfo();
-      expect(info.api_key_secret_url).toBeTruthy();
+      expect(info.version).toBe('1.0.0');
+      expect(info.admin_exists).toBe(true);
+      // Sensitive fields must not be present on the public endpoint response.
+      expect((info as Record<string, unknown>)['api_key_secret_url']).toBeUndefined();
+      expect((info as Record<string, unknown>)['deployment_aws_account_id']).toBeUndefined();
       expect(fetchMock).toHaveBeenCalledWith('/api/info');
     });
 
@@ -980,6 +985,31 @@ describe('Public Info API', () => {
       const info = await getPublicInfo();
       expect(info.version).toBe('');
       expect(info.admin_exists).toBe(false);
+    });
+  });
+
+  describe('getDeploymentInfo', () => {
+    test('fetches api_key_secret_url and deployment_aws_account_id with auth', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          api_key_secret_url: 'https://us-east-1.console.aws.amazon.com/secretsmanager/secret?name=arn:...',
+          deployment_aws_account_id: '123456789012',
+        })
+      });
+
+      const info = await getDeploymentInfo();
+      expect(info.api_key_secret_url).toContain('secretsmanager');
+      expect(info.deployment_aws_account_id).toBe('123456789012');
+      expect(fetchMock).toHaveBeenCalledWith('/api/info/deployment', expect.objectContaining({}));
+    });
+
+    test('returns empty object on error', async () => {
+      fetchMock.mockResolvedValue({ ok: false });
+
+      const info = await getDeploymentInfo();
+      expect(info.api_key_secret_url).toBeUndefined();
+      expect(info.deployment_aws_account_id).toBeUndefined();
     });
   });
 });

@@ -1244,7 +1244,7 @@ paths:
     get:
       operationId: getPublicInfo
       tags: [Info]
-      summary: Public instance information (version, admin status)
+      summary: Public instance information (version, admin status — no auth required)
       security: []
       responses:
         '200':
@@ -1253,6 +1253,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PublicInfoResponse'
+
+  /api/info/deployment:
+    get:
+      operationId: getDeploymentInfo
+      tags: [Info]
+      summary: Deployment-scoped identifiers (AuthUser required)
+      description: >
+        Returns the Secrets Manager console URL and the deployment AWS account ID.
+        Requires at least a valid user session. Not accessible to unauthenticated
+        callers (closes #633).
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: Deployment info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
   # ---- Docs --------------------------------------------------------------
   /api/docs:
@@ -2399,13 +2421,25 @@ components:
     # -- Info ---------------------------------------------------------------
     PublicInfoResponse:
       type: object
+      description: >
+        Unauthenticated public info. Only safe-to-expose fields are included.
+        Sensitive identifiers (API key secret URL, AWS account ID) are served
+        by the authenticated /api/info/deployment endpoint (#633).
       properties:
         version:
           type: string
         admin_exists:
           type: boolean
+
+    DeploymentInfoResponse:
+      type: object
+      description: >
+        Deployment-scoped identifiers. Requires AuthUser. Not accessible to
+        unauthenticated callers (#633).
+      properties:
         api_key_secret_url:
           type: string
+          description: AWS Console deep-link to the Secrets Manager secret holding the API key.
         deployment_aws_account_id:
           type: string
           description: >

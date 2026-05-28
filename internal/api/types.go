@@ -456,11 +456,26 @@ type MFARegenerateResponse struct {
 // EmptyServiceConfigResponse represents an empty service config
 type EmptyServiceConfigResponse struct{}
 
-// PublicInfoResponse holds public information about the CUDly instance
+// PublicInfoResponse holds public information about the CUDly instance.
+// Only fields safe for unauthenticated callers — sensitive identifiers
+// (API key secret URL, deployment AWS account ID) live on the
+// authenticated /api/info/deployment endpoint instead.
 type PublicInfoResponse struct {
-	Version                string `json:"version"`
-	AdminExists            bool   `json:"admin_exists"`
-	APIKeySecretURL        string `json:"api_key_secret_url,omitempty"`
+	Version     string `json:"version"`
+	AdminExists bool   `json:"admin_exists"`
+}
+
+// DeploymentInfoResponse holds deployment-scoped identifiers that must
+// not be exposed to unauthenticated callers. Served by
+// GET /api/info/deployment (AuthUser).
+type DeploymentInfoResponse struct {
+	// APIKeySecretURL is the AWS Console deep-link to the Secrets Manager
+	// secret holding the CUDly API key.
+	APIKeySecretURL string `json:"api_key_secret_url,omitempty"`
+	// DeploymentAWSAccountID is the AWS account ID of the Lambda host,
+	// resolved via STS GetCallerIdentity. Empty on non-AWS deployments
+	// or when STS is unreachable. Used by the frontend to distinguish
+	// legitimate ambient-credential executions from orphan rows (#608).
 	DeploymentAWSAccountID string `json:"deployment_aws_account_id,omitempty"`
 }
 

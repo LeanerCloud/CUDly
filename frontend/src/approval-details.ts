@@ -313,20 +313,24 @@ export async function buildApprovalDetailsBody(executionId: string): Promise<HTM
     // renders the full details when either endpoint is unreachable; the
     // per-rec table degrades gracefully. console.warn keeps failures
     // traceable rather than silently dropping them.
-    const [details, accounts, publicInfo] = await Promise.all([
+    const [details, accounts, deploymentInfo] = await Promise.all([
       api.getPurchaseDetails(executionId),
       api.listAccounts().catch((err) => {
         console.warn('Failed to load accounts for approval modal — falling back to UUID-prefixed labels:', err);
         return [] as CloudAccount[];
       }),
-      api.getPublicInfo().catch((err) => {
-        console.warn('Failed to load public info for approval modal — orphan label will show "Account deleted":', err);
+      // getDeploymentInfo requires an authenticated session (AuthUser). The
+      // approval modal is only reachable post-login, so this is safe. On
+      // failure (e.g. token expiry) the orphan label degrades to "Account deleted"
+      // which is the safe default (#633).
+      api.getDeploymentInfo().catch((err) => {
+        console.warn('Failed to load deployment info for approval modal — orphan label will show "Account deleted":', err);
         return undefined;
       }),
     ]);
     const accountsById = new Map<string, CloudAccount>();
     for (const acct of accounts) accountsById.set(acct.id, acct);
-    const hostAWSAccountID = publicInfo?.deployment_aws_account_id;
+    const hostAWSAccountID = deploymentInfo?.deployment_aws_account_id;
     return renderApprovalDetailsBody(details, accountsById, hostAWSAccountID);
   } catch (err) {
     console.error('Failed to load purchase details for approval modal:', err);

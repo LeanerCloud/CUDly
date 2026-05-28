@@ -331,8 +331,10 @@ func (h *Handler) planIntersectsAllowed(ctx context.Context, planID string, allo
 	return false, nil
 }
 
-// getPublicInfo returns public information about the CUDly instance (no auth required)
+// getPublicInfo returns public information about the CUDly instance (no auth required).
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
+// Sensitive identifiers (API key secret URL, deployment AWS account ID) are intentionally
+// absent here; they live on the authenticated GET /api/info/deployment endpoint (#633).
 func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
 	// Check if admin exists
 	adminExists := false
@@ -343,7 +345,18 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 		}
 	}
 
-	// Build the API key secret URL for the console
+	return &PublicInfoResponse{
+		Version:     "1.0.0",
+		AdminExists: adminExists,
+	}, nil
+}
+
+// getDeploymentInfo returns sensitive deployment identifiers for authenticated callers.
+// Requires at least AuthUser (enforced by the router). The two fields it returns
+// expose the AWS account ID and the Secrets Manager ARN path — neither should be
+// reachable without a valid session (#633).
+func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*DeploymentInfoResponse, error) {
+	// Build the AWS Console deep-link to the Secrets Manager secret.
 	var apiKeySecretURL string
 	if h.secretsARN != "" {
 		// Extract region from ARN: arn:aws:secretsmanager:region:account:secret:name
@@ -364,9 +377,7 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 	// warning label, which is safe.
 	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx)
 
-	return &PublicInfoResponse{
-		Version:                "1.0.0",
-		AdminExists:            adminExists,
+	return &DeploymentInfoResponse{
 		APIKeySecretURL:        apiKeySecretURL,
 		DeploymentAWSAccountID: deploymentAWSAccountID,
 	}, nil

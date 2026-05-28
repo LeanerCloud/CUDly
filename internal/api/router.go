@@ -311,8 +311,10 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
 		{ExactPath: "/api/health", Handler: r.healthCheckHandler, Auth: AuthPublic},
 
-		// Public info endpoint
+		// Public info endpoint (unauthenticated — version + admin_exists only)
 		{ExactPath: "/api/info", Method: "GET", Handler: r.getPublicInfoHandler, Auth: AuthPublic},
+		// Deployment info endpoint (authenticated — API key secret URL + AWS account ID, #633)
+		{ExactPath: "/api/info/deployment", Method: "GET", Handler: r.getDeploymentInfoHandler, Auth: AuthUser},
 
 		// Build-version endpoint — public, returns only version / git SHA /
 		// build time (no account IDs, ARNs, or secrets) so an operator can
@@ -687,6 +689,10 @@ func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFun
 
 func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getVersion(ctx, req)
+}
+
+func (r *Router) getDeploymentInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getDeploymentInfo(ctx, req)
 }
 
 func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

@@ -7,6 +7,7 @@ import type {
   LoginResponse,
   User,
   PublicInfo,
+  DeploymentInfo,
   MFASetupResponse,
   MFARecoveryCodesResponse,
   MFALoginErrorCode,
@@ -369,4 +370,20 @@ export async function getPublicInfo(): Promise<PublicInfo> {
     return response.json() as Promise<PublicInfo>;
   }
   return { version: '', admin_exists: false };
+}
+
+/**
+ * Get deployment info (AuthUser required). Returns sensitive identifiers
+ * (API key secret URL, deployment AWS account ID) that must not be exposed
+ * to unauthenticated callers (#633).
+ */
+export async function getDeploymentInfo(): Promise<DeploymentInfo> {
+  const API_BASE = getApiBase();
+  const response = await fetch(`${API_BASE}/info/deployment`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.ok) {
+    return response.json() as Promise<DeploymentInfo>;
+  }
+  return {};
 }
