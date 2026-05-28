@@ -373,6 +373,8 @@ export interface GlobalConfig {
   // suppression feature. Keys: 'aws' / 'azure' / 'gcp'. Missing keys
   // fall back to the backend default (7). Explicit 0 = disabled.
   grace_period_days?: Record<string, number>;
+  // EC2 Reserved Instance offering class. "convertible" (default) or "standard".
+  offering_class?: 'convertible' | 'standard';
   // Age (hours) after which the recommendations cache triggers a background
   // stale-while-revalidate refresh. 0 disables automatic background refresh.
   // Valid range: 0–8760. Default: 24.
