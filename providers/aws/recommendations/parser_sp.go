@@ -95,6 +95,9 @@ func (c *Client) fetchSPAllPages(
 		if err != nil {
 			return nil, err
 		}
+		if result == nil {
+			break
+		}
 
 		if result.SavingsPlansPurchaseRecommendation != nil {
 			recs := c.parseSavingsPlansRecommendations(result.SavingsPlansPurchaseRecommendation, params, planType)
