@@ -798,9 +798,11 @@ func (c *ComputeClient) cachedSKULookup(ctx context.Context, skuName string) (vm
 // GetValidResourceTypes — a SKU listed for a different region is not
 // safe to attribute to a recommendation in this client's region).
 //
-// Returns nil on pager-create or page-fetch error so the
-// sync.Once-gated cache field stays nil and cachedSKULookup falls back
-// to the empty-fields path. The fetch error is logged WARN once.
+// Returns nil on pager-create, page-fetch error, or context cancellation
+// so the sync.Once-gated cache field stays nil and cachedSKULookup falls
+// back to the empty-fields path. Errors and cancellation are logged WARN
+// once; context.Canceled/DeadlineExceeded are treated as terminal
+// (feedback_ctx_cancel_terminal.md).
 func (c *ComputeClient) fetchSKUCatalogue(ctx context.Context) map[string]vmSKUEntry {
 	pager, err := c.createResourceSKUsPager()
 	if err != nil {
