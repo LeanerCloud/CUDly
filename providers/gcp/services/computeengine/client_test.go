@@ -900,6 +900,8 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 	assert.Equal(t, "us-central1", rec.Region)
 	assert.Equal(t, "n1-standard-4", rec.ResourceType)
 	assert.Equal(t, 50.5, rec.EstimatedSavings)
+	assert.Equal(t, "monthly", rec.PaymentOption,
+		"GCP CUDs are billed monthly; PaymentOption must match ValidPaymentOptionsByProvider[\"gcp\"]")
 }
 
 // infiniteRecommenderIterator never signals iterator.Done, used to exercise
