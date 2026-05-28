@@ -148,7 +148,8 @@ function renderPlannedPurchases(purchases: PlannedPurchase[]): void {
   container.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(btn => {
     btn.addEventListener('click', () => void handlePlannedPurchaseAction(
       btn.dataset['action'] || '',
-      btn.dataset['id'] || ''
+      btn.dataset['id'] || '',
+      btn.dataset['planId'] || ''
     ));
   });
 }
@@ -197,7 +198,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
         ${canManagePlan && canRun ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
         ${canManagePlan && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
         ${canManagePlan && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canManagePlan ? `<button data-action="edit" data-id="${purchase.id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canManagePlan ? `<button data-action="edit" data-id="${purchase.id}" data-plan-id="${purchase.plan_id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
         ${canDisablePlan ? `<button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>
@@ -221,7 +222,7 @@ function getPlannedPurchaseStatusClass(status: string): string {
 /**
  * Handle planned purchase action
  */
-async function handlePlannedPurchaseAction(action: string, purchaseId: string): Promise<void> {
+async function handlePlannedPurchaseAction(action: string, purchaseId: string, planId = ''): Promise<void> {
   try {
     switch (action) {
       case 'run':
@@ -237,8 +238,13 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string): 
         await api.resumePlannedPurchase(purchaseId);
         break;
       case 'edit':
-        // Open edit modal for the plan
-        await editPlan(purchaseId);
+        // Open edit modal for the parent plan using plan_id, not the purchase id.
+        // The purchase row's data-plan-id attribute carries the plan FK (#773).
+        if (!planId) {
+          console.warn('edit action ignored: missing plan id');
+          return;
+        }
+        await editPlan(planId);
         return;
       case 'disable':
         if (confirm('Disable this plan? The plan will be paused and no purchases will be scheduled. You can re-enable it later from the Plans list.')) {
