@@ -3125,6 +3125,94 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     // openPurchaseModal instead of openFanOutModal).
     expect(buckets).toBeNull();
   });
+
+  // Issue #197: multi-account bucket exposes per-rec payment defaults seeded
+  // from each rec's account override. The bucket-level payment falls back to
+  // the toolbar; perRecPayments overrides per rec.
+  test('(h) issue #197: multi-account bucket carries per-rec payment map seeded from each account override', async () => {
+    // Two recs, same (provider, service, term, payment) bucket key so they
+    // land in ONE bucket, but different cloud_account_ids — triggers the
+    // multi-account per-rec seeding path. Need a second bucket (different term)
+    // to force fan-out via openFanOutModal.
+    const recs = [
+      { id: 'h1', provider: 'aws', cloud_account_id: 'acct-x', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'h2', provider: 'aws', cloud_account_id: 'acct-y', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 150, upfront_cost: 600 },
+      // Second bucket (3yr, single account) just to force fan-out modal.
+      { id: 'h3', provider: 'aws', cloud_account_id: 'acct-x', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, payment: 'all-upfront', savings: 300, upfront_cost: 1200 },
+    ];
+    setupMixedTermRecs(recs);
+    // acct-x prefers partial-upfront; acct-y prefers no-upfront.
+    (api.listAccountServiceOverrides as jest.Mock).mockImplementation(async (id: string) => {
+      if (id === 'acct-x') return [{ id: 'ovr-x', account_id: 'acct-x', provider: 'aws', service: 'ec2', payment: 'partial-upfront' }];
+      if (id === 'acct-y') return [{ id: 'ovr-y', account_id: 'acct-y', provider: 'aws', service: 'ec2', payment: 'no-upfront' }];
+      return [];
+    });
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets();
+    expect(buckets).not.toBeNull();
+    const bucket1yr = buckets!.find((b) => b.term === 1)!;
+    expect(bucket1yr).toBeDefined();
+
+    // The 1yr bucket is multi-account: perRecPayments must be present.
+    expect(bucket1yr.perRecPayments).toBeDefined();
+    const prp = bucket1yr.perRecPayments!;
+    // h1 (acct-x) seeded from partial-upfront override.
+    expect(prp.get('h1')).toBe('partial-upfront');
+    // h2 (acct-y) seeded from no-upfront override.
+    expect(prp.get('h2')).toBe('no-upfront');
+
+    // Bucket-level payment falls back to toolbar (multi-account, no single override).
+    expect(bucket1yr.paymentSource).toBe('toolbar');
+
+    // Per-rec dropdowns must be rendered in the modal.
+    const perRecSelects = document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment');
+    expect(perRecSelects.length).toBeGreaterThanOrEqual(2);
+    const h1Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h1');
+    const h2Select = Array.from(perRecSelects).find((s) => s.dataset['recId'] === 'h2');
+    expect(h1Select?.value).toBe('partial-upfront');
+    expect(h2Select?.value).toBe('no-upfront');
+  });
+
+  test('(i) issue #197: per-rec dropdown change updates perRecPayments in module state', async () => {
+    // Same multi-account 1yr bucket as (h), plus a 3yr bucket to force fan-out.
+    const recs = [
+      { id: 'i1', provider: 'aws', cloud_account_id: 'acct-p', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'i2', provider: 'aws', cloud_account_id: 'acct-q', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 120, upfront_cost: 550 },
+      { id: 'i3', provider: 'aws', cloud_account_id: 'acct-p', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, payment: 'all-upfront', savings: 300, upfront_cost: 1200 },
+    ];
+    setupMixedTermRecs(recs);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const before = getFanOutBuckets();
+    const bucket1yr = before!.find((b) => b.term === 1)!;
+    expect(bucket1yr.perRecPayments).toBeDefined();
+    // Initially seeded from toolbar fallback (all-upfront, no overrides).
+    expect(bucket1yr.perRecPayments!.get('i1')).toBe('all-upfront');
+
+    // User changes the i1 dropdown to no-upfront.
+    const i1Select = Array.from(
+      document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment'),
+    ).find((s) => s.dataset['recId'] === 'i1')!;
+    expect(i1Select).toBeDefined();
+    i1Select.value = 'no-upfront';
+    i1Select.dispatchEvent(new Event('change'));
+
+    const after = getFanOutBuckets();
+    const afterBucket1yr = after!.find((b) => b.term === 1)!;
+    expect(afterBucket1yr.perRecPayments!.get('i1')).toBe('no-upfront');
+    // i2 unchanged.
+    expect(afterBucket1yr.perRecPayments!.get('i2')).toBe('all-upfront');
+  });
 });
 
 // Issue #111 (iii): per-row Payment seed in openPurchaseModal — the

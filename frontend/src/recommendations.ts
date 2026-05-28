@@ -3226,6 +3226,13 @@ function handleBulkPurchaseClick(recommendations: LocalRecommendation[]): void {
 // The user can change the per-bucket Payment via the dropdown
 // rendered in the modal; the `change` handler updates `payment` (and
 // keeps `paymentSource` so the source note doesn't lie about origin).
+//
+// `perRecPayments` (issue #197): set only for multi-account buckets.
+// When present, each rec gets its own Payment dropdown seeded from
+// its account's override (if available), falling back to the
+// bucket-level `payment`. handleFanOutExecute uses the per-rec
+// value when sending the POST so each rec's account override is
+// honoured even inside a mixed-account bucket.
 export interface FanOutBucket {
   provider: CompatProvider;
   service: string;
@@ -3234,6 +3241,10 @@ export interface FanOutBucket {
   capacityPercent: number;
   recs: LocalRecommendation[]; // scaled by capacityPercent
   paymentSource: 'override' | 'toolbar';
+  // Per-rec payment overrides for multi-account buckets (issue #197).
+  // Present only when the bucket spans 2+ distinct cloud_account_id values.
+  // Keys are rec.id; values are the resolved payment for that rec.
+  perRecPayments?: Map<string, BulkPurchasePayment>;
 }
 
 // Fan-out modal state. app.ts's Send-for-Approval click reads these
@@ -3242,7 +3253,12 @@ export interface FanOutBucket {
 let currentFanOutBuckets: FanOutBucket[] | null = null;
 
 export function getFanOutBuckets(): FanOutBucket[] | null {
-  return currentFanOutBuckets ? currentFanOutBuckets.map((b) => ({ ...b })) : null;
+  if (!currentFanOutBuckets) return null;
+  return currentFanOutBuckets.map((b) => ({
+    ...b,
+    // Deep-copy the per-rec map so callers can't mutate module state.
+    perRecPayments: b.perRecPayments ? new Map(b.perRecPayments) : undefined,
+  }));
 }
 
 export function clearFanOutBuckets(): void {
@@ -3342,28 +3358,22 @@ async function openFanOutModal(
   bucketEntries: Array<[string, LocalRecommendation[]]>,
   toolbar: BulkPurchaseToolbarState,
 ): Promise<void> {
-  // Pre-fetch service-overrides for every account that's the SOLE
-  // account in any bucket — these are the only buckets eligible for
-  // the override seed (multi-account buckets always fall back to
-  // toolbar). One fetch per distinct accountID; cached for the
-  // lifetime of this openFanOutModal call. Errors are swallowed: the
-  // toolbar-seed fallback always works, so a transient API failure
-  // shouldn't block the modal.
-  const eligibleAccountIDs = new Set<string>();
+  // Pre-fetch service-overrides for every distinct account referenced by
+  // any rec in any bucket. Single-account buckets use overridesByAccount
+  // to seed the bucket-level payment (issue #111). Multi-account buckets
+  // (issue #197) also use it to seed each rec's per-rec payment default.
+  // One fetch per distinct accountID; cached for the lifetime of this
+  // openFanOutModal call. Errors are swallowed: the toolbar-seed fallback
+  // always works, so a transient API failure shouldn't block the modal.
+  const allAccountIDs = new Set<string>();
   for (const [, recs] of bucketEntries) {
-    if (recs.length === 0) continue;
-    const ids = new Set<string>();
     for (const r of recs) {
-      if (r.cloud_account_id) ids.add(r.cloud_account_id);
-    }
-    if (ids.size === 1) {
-      const only = recs[0]?.cloud_account_id;
-      if (only) eligibleAccountIDs.add(only);
+      if (r.cloud_account_id) allAccountIDs.add(r.cloud_account_id);
     }
   }
   const overridesByAccount = new Map<string, AccountServiceOverride[]>();
   await Promise.all(
-    Array.from(eligibleAccountIDs).map(async (id) => {
+    Array.from(allAccountIDs).map(async (id) => {
       try {
         const list = await api.listAccountServiceOverrides(id);
         overridesByAccount.set(id, list);
@@ -3383,6 +3393,38 @@ async function openFanOutModal(
       // section header can render the mixed-plan-type label; the per-
       // rec slugs on recs[].service are what the backend sees.
       const bucketService = isSavingsPlanService(r.service) ? SAVINGS_PLANS_BUCKET_KEY : r.service;
+
+      // Issue #197: for multi-account buckets, build a per-rec payment
+      // map seeded from each rec's account override (when available and
+      // supported), falling back to the bucket-level payment. This lets
+      // each account's payment policy apply inside a mixed-account bucket.
+      const distinctAccountIDs = new Set(recs.map((rec) => rec.cloud_account_id).filter(Boolean));
+      let perRecPayments: Map<string, BulkPurchasePayment> | undefined;
+      if (distinctAccountIDs.size > 1) {
+        perRecPayments = new Map<string, BulkPurchasePayment>();
+        const bucketPayment = seed.payment;
+        for (const rec of recs) {
+          let recPayment: BulkPurchasePayment = bucketPayment;
+          if (rec.cloud_account_id) {
+            const overrides = overridesByAccount.get(rec.cloud_account_id);
+            if (overrides) {
+              const recTerm = rec.term as 1 | 3;
+              const match = overrides.find(
+                (o) => o.provider === (rec.provider as CompatProvider) && o.service === rec.service,
+              );
+              const overridePayment = normalizeBulkPayment(match?.payment);
+              if (
+                overridePayment
+                && isPaymentSupported(rec.provider as CompatProvider, rec.service, recTerm, overridePayment)
+              ) {
+                recPayment = overridePayment;
+              }
+            }
+          }
+          perRecPayments.set(rec.id, recPayment);
+        }
+      }
+
       return {
         provider: r.provider as CompatProvider,
         service: bucketService,
@@ -3394,6 +3436,7 @@ async function openFanOutModal(
         paymentSource: seed.source,
         capacityPercent: toolbar.capacity,
         recs,
+        perRecPayments,
       };
     });
   currentFanOutBuckets = buckets;
@@ -3533,6 +3576,57 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     paymentRow.appendChild(sourceNote);
   }
   section.appendChild(paymentRow);
+
+  // Issue #197: when the bucket spans multiple accounts, render a per-rec
+  // Payment dropdown for each rec so each account's override policy applies
+  // independently. The bucket-level dropdown above still acts as a fallback
+  // default but is labelled to make the per-rec row the primary surface.
+  if (b.perRecPayments) {
+    const perRecNote = document.createElement('p');
+    perRecNote.className = 'fanout-per-rec-note';
+    perRecNote.textContent = 'Multi-account bucket: each commitment can use its own payment option.';
+    section.appendChild(perRecNote);
+
+    const perRecList = document.createElement('ul');
+    perRecList.className = 'fanout-per-rec-list';
+    for (const rec of b.recs) {
+      const currentPayment = b.perRecPayments.get(rec.id) ?? b.payment;
+      const li = document.createElement('li');
+      li.className = 'fanout-per-rec-item';
+
+      const recLabel = document.createElement('span');
+      recLabel.className = 'fanout-per-rec-label';
+      // Show account + resource_type so the user can associate the row.
+      recLabel.textContent = `${rec.cloud_account_id ?? 'unknown'} / ${rec.resource_type}`;
+      li.appendChild(recLabel);
+
+      const recSelect = document.createElement('select');
+      recSelect.className = 'fanout-per-rec-payment';
+      recSelect.dataset['recId'] = rec.id;
+      for (const opt of paymentOptionsFor(b.provider, rec.service, b.term)) {
+        const option = document.createElement('option');
+        option.value = opt;
+        option.textContent = opt;
+        if (opt === currentPayment) option.selected = true;
+        recSelect.appendChild(option);
+      }
+      recSelect.addEventListener('change', () => {
+        const next = recSelect.value as BulkPurchasePayment;
+        // Update module state and the local bucket reference.
+        if (currentFanOutBuckets) {
+          const idx = currentFanOutBuckets.findIndex((cb) => cb.recs === b.recs);
+          if (idx >= 0) {
+            currentFanOutBuckets[idx]!.perRecPayments?.set(rec.id, next);
+          }
+        }
+        b.perRecPayments?.set(rec.id, next);
+      });
+
+      li.appendChild(recSelect);
+      perRecList.appendChild(li);
+    }
+    section.appendChild(perRecList);
+  }
 
   const bucketTotal = b.recs.reduce(
     (acc, r) => ({
