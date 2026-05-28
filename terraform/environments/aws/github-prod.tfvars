@@ -25,10 +25,13 @@ lambda_log_retention_days   = 30
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
 #   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
-# TODO(env-not-deployed): prod environment is not yet provisioned. Update this
-# to the actual prod origin (e.g. the customer-facing dashboard domain) when
-# the env exists. .invalid placeholder ensures any accidental apply fails fast
-# on hostname resolution.
+# Prod is not yet provisioned. Before the first terraform apply:
+#   1. Replace the .invalid placeholder with the actual prod CloudFront domain
+#      (from `terraform output cloudfront_domain_name` after apply), or the
+#      customer-facing custom domain set in TF_VAR_frontend_domain_names.
+#   2. Set TF_VAR_frontend_domain_names to the customer-facing domain (e.g.
+#      "app.cudly.io") so the CloudFront distribution aliases are correct.
+# The .invalid TLD ensures any accidental apply fails fast on hostname resolution.
 lambda_allowed_origins = ["https://prod-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
@@ -70,7 +73,7 @@ secret_recovery_window_days = 30
 # Frontend / CDN
 # ==============================================
 
-enable_cdn            = false
+enable_cdn            = true
 frontend_price_class  = "PriceClass_200"
 create_subdomain_zone = false
 

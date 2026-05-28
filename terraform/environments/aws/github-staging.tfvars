@@ -25,9 +25,12 @@ lambda_log_retention_days   = 14
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
 #   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
-# TODO(env-not-deployed): staging environment is not yet provisioned. Update this
-# to the actual staging origin when the env exists. Until then the .invalid TLD
-# ensures any accidental terraform apply fails fast on hostname resolution.
+# Staging is not yet provisioned. Before the first terraform apply:
+#   1. Replace the .invalid placeholder with the actual staging CloudFront
+#      domain (from `terraform output cloudfront_domain_name` after apply),
+#      or the custom domain set in TF_VAR_frontend_domain_names.
+#   2. Keep http://localhost:3000 for local dev server access.
+# The .invalid TLD ensures any accidental apply fails fast on hostname resolution.
 lambda_allowed_origins = ["https://staging-not-yet-deployed.invalid"]
 
 # Fargate Configuration (when compute_platform = "fargate")
@@ -69,7 +72,7 @@ secret_recovery_window_days = 14
 # Frontend / CDN
 # ==============================================
 
-enable_cdn            = false
+enable_cdn            = true
 frontend_price_class  = "PriceClass_100"
 create_subdomain_zone = false
 

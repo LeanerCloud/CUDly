@@ -25,11 +25,13 @@ lambda_log_retention_days   = 7
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
 #   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
-# Current deployed dev origin (Lambda Function URL) + local Webpack dev server.
+# After applying with enable_cdn = true, replace this list with:
+#   - the CloudFront domain from `terraform output cloudfront_domain_name`
+#     (e.g. "https://d1234abcd.cloudfront.net"), or the custom domain name
+#     set in TF_VAR_frontend_domain_names if one is configured.
+#   - keep http://localhost:3000 for local dev server.
 # Wildcard is rejected by the module (allow_credentials=true + * = any-origin CSRF).
-# Update the Lambda Function URL entry when the dev environment is redeployed.
 lambda_allowed_origins = [
-  "https://33pz7pombdqwu3bdlxp4lqxyra0bsriy.lambda-url.us-east-1.on.aws",
   "http://localhost:3000",
 ]
 
@@ -71,7 +73,7 @@ secret_recovery_window_days = 7
 # Frontend / CDN
 # ==============================================
 
-enable_cdn            = false
+enable_cdn            = true
 frontend_price_class  = "PriceClass_100"
 create_subdomain_zone = false
 
