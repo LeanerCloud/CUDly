@@ -11,7 +11,7 @@ import { confirmDialog } from './confirmDialog';
 import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
-import { isAdmin } from './permissions';
+import { isAdmin, canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { getAccountName } from './recommendations';
 
@@ -381,29 +381,21 @@ function providerCell(p: HistoryPurchase): string {
 // 403 and the click handler turns that into a "Failed to cancel" toast.
 //
 // Heuristic:
-//   * admin → always yes;
-//   * non-admin matching the row's created_by_user_id → yes (cancel-own);
-//   * anyone else → no.
-//
-// Caveat: a non-admin role explicitly granted cancel-any:purchases (no
-// such role exists by default; the verb is reserved for future operator
-// roles) WILL be allowed by the backend but hidden by this helper. We
-// don't surface that case because the frontend doesn't currently fetch
-// the user's permission list, and adding a /me/permissions round-trip
-// just to enable a button for a role nobody has is wasteful. If/when an
-// operator role lands, extend User to carry permissions and broaden this
-// check accordingly.
+//   * admin → always yes (canAccess('admin', '*'));
+//   * cancel-any:purchases → yes (operator roles, issue #158);
+//   * cancel-own:purchases + matching created_by_user_id → yes;
+//   * anyone else, or legacy row with no created_by_user_id → no.
 function canCancelPendingRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (isAdmin()) return true;
-  // Non-admin: only the original creator. Legacy rows with no
+  if (canAccess('admin', '*') || canAccess('cancel-any', 'purchases')) return true;
+  // cancel-own: only the original creator. Legacy rows with no
   // created_by_user_id can't be cancelled via this UI; the email-token
   // path remains the escape hatch.
   if (!p.created_by_user_id) return false;
-  return p.created_by_user_id === user.id;
+  return canAccess('cancel-own', 'purchases') && p.created_by_user_id === user.id;
 }
 
 // canApprovePendingRow returns true when the current session is permitted
