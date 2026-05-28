@@ -581,6 +581,39 @@ function retryThresholdReached(p: HistoryPurchase): boolean {
   return (p.retry_attempt_n ?? 0) >= RETRY_THRESHOLD;
 }
 
+// canSellOnMarketplace returns true when the current session is permitted
+// to list the given completed history row on the AWS RI Marketplace
+// (issue #292). UX gate only -- the backend authorizeSessionSell in
+// internal/api/handler_marketplace.go remains the security boundary; a
+// false-positive here surfaces as a 403 toast on click.
+//
+// Conditions:
+//   * row must be a completed purchase (status "completed" or absent);
+//   * offering_class must be "standard";
+//   * no active listing already (listing_state != "active"); and
+//   * admin, or non-admin user (sell-own covers their own accounts --
+//     we can't efficiently check per-account ownership client-side, so
+//     we show the button for all non-admin users and let the backend 403
+//     when the account is out of scope).
+function canSellOnMarketplace(p: HistoryPurchase): boolean {
+  const status = normalizeStatus(p).toLowerCase();
+  if (status !== 'completed') return false;
+  if ((p.offering_class || '').toLowerCase() !== 'standard') return false;
+  if ((p.listing_state || '').toLowerCase() === 'active') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  return true;
+}
+
+// canCancelMarketplaceListing returns true when there is an active listing
+// that the current session can cancel.
+function canCancelMarketplaceListing(p: HistoryPurchase): boolean {
+  if ((p.listing_state || '').toLowerCase() !== 'active') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  return true;
+}
+
 // shortExecID renders the first 8 chars of a UUID so inline lineage
 // links ("Retried as #abc12345") stay readable in the table cell. The
 // full ID is preserved in the data-history-status attribute so the
@@ -603,7 +636,9 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
   const cell = btn.closest('td') || btn.parentElement;
   if (!cell) return [btn];
   return Array.from(
-    cell.querySelectorAll<HTMLButtonElement>('.history-approve-btn, .history-cancel-btn, .history-revoke-btn'),
+    cell.querySelectorAll<HTMLButtonElement>(
+      '.history-approve-btn, .history-cancel-btn, .history-revoke-btn, .history-marketplace-sell-btn, .history-marketplace-cancel-btn',
+    ),
   );
 }
 
@@ -691,6 +726,18 @@ function renderActionCell(p: HistoryPurchase): string {
   // GCP have no cancel API so the button is suppressed for those providers.
   if (canRevokeCompletedRow(p) && p.purchase_id) {
     return `<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}">Revoke</button>`;
+  }
+
+  // Completed Standard RI rows (AWS): offer Sell on Marketplace (issue
+  // #292). Placed after the revoke check; the two are mutually exclusive
+  // in practice (revoke is Azure-only, marketplace is AWS Standard-RI-only).
+  if (p.purchase_id) {
+    if (canCancelMarketplaceListing(p)) {
+      return `<button type="button" class="btn-link history-marketplace-cancel-btn" data-marketplace-cancel-id="${escapeHtml(p.purchase_id)}">Cancel listing ${escapeHtml(p.listing_id || '')}</button>`;
+    }
+    if (canSellOnMarketplace(p)) {
+      return `<button type="button" class="btn-link history-marketplace-sell-btn" data-marketplace-sell-id="${escapeHtml(p.purchase_id)}">Sell on Marketplace</button>`;
+    }
   }
 
   return escapeHtml(p.plan_name || '-');
@@ -1053,6 +1100,70 @@ function wireRowActionHandlers(container: HTMLElement): void {
         await loadHistory();
       } catch (reloadError) {
         console.error('Failed to reload history after revoke:', reloadError);
+      }
+    });
+  });
+
+  // Wire Sell on Marketplace button (issue #292)
+  container.querySelectorAll<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['marketplaceSellId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'List this RI on the AWS Marketplace?',
+        body: 'This will create a binding listing on the AWS Marketplace. AWS charges a 12% transaction fee on proceeds. Make sure your AWS account has a US bank account on file as a Marketplace seller. This action cannot be undone without cancelling the listing.',
+        confirmLabel: 'Sell on Marketplace',
+        destructive: false,
+      });
+      if (!ok) return;
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach(b => { b.disabled = true; });
+      try {
+        await api.createMarketplaceListing(id);
+      } catch (sellError) {
+        console.error('Failed to list RI on Marketplace:', sellError);
+        const err = sellError as Error;
+        showToast({ message: `Failed to list on Marketplace: ${err.message || 'unknown error'}`, kind: 'error' });
+        rowActions.forEach(b => { b.disabled = false; });
+        return;
+      }
+      showToast({ message: 'RI listed on Marketplace successfully', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after Marketplace listing:', reloadError);
+      }
+    });
+  });
+
+  // Wire Cancel listing button (issue #292)
+  container.querySelectorAll<HTMLButtonElement>('.history-marketplace-cancel-btn[data-marketplace-cancel-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['marketplaceCancelId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Cancel this Marketplace listing?',
+        body: 'This will remove the listing from the AWS Marketplace. Any existing buyer negotiations will be cancelled. You can relist the RI at any time.',
+        confirmLabel: 'Cancel listing',
+        destructive: true,
+      });
+      if (!ok) return;
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach(b => { b.disabled = true; });
+      try {
+        await api.cancelMarketplaceListing(id);
+      } catch (cancelError) {
+        console.error('Failed to cancel Marketplace listing:', cancelError);
+        const err = cancelError as Error;
+        showToast({ message: `Failed to cancel listing: ${err.message || 'unknown error'}`, kind: 'error' });
+        rowActions.forEach(b => { b.disabled = false; });
+        return;
+      }
+      showToast({ message: 'Marketplace listing cancelled', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after Marketplace cancel:', reloadError);
       }
     });
   });
