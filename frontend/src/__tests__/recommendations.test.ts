@@ -6438,7 +6438,7 @@ function makeRec(overrides: Partial<{
     region: 'us-east-1',
     count: 1,
     term: overrides.term ?? 1,
-    payment: overrides.payment ?? 'all_upfront',
+    payment: overrides.payment ?? 'all-upfront',
     savings: 100,
     upfront_cost: 500,
   };
@@ -6487,8 +6487,8 @@ describe('isHomogeneousSelection (#769)', () => {
 
   test('heterogeneous on payment axis', () => {
     const recs = [
-      makeRec({ id: 'r1', payment: 'all_upfront' }),
-      makeRec({ id: 'r2', payment: 'no_upfront' }),
+      makeRec({ id: 'r1', payment: 'all-upfront' }),
+      makeRec({ id: 'r2', payment: 'no-upfront' }),
     ];
     expect(isHomogeneousSelection(recs as never[])).toBe(false);
   });

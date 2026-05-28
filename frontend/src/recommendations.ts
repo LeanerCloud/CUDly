@@ -3156,7 +3156,7 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
   // button (#769): when a selection spans multiple providers/services/terms/payment
   // options the plan button is disabled and the hint explains why.
   if (disabledHint) {
-    const heterogeneousPlanBlock = hasSelection && planBtn != null && !planHomogeneous;
+    const heterogeneousPlanBlock = hasSelection && planBtn != null && !planBtn.hidden && !planHomogeneous;
     if (!hasSelection) {
       disabledHint.hidden = false;
       disabledHint.textContent = disabledMessage;
