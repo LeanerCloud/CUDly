@@ -269,6 +269,9 @@ func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
 	if filter.MinSavings > 0 {
 		add("monthly_savings >= $%d", filter.MinSavings)
 	}
+	if filter.ID != "" {
+		add("payload->>'id' = $%d", filter.ID)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}

@@ -24,8 +24,16 @@ type mockOverrideStore struct {
 	getOverrideErr error
 }
 
-func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
-	return m.recs, nil
+func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	if filter.ID == "" {
+		return m.recs, nil
+	}
+	for _, r := range m.recs {
+		if r.ID == filter.ID {
+			return []config.RecommendationRecord{r}, nil
+		}
+	}
+	return nil, nil
 }
 func (m *mockOverrideStore) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
 	return nil, nil
@@ -320,4 +328,62 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "acct-A's recs hidden by the override")
 	assert.Equal(t, "acct-B", *recs[0].CloudAccountID)
+}
+
+// TestGetRecommendationByID exercises the three acceptance cases from issue #214:
+//
+//   (a) rec visible: returns rec, nil hiddenBy
+//   (b) rec hidden by override: returns rec + hiddenBy reasons (no 404)
+//   (c) rec genuinely absent: returns nil, nil, nil
+func TestGetRecommendationByID_VisibleRec(t *testing.T) {
+	ctx := context.Background()
+	rec := rdsRec("acct-A", "us-east-1", "mysql")
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{rec},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
+		},
+	}
+	s := &Scheduler{config: store}
+
+	got, hiddenBy, err := s.GetRecommendationByID(ctx, rec.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "visible rec must be returned")
+	assert.Equal(t, rec.ID, got.ID)
+	assert.Empty(t, hiddenBy, "visible rec must carry no hidden_by reasons")
+}
+
+func TestGetRecommendationByID_HiddenByOverride(t *testing.T) {
+	// Issue #214: detail endpoint must return the rec with hidden_by reasons
+	// instead of a 404 when an account-service override is filtering it out.
+	ctx := context.Background()
+	rec := rdsRec("acct-A", "us-east-1", "mysql")
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{rec},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
+		},
+		overrides: map[string]*config.AccountServiceOverride{
+			"acct-A|aws|rds": {Enabled: boolPtr(false)},
+		},
+	}
+	s := &Scheduler{config: store}
+
+	got, hiddenBy, err := s.GetRecommendationByID(ctx, rec.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "override-hidden rec must still be returned")
+	assert.Equal(t, rec.ID, got.ID)
+	assert.Equal(t, []string{"enabled=false"}, hiddenBy,
+		"hidden_by must report the override dimension that caused the filter")
+}
+
+func TestGetRecommendationByID_AbsentRec(t *testing.T) {
+	ctx := context.Background()
+	store := &mockOverrideStore{recs: nil}
+	s := &Scheduler{config: store}
+
+	got, hiddenBy, err := s.GetRecommendationByID(ctx, "no-such-rec")
+	require.NoError(t, err)
+	assert.Nil(t, got, "absent rec must return nil")
+	assert.Nil(t, hiddenBy)
 }

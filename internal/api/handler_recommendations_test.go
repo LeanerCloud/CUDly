@@ -111,8 +111,10 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 
 	t.Run("returns errNotFound on unknown id", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
-			Return(knownRecs, nil)
+		// GetRecommendationByID returns (nil, nil, nil) for absent recs.
+		mockScheduler.On("GetRecommendationByID", ctx, "rec-missing").
+			Return((*config.RecommendationRecord)(nil), ([]string)(nil), nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		handler := &Handler{
 			scheduler: mockScheduler,
@@ -129,9 +131,11 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 	})
 
 	t.Run("returns 200 with the expected shape for a known id", func(t *testing.T) {
+		knownRec := knownRecs[0]
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
-			Return(knownRecs, nil)
+		mockScheduler.On("GetRecommendationByID", ctx, "rec-known").
+			Return(&knownRec, ([]string)(nil), nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetRecommendationsFreshness", ctx).
@@ -161,12 +165,45 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 		assert.Contains(t, got.ProvenanceNote, "AWS")
 		assert.Contains(t, got.ProvenanceNote, "ec2")
 		assert.Contains(t, got.ProvenanceNote, "last collected")
+		assert.Nil(t, got.HiddenBy, "visible rec must not carry hidden_by")
+	})
+
+	t.Run("returns 200 with hidden_by for override-filtered rec (issue #214)", func(t *testing.T) {
+		// GetRecommendationByID returns the rec and the override reasons
+		// when the rec exists but is filtered by an account-service override.
+		knownRec := knownRecs[0]
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("GetRecommendationByID", ctx, "rec-known").
+			Return(&knownRec, []string{"enabled=false"}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetRecommendationsFreshness", ctx).
+			Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
+
+		handler := &Handler{
+			scheduler: mockScheduler,
+			config:    mockStore,
+			apiKey:    "test-key",
+		}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		got, err := handler.getRecommendationDetail(ctx, req, "rec-known")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "rec-known", got.ID)
+		assert.Equal(t, []string{"enabled=false"}, got.HiddenBy,
+			"override-hidden rec must carry hidden_by reasons")
 	})
 
 	t.Run("provenance degrades gracefully when freshness is unavailable", func(t *testing.T) {
+		knownRec := knownRecs[0]
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
-			Return(knownRecs, nil)
+		mockScheduler.On("GetRecommendationByID", ctx, "rec-known").
+			Return(&knownRec, ([]string)(nil), nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetRecommendationsFreshness", ctx).

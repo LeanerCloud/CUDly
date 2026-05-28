@@ -202,7 +202,8 @@ func TestPerAccountPerms_RecommendationDetail_CrossAccountRejected(t *testing.T)
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{recB}, nil)
+	mockSched.On("GetRecommendationByID", ctx, "rec-b-detail").Return(&recB, ([]string)(nil), nil)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 
 	mockStore := new(MockConfigStore)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -238,7 +239,8 @@ func TestPerAccountPerms_RecommendationDetail_AllowedAccountReturns200(t *testin
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{recA}, nil)
+	mockSched.On("GetRecommendationByID", ctx, "rec-a-detail").Return(&recA, ([]string)(nil), nil)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 
 	mockStore := new(MockConfigStore)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {

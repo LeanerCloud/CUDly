@@ -113,6 +113,13 @@ export interface RecommendationDetail {
   usage_history: RecommendationUsagePoint[];
   confidence_bucket: 'low' | 'medium' | 'high';
   provenance_note: string;
+  /**
+   * Present (non-empty array) when the recommendation exists but is filtered
+   * out by an account-service override (issue #214). Each element names one
+   * failing dimension: "enabled=false", "engine", "region", or
+   * "resource_type". Absent / undefined means the rec is fully visible.
+   */
+  hidden_by?: string[];
 }
 
 /**

@@ -202,32 +202,37 @@ func (h *Handler) getRecommendationDetail(ctx context.Context, req *events.Lambd
 		return nil, NewClientError(400, "recommendation id is required")
 	}
 
-	// The recommendation cache doesn't expose a get-by-id, so we look it
-	// up from the unfiltered list. The list is already cached in
-	// Postgres (see store_postgres_recommendations.go) so this is a
-	// single round-trip; the in-memory linear scan is bounded by the
-	// catalogue size which is small (low thousands at the high end).
-	recs, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	// GetRecommendationByID bypasses the account-override filter so that a
+	// deep-linked URL to a rec that has been hidden by an account override
+	// still resolves. Suppressions are still applied: a fully-suppressed rec
+	// (actively dismissed) returns nil and we 404 as before. See issue #214.
+	rec, hiddenBy, err := h.scheduler.GetRecommendationByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list recommendations: %w", err)
+		return nil, fmt.Errorf("failed to fetch recommendation: %w", err)
+	}
+	if rec == nil {
+		return nil, errNotFound
 	}
 
-	// Filter by allowed accounts FIRST, then look up by id within the
-	// filtered set. Doing it the other way around would leak existence
-	// of recommendations in accounts the caller can't see (a 404 vs
-	// 403 timing/wording diff would let an attacker probe the
-	// recommendation namespace across accounts).
-	visible, err := h.filterRecommendationsByAllowedAccounts(ctx, session, recs)
+	// Tenant-scoping gate: an authenticated user must not be able to read recs
+	// from accounts outside their allowed set, even via the detail endpoint.
+	// The existence-disclosure-safe check (match before reveal) is preserved:
+	// we checked GetRecommendationByID first and only reach here on a hit, so
+	// the caller still cannot distinguish "doesn't exist" from "wrong tenant"
+	// via a timing or wording difference.
+	visible, err := h.filterRecommendationsByAllowedAccounts(ctx, session, []config.RecommendationRecord{*rec})
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range visible {
-		if visible[i].ID == id {
-			return h.buildRecommendationDetail(ctx, &visible[i]), nil
-		}
+	if len(visible) == 0 {
+		return nil, errNotFound
 	}
-	return nil, errNotFound
+
+	resp := h.buildRecommendationDetail(ctx, &visible[0])
+	if len(hiddenBy) > 0 {
+		resp.HiddenBy = hiddenBy
+	}
+	return resp, nil
 }
 
 // buildRecommendationDetail assembles the drawer payload from a single
