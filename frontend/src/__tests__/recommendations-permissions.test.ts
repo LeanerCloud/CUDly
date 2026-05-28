@@ -12,6 +12,10 @@
  *   Viewer has no purchase/plan actions so the Select-all checkbox,
  *   per-row checkboxes, and row-click selection are all hidden/inert.
  *   Admin and user (operator) roles are unchanged.
+ *
+ * Issue #120: per-row "Plan" button deep-links into the Create Purchase
+ *   Plan modal with the row's rec pre-seeded. The button follows the
+ *   same create:plans permission gate.
  */
 import { loadRecommendations } from '../recommendations';
 import * as api from '../api';
@@ -60,6 +64,19 @@ jest.mock('../state', () => ({
 
 jest.mock('../toast', () => ({
   showToast: jest.fn().mockReturnValue({ dismiss: jest.fn() }),
+}));
+
+// openCreatePlanFromBottomBox calls `await import('./plans')` at runtime.
+// Mock the module so the per-row Plan button click test can assert on
+// the call without rendering the full modal DOM.
+const mockOpenCreatePlanModal = jest.fn();
+jest.mock('../plans', () => ({
+  openCreatePlanModal: (...args: unknown[]) => mockOpenCreatePlanModal(...args),
+  setupPlanHandlers: jest.fn(),
+  loadPlans: jest.fn().mockResolvedValue(undefined),
+  closePlanModal: jest.fn(),
+  closePurchaseModal: jest.fn(),
+  openNewPlanModal: jest.fn(),
 }));
 
 import * as state from '../state';
@@ -298,5 +315,75 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     const summaryEffectiveCols = Array.from(summaryRow!.querySelectorAll('td'))
       .reduce((sum, td) => sum + (td.colSpan || 1), 0);
     expect(summaryEffectiveCols).toBe(headerColCount);
+  });
+});
+
+// Shared rec fixture used by the per-row Plan button tests below.
+const sampleRec120 = {
+  id: 'rec-120',
+  provider: 'aws',
+  cloud_account_id: 'acc-1',
+  service: 'ec2',
+  resource_type: 't3.small',
+  region: 'us-east-1',
+  count: 2,
+  term: 1,
+  payment: 'all-upfront',
+  savings: 150,
+  upfront_cost: 500,
+};
+
+// Helper: seed the api + state mocks with one rec so the table renders a row.
+const seedOneRec = () => {
+  (api.getRecommendations as jest.Mock).mockResolvedValue({
+    summary: {},
+    recommendations: [sampleRec120],
+    regions: [],
+  });
+  (state.getRecommendations as jest.Mock).mockReturnValue([sampleRec120]);
+  (state.getVisibleRecommendations as jest.Mock).mockReturnValue([sampleRec120]);
+  (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+};
+
+describe('Per-row Plan button deep-link (issue #120)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockOpenCreatePlanModal.mockReset();
+    setupDom();
+  });
+
+  test('admin sees a per-row Plan button when rows are rendered', async () => {
+    mockUser('admin');
+    seedOneRec();
+    await loadRecommendations();
+    const planBtns = document.querySelectorAll<HTMLButtonElement>('button.rec-plan-btn');
+    expect(planBtns.length).toBe(1);
+    expect(planBtns[0]!.dataset['recId']).toBe('rec-120');
+  });
+
+  test('readonly role has no per-row Plan buttons (create:plans gated)', async () => {
+    mockUser('readonly');
+    seedOneRec();
+    await loadRecommendations();
+    const planBtns = document.querySelectorAll<HTMLButtonElement>('button.rec-plan-btn');
+    expect(planBtns.length).toBe(0);
+  });
+
+  test('clicking per-row Plan button calls openCreatePlanModal with the rec pre-seeded', async () => {
+    mockUser('admin');
+    seedOneRec();
+    await loadRecommendations();
+    const planBtn = document.querySelector<HTMLButtonElement>('button.rec-plan-btn[data-rec-id="rec-120"]');
+    expect(planBtn).not.toBeNull();
+    planBtn!.click();
+    // openCreatePlanFromBottomBox does `await import('./plans')` which in
+    // CommonJS (ts-jest) compiles to Promise.resolve().then(() => require(...)).
+    // Flush the microtask queue with a few awaits so the dynamic import
+    // resolves and openCreatePlanModal is called before we assert.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(mockOpenCreatePlanModal).toHaveBeenCalledTimes(1);
+    const calledWith = mockOpenCreatePlanModal.mock.calls[0]![0] as unknown[];
+    expect(Array.isArray(calledWith)).toBe(true);
+    expect((calledWith as { id: string }[])[0]!.id).toBe('rec-120');
   });
 });
