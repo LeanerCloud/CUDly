@@ -142,8 +142,8 @@ function renderPlannedPurchasesInternal(): void {
 
   const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
     const active = filters[column] ? ' active' : '';
-    const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">⛛</button>`;
+    const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
   };
 
   const tbody = filtered.length === 0
