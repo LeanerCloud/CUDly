@@ -623,6 +623,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
+    const monthlyCostCell = p.monthly_cost != null
+      ? formatCurrency(p.monthly_cost)
+      : '<span class="muted">-</span>';
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
@@ -634,6 +637,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${p.count}</td>
         <td>${formatTerm(p.term)}</td>
         <td>${formatCurrency(p.upfront_cost)}</td>
+        <td>${monthlyCostCell}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${planCellContent}</td>
       </tr>
@@ -654,6 +658,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
           <th>Count</th>
           <th>Term</th>
           <th>Upfront Cost</th>
+          <th>Monthly Cost</th>
           <th>Monthly Savings</th>
           <th>Plan</th>
         </tr>
