@@ -22,6 +22,11 @@ import type { RecommendationsResponse, LocalRecommendation, RecommendationsSumma
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+// Re-export the shared primitives so existing consumers that import from
+// recommendations.ts keep working without import-path churn (issue #166).
+export { parseNumericFilter } from './lib/column-filters';
+export type { ParsedNumericFilter } from './lib/column-filters';
 
 // Module state for current purchase modal recommendations
 let currentPurchaseRecommendations: LocalRecommendation[] = [];
@@ -1301,101 +1306,38 @@ function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'
 // via groupsInSortOrder() supersedes the flat-list sort. The same
 // SORTABLE_NUMERIC_COLUMNS / SORTABLE_STRING_COLUMNS maps are reused there.
 
-// Numeric filter expression parser. Grammar:
-//   - empty/whitespace      -> match-all
-//   - "42"                  -> equals
-//   - ">X" / "<X" / ">=X" / "<=X" -> comparator
-//   - "X..Y"                -> inclusive range (X and Y both numbers)
-//   - comma-separated       -> OR of any of the above
-// Returns a discriminated union so callers can render parse errors
-// inline without type-narrowing gymnastics. Whitespace inside terms is
-// trimmed; whitespace between terms is allowed.
-export type ParsedNumericFilter =
-  | { ok: true; predicate: (n: number) => boolean }
-  | { ok: false; error: string };
+// parseNumericFilter and ParsedNumericFilter are now in lib/column-filters.ts
+// (issue #166 extraction). Imported at the top of this file and re-exported
+// so existing consumers that import from recommendations.ts keep working.
 
-const MATCH_ALL: ParsedNumericFilter = { ok: true, predicate: () => true };
-
-export function parseNumericFilter(expr: string): ParsedNumericFilter {
-  if (!expr || expr.trim() === '') return MATCH_ALL;
-  const terms = expr.split(',').map((t) => t.trim()).filter((t) => t !== '');
-  if (terms.length === 0) return MATCH_ALL;
-
-  const predicates: Array<(n: number) => boolean> = [];
-  for (const term of terms) {
-    // Order matters: ">=" / "<=" must be checked before ">" / "<".
-    let p: ((n: number) => boolean) | null = null;
-    let m: RegExpMatchArray | null;
-    if ((m = term.match(/^>=\s*(-?\d+(?:\.\d+)?)$/))) {
-      const v = Number(m[1]);
-      p = (n) => n >= v;
-    } else if ((m = term.match(/^<=\s*(-?\d+(?:\.\d+)?)$/))) {
-      const v = Number(m[1]);
-      p = (n) => n <= v;
-    } else if ((m = term.match(/^>\s*(-?\d+(?:\.\d+)?)$/))) {
-      const v = Number(m[1]);
-      p = (n) => n > v;
-    } else if ((m = term.match(/^<\s*(-?\d+(?:\.\d+)?)$/))) {
-      const v = Number(m[1]);
-      p = (n) => n < v;
-    } else if ((m = term.match(/^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$/))) {
-      const lo = Number(m[1]);
-      const hi = Number(m[2]);
-      const min = Math.min(lo, hi);
-      const max = Math.max(lo, hi);
-      p = (n) => n >= min && n <= max;
-    } else if ((m = term.match(/^(-?\d+(?:\.\d+)?)$/))) {
-      const v = Number(m[1]);
-      p = (n) => n === v;
-    }
-    if (p === null) {
-      return { ok: false, error: `Invalid filter term: "${term}"` };
-    }
-    predicates.push(p);
-  }
-  // OR across terms
-  return {
-    ok: true,
-    predicate: (n) => predicates.some((p) => p(n)),
-  };
-}
-
-// Apply the per-column filters to a rec list. ANDs all column filters
-// together. Categorical: row passes iff its column value (string-form,
-// empty/null mapped to "") is in `values`. Numeric: row passes iff
-// parseNumericFilter(expr).predicate accepts the value (skipped if
+// Apply the per-column filters to a rec list. Routes through the shared
+// generic applyColumnFilters from lib/column-filters (issue #166/#570).
+//
+// ANDs all column filters together. Categorical: row passes iff its column
+// value (string-form, empty/null mapped to "") is in `values`. Numeric: row
+// passes iff parseNumericFilter(expr).predicate accepts the value (skipped if
 // parse failed — the popover's inline error tells the user).
 //
 // Account uses cloud_account_id for matching; Term uses String(r.term).
 // All other categorical columns compare on the underlying string field.
+//
+// Issue #484: numeric predicates compare against the rounded display value so
+// exact-match ("123.45") works for rows whose raw value rounds to the typed
+// value, and ">N" / "<N" / "N..M" all behave consistently with what the user
+// sees in the cell.
 export function applyColumnFilters(
   recs: readonly LocalRecommendation[],
   filters: state.RecommendationsColumnFilters,
 ): LocalRecommendation[] {
-  const entries = Object.entries(filters) as Array<
-    [state.RecommendationsColumnId, state.RecommendationsColumnFilter]
-  >;
-  if (entries.length === 0) return [...recs];
-
-  return recs.filter((r) => {
-    for (const [col, f] of entries) {
-      if (f.kind === 'set') {
-        const cellRaw = categoricalCellValue(r, col);
-        if (!f.values.includes(cellRaw)) return false;
-      } else {
-        const parsed = parseNumericFilter(f.expr);
-        if (!parsed.ok) continue; // ignore broken expressions; UI shows the error
-        // Issue #484: compare against the rounded display value so exact-match
-        // ("123.45") works for rows whose raw value rounds to the typed value,
-        // and ">N" / "<N" / "N..M" all behave consistently with what the user
-        // sees in the cell. NaN passes through roundForDisplay unchanged.
-        const period = state.getCostPeriod();
-        const cellNum = roundForDisplay(numericCellValue(r, col), displayPrecision(col, period));
-        if (!parsed.predicate(cellNum)) return false;
-      }
-    }
-    return true;
-  });
+  const period = state.getCostPeriod();
+  return applyColumnFiltersLib<LocalRecommendation, state.RecommendationsColumnId>(
+    recs,
+    filters,
+    {
+      categorical: categoricalCellValue,
+      numeric: (r, col) => roundForDisplay(numericCellValue(r, col), displayPrecision(col, period)),
+    },
+  );
 }
 
 function categoricalCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): string {
