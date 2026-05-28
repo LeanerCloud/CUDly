@@ -245,6 +245,55 @@ export function setCostPeriod(period: CostPeriod): void {
 }
 
 // ---------------------------------------------------------------------------
+// RI Exchange per-column filters (issue #166 follow-up to merged #570).
+//
+// Scoped to the RI Exchange reshape-recommendations table. Independent of
+// the recommendations slice so the two tabs don't fight over column-id
+// shape — RI Exchange's columns are reshape-specific (source/target
+// instance types, normalized units, utilization %).
+// In-memory only; resets on page reload. Persistence is out of scope for
+// this PR, same as the recommendations slice.
+// ---------------------------------------------------------------------------
+export type RiExchangeColumnId =
+  | 'source_ri_id' | 'source_instance_type' | 'target_instance_type' | 'reason'
+  | 'source_count' | 'target_count' | 'utilization_percent'
+  | 'normalized_used' | 'normalized_purchased';
+
+export type RiExchangeColumnFilter =
+  | { kind: 'set'; values: string[] }   // categorical — string-form values
+  | { kind: 'expr'; expr: string };     // numeric — parsed on apply
+
+export type RiExchangeColumnFilters = Partial<
+  Record<RiExchangeColumnId, RiExchangeColumnFilter>
+>;
+
+let riExchangeColumnFilters: RiExchangeColumnFilters = {};
+
+export function getRiExchangeColumnFilters(): RiExchangeColumnFilters {
+  return { ...riExchangeColumnFilters };
+}
+
+export function setRiExchangeColumnFilter(
+  column: RiExchangeColumnId,
+  filter: RiExchangeColumnFilter | null,
+): void {
+  if (filter === null) {
+    const next = { ...riExchangeColumnFilters };
+    delete next[column];
+    riExchangeColumnFilters = next;
+    return;
+  }
+  riExchangeColumnFilters = {
+    ...riExchangeColumnFilters,
+    [column]: filter,
+  };
+}
+
+export function clearAllRiExchangeColumnFilters(): void {
+  riExchangeColumnFilters = {};
+}
+
+// ---------------------------------------------------------------------------
 // Per-column visibility state (issue #318).
 // A column id in this set is HIDDEN; an absent id is visible (default visible).
 // In-memory only; the localStorage layer lives in recommendations.ts alongside
