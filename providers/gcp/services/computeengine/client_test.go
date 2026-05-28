@@ -900,6 +900,10 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 	assert.Equal(t, "us-central1", rec.Region)
 	assert.Equal(t, "n1-standard-4", rec.ResourceType)
 	assert.Equal(t, 50.5, rec.EstimatedSavings)
+	// PaymentOption is "upfront" (all-upfront): no monthly charge, so
+	// RecurringMonthlyCost must be a non-nil pointer to exactly 0.
+	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for upfront GCP CUDs")
+	assert.InDelta(t, 0.0, *rec.RecurringMonthlyCost, 1e-9)
 }
 
 // infiniteRecommenderIterator never signals iterator.Done, used to exercise

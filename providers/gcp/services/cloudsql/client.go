@@ -549,6 +549,22 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		c.fillSQLPricing(ctx, rec, termYears)
 	}
 
+	// Populate RecurringMonthlyCost from the billing API. Cloud SQL CUDs are
+	// monthly-payment commitments, so the per-month charge is
+	// CommitmentPrice / termMonths. A billing lookup failure is non-fatal:
+	// log the warning and leave RecurringMonthlyCost nil so the frontend
+	// renders "—" rather than a stale value.
+	termYears := 1
+	if rec.Term == "3yr" || rec.Term == "3" {
+		termYears = 3
+	}
+	if pricing, err := c.getSQLPricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
+		log.Printf("cloudsql: RecurringMonthlyCost lookup failed for %s/%s: %v", rec.ResourceType, c.region, err)
+	} else {
+		monthly := pricing.CommitmentPrice / float64(termYears*12)
+		rec.RecurringMonthlyCost = &monthly
+	}
+
 	return rec
 }
 

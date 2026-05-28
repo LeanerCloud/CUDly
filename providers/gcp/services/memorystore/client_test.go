@@ -775,3 +775,83 @@ func TestMemorystoreClient_SetterMethods(t *testing.T) {
 	client.SetRecommenderClient(mockRecommender)
 	assert.Equal(t, mockRecommender, client.recommenderClient)
 }
+
+func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Inject a billing mock with a known on-demand hourly price. The
+	// getRedisPricing implementation applies a 30% CUD discount for 1yr, so
+	// CommitmentPrice = onDemandHourly * 8760 * 0.70. RecurringMonthlyCost
+	// must equal CommitmentPrice / 12 (one year = 12 months).
+	const hourlyRate = 0.10 // USD/h -- representative basic Memorystore value
+	client.SetBillingService(&MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "redis-basic Cloud Memorystore Redis",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        int64(hourlyRate * 1e9),
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{Resource: "projects/test/instances/redis-basic"},
+					},
+				},
+			},
+		},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	require.NotNil(t, rec)
+
+	// RecurringMonthlyCost must be a non-nil pointer to a positive value for
+	// a monthly Memorystore CUD recommendation.
+	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
+	assert.Greater(t, *rec.RecurringMonthlyCost, 0.0, "RecurringMonthlyCost must be positive for a monthly Memorystore CUD")
+
+	// Verify the value matches CommitmentPrice / 12 exactly.
+	const hoursIn1yr = 8760.0
+	expectedCommitment := hourlyRate * hoursIn1yr * 0.70 // 30% discount for 1yr
+	assert.InDelta(t, expectedCommitment/12, *rec.RecurringMonthlyCost, 1e-6)
+}
+
+func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost_BillingFailure(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Inject a billing mock that always errors; RecurringMonthlyCost must
+	// remain nil (frontend renders "—") rather than a zero or stale value.
+	client.SetBillingService(&MockBillingService{err: errors.New("billing unavailable")})
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name:    "test-rec",
+		Content: &recommenderpb.RecommendationContent{},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	require.NotNil(t, rec)
+	assert.Nil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be nil when billing lookup fails")
+}
