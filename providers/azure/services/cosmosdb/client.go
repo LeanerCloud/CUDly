@@ -125,29 +125,12 @@ func (c *CosmosDBClient) GetRegion() string {
 	return c.region
 }
 
-// CosmosRetailPriceItem is the Azure Retail Prices API item shape for
-// Cosmos DB. Lifted from the previous inline anonymous struct so it can
-// serve as the type parameter to pricing.FetchAll.
-type CosmosRetailPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	Location        string  `json:"location"`
-	MeterName       string  `json:"meterName"`
-	SKUName         string  `json:"skuName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	UnitOfMeasure   string  `json:"unitOfMeasure"`
-	Type            string  `json:"type"`
-	ArmSKUName      string  `json:"armSkuName"`
-	ReservationTerm string  `json:"reservationTerm"`
-}
+// CosmosRetailPriceItem is a type alias for pricing.RetailPriceItem kept for
+// backward compatibility within this package.
+type CosmosRetailPriceItem = pricing.RetailPriceItem
 
-// AzureRetailPrice is the service-local envelope consumers still reference.
-type AzureRetailPrice struct {
-	Items []CosmosRetailPriceItem `json:"Items"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets Cosmos DB reservation recommendations from Azure Consumption API
 func (c *CosmosDBClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
