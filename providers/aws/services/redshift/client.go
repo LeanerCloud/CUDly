@@ -347,10 +347,20 @@ func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.
 	// does not accept a customer-supplied node ID, so the only way to make
 	// the reserved node identifiable from the AWS console alone (without
 	// cross-referencing CUDly) is to encode the same descriptors that the
-	// other AWS service clients embed in their reservation name. Term,
-	// PaymentOption, and Count join the pre-existing NodeType/Region/
-	// PurchaseDate set.
+	// other AWS service clients embed in their reservation name. The Name tag
+	// uses BuildReservationName to produce the same rich format so operators
+	// can identify the node without cross-referencing CUDly's purchase audit log.
+	displayName := common.BuildReservationName(common.ReservationNameFields{
+		Service:      "redshift",
+		Region:       rec.Region,
+		ResourceType: rec.ResourceType,
+		Count:        rec.Count,
+		Term:         rec.Term,
+		Payment:      rec.PaymentOption,
+		Now:          time.Now(),
+	}, "redshift-reserved-")
 	tags := []redshifttypes.Tag{
+		{Key: aws.String("Name"), Value: aws.String(displayName)},
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Node Purchase")},
 		{Key: aws.String("NodeType"), Value: aws.String(rec.ResourceType)},
 		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
