@@ -1694,7 +1694,7 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 }
 
 // TestSummarizePurchaseHistory_CancelledExcludedFromKPIs is the regression
-// test for issue #736. Canceling a pending purchase must not add its upfront
+// test for issues #625 and #736. Canceling a pending purchase must not add its upfront
 // cost or savings to the KPI totals. Specifically:
 //   - TotalUpfront, TotalMonthlySavings, TotalAnnualSavings must reflect only
 //     the approved/completed rows.
@@ -1721,17 +1721,17 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 	assert.Equal(t, 1, summary.TotalPending)
 
 	assert.InDelta(t, 350.0, summary.TotalUpfront, 0.001,
-		"canceled upfront cost must not be included in TotalUpfront (issue #736)")
+		"canceled upfront cost must not be included in TotalUpfront (issues #625, #736)")
 	assert.InDelta(t, 35.0, summary.TotalMonthlySavings, 0.001,
-		"canceled savings must not be included in TotalMonthlySavings (issue #736)")
+		"canceled savings must not be included in TotalMonthlySavings (issues #625, #736)")
 	assert.InDelta(t, 420.0, summary.TotalAnnualSavings, 0.001,
-		"TotalAnnualSavings = TotalMonthlySavings * 12 and must exclude canceled (issue #736)")
+		"TotalAnnualSavings = TotalMonthlySavings * 12 and must exclude canceled (issues #625, #736)")
 }
 
 // TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs mirrors the
-// QA reproduction scenario from issue #736: start with N approved purchases,
-// observe KPI totals, then add a canceled execution and assert the totals
-// are unchanged.
+// QA reproduction scenario from issues #625 and #736: start with N approved
+// purchases, observe KPI totals, then add a canceled execution and assert the
+// totals are unchanged.
 // TestHandler_getHistory_LimitParsing is the 01-M1 regression guard.
 // Prior to the fix, parseHistoryFilters used fmt.Sscanf to parse the limit
 // query param, which silently swallows non-integer input (callers get the
@@ -1811,7 +1811,6 @@ func TestHandler_getHistory_LimitParsing(t *testing.T) {
 		})
 	}
 }
-
 func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	// Baseline: three approved (completed) rows.
 	baseline := []config.PurchaseHistoryRecord{ //nolint:prealloc // composite literal with fixed elements; append below adds 1 more
@@ -1830,11 +1829,11 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	after := summarizePurchaseHistory(withCancelled)
 
 	assert.Equal(t, before.TotalUpfront, after.TotalUpfront,
-		"canceling a pending purchase must not change TotalUpfront (issue #736)")
+		"canceling a pending purchase must not change TotalUpfront (issues #625, #736)")
 	assert.Equal(t, before.TotalMonthlySavings, after.TotalMonthlySavings,
-		"canceling a pending purchase must not change TotalMonthlySavings (issue #736)")
+		"canceling a pending purchase must not change TotalMonthlySavings (issues #625, #736)")
 	assert.Equal(t, before.TotalAnnualSavings, after.TotalAnnualSavings,
-		"canceling a pending purchase must not change TotalAnnualSavings (issue #736)")
+		"canceling a pending purchase must not change TotalAnnualSavings (issues #625, #736)")
 	assert.Equal(t, before.TotalCompleted, after.TotalCompleted,
-		"canceling a pending purchase must not change TotalCompleted (issue #736)")
+		"canceling a pending purchase must not change TotalCompleted (issues #625, #736)")
 }
