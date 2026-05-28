@@ -52,7 +52,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		       auto_collect, collection_schedule, notification_days_before,
 		       grace_period_days,
 		       recommendations_cache_stale_hours, recommendations_lookback_days,
-		       COALESCE(purchase_delay_hours, 0)
+		       COALESCE(purchase_delay_hours, 0),
+		       offering_class
 		FROM global_config
 		WHERE id = 1
 	`
@@ -82,6 +83,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&config.RecommendationsCacheStaleHours,
 		&config.RecommendationsLookbackDays,
 		&config.PurchaseDelayHours,
+		&config.OfferingClass,
 	)
 
 	if err != nil {
@@ -104,6 +106,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 				RecommendationsCacheStaleHours: DefaultRecommendationsCacheStaleHours,
 				RecommendationsLookbackDays:    DefaultRecommendationsLookbackDays,
 				PurchaseDelayHours:             DefaultPurchaseDelayHours,
+				OfferingClass:                  "convertible",
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -136,8 +139,8 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			auto_collect, collection_schedule, notification_days_before,
 			grace_period_days,
 			recommendations_cache_stale_hours, recommendations_lookback_days,
-			purchase_delay_hours
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			purchase_delay_hours, offering_class
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -159,6 +162,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			recommendations_cache_stale_hours = $18,
 			recommendations_lookback_days = $19,
 			purchase_delay_hours = $20,
+			offering_class = $21,
 			updated_at = NOW()
 	`
 
@@ -182,7 +186,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		riExchangeUtilizationThreshold = 95.0
 	}
 
-	// Marshal GracePeriodDays → JSON text column. Empty map encodes as
+	// Marshal GracePeriodDays -> JSON text column. Empty map encodes as
 	// "{}" so the DB column is never NULL and GetGlobalConfig can
 	// treat "{}" and "" uniformly as "no explicit entries".
 	gracePeriodJSON := "{}"
@@ -192,6 +196,14 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			return fmt.Errorf("failed to encode grace_period_days JSON: %w", err)
 		}
 		gracePeriodJSON = string(gpBytes)
+	}
+
+	// Default offering_class to "convertible" when unset so the DB column
+	// never stores an empty string (the NOT NULL DEFAULT 'convertible'
+	// column handles inserts, but upserts overwrite with whatever we pass).
+	offeringClass := config.OfferingClass
+	if offeringClass == "" {
+		offeringClass = "convertible"
 	}
 
 	_, err := s.db.Exec(ctx, query,
@@ -215,6 +227,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		config.RecommendationsCacheStaleHours,
 		recommendationsLookbackDays,
 		config.PurchaseDelayHours,
+		offeringClass,
 	)
 
 	if err != nil {

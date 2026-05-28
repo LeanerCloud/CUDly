@@ -289,6 +289,10 @@ export interface Config {
   // Keys: 'aws' / 'azure' / 'gcp'. A missing key defaults to 7 on
   // the backend. Explicit 0 disables the feature for that provider.
   grace_period_days?: Record<string, number>;
+  // EC2 Reserved Instance offering class. "convertible" (default) allows
+  // future exchanges for different families/sizes/OS; "standard" is
+  // ~5% cheaper but locked to the exact instance type for the full term.
+  offering_class?: 'convertible' | 'standard';
   ri_exchange_enabled?: boolean;
   ri_exchange_mode?: string;
   ri_exchange_utilization_threshold?: number;
