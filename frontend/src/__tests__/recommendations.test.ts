@@ -2161,7 +2161,7 @@ describe('Bundle B: column header filter triggers', () => {
     expect(document.querySelector('.column-filter-popover')).toBeNull();
   });
 
-  test('categorical popover lists distinct values from the unfiltered rec set', async () => {
+  test('categorical popover lists distinct values from the rec set (no other active filters)', async () => {
     await loadRecommendations();
     const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
     providerBtn?.click();
@@ -2621,6 +2621,61 @@ describe('Bundle B: column header filter triggers', () => {
       expect(values).toContain('savings-plans-compute');
       // ec2 remains in the selection.
       expect(values).toContain('ec2');
+    });
+  });
+
+  // Issue #164: cross-column-aware (cascading) distinct values.
+  // Each column popover must show only values from rows that pass all
+  // OTHER active filters -- values that produce non-empty results when
+  // combined with the existing selection.
+  describe('Issue #164: cross-column-aware categorical filter distinct values', () => {
+    const multiProviderRecs = [
+      { id: 'r-aws-ec2',  provider: 'aws',   cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 'r-aws-rds',  provider: 'aws',   cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3',    region: 'us-east-1', count: 1, term: 1, savings: 80,  upfront_cost: 400 },
+      { id: 'r-az-vm',   provider: 'azure',  cloud_account_id: 'a2', service: 'vm',  resource_type: 'D2s',      region: 'eastus',    count: 2, term: 3, savings: 200, upfront_cost: 800 },
+    ];
+
+    beforeEach(() => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: multiProviderRecs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(multiProviderRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(multiProviderRecs);
+    });
+
+    test('service popover shows only AWS services when provider=aws filter is active', async () => {
+      // Provider=aws is set; opening the service popover must list only
+      // services from aws rows (ec2, rds), not the azure service (vm).
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['aws'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      expect(values).toEqual(['ec2', 'rds']);
+      expect(values).not.toContain('vm');
+    });
+
+    test('provider popover shows all providers when opening the provider column (own filter excluded)', async () => {
+      // Provider=aws is active, but opening the provider popover must still
+      // show all 3 providers because the column's own filter is excluded from
+      // the cross-filter narrowing -- allowing the user to switch providers.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['aws'] },
+      });
+      await loadRecommendations();
+      const providerBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="provider"]');
+      providerBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      // All providers must be visible so the user can switch from aws to azure.
+      expect(values).toEqual(['aws', 'azure']);
     });
   });
 });

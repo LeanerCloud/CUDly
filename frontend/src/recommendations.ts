@@ -1518,12 +1518,19 @@ function positionPopover(popover: HTMLElement, anchor: HTMLElement): void {
 function distinctValuesForColumn(
   recs: readonly LocalRecommendation[],
   column: state.RecommendationsColumnId,
+  // Values to include regardless of what appears in `recs` (used so the
+  // currently-active filter selection for the column being edited remains
+  // visible even when cross-column filtering would otherwise hide it).
+  alwaysInclude?: ReadonlySet<string>,
 ): string[] {
   // Numeric columns don't get a checkbox list, but we still call this for
   // categorical columns only.
   const seen = new Set<string>();
   for (const r of recs) {
     seen.add(categoricalCellValue(r, column));
+  }
+  if (alwaysInclude) {
+    for (const v of alwaysInclude) seen.add(v);
   }
   return Array.from(seen).sort((a, b) => {
     if (a === '' && b !== '') return -1; // (empty) first
@@ -1553,9 +1560,15 @@ function categoricalDisplayLabel(
 // Build the popover DOM for a given column. Categorical: checkbox list with
 // (All) tri-state + Clear footer. Numeric: free-text expression input with
 // inline error and Clear footer.
+//
+// `recs` should already be pre-filtered to the cross-column narrowed set
+// (all filters except this column's own applied). `alwaysInclude` pins any
+// currently-active values for this column so the user can still deselect
+// them even when the cross-filtered set would otherwise omit them.
 function buildPopoverContent(
   column: state.RecommendationsColumnId,
   recs: readonly LocalRecommendation[],
+  alwaysInclude?: ReadonlySet<string>,
 ): { el: HTMLDivElement; checkboxes: Map<string, HTMLInputElement>; input: HTMLInputElement | null; errorEl: HTMLElement | null } {
   const popover = document.createElement('div');
   popover.className = 'column-filter-popover';
@@ -1622,7 +1635,7 @@ function buildPopoverContent(
       }
     });
   } else {
-    const distinct = distinctValuesForColumn(recs, column);
+    const distinct = distinctValuesForColumn(recs, column, alwaysInclude);
 
     // (All) tri-state checkbox at the top.
     const allLabel = document.createElement('label');
@@ -1922,7 +1935,25 @@ function openColumnPopover(column: state.RecommendationsColumnId, anchor: HTMLEl
   if (openPopover) closePopover();
 
   const recs = state.getRecommendations() as unknown as LocalRecommendation[];
-  const built = buildPopoverContent(column, recs);
+  // Cross-column-aware distinct values (issue #164): build the checkbox list
+  // from rows that pass all OTHER active filters, not the full unfiltered set.
+  // This way, selecting Provider=AWS first narrows the Service popover to only
+  // AWS services -- values that produce non-empty results.
+  //
+  // Mitigation for the "broaden a single column" UX: any value that is part of
+  // the column's own currently-active filter is always included even if the
+  // cross-filtered set would omit it (e.g. opening Provider popover while
+  // Provider=AWS + Service=ec2 are both active still shows AWS so the user can
+  // deselect it without first clearing the Service filter).
+  const allFilters = state.getRecommendationsColumnFilters();
+  const filtersExceptThisColumn: state.RecommendationsColumnFilters = { ...allFilters };
+  delete filtersExceptThisColumn[column];
+  const recsForDistinct = applyColumnFilters(recs, filtersExceptThisColumn);
+  const ownFilter = allFilters[column];
+  const alwaysInclude: ReadonlySet<string> = ownFilter && ownFilter.kind === 'set'
+    ? new Set(ownFilter.values)
+    : new Set();
+  const built = buildPopoverContent(column, recsForDistinct, alwaysInclude);
   document.body.appendChild(built.el);
   openPopover = {
     column,
