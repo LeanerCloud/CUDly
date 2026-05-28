@@ -132,6 +132,8 @@ func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.P
 	data := email.NotificationData{
 		DashboardURL:      m.dashboardURL,
 		ApprovalToken:     exec.ApprovalToken,
+		ExecutionID:       exec.ExecutionID,
+		PlanID:            plan.ID,
 		TotalSavings:      exec.EstimatedSavings,
 		TotalUpfrontCost:  exec.TotalUpfrontCost,
 		PurchaseDate:      exec.ScheduledDate.Format("January 2, 2006"),

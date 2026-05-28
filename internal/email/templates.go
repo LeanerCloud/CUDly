@@ -48,11 +48,11 @@ Estimated Monthly Savings: ${{printf "%.2f" .TotalSavings}}
 
 Actions:
 --------
-[Review & Edit] {{.DashboardURL}}?action=edit&token={{urlquery .ApprovalToken}}
+[Review & Edit] {{.DashboardURL}}/purchases#history?execution={{.ExecutionID}}
 
-[Pause Plan] {{.DashboardURL}}?action=pause&token={{urlquery .ApprovalToken}}
+[Pause Plan] {{.DashboardURL}}/plans?plan={{.PlanID}}
 
-[Cancel This Purchase] {{.DashboardURL}}?action=cancel&token={{urlquery .ApprovalToken}}
+[Cancel This Purchase] {{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
 
 You have {{.DaysUntilPurchase}} days to modify or cancel before automatic execution.
 

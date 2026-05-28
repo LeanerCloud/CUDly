@@ -513,11 +513,20 @@ func TestTemplateContent_HasRequiredSections(t *testing.T) {
 	})
 
 	t.Run("scheduledPurchaseTemplate has action links", func(t *testing.T) {
-		assert.Contains(t, scheduledPurchaseTemplate, "action=edit")
-		assert.Contains(t, scheduledPurchaseTemplate, "action=pause")
-		assert.Contains(t, scheduledPurchaseTemplate, "action=cancel")
+		// Review/edit and pause links go to the dashboard (no token in URL).
+		assert.NotContains(t, scheduledPurchaseTemplate, "action=edit")
+		assert.NotContains(t, scheduledPurchaseTemplate, "action=pause")
+		assert.NotContains(t, scheduledPurchaseTemplate, "action=cancel")
+		// Cancel link uses the direct API path with execution ID and token (#406).
+		assert.Contains(t, scheduledPurchaseTemplate, "/purchases/cancel/{{.ExecutionID}}")
 		assert.Contains(t, scheduledPurchaseTemplate, ".ApprovalToken")
 		assert.Contains(t, scheduledPurchaseTemplate, ".PlanName")
+		// Review & Edit and Pause Plan deeplinks (#581 follow-up) carry
+		// the non-sensitive ExecutionID / PlanID so the SPA can scroll
+		// the user to the relevant row instead of landing on the
+		// dashboard root.
+		assert.Contains(t, scheduledPurchaseTemplate, "/purchases#history?execution={{.ExecutionID}}")
+		assert.Contains(t, scheduledPurchaseTemplate, "/plans?plan={{.PlanID}}")
 	})
 
 	t.Run("purchaseConfirmationTemplate has history link", func(t *testing.T) {
