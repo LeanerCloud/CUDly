@@ -1505,18 +1505,171 @@ function isPendingRow(p: HistoryPurchase): boolean {
 // from the history table (confirmDialog → API → toast → reload). The
 // reload re-renders both views from one fetch, which removes the
 // approved row from BOTH lists in one shot.
+// ---------------------------------------------------------------------------
+// Per-column filter wiring for the Approval Queue table.
+//
+// The queue scope is already narrow (pending|notified rows only); column
+// filters add inline narrowing on the queue's own columns. As with the
+// Purchase History wiring, Status is excluded because the queue's row set
+// is status-defined and the parent loadHistory loop is the authoritative
+// status source.
+//
+// Numeric extractors round to 0 decimal places (CURRENCY_DEFAULT_DIGITS)
+// so a "$X" filter targets the same value the cell renders.
+// ---------------------------------------------------------------------------
+
+const APPROVAL_QUEUE_NUMERIC_COLUMNS: ReadonlySet<ApprovalQueueColumnId> = new Set([
+  'count', 'monthly_cost', 'upfront_cost', 'savings',
+]);
+
+const APPROVAL_QUEUE_LABELS: Record<ApprovalQueueColumnId, string> = {
+  provider: 'Provider',
+  account: 'Account',
+  service: 'Service',
+  term: 'Term',
+  payment: 'Payment',
+  created_by: 'Created by',
+  count: 'Count',
+  monthly_cost: 'Monthly Cost',
+  upfront_cost: 'Upfront Cost',
+  savings: 'Monthly Savings',
+};
+
+function approvalQueueCategoricalCellValue(
+  p: HistoryPurchase,
+  col: ApprovalQueueColumnId,
+): string {
+  switch (col) {
+    case 'provider':    return p.provider ?? '';
+    case 'account':     return p.account_id ?? '';
+    case 'service':     return p.service ?? '';
+    case 'term':        return p.term == null ? '' : String(p.term);
+    case 'payment':     return p.payment ?? '';
+    case 'created_by':  return p.created_by_user_email ?? p.created_by_user_id ?? '';
+    case 'count':
+    case 'monthly_cost':
+    case 'upfront_cost':
+    case 'savings':     return '';
+  }
+}
+
+function approvalQueueNumericCellValue(
+  p: HistoryPurchase,
+  col: ApprovalQueueColumnId,
+): number {
+  switch (col) {
+    case 'count':        return p.count ?? 0;
+    // Return NaN for null monthly_cost so numeric predicates (e.g. "= 0")
+    // don't match rows where the provider didn't report a monthly cost.
+    case 'monthly_cost': return p.monthly_cost == null ? Number.NaN : p.monthly_cost;
+    case 'upfront_cost': return p.upfront_cost ?? 0;
+    case 'savings':      return p.estimated_savings ?? 0;
+    case 'provider':
+    case 'account':
+    case 'service':
+    case 'term':
+    case 'payment':
+    case 'created_by':   return Number.NaN;
+  }
+}
+
+export function applyApprovalQueueColumnFilters(
+  purchases: readonly HistoryPurchase[],
+  filters: state.ApprovalQueueColumnFilters,
+): HistoryPurchase[] {
+  return applyColumnFilters<HistoryPurchase, ApprovalQueueColumnId>(
+    purchases,
+    filters,
+    {
+      categorical: approvalQueueCategoricalCellValue,
+      numeric: (p, col) => roundForDisplay(approvalQueueNumericCellValue(p, col)),
+    },
+  );
+}
+
+function approvalQueueDistinctValues(
+  purchases: readonly HistoryPurchase[],
+  column: ApprovalQueueColumnId,
+): string[] {
+  const seen = new Set<string>();
+  for (const p of purchases) {
+    seen.add(approvalQueueCategoricalCellValue(p, column));
+  }
+  return Array.from(seen).sort((a, b) => {
+    if (a === '' && b !== '') return -1;
+    if (a !== '' && b === '') return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function approvalQueueDisplayLabel(
+  column: ApprovalQueueColumnId,
+  value: string,
+): string {
+  if (value === '') return '(empty)';
+  if (column === 'term') {
+    const n = Number(value);
+    return Number.isFinite(n) ? formatTerm(n) : value;
+  }
+  if (column === 'account') {
+    // Account cells render via getAccountName() — mirror the same display.
+    return getAccountName(value);
+  }
+  return value;
+}
+
+function wireApprovalQueueFilterButtons(
+  container: HTMLElement,
+  // Source for the popover's distinct-values list — the pre-column-filter
+  // pending slice. Same reasoning as Purchase History: the popover must
+  // list every value that exists in the broader (un-narrowed) set so
+  // the user can re-check a value after unchecking it.
+  sourceRows: readonly HistoryPurchase[],
+): void {
+  container.querySelectorAll<HTMLButtonElement>('.history-column-filter-btn').forEach((btn) => {
+    const column = btn.dataset['column'] as ApprovalQueueColumnId | undefined;
+    if (!column) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isNumeric = APPROVAL_QUEUE_NUMERIC_COLUMNS.has(column);
+      const filters = state.getApprovalQueueColumnFilters();
+      openHistoryColumnPopover<ApprovalQueueColumnId>({
+        column,
+        anchor: btn,
+        currentFilter: filters[column],
+        headerLabel: APPROVAL_QUEUE_LABELS[column],
+        kind: isNumeric ? 'numeric' : 'categorical',
+        distinctValues: isNumeric ? undefined : approvalQueueDistinctValues(sourceRows, column),
+        displayLabel: (v) => approvalQueueDisplayLabel(column, v),
+        onCommit: (filter) => {
+          state.setApprovalQueueColumnFilter(column, filter);
+          renderApprovalQueue(lastPendingForQueue);
+        },
+      });
+    });
+  });
+}
+
+// Cache of the last pre-column-filter pending list so the popover-driven
+// re-render path can rebuild the table without re-fetching.
+let lastPendingForQueue: HistoryPurchase[] = [];
+
 export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const container = document.getElementById('purchases-approval-queue');
   if (!container) return;
 
   const pending = (purchases || []).filter(isPendingRow);
+  lastPendingForQueue = pending;
 
   if (pending.length === 0) {
     container.innerHTML = '<p class="empty">No pending approvals.</p>';
     return;
   }
 
-  const rows = pending.map(p => {
+  const colFilters = state.getApprovalQueueColumnFilters();
+  const visible = applyApprovalQueueColumnFilters(pending, colFilters);
+
+  const rows = visible.map(p => {
     const actions = renderPendingActionButtons(p);
     const actionsCell = actions || '<span class="muted">-</span>';
     // Show email when resolved; fall back to UUID so the cancel-own gate still
@@ -1562,21 +1715,24 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   // monthlyColHeader is a hardcoded constant string (no user data), so
   // interpolating it directly into the template is safe.
+  const fbtn = (col: ApprovalQueueColumnId): string => renderHistoryFilterButton(
+    col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null,
+  );
   container.innerHTML = `
     <table class="approval-queue-table">
       <thead>
         <tr>
           <th>Date</th>
-          <th>Account</th>
-          <th>Provider</th>
-          <th>Service</th>
-          <th>Count</th>
-          <th>Term</th>
-          <th>Payment</th>
-          <th>${monthlyColHeader}</th>
-          <th>Upfront Cost</th>
-          <th>Monthly Savings</th>
-          <th>Created by</th>
+          <th><span>Account</span>${fbtn('account')}</th>
+          <th><span>Provider</span>${fbtn('provider')}</th>
+          <th><span>Service</span>${fbtn('service')}</th>
+          <th><span>Count</span>${fbtn('count')}</th>
+          <th><span>Term</span>${fbtn('term')}</th>
+          <th><span>Payment</span>${fbtn('payment')}</th>
+          <th><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
+          <th><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
+          <th><span>Monthly Savings</span>${fbtn('savings')}</th>
+          <th><span>Created by</span>${fbtn('created_by')}</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -1590,4 +1746,5 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   mountAmortizeCheckbox('purchases-approval-queue-section', 'approval-queue-amortize-checkbox');
 
   wireRowActionHandlers(container);
+  wireApprovalQueueFilterButtons(container, pending);
 }
