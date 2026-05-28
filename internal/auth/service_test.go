@@ -631,7 +631,7 @@ func TestService_ErrorPaths(t *testing.T) {
 		testUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			PasswordResetToken:  "hashed-token",
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
