@@ -43,15 +43,48 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		rec       config.RecommendationRecord
 		wantError bool
 	}{
+		// --- AWS canonical set ---
 		{"valid aws all-upfront 3y", validRec(), false},
 		{"valid aws no-upfront 1y", mutate(func(r *config.RecommendationRecord) { r.Payment = "no-upfront"; r.Term = 1 }), false},
+		{"valid aws partial-upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "partial-upfront" }), false},
+		{"aws rejects azure-only monthly", mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), true},
+		{"aws rejects azure-only upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "upfront" }), true},
+		// --- Azure canonical set ---
+		{"valid azure upfront", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "upfront" }), false},
 		{"valid azure monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" }), false},
-		{"valid gcp upfront", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "upfront" }), false},
+		// Legacy AWS-style tokens on Azure are normalized to Azure-canonical before validation.
+		{"azure accepts legacy all-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "azure"; r.Payment = "all-upfront"
+		}), false},
+		{"azure accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "azure"; r.Payment = "no-upfront"
+		}), false},
+		{"azure accepts legacy partial-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "azure"; r.Payment = "partial-upfront"
+		}), false},
+		{"azure rejects unknown token", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "azure"; r.Payment = "foo"
+		}), true},
+		// --- GCP canonical set (monthly-only) ---
+		{"valid gcp monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" }), false},
+		// Legacy tokens on GCP are all normalized to monthly.
+		{"gcp accepts legacy upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "gcp"; r.Payment = "upfront"
+		}), false},
+		{"gcp accepts legacy all-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "gcp"; r.Payment = "all-upfront"
+		}), false},
+		{"gcp accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "gcp"; r.Payment = "no-upfront"
+		}), false},
+		{"gcp rejects unknown token", mutate(func(r *config.RecommendationRecord) {
+			r.Provider = "gcp"; r.Payment = "foo"
+		}), true},
+		// --- General ---
 		{"payment case-insensitive", mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" }), false},
 		{"invalid term 7", mutate(func(r *config.RecommendationRecord) { r.Term = 7 }), true},
 		{"invalid term 0", mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), true},
 		{"invalid payment foo", mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), true},
-		{"aws rejects azure-only monthly", mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), true},
 		{"negative count", mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), true},
 		{"zero count", mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), true},
 		{"empty service", mutate(func(r *config.RecommendationRecord) { r.Service = "" }), true},
@@ -72,6 +105,22 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidatePurchaseRecommendation_ErrorMessage verifies that a mismatched
+// (provider, payment-option) pair produces a 400 error whose message names the
+// provider and lists the valid options, matching the plan-validator shape
+// required by issue #717.
+func TestValidatePurchaseRecommendation_ErrorMessage(t *testing.T) {
+	t.Parallel()
+	rec := validRec()
+	rec.Provider = "azure"
+	rec.Payment = "foo" // not in azure canonical set and has no normalization alias
+	err := validatePurchaseRecommendation(&rec, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "azure")
+	assert.Contains(t, err.Error(), "upfront")
+	assert.Contains(t, err.Error(), "monthly")
 }
 
 // The per-rec #643 validation is wired into the web execute boundary
