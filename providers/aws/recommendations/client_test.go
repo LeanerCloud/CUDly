@@ -565,6 +565,69 @@ func TestGetAllRecommendations_PropagatesContextCancellation(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
+// TestGetAllRecommendations_IncludesSavingsPlans pins the fix for issue #784:
+// GetAllRecommendations must include a Savings Plans goroutine so that SP recs
+// reach the merged output.  Without the 6th goroutine the SP mock branch is
+// never called and all SP rows are silently absent from the result.
+func TestGetAllRecommendations_IncludesSavingsPlans(t *testing.T) {
+	mockAPI := &mockCostExplorerAPI{
+		// RI services return an EC2 row so we can assert at least one EC2 rec
+		// is present alongside the SP row (cross-service non-regression).
+		riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{
+			Recommendations: []types.ReservationPurchaseRecommendation{
+				{
+					RecommendationDetails: []types.ReservationPurchaseRecommendationDetail{
+						{
+							RecommendedNumberOfInstancesToPurchase: aws.String("1"),
+							EstimatedMonthlySavingsAmount:          aws.String("50.00"),
+							EstimatedMonthlySavingsPercentage:      aws.String("20.0"),
+							InstanceDetails: &types.InstanceDetails{
+								EC2InstanceDetails: &types.EC2InstanceDetails{
+									InstanceType: aws.String("t3.medium"),
+									Platform:     aws.String("Linux/UNIX"),
+									Region:       aws.String("us-east-1"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		// SP mock returns a Compute Savings Plan row.
+		spRecommendations: &costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
+			SavingsPlansPurchaseRecommendation: &types.SavingsPlansPurchaseRecommendation{
+				SavingsPlansPurchaseRecommendationDetails: []types.SavingsPlansPurchaseRecommendationDetail{
+					{
+						HourlyCommitmentToPurchase:    aws.String("1.00"),
+						EstimatedMonthlySavingsAmount: aws.String("120.00"),
+						EstimatedSavingsPercentage:    aws.String("30.0"),
+						UpfrontCost:                   aws.String("0"),
+						AccountId:                     aws.String("123456789012"),
+					},
+				},
+			},
+		},
+	}
+
+	client := NewClientWithAPI(mockAPI, "us-east-1")
+
+	recs, err := client.GetAllRecommendations(context.Background())
+	require.NoError(t, err)
+
+	// At least one EC2 rec must be present (existing services not regressed).
+	var ec2Count, spCount int
+	for _, r := range recs {
+		if r.Service == common.ServiceEC2 {
+			ec2Count++
+		}
+		if common.IsSavingsPlan(r.Service) {
+			spCount++
+		}
+	}
+	assert.Positive(t, ec2Count, "EC2 recs must be present in merged output")
+	assert.Positive(t, spCount, "Savings Plans recs must be present in merged output (issue #784 regression)")
+}
+
 // multiPageRIMock returns distinct pages for GetReservationPurchaseRecommendation
 // based on the NextPageToken in the incoming request. Implements CostExplorerAPI.
 type multiPageRIMock struct {

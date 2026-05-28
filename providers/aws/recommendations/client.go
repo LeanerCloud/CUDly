@@ -254,6 +254,8 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 	var (
 		ec2Recs, rdsRecs, cacheRecs, osRecs, redshiftRecs []common.Recommendation
 		ec2Err, rdsErr, cacheErr, osErr, redshiftErr      error
+		spRecs                                            []common.Recommendation
+		spErr                                             error
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -266,7 +268,9 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 	// no request is actually in flight. The Acquire/Release boundary lives
 	// inside GetRecommendations (around the individual CE SDK call), which
 	// frees slots during backoffs and gives the cap its full effective
-	// throughput. See pkg/concurrency.
+	// throughput. The SP goroutine expands further to 24 calls (2 terms × 3
+	// payment options × 4 plan types) internally via planTypesForParams.
+	// See pkg/concurrency.
 	g.Go(func() error {
 		ec2Recs, ec2Err = c.GetRecommendationsForService(gctx, common.ServiceEC2)
 		return nil
@@ -287,10 +291,14 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 		redshiftRecs, redshiftErr = c.GetRecommendationsForService(gctx, common.ServiceRedshift)
 		return nil
 	})
+	g.Go(func() error {
+		spRecs, spErr = c.GetRecommendationsForService(gctx, common.ServiceSavingsPlans)
+		return nil
+	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every
 	// goroutine returns nil — errors are captured per-service above. After
-	// Wait, propagate ctx cancellation so callers can distinguish "all five
+	// Wait, propagate ctx cancellation so callers can distinguish "all six
 	// services completed (with possibly per-service errors)" from "the
 	// parent ctx was canceled mid-fan-out".
 	_ = g.Wait()
@@ -304,6 +312,7 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 		serviceResult{name: "ElastiCache", recs: cacheRecs, err: cacheErr},
 		serviceResult{name: "OpenSearch", recs: osRecs, err: osErr},
 		serviceResult{name: "Redshift", recs: redshiftRecs, err: redshiftErr},
+		serviceResult{name: "SavingsPlans", recs: spRecs, err: spErr},
 	), nil
 }
 
@@ -319,8 +328,8 @@ type serviceResult struct {
 
 // mergeServiceResults logs per-service errors at WARN and appends successful
 // results in the order the slice is passed — callers must preserve the
-// canonical EC2 → RDS → ElastiCache → OpenSearch → Redshift order so that
-// order-sensitive consumers stay stable.
+// canonical EC2 → RDS → ElastiCache → OpenSearch → Redshift → SavingsPlans
+// order so that order-sensitive consumers stay stable.
 func mergeServiceResults(results ...serviceResult) []common.Recommendation {
 	total := 0
 	for _, r := range results {
