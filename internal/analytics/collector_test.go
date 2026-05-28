@@ -420,6 +420,13 @@ func (m *mockConfigStore) UpsertRIUtilizationCache(_ context.Context, _ string, 
 	return nil
 }
 
+func (m *mockConfigStore) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 // strPtr is a test helper for *string fields.
 func strPtr(s string) *string { return &s }
 

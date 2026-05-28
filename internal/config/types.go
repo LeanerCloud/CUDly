@@ -770,6 +770,20 @@ type PurchaseHistoryRecord struct {
 	// can detect and retry the MarkPurchaseRevoked write without re-calling Azure
 	// (preventing a duplicate-refund error).
 	RevocationInFlight bool `json:"revocation_in_flight,omitempty" dynamodbav:"revocation_in_flight,omitempty"`
+
+	// OfferingClass records whether this commitment is a 'standard' or
+	// 'convertible' RI. NULL on pre-migration rows. The Sell-on-Marketplace
+	// button renders only when this equals "standard" (issue #292).
+	// Persisted in purchase_history via migration 000060.
+	OfferingClass string `json:"offering_class,omitempty" dynamodbav:"offering_class,omitempty"`
+	// ListingID is the AWS ReservedInstancesListingId returned by
+	// CreateReservedInstancesListing. Empty when the RI has not been
+	// listed. Persisted in purchase_history via migration 000060.
+	ListingID string `json:"listing_id,omitempty" dynamodbav:"listing_id,omitempty"`
+	// ListingState mirrors the AWS marketplace listing state: "active",
+	// "cancelled", or "closed" (sold). Empty when not listed.
+	// Persisted in purchase_history via migration 000060.
+	ListingState string `json:"listing_state,omitempty" dynamodbav:"listing_state,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table
