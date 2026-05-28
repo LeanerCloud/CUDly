@@ -659,6 +659,24 @@ type PurchaseHistoryRecord struct {
 	// persistence (resolved at read time). The UI renders this in the
 	// Approval Queue "Created by" column instead of the raw UUID.
 	CreatedByUserEmail string `json:"created_by_user_email,omitempty" dynamodbav:"-"`
+
+	// --- Revocation window fields (issue #290) ---
+	//
+	// RevocationWindowClosesAt is set when the purchase_history row is
+	// written: Timestamp + the provider-specific free-cancel window
+	// (Azure: 7 days). NULL for AWS EC2 (no direct cancel API) and GCP
+	// (no free-cancel window). Persisted in purchase_history.
+	RevocationWindowClosesAt *time.Time `json:"revocation_window_closes_at,omitempty" dynamodbav:"revocation_window_closes_at,omitempty"`
+	// RevokedAt is set by the revoke endpoint when the provider API
+	// confirmed the cancellation / refund. Persisted.
+	RevokedAt *time.Time `json:"revoked_at,omitempty" dynamodbav:"revoked_at,omitempty"`
+	// RevokedVia identifies how the revocation was completed: "direct-api"
+	// (provider returned 2xx) or "support-case" (AWS Support case filed).
+	// Persisted.
+	RevokedVia string `json:"revoked_via,omitempty" dynamodbav:"revoked_via,omitempty"`
+	// SupportCaseID is non-empty when RevokedVia == "support-case".
+	// Persisted.
+	SupportCaseID string `json:"support_case_id,omitempty" dynamodbav:"support_case_id,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

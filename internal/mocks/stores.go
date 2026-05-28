@@ -213,6 +213,21 @@ func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
 }
 
+// GetPurchaseHistoryByPurchaseID mocks the GetPurchaseHistoryByPurchaseID operation (issue #290).
+func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx, purchaseID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.PurchaseHistoryRecord), args.Error(1)
+}
+
+// MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
+func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error {
+	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

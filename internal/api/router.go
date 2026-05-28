@@ -177,6 +177,12 @@ func (r *Router) registerRoutes() {
 		// AuthUser gates "must be signed in"; the handler then enforces
 		// the retry-any/retry-own RBAC matrix.
 		{PathPrefix: "/api/purchases/retry/", Method: "POST", Handler: r.retryPurchaseHandler, Auth: AuthUser},
+		// Revoke a completed purchase within the provider's free-cancel window
+		// (issue #290). Session-authed only; the handler enforces the
+		// revoke-any/revoke-own RBAC matrix and the per-provider window check.
+		// AuthUser: router-level gate; per-handler requirePermission is the
+		// real security boundary.
+		{PathPrefix: "/api/purchases/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokePurchaseHandler, Auth: AuthUser},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id}).
 		// All now AuthUser (PR-A of #660): handler-level requirePermission
@@ -542,6 +548,10 @@ func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFu
 
 func (r *Router) retryPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.retryPurchase(ctx, req, params["id"])
+}
+
+func (r *Router) revokePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.revokePurchase(ctx, req, params["id"])
 }
 
 func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

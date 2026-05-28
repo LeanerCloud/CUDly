@@ -121,6 +121,17 @@ type StoreInterface interface {
 	// also matched, while the per-provider grouping keeps a reused external number
 	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
+	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
+	// whose purchase_id matches. Returns (nil, nil) when no row is found.
+	// Used by the revoke endpoint to load the record before calling the
+	// provider cancel API (issue #290).
+	GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error)
+	// MarkPurchaseRevoked stamps revoked_at, revoked_via, and optionally
+	// support_case_id on a purchase_history row identified by purchase_id.
+	// Returns a not-found error when no row matches. Idempotent: a second
+	// call for the same row is a no-op (revoked_at is not overwritten when
+	// it is already non-null). Used by the revoke endpoint (issue #290).
+	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

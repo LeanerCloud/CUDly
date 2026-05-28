@@ -535,6 +535,30 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
   return p.created_by_user_id === user.id;
 }
 
+// canRevokeCompletedRow returns true when the current session may revoke the
+// given completed purchase row via the inline Revoke button (issue #290).
+// UX gate only -- the backend authorizeSessionRevoke remains the real
+// security boundary.
+//
+// Conditions:
+//   * status must be "completed";
+//   * provider must be "azure" (AWS and GCP have no direct cancel API);
+//   * revocation_window_closes_at must be in the future;
+//   * row must not already be revoked (revoked_at absent);
+//   * admin -> always yes; non-admin -> yes (revoke-own granted by default
+//     to all authenticated users; account-access is enforced server-side).
+function canRevokeCompletedRow(p: HistoryPurchase): boolean {
+  const status = (p.status || '').toLowerCase();
+  if (status !== 'completed' && status !== '') return false;
+  if ((p.provider || '').toLowerCase() !== 'azure') return false;
+  if (p.revoked_at) return false; // already revoked
+  if (!p.revocation_window_closes_at) return false;
+  if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  return true;
+}
+
 // retryThresholdReached returns true when the row has hit the soft-
 // block threshold (5 attempts). The frontend shows a confirm-with-
 // warning dialog and forwards force=true on confirmation.
@@ -570,7 +594,7 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
   const cell = btn.closest('td') || btn.parentElement;
   if (!cell) return [btn];
   return Array.from(
-    cell.querySelectorAll<HTMLButtonElement>('.history-approve-btn, .history-cancel-btn'),
+    cell.querySelectorAll<HTMLButtonElement>('.history-approve-btn, .history-cancel-btn, .history-revoke-btn'),
   );
 }
 
@@ -651,6 +675,13 @@ function renderActionCell(p: HistoryPurchase): string {
   }
   if (lineage.length > 0) {
     return lineage.join(' ');
+  }
+
+  // Completed Azure row within revocation window: show Revoke button
+  // (issue #290). Only Azure supports direct in-app revocation; AWS and
+  // GCP have no cancel API so the button is suppressed for those providers.
+  if (canRevokeCompletedRow(p) && p.purchase_id) {
+    return `<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}">Revoke</button>`;
   }
 
   return escapeHtml(p.plan_name || '-');
@@ -977,6 +1008,42 @@ function wireRowActionHandlers(container: HTMLElement): void {
         await loadHistory();
       } catch (reloadError) {
         console.error('Failed to reload history after retry:', reloadError);
+      }
+    });
+  });
+
+  // Wire the inline Revoke button on completed Azure rows within the
+  // free-cancel window (issue #290). confirmDialog -> POST -> reload.
+  // The backend is the security boundary; canRevokeCompletedRow is a
+  // UX gate that hides the button when the call would fail, but a stale
+  // cache can still surface a 4xx -- handle it like any other failure.
+  container.querySelectorAll<HTMLButtonElement>('.history-revoke-btn[data-revoke-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['revokeId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Revoke this purchase within the free-cancel window?',
+        body: 'This will request an Azure reservation return. The charge will be refunded if the request is within the 7-day window. This action cannot be undone.',
+        confirmLabel: 'Revoke purchase',
+        destructive: true,
+      });
+      if (!ok) return;
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach((b) => { b.disabled = true; });
+      try {
+        await api.revokePurchase(id);
+      } catch (revokeError) {
+        console.error('Failed to revoke purchase:', revokeError);
+        const err = revokeError as Error;
+        showToast({ message: `Failed to revoke: ${err.message || 'unknown error'}`, kind: 'error' });
+        rowActions.forEach((b) => { b.disabled = false; });
+        return;
+      }
+      showToast({ message: 'Purchase revocation submitted', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after revoke:', reloadError);
       }
     });
   });

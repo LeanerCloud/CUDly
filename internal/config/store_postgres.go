@@ -1434,8 +1434,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
 			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			source, revocation_window_closes_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -1457,6 +1457,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		record.RampStep,
 		record.CloudAccountID,
 		record.Source,
+		record.RevocationWindowClosesAt,
 	)
 
 	if err != nil {
@@ -1471,7 +1472,8 @@ func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history
 		WHERE account_id = $1
 		ORDER BY timestamp DESC
@@ -1486,7 +1488,8 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history
 		ORDER BY timestamp DESC
 		LIMIT $1
@@ -1643,7 +1646,8 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	query := fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history%s
 		ORDER BY timestamp DESC
 		LIMIT $%d
@@ -1652,7 +1656,16 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	return s.queryPurchaseHistory(ctx, query, args...)
 }
 
-// queryPurchaseHistory is a helper to query and scan purchase history
+// queryPurchaseHistory is a helper to query and scan purchase history.
+// The query must SELECT the following columns in order:
+//
+//	account_id, purchase_id, timestamp, provider, service, region,
+//	resource_type, count, term, payment, upfront_cost, monthly_cost,
+//	estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+//
+// The revocation columns were added in migration 000057. Queries must
+// include them explicitly so the Scan targets stay in sync.
 func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1665,6 +1678,8 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		var record PurchaseHistoryRecord
 		var planID, planName, cloudAccountID sql.NullString
 		var monthlyCost sql.NullFloat64
+		var revocationWindowClosesAt, revokedAt *time.Time
+		var revokedVia, supportCaseID sql.NullString
 
 		err := rows.Scan(
 			&record.AccountID,
@@ -1684,6 +1699,10 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 			&planName,
 			&record.RampStep,
 			&cloudAccountID,
+			&revocationWindowClosesAt,
+			&revokedAt,
+			&revokedVia,
+			&supportCaseID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
@@ -1706,11 +1725,132 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		if cloudAccountID.Valid {
 			record.CloudAccountID = &cloudAccountID.String
 		}
+		record.RevocationWindowClosesAt = revocationWindowClosesAt
+		record.RevokedAt = revokedAt
+		if revokedVia.Valid {
+			record.RevokedVia = revokedVia.String
+		}
+		if supportCaseID.Valid {
+			record.SupportCaseID = supportCaseID.String
+		}
 
 		records = append(records, record)
 	}
 
 	return records, rows.Err()
+}
+
+// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
+// whose purchase_id matches purchaseID. Returns (nil, nil) when the row
+// does not exist. The revocation-window columns (revocation_window_closes_at,
+// revoked_at, revoked_via, support_case_id) are read alongside the base
+// columns so the revoke endpoint can check idempotency without a second round
+// trip (issue #290).
+func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
+	query := `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		FROM purchase_history
+		WHERE purchase_id = $1
+		LIMIT 1
+	`
+	rows, err := s.db.Query(ctx, query, purchaseID)
+	if err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+
+	var r PurchaseHistoryRecord
+	var planID, planName, cloudAccountID sql.NullString
+	var revocationWindowClosesAt, revokedAt *time.Time
+	var revokedVia, supportCaseID sql.NullString
+
+	if err := rows.Scan(
+		&r.AccountID,
+		&r.PurchaseID,
+		&r.Timestamp,
+		&r.Provider,
+		&r.Service,
+		&r.Region,
+		&r.ResourceType,
+		&r.Count,
+		&r.Term,
+		&r.Payment,
+		&r.UpfrontCost,
+		&r.MonthlyCost,
+		&r.EstimatedSavings,
+		&planID,
+		&planName,
+		&r.RampStep,
+		&cloudAccountID,
+		&revocationWindowClosesAt,
+		&revokedAt,
+		&revokedVia,
+		&supportCaseID,
+	); err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
+	}
+
+	if planID.Valid {
+		r.PlanID = planID.String
+	}
+	if planName.Valid {
+		r.PlanName = planName.String
+	}
+	if cloudAccountID.Valid {
+		r.CloudAccountID = &cloudAccountID.String
+	}
+	r.RevocationWindowClosesAt = revocationWindowClosesAt
+	r.RevokedAt = revokedAt
+	if revokedVia.Valid {
+		r.RevokedVia = revokedVia.String
+	}
+	if supportCaseID.Valid {
+		r.SupportCaseID = supportCaseID.String
+	}
+
+	return &r, rows.Err()
+}
+
+// MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id on
+// the purchase_history row identified by purchaseID. The UPDATE is a no-op
+// when revoked_at is already non-null (idempotency guard). Returns a not-found
+// error when zero rows are affected and revoked_at was previously NULL.
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error {
+	var supportCaseIDPtr *string
+	if supportCaseID != "" {
+		supportCaseIDPtr = &supportCaseID
+	}
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revoked_at       = $2,
+		       revoked_via      = $3,
+		       support_case_id  = $4
+		 WHERE purchase_id = $1
+		   AND revoked_at IS NULL
+	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr)
+	if err != nil {
+		return fmt.Errorf("MarkPurchaseRevoked: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Either no row found or already revoked — check which.
+		var exists bool
+		err2 := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM purchase_history WHERE purchase_id=$1)`, purchaseID).Scan(&exists)
+		if err2 != nil {
+			return fmt.Errorf("MarkPurchaseRevoked existence check: %w", err2)
+		}
+		if !exists {
+			return fmt.Errorf("MarkPurchaseRevoked: purchase_id %q not found", purchaseID)
+		}
+		// Already revoked — idempotent, treat as success.
+	}
+	return nil
 }
 
 // ==========================================

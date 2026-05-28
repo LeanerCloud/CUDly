@@ -61,12 +61,31 @@ export async function cancelPurchase(executionId: string): Promise<void> {
  * (issue #286). The same backend endpoint also accepts an email-link
  * token for the legacy flow; this caller relies on the bearer-session
  * auth from `apiRequest` and intentionally does not pass a token in
- * the URL — the backend's session-first dispatch picks the correct
+ * the URL -- the backend's session-first dispatch picks the correct
  * auth path based on whether the session matches the
  * approve-{any,own} RBAC matrix.
  */
 export async function approvePurchase(executionId: string): Promise<void> {
   return apiRequest<void>(`/purchases/approve/${executionId}`, { method: 'POST' });
+}
+
+/**
+ * Revoke a completed purchase within the provider's free-cancel window
+ * (issue #290). Only shown for Azure rows within the 7-day window; AWS
+ * and GCP providers have no direct cancel API so the button is hidden
+ * for those rows in the History UI.
+ *
+ * Returns the revocation result (status, revoked_at, revoked_via) or
+ * throws on 4xx/5xx.
+ */
+export interface RevokePurchaseResult {
+  status: string;
+  revoked_at: string;
+  revoked_via: string;
+}
+
+export async function revokePurchase(purchaseId: string): Promise<RevokePurchaseResult> {
+  return apiRequest<RevokePurchaseResult>(`/purchases/${purchaseId}/revoke`, { method: 'POST' });
 }
 
 /**

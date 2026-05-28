@@ -291,3 +291,11 @@ func (m *mockConfigStoreForHealth) GetPendingExecutionsTx(ctx context.Context, _
 func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
+
+func (m *mockConfigStoreForHealth) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
+	return nil
+}

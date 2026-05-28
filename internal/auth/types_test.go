@@ -20,8 +20,9 @@ func TestDefaultPermissions(t *testing.T) {
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
 		// + retry-own:purchases (issue #47)
-		// + approve-own:purchases (issue #286) = 11.
-		assert.Len(t, perms, 11)
+		// + approve-own:purchases (issue #286)
+		// + revoke-own:purchases (issue #290) = 12.
+		assert.Len(t, perms, 12)
 
 		actions := make(map[string]bool)
 		for _, p := range perms {
@@ -39,6 +40,7 @@ func TestDefaultPermissions(t *testing.T) {
 		assert.True(t, actions[ActionCancelOwn+":"+ResourcePurchases])
 		assert.True(t, actions[ActionRetryOwn+":"+ResourcePurchases])
 		assert.True(t, actions[ActionApproveOwn+":"+ResourcePurchases])
+		assert.True(t, actions[ActionRevokeOwn+":"+ResourcePurchases])
 	})
 
 	t.Run("DefaultReadOnlyPermissions returns readonly access", func(t *testing.T) {

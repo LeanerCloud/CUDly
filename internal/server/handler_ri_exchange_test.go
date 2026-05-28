@@ -929,3 +929,11 @@ func (m *mockConfigStoreForExchange) SavePurchaseExecutionTx(ctx context.Context
 func (m *mockConfigStoreForExchange) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
+
+func (m *mockConfigStoreForExchange) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForExchange) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
+	return nil
+}

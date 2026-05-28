@@ -585,16 +585,20 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 		"account_id", "purchase_id", "timestamp", "provider", "service", "region",
 		"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
 		"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
+		// revocation columns (issue #290)
+		"revocation_window_closes_at", "revoked_at", "revoked_via", "support_case_id",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("acc-1", "pur-1", now, "aws", "ec2", "us-east-1",
 			"m5.large", 2, 1, "no-upfront", 100.0, 50.0, 200.0,
 			sql.NullString{Valid: true, String: "plan-1"},
 			sql.NullString{Valid: true, String: "My Plan"},
-			1, sql.NullString{Valid: true, String: "cloud-acct-1"}).
+			1, sql.NullString{Valid: true, String: "cloud-acct-1"},
+			nil, nil, sql.NullString{}, sql.NullString{}).
 		AddRow("acc-1", "pur-2", now, "aws", "rds", "us-west-2",
 			"db.t3.medium", 1, 3, "all-upfront", 200.0, 0.0, 100.0,
-			sql.NullString{}, sql.NullString{}, 0, sql.NullString{})
+			sql.NullString{}, sql.NullString{}, 0, sql.NullString{},
+			nil, nil, sql.NullString{}, sql.NullString{})
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistory(ctx, "acc-1", 10)
@@ -608,11 +612,14 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 // ─── GetPurchaseHistoryFiltered (issue #701) ─────────────────────────────────
 
 // purchaseHistoryCols lists the SELECT columns for purchase_history rows in
-// the order GetPurchaseHistoryFiltered scans them.
+// the order GetPurchaseHistoryFiltered scans them. Keep in sync with
+// queryPurchaseHistory in store_postgres.go (issue #290 added the 4 revocation
+// columns at positions 18-21).
 var purchaseHistoryCols = []string{
 	"account_id", "purchase_id", "timestamp", "provider", "service", "region",
 	"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
 	"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
+	"revocation_window_closes_at", "revoked_at", "revoked_via", "support_case_id",
 }
 
 // purchaseHistoryRow builds a single AddRow tuple matching purchaseHistoryCols.
@@ -621,6 +628,8 @@ func purchaseHistoryRow(now time.Time, provider, acct string) []interface{} {
 		acct, "pur-1", now, provider, "ec2", "us-east-1",
 		"m5.large", 1, 1, "no-upfront", 100.0, 50.0, 200.0,
 		sql.NullString{}, sql.NullString{}, 0, sql.NullString{},
+		// revocation columns (issue #290): all null for non-revoked rows
+		nil, nil, sql.NullString{}, sql.NullString{},
 	}
 }
 
@@ -1679,7 +1688,8 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(18)...).
+	// 19 columns: original 18 + revocation_window_closes_at (issue #290).
+	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(19)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{

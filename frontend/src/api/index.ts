@@ -140,9 +140,10 @@ export {
   resumePlannedPurchase,
   runPlannedPurchase,
   deletePlannedPurchase,
-  createPlannedPurchases
+  createPlannedPurchases,
+  revokePurchase
 } from './purchases';
-export type { RetryPurchaseResult } from './purchases';
+export type { RetryPurchaseResult, RevokePurchaseResult } from './purchases';
 
 // Re-export users functions
 export {

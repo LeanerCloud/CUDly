@@ -229,6 +229,14 @@ func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	return nil, nil
 }
 
+func (m *mockConfigStore) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	return 0, nil
 }
