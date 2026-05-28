@@ -54,6 +54,13 @@ type SESEmailSender interface {
 	CreateEmailIdentity(ctx context.Context, params *sesv2.CreateEmailIdentityInput, optFns ...func(*sesv2.Options)) (*sesv2.CreateEmailIdentityOutput, error)
 }
 
+// MuteChecker is a narrow interface the send path uses to consult the
+// muted_recipients table. Isolating it from the full config.StoreInterface
+// keeps the email package free of a direct dependency on the config package.
+type MuteChecker interface {
+	IsNotificationMuted(ctx context.Context, recipientEmail, scope string) (bool, error)
+}
+
 // Ensure concrete types implement interfaces.
 var _ SNSPublisher = (*sns.Client)(nil)
 var _ SESEmailSender = (*sesv2.Client)(nil)

@@ -31,6 +31,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
 		"/api/register/", // GET /api/register/:token (trailing slash avoids matching /api/registrations)
+		"/api/notifications/unsubscribe",
 		"/docs",
 		"/api/docs",
 	}

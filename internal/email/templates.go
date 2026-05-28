@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 )
 
 // Email templates
@@ -812,6 +814,11 @@ func sendMultipartVia(
 // ErrNoRecipient when data.RecipientEmail is empty and ErrNoFromEmail when
 // FROM_EMAIL is unconfigured, so the caller can surface a precise reason in
 // the API response instead of the prior silent no-op.
+//
+// Mute check: if the recipient has opted out of purchase_approvals via the
+// List-Unsubscribe link, the email is silently skipped and nil is returned.
+// A List-Unsubscribe / List-Unsubscribe-Post header pair (RFC 8058) is added
+// to the outbound SES message when an unsubscribe base URL is configured.
 func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
@@ -824,8 +831,49 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
+
+	scope := string(common.ScopePurchaseApprovals)
+
+	// Per-recipient mute check: skip silently if the approver has opted out.
+	if s.isMuted(ctx, data.RecipientEmail, scope) {
+		logging.Infof("email: purchase approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+
+	// Filter CC list against mutes so no muted address receives a copy.
+	filteredCC := s.filterMutedAddresses(ctx, data.CCEmails, scope)
+
+	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
+	unsubHdr, postHdr := s.listUnsubscribeHeaders(data.RecipientEmail, scope)
+	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
+
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return sendPurchaseApprovalRequestVia(ctx, s, data.RecipientEmail, subject, data)
+	return sendPurchaseApprovalRequestWithCC(ctx, s, data.RecipientEmail, filteredCC, subject, data, extraHeaders)
+}
+
+// sendPurchaseApprovalRequestWithCC is the low-level send helper that accepts
+// a pre-filtered CC list and extra message headers. Extracted from
+// sendPurchaseApprovalRequestVia so the mute/unsub path can inject headers
+// without duplicating the render logic.
+func sendPurchaseApprovalRequestWithCC(
+	ctx context.Context,
+	s *Sender,
+	recipient string,
+	ccEmails []string,
+	subject string,
+	data NotificationData,
+	extraHeaders []types.MessageHeader,
+) error {
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
+	}
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
+		htmlBody = ""
+	}
+	return s.sendToEmailWithCCMultipartHeaders(ctx, recipient, ccEmails, subject, textBody, htmlBody, extraHeaders)
 }
 
 // ---------------------------------------------------------------------------

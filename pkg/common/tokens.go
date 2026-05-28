@@ -1,6 +1,7 @@
 package common
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -94,4 +95,44 @@ func ReservationOrderID(token, fallback string) string {
 		return guid
 	}
 	return fallback
+}
+
+// MuteNotifScope is the set of valid notification scopes for per-recipient
+// muting (issue #297). Each scope corresponds to one category of outbound email;
+// a mute row suppresses only that category for its holder.
+type MuteNotifScope string
+
+const (
+	// ScopePurchaseApprovals suppresses purchase-approval-request emails.
+	ScopePurchaseApprovals MuteNotifScope = "purchase_approvals"
+	// ScopeRIExchangeApprovals suppresses RI-exchange pending-approval emails.
+	ScopeRIExchangeApprovals MuteNotifScope = "ri_exchange_approvals"
+)
+
+// DeriveMuteToken returns a 32-byte HMAC-SHA256 token (hex-encoded) that
+// signs the (email, scope) tuple. The token is embedded in the
+// List-Unsubscribe URL; the handler re-derives it from the query params and
+// compares in constant time, so a forged URL cannot mute a different address.
+//
+// key must come from a deployment secret (NOTIFICATION_MUTE_SECRET env var).
+// When key is empty a static fallback is used so local-dev / test environments
+// still produce a deterministic token without crashing; production deployments
+// MUST set the env var.
+func DeriveMuteToken(key []byte, email, scope string) string {
+	if len(key) == 0 {
+		// Fallback for local dev / tests: deterministic but clearly insecure.
+		key = []byte("dev-mute-secret-not-for-production")
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(strings.ToLower(email)))
+	mac.Write([]byte("|"))
+	mac.Write([]byte(scope))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyMuteToken returns true when token equals the HMAC for (email, scope)
+// under key. Comparison is constant-time to prevent timing attacks.
+func VerifyMuteToken(key []byte, email, scope, token string) bool {
+	want := DeriveMuteToken(key, email, scope)
+	return hmac.Equal([]byte(want), []byte(token))
 }
