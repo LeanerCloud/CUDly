@@ -4522,6 +4522,22 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(chevron).not.toBeNull();
     });
 
+    test('chevron is a <button> with aria-label and is not inside rec-cell-summary-content (closes #280)', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      await loadRecommendations();
+
+      const chevron = document.querySelector<HTMLButtonElement>('.rec-cell-chevron');
+      expect(chevron).not.toBeNull();
+      // Must be a <button> so native Enter/Space keyboard activation works without extra keydown handlers.
+      expect(chevron!.tagName.toLowerCase()).toBe('button');
+      expect(chevron!.getAttribute('type')).toBe('button');
+      expect(chevron!.getAttribute('aria-label')).toBeTruthy();
+      // Chevron must NOT be a descendant of .rec-cell-summary-content.
+      expect(chevron!.closest('.rec-cell-summary-content')).toBeNull();
+    });
+
     test('clicking chevron expands the cell and shows variant rows', async () => {
       const recs = multiVariantRecs();
       (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
