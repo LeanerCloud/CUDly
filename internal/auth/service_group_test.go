@@ -279,13 +279,14 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
+		// 12 = 6 read/plan-author + delete:plans (PR-A #660)
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
 		// + retry-own:purchases (issue #47)
-		// + revoke-own:purchases (issue #290).
+		// + revoke-own:purchases (issue #290)
+		// + sell-own:purchases (issue #292).
 		// NOTE: approve-own removed (issue #1407, four-eyes).
-		assert.Len(t, permissions, 11)
+		assert.Len(t, permissions, 12)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -354,11 +355,11 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 11 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
+		// 12 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
 		// + cancel-own (#46) + retry-own (#47)
-		// + revoke-own (#290):purchases; approve-own removed per #1407 four-eyes)
-		// + 1 group1 + 1 group2 = 13
-		assert.Len(t, permissions, 13)
+		// + revoke-own (#290) + sell-own (#292):purchases; approve-own removed
+		// per #1407 four-eyes) + 1 group1 + 1 group2 = 14
+		assert.Len(t, permissions, 14)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -401,13 +402,14 @@ func TestService_GetUserPermissions(t *testing.T) {
 		require.NoError(t, err)
 		// Should have only the resolvable group's permissions; the missing
 		// group is skipped.
-		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
+		// 12 = 6 read/plan-author + delete:plans (PR-A #660)
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
 		// + retry-own:purchases (issue #47)
-		// + revoke-own:purchases (issue #290).
+		// + revoke-own:purchases (issue #290)
+		// + sell-own:purchases (issue #292).
 		// NOTE: approve-own removed (issue #1407, four-eyes).
-		assert.Len(t, permissions, 11)
+		assert.Len(t, permissions, 12)
 
 		mockStore.AssertExpectations(t)
 	})

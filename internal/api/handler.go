@@ -83,6 +83,11 @@ type Handler struct {
 	// armreservations-backed client.
 	azureExchangeFactory func(subscriptionID string) azureExchangeClient
 
+	// Optional marketplace EC2 client factory injected by tests. When nil
+	// (the production default), buildMarketplaceEC2Client uses
+	// awsprovider.NewEC2ClientDirect.
+	marketplaceEC2Factory func(aws.Config) marketplaceEC2Client
+
 	// Optional account-resolver injection point used by the reshape
 	// handler integration test. When nil (the production default), the
 	// handler calls h.resolveAWSCloudAccountID which in turn invokes

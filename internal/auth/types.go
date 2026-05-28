@@ -461,6 +461,20 @@ const (
 	// escalating to admin.
 	ActionRevokeOwn = "revoke-own"
 	ActionRevokeAny = "revoke-any"
+	// ActionSellOwn / ActionSellAny gate the "Sell on Marketplace" button on
+	// Standard RI purchase history rows (issue #292). Mirror image of the
+	// cancel-{own,any} / retry-{own,any} / approve-{own,any} family:
+	//
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//     both verbs.
+	//   * RoleUser — DefaultUserPermissions() adds sell-own:purchases so
+	//     every user can list RIs they purchased themselves.
+	//   * RoleReadOnly — neither verb.
+	//
+	// sell-any has no default non-admin grant; the constant exists so a
+	// custom operator group can list any Standard RI without admin escalation.
+	ActionSellOwn = "sell-own"
+	ActionSellAny = "sell-any"
 )
 
 // Predefined resources.
@@ -540,6 +554,12 @@ func DefaultUserPermissions() []Permission {
 		// creator UUID matches. Legacy rows with NULL creator are out of reach
 		// for non-admins (email-token paths have no revocation escape hatch).
 		{Action: ActionRevokeOwn, Resource: ResourcePurchases},
+		// sell-own:purchases — every authenticated user can list Standard
+		// RIs they purchased themselves on the AWS Marketplace (issue #292).
+		// The handler still requires the purchase_history row to carry
+		// offering_class = 'standard' and the cloud account to match the
+		// row's cloud_account_id before creating the listing.
+		{Action: ActionSellOwn, Resource: ResourcePurchases},
 	}
 }
 

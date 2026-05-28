@@ -368,3 +368,6 @@ func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, a
 	}
 	return cfg, nil
 }
+func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
+	return nil
+}

@@ -1638,8 +1638,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
 			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source, revocation_window_closes_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			source, revocation_window_closes_at, offering_class
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -1662,6 +1662,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		record.CloudAccountID,
 		record.Source,
 		record.RevocationWindowClosesAt,
+		nullStringFromString(record.OfferingClass),
 	)
 
 	if err != nil {
@@ -1671,13 +1672,35 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 	return nil
 }
 
+// UpdatePurchaseHistoryListing stamps the marketplace listing fields onto a
+// purchase_history row identified by its purchase_id (RI reservation ID).
+// Called by the marketplace-list handler after CreateReservedInstancesListing
+// succeeds (listing_id + listing_state="active") and by the status-poll path
+// when AWS reports closed or cancelled.
+func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	query := `
+		UPDATE purchase_history
+		SET listing_id = $1, listing_state = $2
+		WHERE purchase_id = $3
+	`
+	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID)
+	if err != nil {
+		return fmt.Errorf("failed to update listing state for purchase %s: %w", purchaseID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("purchase %s not found in history", purchaseID)
+	}
+	return nil
+}
+
 // GetPurchaseHistory retrieves purchase history for an account.
 func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE account_id = $1
 		ORDER BY timestamp DESC
@@ -1693,7 +1716,8 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history
 		ORDER BY timestamp DESC
 		LIMIT $1
@@ -1868,7 +1892,8 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history%s
 		ORDER BY timestamp DESC
 		LIMIT $%d
@@ -1883,10 +1908,13 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 //	account_id, purchase_id, timestamp, provider, service, region,
 //	resource_type, count, term, payment, upfront_cost, monthly_cost,
 //	estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+//	offering_class, listing_id, listing_state
 //
-// The revocation columns were added in migration 000057. Queries must
-// include them explicitly so the Scan targets stay in sync.
+// The revocation columns were added in migration 000057; the marketplace
+// listing columns (offering_class, listing_id, listing_state) in the #292
+// migration. Queries must include them explicitly so the Scan targets stay
+// in sync.
 func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1897,7 +1925,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 	records := make([]PurchaseHistoryRecord, 0)
 	for rows.Next() {
 		var record PurchaseHistoryRecord
-		var planID, planName, cloudAccountID sql.NullString
+		var planID, planName, cloudAccountID, offeringClass, listingID, listingState sql.NullString
 		var monthlyCost sql.NullFloat64
 		var revocationWindowClosesAt, revokedAt *time.Time
 		var revokedVia, supportCaseID sql.NullString
@@ -1924,6 +1952,9 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 			&revokedAt,
 			&revokedVia,
 			&supportCaseID,
+			&offeringClass,
+			&listingID,
+			&listingState,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
@@ -1954,6 +1985,15 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		if supportCaseID.Valid {
 			record.SupportCaseID = supportCaseID.String
 		}
+		if offeringClass.Valid {
+			record.OfferingClass = offeringClass.String
+		}
+		if listingID.Valid {
+			record.ListingID = listingID.String
+		}
+		if listingState.Valid {
+			record.ListingState = listingState.String
+		}
 
 		records = append(records, record)
 	}
@@ -1966,14 +2006,16 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 // does not exist. The revocation-window columns (revocation_window_closes_at,
 // revoked_at, revoked_via, support_case_id) are read alongside the base
 // columns so the revoke endpoint can check idempotency without a second round
-// trip (issue #290).
+// trip (issue #290). The marketplace columns (offering_class, listing_id,
+// listing_state) are read so the marketplace-list handler can validate
+// offering_class and look up the cloud account (issue #292).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
 		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
-		       revocation_in_flight
+		       revocation_in_flight, offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE purchase_id = $1
 		LIMIT 1
@@ -1992,6 +2034,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 	var planID, planName, cloudAccountID sql.NullString
 	var revocationWindowClosesAt, revokedAt *time.Time
 	var revokedVia, supportCaseID sql.NullString
+	var offeringClass, listingID, listingState sql.NullString
 
 	if err := rows.Scan(
 		&r.AccountID,
@@ -2016,6 +2059,9 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		&revokedVia,
 		&supportCaseID,
 		&r.RevocationInFlight,
+		&offeringClass,
+		&listingID,
+		&listingState,
 	); err != nil {
 		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
 	}
@@ -2036,6 +2082,15 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 	}
 	if supportCaseID.Valid {
 		r.SupportCaseID = supportCaseID.String
+	}
+	if offeringClass.Valid {
+		r.OfferingClass = offeringClass.String
+	}
+	if listingID.Valid {
+		r.ListingID = listingID.String
+	}
+	if listingState.Valid {
+		r.ListingState = listingState.String
 	}
 
 	return &r, rows.Err()

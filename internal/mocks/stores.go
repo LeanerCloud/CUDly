@@ -389,7 +389,7 @@ func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	return v, args.Error(1)
 }
 
-// GetPurchaseHistoryByPurchaseID mocks the GetPurchaseHistoryByPurchaseID operation (issue #290).
+// GetPurchaseHistoryByPurchaseID mocks the single-row lookup by purchase_id (issues #290, #292).
 func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx, purchaseID)
 	if args.Get(0) == nil {
@@ -441,6 +441,12 @@ func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*co
 		panic(fmt.Sprintf("mock: expected []*config.PurchaseHistoryRecord, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
+}
+
+// UpdatePurchaseHistoryListing mocks stamping listing_id and listing_state (issue #292).
+func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	args := m.Called(ctx, purchaseID, listingID, listingState)
+	return args.Error(0)
 }
 
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
