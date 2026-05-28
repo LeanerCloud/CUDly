@@ -1032,6 +1032,13 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // produces 100% / neg%).
   const hasOnDemand = r.on_demand_cost != null && r.on_demand_cost > 0;
   if (r.monthly_cost == null && !hasOnDemand) return null;
+  // #323: for AWS rows the on_demand_cost field is the provider-canonical
+  // denominator (EstimatedMonthlyOnDemandCost from Cost Explorer). When it
+  // is absent the reconstruction formula (monthly_cost + savings + amortized)
+  // diverges from the true on-demand baseline for RI/SP recs, producing
+  // misleadingly high percentages. Return null so the UI renders "—" rather
+  // than a silently-wrong value.
+  if (r.provider === 'aws' && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
   const effectiveSavings = r.savings - amortized;
