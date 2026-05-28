@@ -1432,3 +1432,48 @@ func TestDerivePaymentOption(t *testing.T) {
 	assert.Equal(t, "partial-upfront", derivePaymentOption(rsOffering("x", 500, 0.05)))
 	assert.Equal(t, "unknown", derivePaymentOption(rsOffering("x", 0, 0)))
 }
+
+// TestFindOfferingID_CtxCancelledBeforePage asserts that findOfferingID returns
+// context.Canceled immediately when the context is already cancelled before the
+// first pagination iteration, without calling the AWS API (issue #515).
+func TestFindOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, rec, "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", 0)
+}
+
+// TestFindOfferingID_EmptyStringTokenEndsPagination asserts that a page whose
+// Marker is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestFindOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	// Single page with no matching node type and Marker = ""; must not loop again.
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{},
+			Marker:                aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+	}
+	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", 1)
+}

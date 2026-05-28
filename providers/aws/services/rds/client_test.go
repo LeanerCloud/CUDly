@@ -939,6 +939,51 @@ func TestNormalizeEngineName_EditionTokensPassThrough(t *testing.T) {
 	}
 }
 
+// TestFindOfferingID_CtxCancelledBeforePage asserts that findOfferingID returns
+// context.Canceled immediately when the context is already cancelled before the
+// first pagination iteration, without calling the AWS API (issue #515).
+func TestFindOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := idempotencyTestRec()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, rec, "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockRDS.AssertNumberOfCalls(t, "DescribeReservedDBInstancesOfferings", 0)
+}
+
+// TestFindOfferingID_EmptyStringTokenEndsPagination asserts that a page whose
+// Marker is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestFindOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := idempotencyTestRec()
+
+	// Single page with zero results and Marker = ""; must not loop again.
+	mockRDS.On("DescribeReservedDBInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&rds.DescribeReservedDBInstancesOfferingsOutput{
+			ReservedDBInstancesOfferings: []types.ReservedDBInstancesOffering{},
+			Marker:                       aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+	}
+	mockRDS.AssertNumberOfCalls(t, "DescribeReservedDBInstancesOfferings", 1)
+}
+
 // TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the
 // no-token CLI path (issue #687) composes a self-describing
 // ReservedDBInstanceId carrying the service code, region, SKU, count, and

@@ -949,3 +949,56 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 	assert.Contains(t, capturedName, "2x-3yr", "count and term must be embedded: %q", capturedName)
 	assert.LessOrEqual(t, len(capturedName), 60, "must fit AWS reservation-ID cap")
 }
+
+// TestFindOfferingID_CtxCancelledBeforePage asserts that findOfferingID returns
+// context.Canceled immediately when the context is already cancelled before the
+// first pagination iteration, without calling the AWS API (issue #515).
+func TestFindOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	t.Cleanup(func() { mockOS.AssertExpectations(t) })
+	client := &Client{client: mockOS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "m5.xlarge.search",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, rec, "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockOS.AssertNumberOfCalls(t, "DescribeReservedInstanceOfferings", 0)
+}
+
+// TestFindOfferingID_EmptyStringTokenEndsPagination asserts that a page whose
+// NextToken is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestFindOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	t.Cleanup(func() { mockOS.AssertExpectations(t) })
+	client := &Client{client: mockOS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "m5.xlarge.search",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+	}
+
+	// Single page with zero results and NextToken = ""; must not loop again.
+	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
+			NextToken:                 aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+	}
+	mockOS.AssertNumberOfCalls(t, "DescribeReservedInstanceOfferings", 1)
+}
