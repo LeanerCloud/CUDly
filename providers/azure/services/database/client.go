@@ -56,15 +56,29 @@ type CapabilitiesClient interface {
 	ListByLocation(ctx context.Context, locationName string, options *armsql.CapabilitiesClientListByLocationOptions) (armsql.CapabilitiesClientListByLocationResponse, error)
 }
 
+// SQLServersPager interface for listing SQL servers (enables mocking)
+type SQLServersPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armsql.ServersClientListResponse, error)
+}
+
+// SQLManagedInstancesPager interface for listing SQL managed instances (enables mocking)
+type SQLManagedInstancesPager interface {
+	More() bool
+	NextPage(ctx context.Context) (armsql.ManagedInstancesClientListResponse, error)
+}
+
 // DatabaseClient handles Azure SQL Database Reserved Capacity
 type DatabaseClient struct {
-	cred                 azcore.TokenCredential
-	subscriptionID       string
-	region               string
-	httpClient           HTTPClient
-	recommendationsPager RecommendationsPager
-	reservationsPager    ReservationsDetailsPager
-	capabilitiesClient   CapabilitiesClient
+	cred                   azcore.TokenCredential
+	subscriptionID         string
+	region                 string
+	httpClient             HTTPClient
+	recommendationsPager   RecommendationsPager
+	reservationsPager      ReservationsDetailsPager
+	capabilitiesClient     CapabilitiesClient
+	serversPager           SQLServersPager
+	managedInstancesPager  SQLManagedInstancesPager
 
 	// Lazy SKU catalogue cache. Populated once on the first
 	// recommendation conversion in this client's GetRecommendations
@@ -73,6 +87,14 @@ type DatabaseClient struct {
 	// to empty EngineVersion with a one-time WARN log.
 	skuCacheOnce sync.Once
 	skuCacheMap  map[string]sqlSKUEntry
+
+	// Lazy server-info cache. Populated once by fetchServerInfo, which
+	// walks the managed-instances and servers pagers. Both azConfig and
+	// deployment are derived in a single pass so the injected test pager
+	// is consumed exactly once. Mirrors the cosmosdb cachedAPIType pattern.
+	serverInfoOnce sync.Once
+	azConfig       string
+	deployment     string
 }
 
 // NewClient creates a new Azure Database client
@@ -108,6 +130,16 @@ func (c *DatabaseClient) SetReservationsPager(pager ReservationsDetailsPager) {
 // SetCapabilitiesClient sets the capabilities client (for testing)
 func (c *DatabaseClient) SetCapabilitiesClient(client CapabilitiesClient) {
 	c.capabilitiesClient = client
+}
+
+// SetServersPager sets the SQL servers pager (for testing)
+func (c *DatabaseClient) SetServersPager(pager SQLServersPager) {
+	c.serversPager = pager
+}
+
+// SetManagedInstancesPager sets the SQL managed instances pager (for testing)
+func (c *DatabaseClient) SetManagedInstancesPager(pager SQLManagedInstancesPager) {
+	c.managedInstancesPager = pager
 }
 
 // GetServiceType returns the service type
@@ -579,8 +611,9 @@ func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand
 // populated). EngineVersion enriched from the lazily-cached
 // armsql.CapabilitiesClient catalogue when the recommendation's SKU
 // string matches a ServiceLevelObjective in the location capabilities;
-// otherwise stays empty. AZConfig/Deployment still need additional
-// signals (per-server config) and remain deferred.
+// otherwise stays empty. AZConfig and Deployment are enriched from the
+// lazily-cached subscription-wide server/managed-instance lists;
+// both stay empty when the fetch fails or the subscription is ambiguous.
 func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := azrecs.Extract(azureRec)
 	if f == nil {
@@ -589,6 +622,12 @@ func (c *DatabaseClient) convertAzureSQLRecommendation(ctx context.Context, azur
 	details := detailsFromSQLSKU(f.ResourceType)
 	if entry, ok := c.cachedSKULookup(ctx, f.ResourceType); ok && entry.engineVersion != "" {
 		details.EngineVersion = entry.engineVersion
+	}
+	if az := c.cachedDominantAZConfig(ctx); az != "" {
+		details.AZConfig = az
+	}
+	if dep := c.cachedDominantDeployment(ctx); dep != "" {
+		details.Deployment = dep
 	}
 	return &common.Recommendation{
 		Provider:             common.ProviderAzure,
@@ -676,6 +715,155 @@ func populateSQLSKUMapFromVersion(out map[string]sqlSKUEntry, engineVersion stri
 	}
 }
 
+// cachedDominantAZConfig returns the single dominant AZConfig observed
+// across all managed instances in the subscription, or "" when the
+// answer is ambiguous or unavailable. Values: "zoneRedundant" when all
+// instances have ZoneRedundant=true; "none" when all have
+// ZoneRedundant=false; "" when the mix is ambiguous, zero instances
+// exist, or the fetch fails.
+//
+// Both AZConfig and Deployment are populated by a single
+// fetchServerInfo call gated by serverInfoOnce; there is no double walk.
+// This ensures the injected test pager is consumed exactly once.
+func (c *DatabaseClient) cachedDominantAZConfig(ctx context.Context) string {
+	c.serverInfoOnce.Do(func() {
+		c.azConfig, c.deployment = c.fetchServerInfo(ctx)
+	})
+	return c.azConfig
+}
+
+// cachedDominantDeployment returns the dominant Deployment observed
+// across the subscription's SQL resources, or "" when ambiguous or
+// unavailable. Values: "managed" / "single". Shares the single
+// fetchServerInfo walk with cachedDominantAZConfig.
+func (c *DatabaseClient) cachedDominantDeployment(ctx context.Context) string {
+	c.serverInfoOnce.Do(func() {
+		c.azConfig, c.deployment = c.fetchServerInfo(ctx)
+	})
+	return c.deployment
+}
+
+// fetchServerInfo performs a single walk of each pager (managed
+// instances and regular servers) to compute both AZConfig and
+// Deployment. This ensures the injected test pager for managed instances
+// is consumed exactly once, even though the results feed two separate
+// cached fields.
+//
+// AZConfig: "zoneRedundant" / "none" / "" (ambiguous or no signal).
+// Deployment: "managed" / "single" / "" (mixed or no signal).
+func (c *DatabaseClient) fetchServerInfo(ctx context.Context) (azConfig, deployment string) {
+	zoneRedundantCount, nonZoneRedundantCount, managedCount := c.walkManagedInstances(ctx)
+	hasServers := c.hasRegularServers(ctx)
+
+	// Derive AZConfig from zone-redundancy counts.
+	total := zoneRedundantCount + nonZoneRedundantCount
+	switch {
+	case total == 0:
+		azConfig = ""
+	case zoneRedundantCount == total:
+		azConfig = "zoneRedundant"
+	case nonZoneRedundantCount == total:
+		azConfig = "none"
+	default:
+		azConfig = ""
+	}
+
+	// Derive Deployment from presence of managed vs regular servers.
+	hasManaged := managedCount > 0
+	switch {
+	case hasManaged && !hasServers:
+		deployment = "managed"
+	case hasServers && !hasManaged:
+		deployment = "single"
+	default:
+		deployment = ""
+	}
+
+	return azConfig, deployment
+}
+
+// walkManagedInstances walks the managed-instances pager once and
+// returns the count of zone-redundant, non-zone-redundant, and total
+// managed instances observed. Stops immediately on context cancellation
+// or unrecoverable page error.
+func (c *DatabaseClient) walkManagedInstances(ctx context.Context) (zoneRedundant, nonZoneRedundant, total int) {
+	pager, err := c.createManagedInstancesPager()
+	if err != nil {
+		logging.Warnf("azure database: managed instances pager create failed: %v — AZConfig/Deployment signal unavailable", err)
+		return 0, 0, 0
+	}
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return zoneRedundant, nonZoneRedundant, total
+			}
+			logging.Warnf("azure database: managed instances page fetch failed: %v — AZConfig/Deployment signal unavailable", err)
+			return zoneRedundant, nonZoneRedundant, total
+		}
+		for _, mi := range page.Value {
+			total++
+			if mi == nil || mi.Properties == nil || mi.Properties.ZoneRedundant == nil {
+				continue
+			}
+			if *mi.Properties.ZoneRedundant {
+				zoneRedundant++
+			} else {
+				nonZoneRedundant++
+			}
+		}
+	}
+	return zoneRedundant, nonZoneRedundant, total
+}
+
+// createManagedInstancesPager returns the injected pager or creates a real one.
+func (c *DatabaseClient) createManagedInstancesPager() (SQLManagedInstancesPager, error) {
+	if c.managedInstancesPager != nil {
+		return c.managedInstancesPager, nil
+	}
+	client, err := armsql.NewManagedInstancesClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create managed instances client: %w", err)
+	}
+	return client.NewListPager(nil), nil
+}
+
+// hasRegularServers returns true when at least one SQL server exists in
+// the subscription. Stops after the first non-empty page.
+func (c *DatabaseClient) hasRegularServers(ctx context.Context) bool {
+	pager, err := c.createServersPager()
+	if err != nil {
+		logging.Warnf("azure database: servers pager create failed: %v — Deployment signal unavailable", err)
+		return false
+	}
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			logging.Warnf("azure database: servers page fetch failed: %v — Deployment signal unavailable", err)
+			return false
+		}
+		if len(page.Value) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// createServersPager returns the injected pager or creates a real one.
+func (c *DatabaseClient) createServersPager() (SQLServersPager, error) {
+	if c.serversPager != nil {
+		return c.serversPager, nil
+	}
+	client, err := armsql.NewServersClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create servers client: %w", err)
+	}
+	return client.NewListPager(nil), nil
+}
+
 // detailsFromSQLSKU parses an Azure SQL SKU string into a
 // common.DatabaseDetails value. The Azure Reservation Recommendations
 // API returns SKU strings like "GeneralPurpose_Gen5_2" (edition, compute
@@ -684,9 +872,9 @@ func populateSQLSKUMapFromVersion(out map[string]sqlSKUEntry, engineVersion stri
 // blank — converters must never return an error on unexpected SKU
 // strings because the API can add new SKUs without breaking consumers.
 //
-// Engine / EngineVersion / AZConfig / Deployment require an armsql SKU
-// catalogue lookup and are deliberately left empty; batched enrichment
-// is a separate follow-up.
+// Engine is always "sqlserver". EngineVersion, AZConfig, and Deployment
+// are enriched by the lazy subscription-wide cached lookups in
+// convertAzureSQLRecommendation; they are left empty here.
 func detailsFromSQLSKU(sku string) common.DatabaseDetails {
 	// Engine is always SQL Server for an Azure SQL Database reservation.
 	d := common.DatabaseDetails{
