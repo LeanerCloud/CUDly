@@ -19,6 +19,8 @@ import (
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
 	redshifttypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
+	"github.com/aws/aws-sdk-go-v2/service/savingsplans"
+	savingsplanstypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -345,7 +347,7 @@ func TestDefaultProbers(t *testing.T) {
 		services = append(services, p.Service())
 	}
 	sort.Strings(services)
-	assert.Equal(t, []string{"ec2", "elasticache", "memorydb", "opensearch", "rds", "redshift"}, services)
+	assert.Equal(t, []string{"ec2", "elasticache", "memorydb", "opensearch", "rds", "redshift", "savings-plans"}, services)
 }
 
 // ---------------------------------------------------------------------------
@@ -444,4 +446,221 @@ func TestWalkPaginated_AccumulatesAcrossPages(t *testing.T) {
 	assert.Equal(t, int64(1), got[0].durationSeconds)
 	assert.Equal(t, int64(2), got[1].durationSeconds)
 	assert.Equal(t, int64(3), got[2].durationSeconds)
+}
+
+// ---------------------------------------------------------------------------
+// Savings Plans
+// ---------------------------------------------------------------------------
+
+// fakeSavingsPlans stubs DescribeSavingsPlansOfferings so tests never hit AWS.
+type fakeSavingsPlans struct {
+	fn func(*savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error)
+}
+
+func (f *fakeSavingsPlans) DescribeSavingsPlansOfferings(
+	_ context.Context,
+	in *savingsplans.DescribeSavingsPlansOfferingsInput,
+	_ ...func(*savingsplans.Options),
+) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+	return f.fn(in)
+}
+
+// spOffering builds a SavingsPlanOffering with the requested duration and
+// payment for use in test fixtures.
+func spOffering(dur int64, pay savingsplanstypes.SavingsPlanPaymentOption) savingsplanstypes.SavingsPlanOffering {
+	return savingsplanstypes.SavingsPlanOffering{
+		DurationSeconds: dur,
+		PaymentOption:   pay,
+	}
+}
+
+func TestSavingsPlansProber_Service(t *testing.T) {
+	p := &SavingsPlansProber{}
+	assert.Equal(t, "savings-plans", p.Service())
+}
+
+// TestSavingsPlansProber_Probe verifies that a single Compute plan type with
+// standard offerings normalizes to the expected Combos and carries the right
+// per-product service key.
+func TestSavingsPlansProber_Probe(t *testing.T) {
+	// Only return offerings for the Compute plan type; all others return empty.
+	fake := &fakeSavingsPlans{
+		fn: func(in *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			if len(in.PlanTypes) == 1 && in.PlanTypes[0] == savingsplanstypes.SavingsPlanTypeCompute {
+				return &savingsplans.DescribeSavingsPlansOfferingsOutput{
+					SearchResults: []savingsplanstypes.SavingsPlanOffering{
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionPartialUpfront),
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionNoUpfront),
+						spOffering(threeYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+						spOffering(threeYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionPartialUpfront),
+						// dup — same (dur, pay) seen twice, must collapse
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+					},
+				}, nil
+			}
+			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	got, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+
+	var computeCombos []Combo
+	for _, c := range got {
+		if c.Service == "savings-plans-compute" {
+			computeCombos = append(computeCombos, c)
+		}
+	}
+	computeCombos = sortCombos(computeCombos)
+	want := []Combo{
+		{Provider: "aws", Service: "savings-plans-compute", TermYears: 1, Payment: "all-upfront"},
+		{Provider: "aws", Service: "savings-plans-compute", TermYears: 1, Payment: "no-upfront"},
+		{Provider: "aws", Service: "savings-plans-compute", TermYears: 1, Payment: "partial-upfront"},
+		{Provider: "aws", Service: "savings-plans-compute", TermYears: 3, Payment: "all-upfront"},
+		{Provider: "aws", Service: "savings-plans-compute", TermYears: 3, Payment: "partial-upfront"},
+	}
+	assert.Equal(t, want, computeCombos)
+}
+
+// TestSavingsPlansProber_AllPlanTypes verifies that the prober emits combos
+// for each of the four plan types independently and uses the correct service key.
+func TestSavingsPlansProber_AllPlanTypes(t *testing.T) {
+	// Return one 1yr no-upfront combo per plan type so each service key gets
+	// exactly one Combo in the output.
+	fake := &fakeSavingsPlans{
+		fn: func(in *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			return &savingsplans.DescribeSavingsPlansOfferingsOutput{
+				SearchResults: []savingsplanstypes.SavingsPlanOffering{
+					spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionNoUpfront),
+				},
+			}, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	got, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+
+	byService := make(map[string][]Combo)
+	for _, c := range got {
+		byService[c.Service] = append(byService[c.Service], c)
+	}
+	expectedKeys := []string{
+		"savings-plans-compute",
+		"savings-plans-ec2instance",
+		"savings-plans-sagemaker",
+		"savings-plans-database",
+	}
+	for _, key := range expectedKeys {
+		combos, ok := byService[key]
+		assert.True(t, ok, "expected service key %s in output", key)
+		require.Len(t, combos, 1)
+		assert.Equal(t, "aws", combos[0].Provider)
+		assert.Equal(t, key, combos[0].Service)
+		assert.Equal(t, 1, combos[0].TermYears)
+		assert.Equal(t, "no-upfront", combos[0].Payment)
+	}
+}
+
+// TestSavingsPlansProber_EmptyResultDropped verifies that a plan type with
+// no offerings contributes nothing to the output (no empty-combo key stored).
+func TestSavingsPlansProber_EmptyResultDropped(t *testing.T) {
+	fake := &fakeSavingsPlans{
+		fn: func(_ *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	got, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+	assert.Empty(t, got, "empty offerings should produce no combos")
+}
+
+// TestSavingsPlansProber_ErrorPropagates verifies that an API error on any
+// plan type bubbles up and halts the probe.
+func TestSavingsPlansProber_ErrorPropagates(t *testing.T) {
+	boom := errors.New("boom")
+	fake := &fakeSavingsPlans{
+		fn: func(_ *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			return nil, boom
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	_, err := p.Probe(context.Background(), aws.Config{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, boom)
+}
+
+// TestSavingsPlansProber_PageCap verifies the prober stops at maxPages even
+// if the API keeps returning a non-empty next-page token.
+func TestSavingsPlansProber_PageCap(t *testing.T) {
+	calls := 0
+	fake := &fakeSavingsPlans{
+		fn: func(_ *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			calls++
+			return &savingsplans.DescribeSavingsPlansOfferingsOutput{
+				NextToken: aws.String("more"),
+				SearchResults: []savingsplanstypes.SavingsPlanOffering{
+					spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+				},
+			}, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	_, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+	// 4 plan types x maxPages calls each
+	assert.Equal(t, 4*maxPages, calls)
+}
+
+// TestSavingsPlansProber_DedupedAcrossProductTypes verifies that (duration,
+// payment) duplicates across multiple ProductType entries within one plan type
+// collapse to a single Combo rather than being stored N times.
+func TestSavingsPlansProber_DedupedAcrossProductTypes(t *testing.T) {
+	// Return the same (1yr, AllUpfront) offering twice to simulate the real
+	// API returning the same matrix for EC2 and Fargate product types.
+	fake := &fakeSavingsPlans{
+		fn: func(in *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			if len(in.PlanTypes) == 1 && in.PlanTypes[0] == savingsplanstypes.SavingsPlanTypeCompute {
+				return &savingsplans.DescribeSavingsPlansOfferingsOutput{
+					SearchResults: []savingsplanstypes.SavingsPlanOffering{
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+						spOffering(oneYearSeconds, savingsplanstypes.SavingsPlanPaymentOptionAllUpfront),
+					},
+				}, nil
+			}
+			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	got, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+
+	var compute []Combo
+	for _, c := range got {
+		if c.Service == "savings-plans-compute" {
+			compute = append(compute, c)
+		}
+	}
+	assert.Len(t, compute, 1, "duplicate (dur, pay) must collapse to one Combo")
+}
+
+// TestDefaultProbers_IncludesSavingsPlans verifies that SavingsPlansProber is
+// registered in DefaultProbers.
+func TestDefaultProbers_IncludesSavingsPlans(t *testing.T) {
+	probers := DefaultProbers()
+	found := false
+	for _, pr := range probers {
+		if pr.Service() == "savings-plans" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "DefaultProbers must include SavingsPlansProber")
 }

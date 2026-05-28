@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
+	"github.com/aws/aws-sdk-go-v2/service/savingsplans"
+	savingsplanstypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 )
 
 // maxPages is the hard ceiling on paginated Describe*Offerings calls per
@@ -462,6 +464,142 @@ func (p *EC2Prober) client(cfg aws.Config) EC2DescribeOfferings {
 	return ec2.NewFromConfig(cfg)
 }
 
+// ---------------------------------------------------------------------------
+// Savings Plans
+// ---------------------------------------------------------------------------
+
+// spPlanKeys maps each AWS SavingsPlanType to the service key we persist in
+// commitment_options_combos and emit via GET /api/commitment-options. The
+// keys are aligned with SERVICE_FIELDS in the frontend's settings.ts so the
+// overlay in fetchAndPopulateCommitmentOptions lands on the right card.
+var spPlanKeys = []struct {
+	planType savingsplanstypes.SavingsPlanType
+	service  string
+}{
+	{savingsplanstypes.SavingsPlanTypeCompute, "savings-plans-compute"},
+	{savingsplanstypes.SavingsPlanTypeEc2Instance, "savings-plans-ec2instance"},
+	{savingsplanstypes.SavingsPlanTypeSagemaker, "savings-plans-sagemaker"},
+	{savingsplanstypes.SavingsPlanTypeDatabase, "savings-plans-database"},
+}
+
+// SavingsPlansDescribeOfferings is the minimal Savings Plans surface the
+// probe needs. It matches the relevant method on the generated client so
+// tests can substitute a mock without dragging in the full SavingsPlansAPI
+// interface.
+type SavingsPlansDescribeOfferings interface {
+	DescribeSavingsPlansOfferings(ctx context.Context, params *savingsplans.DescribeSavingsPlansOfferingsInput, optFns ...func(*savingsplans.Options)) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error)
+}
+
+// SavingsPlansProber probes savingsplans:DescribeSavingsPlansOfferings once
+// per plan type (Compute, EC2Instance, SageMaker, Database) and emits
+// per-product service keys. The probe runs all four plan types in sequence
+// and returns all combos; Service.probeAndPersist fans them out concurrently
+// alongside the RI probers. Any plan type that returns zero offerings for a
+// given account is silently skipped — the frontend falls back to its
+// hardcoded rules for that key.
+type SavingsPlansProber struct {
+	// NewClient builds a client from the probe's aws.Config. Override in
+	// tests to return a mock.
+	NewClient func(cfg aws.Config) SavingsPlansDescribeOfferings
+}
+
+// Service returns "savings-plans" — a sentinel used only for error
+// wrapping. Each plan type emits its own per-product service key via
+// Probe; the umbrella name is never stored.
+func (p *SavingsPlansProber) Service() string { return "savings-plans" }
+
+// Probe calls DescribeSavingsPlansOfferings for each of the four plan
+// types and returns combos keyed with the per-product service slug. Empty
+// results for a plan type are silently dropped so the caller never stores
+// a zero-combo entry that would incorrectly suppress the fallback.
+func (p *SavingsPlansProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+	client := p.client(cfg)
+	var all []Combo
+	for _, pk := range spPlanKeys {
+		combos, err := p.probeOnePlanType(ctx, client, pk.planType, pk.service)
+		if err != nil {
+			return nil, fmt.Errorf("savings-plans/%s: %w", pk.service, err)
+		}
+		all = append(all, combos...)
+	}
+	return all, nil
+}
+
+// probeOnePlanType fetches offerings for a single Savings Plan type and
+// returns normalised Combos. It uses walkPaginated with a planType filter
+// so each page only contains offerings for the requested product.
+func (p *SavingsPlansProber) probeOnePlanType(
+	ctx context.Context,
+	client SavingsPlansDescribeOfferings,
+	planType savingsplanstypes.SavingsPlanType,
+	serviceKey string,
+) ([]Combo, error) {
+	raw, err := walkPaginated(ctx, serviceKey, func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+		out, err := client.DescribeSavingsPlansOfferings(ctx, &savingsplans.DescribeSavingsPlansOfferingsInput{
+			PlanTypes:  []savingsplanstypes.SavingsPlanType{planType},
+			MaxResults: pageSize,
+			NextToken:  token,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		offers := make([]rawOffer, 0, len(out.SearchResults))
+		for _, o := range out.SearchResults {
+			offers = append(offers, rawOffer{
+				durationSeconds: o.DurationSeconds,
+				payment:         string(o.PaymentOption),
+			})
+		}
+		return offers, out.NextToken, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	raw = dedupeRaw(raw)
+	// Use collect but override the service key to the per-product slug.
+	combos := collectWithService(serviceKey, raw)
+	return combos, nil
+}
+
+// dedupeRaw removes duplicate (durationSeconds, payment) pairs so that
+// collect does not see the same pair multiple times across an SP type's
+// pages. SP offerings differ by ProductType (EC2, Lambda, Fargate ...) but
+// share the same (duration, payment) matrix — we only need unique combos.
+func dedupeRaw(raw []rawOffer) []rawOffer {
+	type key struct {
+		dur     int64
+		payment string
+	}
+	seen := make(map[key]struct{}, len(raw))
+	out := make([]rawOffer, 0, len(raw))
+	for _, r := range raw {
+		k := key{r.durationSeconds, r.payment}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
+// collectWithService is like collect but uses the supplied serviceKey
+// instead of the service embedded in each rawOffer (rawOffer has no
+// service field; collect() uses the `service` argument, which is the
+// per-prober name). Extracted to avoid a second copy of the
+// normalization loop when the service name comes from outside the
+// prober's Service() method (as it does for SP plan types).
+func collectWithService(service string, raw []rawOffer) []Combo {
+	return collect(service, raw)
+}
+
+func (p *SavingsPlansProber) client(cfg aws.Config) SavingsPlansDescribeOfferings {
+	if p.NewClient != nil {
+		return p.NewClient(cfg)
+	}
+	return savingsplans.NewFromConfig(cfg)
+}
+
 // DefaultProbers returns one prober instance per commitment-capable
 // service. The Service wires these up by default; tests override via a
 // custom slice.
@@ -473,5 +611,6 @@ func DefaultProbers() []Prober {
 		&RedshiftProber{},
 		&MemoryDBProber{},
 		&EC2Prober{},
+		&SavingsPlansProber{},
 	}
 }
