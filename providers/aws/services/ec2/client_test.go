@@ -820,3 +820,68 @@ func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
 	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
 	assert.Equal(t, types.Tenancy("default"), q.tenancy)
 }
+
+// TestFindOfferingID_CtxCancelledBeforePage asserts that findOfferingID returns
+// context.Canceled immediately when the context is already cancelled at the top
+// of the first pagination iteration, without calling the AWS API (issue #515).
+func TestFindOfferingID_CtxCancelledBeforePage(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the first iteration
+
+	// The mock must not be called: ctx.Err() fires at the top of the loop.
+	_, err := client.findOfferingID(ctx, rec, "")
+
+	assert.ErrorIs(t, err, context.Canceled)
+	mockEC2.AssertNumberOfCalls(t, "DescribeReservedInstancesOfferings", 0)
+}
+
+// TestFindOfferingID_EmptyStringTokenEndsPageination asserts that a page whose
+// NextToken is a pointer to an empty string (rather than nil) is treated as the
+// terminal page and does not cause an extra API call (issue #515).
+func TestFindOfferingID_EmptyStringTokenEndsPagination(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	// Single page with zero results and NextToken = ""; must not loop again.
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{},
+			NextToken:                  aws.String(""),
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+	}
+	mockEC2.AssertNumberOfCalls(t, "DescribeReservedInstancesOfferings", 1)
+}
