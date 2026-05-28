@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
@@ -374,18 +375,7 @@ func TestSearchClient_GetExistingCommitments_Empty(t *testing.T) {
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
 		Count: 2,
-		Items: []struct {
-			CurrencyCode    string  `json:"currencyCode"`
-			RetailPrice     float64 `json:"retailPrice"`
-			UnitPrice       float64 `json:"unitPrice"`
-			ArmRegionName   string  `json:"armRegionName"`
-			ProductName     string  `json:"productName"`
-			ServiceName     string  `json:"serviceName"`
-			ArmSKUName      string  `json:"armSkuName"`
-			MeterName       string  `json:"meterName"`
-			ReservationTerm string  `json:"reservationTerm"`
-			Type            string  `json:"type"`
-		}{
+		Items: []pricing.RetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     500.0,
