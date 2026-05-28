@@ -945,6 +945,12 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 
 	c.enrichRecWithPricing(ctx, rec)
 
+	// GCP Compute CUDs with PaymentOption "upfront" carry no per-month charge:
+	// the full commitment is paid at purchase time. Set RecurringMonthlyCost to
+	// a pointer-to-zero (not nil) so the frontend renders "$0" rather than "—".
+	zero := 0.0
+	rec.RecurringMonthlyCost = &zero
+
 	return rec
 }
 
