@@ -840,3 +840,46 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 	assert.Equal(t, "n1-standard-4", rec.ResourceType)
 	assert.Equal(t, 50.5, rec.EstimatedSavings)
 }
+
+// infiniteRecommenderIterator never signals iterator.Done, used to exercise
+// the ctx-cancel guard and the maxRecsPages budget cap.
+type infiniteRecommenderIterator struct{}
+
+func (i *infiniteRecommenderIterator) Next() (*recommenderpb.Recommendation, error) {
+	return &recommenderpb.Recommendation{}, nil
+}
+
+type infiniteRecommenderClient struct{}
+
+func (c *infiniteRecommenderClient) ListRecommendations(_ context.Context, _ *recommenderpb.ListRecommendationsRequest) RecommenderIterator {
+	return &infiniteRecommenderIterator{}
+}
+
+func (c *infiniteRecommenderClient) Close() error { return nil }
+
+// TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError asserts
+// that a cancelled context is treated as a terminal stop and returns an error
+// rather than silently producing a partial result set
+// (feedback_ctx_cancel_terminal).
+func TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the call
+
+	client, err := NewClient(context.Background(), "test-project", "us-central1")
+	require.NoError(t, err)
+	client.SetRecommenderClient(&infiniteRecommenderClient{})
+
+	_, err = client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.Error(t, err, "cancelled context must surface an error, not a partial result set")
+}
+
+// TestComputeEngineClient_GetRecommendations_PageCapFires asserts that the
+// iteration budget terminates an infinite iterator rather than looping forever.
+func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
+	client, err := NewClient(context.Background(), "test-project", "us-central1")
+	require.NoError(t, err)
+	client.SetRecommenderClient(&infiniteRecommenderClient{})
+
+	_, err = client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	require.Error(t, err, "page cap must surface an error when the iterator never terminates")
+}

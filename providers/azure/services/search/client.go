@@ -23,6 +23,15 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+const maxReservationsPages = 50
+
+// maxServicesPages caps Search service list pagination.
+const maxServicesPages = 20
+
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -141,7 +150,13 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("search: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Search recommendations: %w", err)
@@ -191,7 +206,13 @@ func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, erro
 func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("search: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("search: list reservations: %w", err)
@@ -385,7 +406,14 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 		pager = client.NewListBySubscriptionPager(nil, nil)
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("search: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
+		}
+		if pageIdx >= maxServicesPages {
+			log.Printf("WARNING: search: GetValidResourceTypes pagination cap (%d pages) reached", maxServicesPages)
+			break
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			// If we can't list existing services, fall back to known SKU families

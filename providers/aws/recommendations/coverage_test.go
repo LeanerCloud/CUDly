@@ -361,6 +361,33 @@ func TestNormaliseRDSEngine(t *testing.T) {
 	}
 }
 
+// TestFetchCoveragePaged_CtxCancelReturnsError asserts that a cancelled context
+// is treated as a hard stop inside the pagination loop and surfaces an error
+// rather than returning a partial/empty result silently
+// (feedback_ctx_cancel_terminal).
+func TestFetchCoveragePaged_CtxCancelReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the call
+
+	// The mock returns a non-nil token on the first call so the loop
+	// would try to paginate -- but ctx.Err() must fire first.
+	token := "page2"
+	mock := &mockCoverageCE{
+		coverageOutput: &costexplorer.GetReservationCoverageOutput{
+			NextPageToken: &token,
+		},
+	}
+	client := NewClientWithAPI(mock, "us-east-1")
+
+	err := client.fetchCoveragePaged(
+		ctx,
+		&costexplorer.GetReservationCoverageInput{},
+		func(_, _ string, _ PoolCoverage) {},
+		720,
+	)
+	require.Error(t, err, "cancelled context must surface an error from fetchCoveragePaged")
+}
+
 // TestNormaliseDeployment locks deployment-option canonicalisation. CE
 // returns "Single-AZ" / "Multi-AZ" / "Multi-AZ (readable standbys)" while
 // the parser stores "single-az" / "multi-az"; both forms must collapse to

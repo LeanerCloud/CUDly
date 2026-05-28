@@ -188,7 +188,7 @@ func TestCacheClient_GetValidResourceTypes_Fallback(t *testing.T) {
 	// When API calls fail, GetValidResourceTypes should return common SKUs
 	client := NewClient(nil, "invalid-subscription", "eastus")
 
-	skus, err := client.GetValidResourceTypes(nil)
+	skus, err := client.GetValidResourceTypes(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, skus)
 
@@ -204,7 +204,7 @@ func TestCacheClient_ValidateOffering_InvalidSKU(t *testing.T) {
 		ResourceType: "InvalidSKU_X99",
 	}
 
-	err := client.ValidateOffering(nil, rec)
+	err := client.ValidateOffering(context.Background(), rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Azure Redis Cache SKU")
 }
@@ -1195,4 +1195,42 @@ func TestCacheClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t *t
 	// (see providers/azure/services/internal/reservations/displayname.go).
 	assert.Regexp(t, `^redis-`, capturedDisplayName)
 	assert.Contains(t, capturedDisplayName, "Premium_P1")
+}
+
+// infiniteRedisCachesPager is a pager that always reports More()=true,
+// used to exercise the maxCachesPages budget cap.
+type infiniteRedisCachesPager struct{}
+
+func (p *infiniteRedisCachesPager) More() bool { return true }
+func (p *infiniteRedisCachesPager) NextPage(_ context.Context) (armredis.ClientListBySubscriptionResponse, error) {
+	return armredis.ClientListBySubscriptionResponse{}, nil
+}
+
+// TestCacheClient_GetValidResourceTypes_CtxCancelReturnsError asserts that a
+// cancelled context is treated as a hard stop and surfaces an error rather than
+// returning a silent partial result (feedback_ctx_cancel_terminal).
+func TestCacheClient_GetValidResourceTypes_CtxCancelReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetRedisCachesPager(&infiniteRedisCachesPager{})
+
+	_, err := client.GetValidResourceTypes(ctx)
+	require.Error(t, err, "cancelled context must produce an error, not a silent partial result")
+}
+
+// TestCacheClient_GetValidResourceTypes_PageCapReturnsError asserts that the
+// page budget is enforced: an unbounded pager is stopped after maxCachesPages
+// iterations and the function returns an error rather than looping forever.
+func TestCacheClient_GetValidResourceTypes_PageCapFires(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetRedisCachesPager(&infiniteRedisCachesPager{})
+
+	// GetValidResourceTypes falls back to common SKUs after hitting the log-only
+	// cap, so the call itself succeeds. The important invariant is that it
+	// terminates rather than looping forever.
+	skus, err := client.GetValidResourceTypes(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, skus, "page cap must trigger fallback to common SKUs, not an empty result")
 }

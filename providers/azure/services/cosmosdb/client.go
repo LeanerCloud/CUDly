@@ -26,6 +26,15 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+const maxReservationsPages = 50
+
+// maxAccountsPages caps Cosmos DB account list pagination.
+const maxAccountsPages = 20
+
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -160,7 +169,13 @@ func (c *CosmosDBClient) GetRecommendations(ctx context.Context, params common.R
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("cosmosdb: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Cosmos DB recommendations: %w", err)
@@ -210,7 +225,13 @@ func (c *CosmosDBClient) createReservationsPager() (ReservationsDetailsPager, er
 func (c *CosmosDBClient) collectCosmosReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("cosmosdb: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("cosmosdb: list reservations: %w", err)
@@ -395,7 +416,10 @@ func (c *CosmosDBClient) GetValidResourceTypes(ctx context.Context) ([]string, e
 		return c.getCommonSKUs(), nil
 	}
 
-	skuSet := c.collectCapabilitiesFromAccounts(ctx, pager)
+	skuSet, err := c.collectCapabilitiesFromAccounts(ctx, pager)
+	if err != nil {
+		return nil, err
+	}
 
 	// If we found SKUs from existing accounts, use those
 	if len(skuSet) > 0 {
@@ -421,11 +445,20 @@ func (c *CosmosDBClient) createCosmosAccountsPager() (CosmosAccountsPager, error
 	return client.NewListPager(nil), nil
 }
 
-// collectCapabilitiesFromAccounts collects capabilities from existing Cosmos DB accounts
-func (c *CosmosDBClient) collectCapabilitiesFromAccounts(ctx context.Context, pager CosmosAccountsPager) map[string]bool {
+// collectCapabilitiesFromAccounts collects capabilities from existing Cosmos DB accounts.
+// Returns (nil, err) on context cancellation so callers can propagate the error
+// instead of silently using a partial result set.
+func (c *CosmosDBClient) collectCapabilitiesFromAccounts(ctx context.Context, pager CosmosAccountsPager) (map[string]bool, error) {
 	skuSet := make(map[string]bool)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("cosmosdb: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
+		}
+		if pageIdx >= maxAccountsPages {
+			log.Printf("WARNING: cosmosdb: GetValidResourceTypes pagination cap (%d pages) reached", maxAccountsPages)
+			break
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			// If we can't list existing accounts, fall back to known SKU types
@@ -440,7 +473,7 @@ func (c *CosmosDBClient) collectCapabilitiesFromAccounts(ctx context.Context, pa
 		}
 	}
 
-	return skuSet
+	return skuSet, nil
 }
 
 // extractCapabilitiesFromAccount extracts capability names from a Cosmos DB account
