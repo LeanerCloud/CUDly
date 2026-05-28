@@ -131,9 +131,20 @@ func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
 	return renderTextTemplate("failed", purchaseFailedTemplate, data)
 }
 
-// RenderRIExchangePendingApprovalEmail renders the plain-text RI exchange pending approval email template.
+// RenderRIExchangePendingApprovalEmail renders the plain-text RI exchange
+// pending approval email template. Pair with
+// RenderRIExchangePendingApprovalEmailHTML for multipart/alternative delivery.
 func RenderRIExchangePendingApprovalEmail(data RIExchangeNotificationData) (string, error) {
 	return renderTextTemplate("ri-exchange-pending", riExchangePendingApprovalTemplate, data)
+}
+
+// RenderRIExchangePendingApprovalEmailHTML renders the HTML half of the RI
+// exchange pending approval email -- inline-styled per email-client constraints.
+// The plain-text half (RenderRIExchangePendingApprovalEmail) carries the same
+// content; receiving clients pick whichever they support via the
+// multipart/alternative wrapper assembled by the sender. Issue #296.
+func RenderRIExchangePendingApprovalEmailHTML(data RIExchangeNotificationData) (string, error) {
+	return renderTemplate("ri-exchange-pending-html", riExchangePendingApprovalHTMLTemplate, data)
 }
 
 // RenderRIExchangeCompletedEmail renders the plain-text RI exchange completed email template.

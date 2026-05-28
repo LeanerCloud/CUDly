@@ -570,3 +570,167 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 		assert.NotContains(t, html, xssName, "html/template must escape <script> tags in HTML bodies")
 	})
 }
+
+// Issue #296: plain-text RI exchange pending approval email carries the
+// enriched summary fields (requested-by, cancellation-window note) and uses
+// labelled Approve/Reject URLs instead of bracket-wrapped actions.
+func TestRenderRIExchangePendingApprovalEmail_Issue296(t *testing.T) {
+	data := RIExchangeNotificationData{
+		DashboardURL:           "https://dashboard.example.com",
+		TotalPayment:           "125.50",
+		RequestedByName:        "Cristi M",
+		RequestedByEmail:       "cristi@acme.com",
+		RequestedAt:            "2026-05-22T10:00:00Z",
+		CancellationWindowNote: "RI exchanges are irreversible once accepted by AWS.",
+		Exchanges: []RIExchangeItem{
+			{
+				RecordID:           "rec-001",
+				ApprovalToken:      "tok-abc",
+				SourceRIID:         "ri-0123456789abcdef0",
+				SourceInstanceType: "m5.large",
+				TargetInstanceType: "m6i.large",
+				TargetCount:        1,
+				PaymentDue:         "125.50",
+				UtilizationPct:     42.5,
+			},
+		},
+	}
+
+	body, err := RenderRIExchangePendingApprovalEmail(data)
+	require.NoError(t, err)
+
+	// Exchange details.
+	assert.Contains(t, body, "ri-0123456789abcdef0")
+	assert.Contains(t, body, "m5.large")
+	assert.Contains(t, body, "m6i.large")
+	assert.Contains(t, body, "42.5")
+	assert.Contains(t, body, "125.50")
+
+	// Requested-by block.
+	assert.Contains(t, body, "Cristi M")
+	assert.Contains(t, body, "cristi@acme.com")
+	assert.Contains(t, body, "2026-05-22T10:00:00Z")
+
+	// Labelled action URLs (not bracket notation).
+	assert.Contains(t, body, "Approve: ")
+	assert.Contains(t, body, "Reject:  ")
+	assert.Contains(t, body, "/api/ri-exchange/approve/rec-001")
+	assert.Contains(t, body, "/api/ri-exchange/reject/rec-001")
+
+	// Custom cancellation-window note overrides the generic fallback.
+	assert.Contains(t, body, "RI exchanges are irreversible once accepted by AWS.")
+	assert.NotContains(t, body, "Please approve within 6 hours")
+}
+
+// Issue #296: plain-text template omits requested-by block when email is empty.
+func TestRenderRIExchangePendingApprovalEmail_NoRequestedBy(t *testing.T) {
+	data := RIExchangeNotificationData{
+		DashboardURL: "https://dashboard.example.com",
+		TotalPayment: "50.00",
+		Exchanges: []RIExchangeItem{{
+			RecordID: "rec-002", ApprovalToken: "tok-xyz",
+			SourceRIID: "ri-aaa", SourceInstanceType: "c5.large",
+			TargetInstanceType: "c6i.large", TargetCount: 1,
+			PaymentDue: "50.00", UtilizationPct: 80.0,
+		}},
+	}
+
+	body, err := RenderRIExchangePendingApprovalEmail(data)
+	require.NoError(t, err)
+
+	assert.NotContains(t, body, "Requested by:")
+	// Generic note rendered when CancellationWindowNote is empty.
+	assert.Contains(t, body, "Please approve within 6 hours")
+}
+
+// Issue #296: HTML half of the RI exchange pending approval email carries
+// inline-styled approve/reject anchors with correct hrefs, the exchange
+// summary table, and the requested-by line.
+func TestRenderRIExchangePendingApprovalEmailHTML_Issue296(t *testing.T) {
+	data := RIExchangeNotificationData{
+		DashboardURL:           "https://dashboard.example.com",
+		TotalPayment:           "125.50",
+		RequestedByEmail:       "cristi@acme.com",
+		CancellationWindowNote: "RI exchanges are irreversible once accepted by AWS.",
+		Exchanges: []RIExchangeItem{
+			{
+				RecordID:           "rec-001",
+				ApprovalToken:      "tok-abc",
+				SourceRIID:         "ri-0123456789abcdef0",
+				SourceInstanceType: "m5.large",
+				TargetInstanceType: "m6i.large",
+				TargetCount:        1,
+				PaymentDue:         "125.50",
+				UtilizationPct:     42.5,
+			},
+		},
+	}
+
+	html, err := RenderRIExchangePendingApprovalEmailHTML(data)
+	require.NoError(t, err)
+	assert.NotEmpty(t, html)
+
+	// Inline-styled approve anchor with correct href.
+	assert.Contains(t, html, `href="https://dashboard.example.com/api/ri-exchange/approve/rec-001?token=tok-abc"`)
+	assert.Contains(t, html, `href="https://dashboard.example.com/api/ri-exchange/reject/rec-001?token=tok-abc"`)
+	assert.Contains(t, html, ">Approve<")
+	assert.Contains(t, html, ">Reject<")
+
+	// Approve button has inline green background (prove CSS classes aren't relied on).
+	assert.Regexp(t, `<a[^>]*style="[^"]*background:#16a34a[^"]*"[^>]*>Approve</a>`, html)
+
+	// Exchange table cells.
+	assert.Contains(t, html, "m5.large")
+	assert.Contains(t, html, "m6i.large")
+	assert.Contains(t, html, "42.5%")
+	assert.Contains(t, html, "125.50")
+
+	// Summary block + requested-by line.
+	assert.Contains(t, html, "cristi@acme.com")
+	assert.Contains(t, html, "RI Exchange Approval Required")
+
+	// Custom cancellation note.
+	assert.Contains(t, html, "RI exchanges are irreversible once accepted by AWS.")
+	assert.NotContains(t, html, "Please approve within 6 hours")
+}
+
+// Issue #296: HTML template falls back to generic 6-hour note when
+// CancellationWindowNote is empty.
+func TestRenderRIExchangePendingApprovalEmailHTML_DefaultCancellationNote(t *testing.T) {
+	data := RIExchangeNotificationData{
+		DashboardURL: "https://dashboard.example.com",
+		TotalPayment: "10.00",
+		Exchanges: []RIExchangeItem{{
+			RecordID: "rec-003", ApprovalToken: "tok-def",
+			SourceRIID: "ri-bbb", SourceInstanceType: "t3.medium",
+			TargetInstanceType: "t4g.medium", TargetCount: 1,
+			PaymentDue: "10.00", UtilizationPct: 60.0,
+		}},
+	}
+
+	html, err := RenderRIExchangePendingApprovalEmailHTML(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, html, "Please approve within 6 hours")
+}
+
+// Issue #296: skipped exchanges block appears in HTML when Skipped is non-empty.
+func TestRenderRIExchangePendingApprovalEmailHTML_SkippedBlock(t *testing.T) {
+	data := RIExchangeNotificationData{
+		DashboardURL: "https://dashboard.example.com",
+		TotalPayment: "0.00",
+		Exchanges:    []RIExchangeItem{},
+		Skipped: []SkippedExchange{{
+			SourceRIID:         "ri-skip-01",
+			SourceInstanceType: "r5.large",
+			Reason:             "no matching target available",
+		}},
+	}
+
+	html, err := RenderRIExchangePendingApprovalEmailHTML(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, html, "ri-skip-01")
+	assert.Contains(t, html, "no matching target available")
+	assert.Contains(t, html, "Skipped")
+}

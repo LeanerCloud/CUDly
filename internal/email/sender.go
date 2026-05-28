@@ -515,6 +515,18 @@ type RIExchangeNotificationData struct {
 	// CCEmails carries additional recipients informed of the pending exchanges
 	// but not the authorised approvers. Deduplicated against RecipientEmail.
 	CCEmails []string
+	// RequestedByName is the human-readable display name of the user who
+	// triggered the exchange run. Empty falls back to RequestedByEmail.
+	RequestedByName string
+	// RequestedByEmail is the requester's email address. Empty omits the
+	// requested-by block from the approval email.
+	RequestedByEmail string
+	// RequestedAt is the ISO-8601 / RFC3339 timestamp the exchange was
+	// submitted. Empty omits the timestamp from the summary.
+	RequestedAt string
+	// CancellationWindowNote is short text rendered below the approve/reject
+	// buttons. Empty falls back to a generic 6-hour note.
+	CancellationWindowNote string
 }
 
 // RIExchangeItem represents a single exchange in an email notification
