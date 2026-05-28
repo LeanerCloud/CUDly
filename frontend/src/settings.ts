@@ -1195,10 +1195,48 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
           destructive: true,
         });
         if (!ok) return;
+        // Snapshot all fields before deleting so the Undo action can re-PUT
+        // them if the user clicks the toast button within the 5-second window.
+        const snapshot: api.AccountServiceOverrideRequest = {
+          enabled: o.enabled,
+          term: o.term,
+          payment: o.payment,
+          coverage: o.coverage,
+          ramp_schedule: o.ramp_schedule,
+          include_engines: o.include_engines,
+          exclude_engines: o.exclude_engines,
+          include_regions: o.include_regions,
+          exclude_regions: o.exclude_regions,
+          include_types: o.include_types,
+          exclude_types: o.exclude_types,
+        };
         try {
           await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
           await loadOverridesPanel(accountId, panel, provider);
           await refreshRecommendationsAfterOverrideChange();
+          // Show a 5-second undo toast. The action closure captures `snapshot`
+          // and re-PUT it if the user clicks Undo before the toast expires.
+          // Each Reset click replaces any prior toast handle so a rapid
+          // double-click cannot stack multiple Undo buttons.
+          showToast({
+            message: `Override for ${o.provider}/${o.service} deleted.`,
+            kind: 'info',
+            timeout: 5_000,
+            actions: [{
+              label: 'Undo',
+              onClick: () => {
+                void (async () => {
+                  try {
+                    await api.saveAccountServiceOverride(accountId, o.provider, o.service, snapshot);
+                    await loadOverridesPanel(accountId, panel, provider);
+                    await refreshRecommendationsAfterOverrideChange();
+                  } catch (undoErr) {
+                    showToast({ message: `Failed to restore override: ${(undoErr as Error).message}`, kind: 'error' });
+                  }
+                })();
+              },
+            }],
+          });
         } catch (err) {
           showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
         }
