@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRampSchedule_GetCurrentCoverage(t *testing.T) {
@@ -335,7 +336,7 @@ func TestPurchaseHistoryRecord_Fields(t *testing.T) {
 		Term:             1,
 		Payment:          "no-upfront",
 		UpfrontCost:      0,
-		MonthlyCost:      150.00,
+		MonthlyCost:      pf(150.00),
 		EstimatedSavings: 50.00,
 		PlanID:           "plan-123",
 		PlanName:         "EC2 Production Plan",
@@ -353,7 +354,8 @@ func TestPurchaseHistoryRecord_Fields(t *testing.T) {
 	assert.Equal(t, 1, rec.Term)
 	assert.Equal(t, "no-upfront", rec.Payment)
 	assert.Equal(t, float64(0), rec.UpfrontCost)
-	assert.Equal(t, 150.00, rec.MonthlyCost)
+	require.NotNil(t, rec.MonthlyCost)
+	assert.Equal(t, 150.00, *rec.MonthlyCost)
 	assert.Equal(t, 50.00, rec.EstimatedSavings)
 	assert.Equal(t, "plan-123", rec.PlanID)
 	assert.Equal(t, "EC2 Production Plan", rec.PlanName)

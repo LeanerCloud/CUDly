@@ -8,6 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// pf returns a pointer to the given float64 value. Used in test struct
+// literals where a *float64 field must be initialised from a constant.
+func pf(v float64) *float64 { return &v }
+
 // TestTimeFromTTL tests the timeFromTTL helper function
 func TestTimeFromTTL(t *testing.T) {
 	tests := []struct {

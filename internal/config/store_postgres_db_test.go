@@ -709,7 +709,7 @@ func TestPostgresStoreDB_PurchaseHistory(t *testing.T) {
 			Term:             3,
 			Payment:          "all-upfront",
 			UpfrontCost:      2250.00,
-			MonthlyCost:      0,
+			MonthlyCost:      pf(0),
 			EstimatedSavings: 450.00,
 			PlanID:           "",
 			PlanName:         "Test Plan",

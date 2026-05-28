@@ -750,7 +750,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 		Service:     "ec2",
 		Timestamp:   now.AddDate(0, -6, 0),
 		Term:        1,
-		MonthlyCost: 200.0,
+		MonthlyCost: float64Ptr(200.0),
 	}
 
 	// Recommendation for account A: on-demand gap the scoped user is allowed to see.
@@ -830,7 +830,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 		Service:     "ec2",
 		Timestamp:   now.AddDate(0, -6, 0),
 		Term:        1,
-		MonthlyCost: 200.0,
+		MonthlyCost: float64Ptr(200.0),
 	}
 	recA := config.RecommendationRecord{
 		Provider: "aws", Service: "ec2",

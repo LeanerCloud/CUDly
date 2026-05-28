@@ -74,7 +74,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 			Term:             1,
 			Payment:          "no-upfront",
 			Timestamp:        now.AddDate(0, -6, 0),
-			MonthlyCost:      100.0,
+			MonthlyCost:      float64Ptr(100.0),
 			EstimatedSavings: 30.0,
 		},
 		// Expired: bought 2 years ago, 1-year term.
@@ -87,7 +87,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 			Count:            1,
 			Term:             1,
 			Timestamp:        now.AddDate(-2, 0, 0),
-			MonthlyCost:      50.0,
+			MonthlyCost:      float64Ptr(50.0),
 			EstimatedSavings: 15.0,
 		},
 	}
@@ -117,7 +117,8 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 	assert.Equal(t, 2, row.Count)
 	assert.Equal(t, 1, row.TermYears)
 	assert.Equal(t, "no-upfront", row.PaymentOption)
-	assert.Equal(t, 100.0, row.MonthlyCost)
+	require.NotNil(t, row.MonthlyCost)
+	assert.Equal(t, 100.0, *row.MonthlyCost)
 	assert.Equal(t, 30.0, row.EstimatedSavings)
 	assert.Equal(t, "active", row.Status)
 	assert.False(t, row.StartDate.IsZero())
@@ -141,7 +142,7 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 			Timestamp:        now.AddDate(0, -3, 0),
 			Term:             1,
 			Count:            1,
-			MonthlyCost:      80.0,
+			MonthlyCost:      float64Ptr(80.0),
 			EstimatedSavings: 20.0,
 		},
 	}
@@ -426,7 +427,7 @@ func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
 			Service:     "ec2",
 			Timestamp:   now.AddDate(-1, 0, 1), // active: 1y term started ~1y ago
 			Term:        1,
-			MonthlyCost: 150.0,
+			MonthlyCost: float64Ptr(150.0),
 		},
 	}
 	recs := []config.RecommendationRecord{

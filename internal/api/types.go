@@ -508,8 +508,11 @@ type InventoryCommitment struct {
 	PaymentOption    string    `json:"payment_option,omitempty"`
 	StartDate        time.Time `json:"start_date"`
 	EndDate          time.Time `json:"end_date"`
-	UpfrontCost      float64   `json:"upfront_cost"`
-	MonthlyCost      float64   `json:"monthly_cost"`
+	UpfrontCost float64 `json:"upfront_cost"`
+	// MonthlyCost is nil when the source purchase_history row has a NULL
+	// monthly_cost (provider did not return a monthly breakdown). The
+	// frontend renders "—" for nil and "$X.XX" when non-nil.
+	MonthlyCost      *float64  `json:"monthly_cost"`
 	EstimatedSavings float64   `json:"estimated_savings"`
 	Status           string    `json:"status"`
 }

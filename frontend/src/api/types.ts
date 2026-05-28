@@ -676,7 +676,8 @@ export interface InventoryCommitment {
   start_date: string;
   end_date: string;
   upfront_cost: number;
-  monthly_cost: number;
+  /** null when the provider API did not return a monthly recurring breakdown; "$X.XX" when populated, "—" when null. */
+  monthly_cost: number | null;
   estimated_savings: number;
   /**
    * Always "active" today — the backend filters expired rows before

@@ -171,7 +171,9 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 		if !isActiveCommitment(p, now) {
 			continue
 		}
-		coveredByKey[p.Provider+":"+p.Service] += p.MonthlyCost
+		if p.MonthlyCost != nil {
+			coveredByKey[p.Provider+":"+p.Service] += *p.MonthlyCost
+		}
 	}
 
 	// --- on-demand gap: recommendations -------------------------------------

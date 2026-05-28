@@ -236,7 +236,7 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   appendCell(tr, String(c.count));
   appendCell(tr, `${c.term_years}y`);
   appendCell(tr, c.payment_option ?? '');
-  appendCell(tr, formatCurrency(c.monthly_cost));
+  appendCell(tr, c.monthly_cost != null ? formatCurrency(c.monthly_cost) : '—');
   appendCell(tr, formatCurrency(c.estimated_savings));
   appendCell(tr, formatDate(c.end_date));
 
