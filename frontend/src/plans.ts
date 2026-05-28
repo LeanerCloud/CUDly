@@ -701,6 +701,12 @@ export function closePlanModal(): void {
 // Selected accounts for the plan modal
 let planSelectedAccounts: Array<{ id: string; name: string; external_id: string }> = [];
 
+// Monotonically incrementing counter scoped to the plan modal lifecycle.
+// Incremented each time the create modal opens so that async callbacks
+// from a previous session (stale promises) can detect they're out-of-date
+// and discard their results rather than mutating state in the new session.
+let planModalSession = 0;
+
 /**
  * Render selected account chips in the plan modal
  */
@@ -858,10 +864,20 @@ function prefillPurchaseConfigFromCommitment(rec: api.Recommendation): void {
  * chip in the plan modal accounts section. Runs after setupPlanAccountsSection
  * has reset the chip list for the create flow. Silently no-ops on failure so
  * the user can still pick the account manually. (#770)
+ *
+ * @param accountId - Internal UUID of the account to prefill.
+ * @param session   - planModalSession value captured at call time. If the
+ *                    modal is closed and reopened before this promise resolves,
+ *                    the counter will have advanced and the stale result is
+ *                    discarded to prevent wrong-modal pollution. (#770 CR)
  */
-async function prefillAccountChipFromId(accountId: string): Promise<void> {
+async function prefillAccountChipFromId(accountId: string, session: number): Promise<void> {
   try {
     const account = await api.getAccount(accountId);
+    // Session guard: discard the result if the modal was closed and reopened
+    // while this promise was in-flight. planModalSession is incremented on
+    // each new modal open, so a mismatch means this callback is stale.
+    if (session !== planModalSession) return;
     // Guard: only add if the chip is not already present (e.g. a concurrent
     // edit flow somehow set it) and the account record is usable.
     if (account && account.id && !planSelectedAccounts.some(a => a.id === account.id)) {
@@ -915,6 +931,11 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   // Generate initial plan name
   updatePlanNameFromSchedule();
 
+  // Stamp a new session so any in-flight prefillAccountChipFromId promise
+  // from a prior modal open can detect it belongs to a stale session and
+  // discard its result without mutating planSelectedAccounts. (#770 CR)
+  planModalSession += 1;
+
   // setupPlanAccountsSection clears planSelectedAccounts and re-renders.
   // When a single commitment carries a cloud_account_id, we look up that
   // account after the section has reset and add it as a pre-selected chip.
@@ -922,7 +943,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   if (pendingPlanRecommendations.length === 1) {
     const accountId = pendingPlanRecommendations[0]!.cloud_account_id;
     if (accountId) {
-      void prefillAccountChipFromId(accountId);
+      void prefillAccountChipFromId(accountId, planModalSession);
     }
   }
 

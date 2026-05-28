@@ -1353,6 +1353,39 @@ describe('Plans Module', () => {
         expect(api.getAccount).not.toHaveBeenCalled();
       });
 
+      test('discards stale getAccount result when modal is reopened before promise resolves', async () => {
+        // Simulate a slow first getAccount call that resolves after the modal
+        // is closed and a new modal session starts (the race condition fixed
+        // by the planModalSession guard — #770 CR Major).
+        let resolveFirstCall!: (value: api.CloudAccount) => void;
+        const firstCallPromise = new Promise<api.CloudAccount>(resolve => {
+          resolveFirstCall = resolve;
+        });
+
+        (api.getAccount as jest.Mock)
+          .mockReturnValueOnce(firstCallPromise) // first open: hangs
+          .mockResolvedValueOnce(null);          // second open: no account
+
+        // First modal open with cloud_account_id
+        openCreatePlanModal([fixture]);
+
+        // Close and reopen — this increments planModalSession
+        closePlanModal();
+        const noAccount: api.Recommendation = { ...fixture, cloud_account_id: undefined };
+        openCreatePlanModal([noAccount]);
+
+        // Now resolve the stale first promise — should be discarded
+        resolveFirstCall({ id: 'acct-uuid-123', name: 'Prod AWS', external_id: '123456789012' } as api.CloudAccount);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The stale chip must NOT have been added to the new modal session
+        const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
+        expect(hiddenIds).toBe('');
+        const chips = document.getElementById('plan-accounts-selected');
+        expect(chips?.textContent).not.toContain('Prod AWS');
+      });
+
       test('does not prefill when snapshot has more than one commitment', () => {
         const second: api.Recommendation = { ...fixture, id: 'rec-771', service: 'rds' };
         openCreatePlanModal([fixture, second]);
