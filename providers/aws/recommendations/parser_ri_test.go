@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -184,7 +185,7 @@ func TestParseRecommendationDetail_UnsupportedService(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	rec, err := client.parseRecommendationDetail(details, params)
+	rec, err := client.parseRecommendationDetail(context.Background(), details, params)
 
 	assert.Error(t, err)
 	assert.Nil(t, rec)
@@ -207,7 +208,7 @@ func TestParseRecommendationDetail_MissingQuantity(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	rec, err := client.parseRecommendationDetail(details, params)
+	rec, err := client.parseRecommendationDetail(context.Background(), details, params)
 
 	assert.Error(t, err)
 	assert.Nil(t, rec)
@@ -241,7 +242,7 @@ func TestParseRecommendationDetail_WithAccountAndCosts(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	rec, err := client.parseRecommendationDetail(details, params)
+	rec, err := client.parseRecommendationDetail(context.Background(), details, params)
 
 	require.NoError(t, err)
 	require.NotNil(t, rec)
@@ -300,7 +301,7 @@ func TestParseRecommendations(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.parseRecommendations(awsRecs, params)
+	recs, err := client.parseRecommendations(context.Background(), awsRecs, params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
@@ -371,7 +372,7 @@ func TestParseRecommendations_SkipsInvalidDetails(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.parseRecommendations(awsRecs, params)
+	recs, err := client.parseRecommendations(context.Background(), awsRecs, params)
 
 	require.NoError(t, err)
 	// Should have 2 valid recommendations, skipping the invalid one
@@ -390,7 +391,7 @@ func TestParseRecommendations_EmptyInput(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.parseRecommendations([]types.ReservationPurchaseRecommendation{}, params)
+	recs, err := client.parseRecommendations(context.Background(), []types.ReservationPurchaseRecommendation{}, params)
 
 	require.NoError(t, err)
 	assert.Empty(t, recs)

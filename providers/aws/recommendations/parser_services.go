@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 )
 
 // parseRDSDetails extracts RDS-specific details
-func (c *Client) parseRDSDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RDSInstanceDetails == nil {
 		return fmt.Errorf("RDS instance details not found")
 	}
@@ -43,7 +44,7 @@ func (c *Client) parseRDSDetails(rec *common.Recommendation, details *types.Rese
 }
 
 // parseElastiCacheDetails extracts ElastiCache-specific details
-func (c *Client) parseElastiCacheDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseElastiCacheDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ElastiCacheInstanceDetails == nil {
 		return fmt.Errorf("ElastiCache instance details not found")
 	}
@@ -66,8 +67,11 @@ func (c *Client) parseElastiCacheDetails(rec *common.Recommendation, details *ty
 	return nil
 }
 
-// parseEC2Details extracts EC2-specific details
-func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+// parseEC2Details extracts EC2-specific details and enriches the rec with
+// vCPU and memory from the lazily-cached DescribeInstanceTypes catalogue.
+// If the catalogue fetch failed or the instance type is not found, VCPU
+// and MemoryGB remain 0 (the omitempty JSON tags hide them from payloads).
+func (c *Client) parseEC2Details(ctx context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.EC2InstanceDetails == nil {
 		return fmt.Errorf("EC2 instance details not found")
 	}
@@ -102,12 +106,24 @@ func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.Rese
 		ec2Info.Scope = string(ec2types.ScopeRegional)
 	}
 
+	// Enrich with vCPU + memory from the DescribeInstanceTypes catalogue.
+	if ec2Info.InstanceType != "" {
+		if entry, ok := c.instanceTypeLookup(ctx, ec2Info.InstanceType); ok {
+			if entry.vCPUs > 0 {
+				ec2Info.VCPU = entry.vCPUs
+			}
+			if entry.memoryGB > 0 {
+				ec2Info.MemoryGB = entry.memoryGB
+			}
+		}
+	}
+
 	rec.Details = ec2Info
 	return nil
 }
 
 // parseOpenSearchDetails extracts OpenSearch-specific details
-func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseOpenSearchDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ESInstanceDetails == nil {
 		return fmt.Errorf("OpenSearch/Elasticsearch instance details not found")
 	}
@@ -134,7 +150,7 @@ func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *typ
 }
 
 // parseRedshiftDetails extracts Redshift-specific details
-func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseRedshiftDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RedshiftInstanceDetails == nil {
 		return fmt.Errorf("Redshift instance details not found")
 	}
@@ -174,7 +190,7 @@ func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types
 // than silently substituting a wrong default instance type.
 func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, _ *types.ReservationPurchaseRecommendationDetail) error {
 	if rec.ResourceType == "" {
-		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering — Cost Explorer did not populate instance details")
+		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering - Cost Explorer did not populate instance details")
 	}
 	rec.Details = &common.CacheDetails{
 		Engine:   "redis",

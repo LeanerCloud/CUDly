@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -34,6 +35,20 @@ type Client struct {
 	costExplorerClient CostExplorerAPI
 	region             string
 	rateLimiter        *RateLimiter
+
+	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
+	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
+	ec2API DescribeInstanceTypesAPI
+
+	// instanceTypePagerFactory creates a new InstanceTypePager on demand.
+	// Set by NewClient to wrap ec2API; overridable via SetInstanceTypePagerFactory
+	// for hermetic tests. When nil, instanceTypeLookup returns (0,0).
+	instanceTypePagerFactory func() InstanceTypePager
+
+	// skuCatalog caches the per-instance-type vCPU/memory catalogue, fetched
+	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
+	// fan-out per scheduler tick).
+	skuCatalog skuCatalog
 }
 
 // NewClient creates a new recommendations client
@@ -43,10 +58,17 @@ func NewClient(cfg aws.Config) *Client {
 	ceConfig.Region = "us-east-1"
 	ceConfig.BaseEndpoint = aws.String("https://ce.us-east-1.amazonaws.com")
 
+	ec2Client := awsec2.NewFromConfig(cfg)
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
 		rateLimiter:        NewRateLimiter(),
+		ec2API:             ec2Client,
+		// Factory wraps the EC2 client so the paginator is created lazily
+		// on the first EC2 recommendation parse (not at construction time).
+		instanceTypePagerFactory: func() InstanceTypePager {
+			return awsec2.NewDescribeInstanceTypesPaginator(ec2Client, &awsec2.DescribeInstanceTypesInput{})
+		},
 	}
 }
 
@@ -56,7 +78,29 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 		costExplorerClient: api,
 		region:             region,
 		rateLimiter:        NewRateLimiter(),
+		// ec2API left nil: instanceTypeLookup falls back to VCPU=0/MemoryGB=0
+		// unless the caller sets instanceTypePagerFactory.
 	}
+}
+
+// SetInstanceTypePagerFactory injects a pager factory for the instance-type
+// SKU catalogue. Must be called before the first GetRecommendations call.
+// Intended for tests that need to verify the one-fetch-per-lifetime invariant
+// without hitting AWS.
+func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
+	c.instanceTypePagerFactory = f
+}
+
+// instanceTypeLookup returns the cached SKU entry for instanceType.
+// On the first call the catalogue is built by calling the pager factory.
+// ok=false when no factory is configured, the catalogue fetch failed, or
+// the instance type was not in the catalogue — the caller falls back to
+// VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
+func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
+	if c.instanceTypePagerFactory == nil {
+		return instanceTypeSKUEntry{}, false
+	}
+	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
@@ -83,7 +127,7 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		return nil, err
 	}
 
-	return c.parseRecommendations(allRecs, params)
+	return c.parseRecommendations(ctx, allRecs, params)
 }
 
 // fetchRIAllPages paginates over all pages of RI recommendations for a single

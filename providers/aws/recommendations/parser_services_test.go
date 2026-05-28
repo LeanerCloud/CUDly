@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -104,7 +105,7 @@ func TestParseRDSDetails(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &common.Recommendation{}
-			err := client.parseRDSDetails(rec, tt.details)
+			err := client.parseRDSDetails(context.Background(), rec, tt.details)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -181,7 +182,7 @@ func TestParseElastiCacheDetails(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &common.Recommendation{}
-			err := client.parseElastiCacheDetails(rec, tt.details)
+			err := client.parseElastiCacheDetails(context.Background(), rec, tt.details)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -334,7 +335,7 @@ func TestParseEC2Details(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &common.Recommendation{}
-			err := client.parseEC2Details(rec, tt.details)
+			err := client.parseEC2Details(context.Background(), rec, tt.details)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -408,7 +409,7 @@ func TestParseOpenSearchDetails(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &common.Recommendation{}
-			err := client.parseOpenSearchDetails(rec, tt.details)
+			err := client.parseOpenSearchDetails(context.Background(), rec, tt.details)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -491,7 +492,7 @@ func TestParseRedshiftDetails(t *testing.T) {
 			rec := &common.Recommendation{
 				Count: tt.count,
 			}
-			err := client.parseRedshiftDetails(rec, tt.details)
+			err := client.parseRedshiftDetails(context.Background(), rec, tt.details)
 
 			if tt.expectError {
 				assert.Error(t, err)
