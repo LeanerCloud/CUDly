@@ -651,6 +651,34 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 		assert.Nil(t, resultKey)
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("reject when stored hash does not match derived hash", func(t *testing.T) {
+		// Simulates a DB row whose key_hash field was tampered or
+		// belongs to a different key -- the constant-time check must reject it.
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+
+		apiKey := "test-api-key-123456"
+		hash := sha256.Sum256([]byte(apiKey))
+		keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
+
+		tamperedRecord := &UserAPIKey{
+			ID:       "key-1",
+			UserID:   "user-123",
+			KeyHash:  keyHash + "tampered",
+			IsActive: true,
+		}
+
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(tamperedRecord, nil)
+
+		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid API key")
+		assert.Nil(t, resultUser)
+		assert.Nil(t, resultKey)
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestService_UpdateLastUsed(t *testing.T) {
