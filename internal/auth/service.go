@@ -195,7 +195,11 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			return ErrMFARequired
 		}
 		if user.MFASecret == "" {
-			return fmt.Errorf("MFA is enabled but not configured")
+			// Data integrity anomaly: MFA is flagged enabled but has no secret.
+			// Log internally for operator visibility without leaking internal state
+			// to the caller -- a distinct message would confirm the password was correct.
+			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
+			return fmt.Errorf("Check your email address and password and try again")
 		}
 		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
 		// (base32 decode error), resulting in a comparison miss rather than a panic.

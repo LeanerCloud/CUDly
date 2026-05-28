@@ -519,8 +519,7 @@ func mapMFAServiceError(err error) error {
 		strings.Contains(msg, "MFA code or recovery code required"),
 		strings.Contains(msg, "no MFA enrollment in progress"),
 		strings.Contains(msg, "MFA enrollment expired"),
-		strings.Contains(msg, "MFA is not enabled"),
-		strings.Contains(msg, "MFA is enabled but not configured"):
+		strings.Contains(msg, "MFA is not enabled"):
 		return NewClientError(400, msg)
 	case strings.Contains(msg, "authentication failed"):
 		return NewClientError(401, msg)

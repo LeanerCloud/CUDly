@@ -442,11 +442,12 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	assert.ErrorIs(t, err, ErrMFARequired)
 }
 
+// TestLogin_WithMFA_NoSecret verifies that a correct password against an account
+// where MFA is enabled but the secret is missing returns the same generic error
+// as a wrong password -- the response must not reveal that the password was correct
+// (closes #391).
 func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	ctx := context.Background()
-	mockStore := new(MockStore)
-	mockEmail := new(MockEmailSender)
-	service := createTestService(mockStore, mockEmail)
 
 	s := newTestService()
 	hash, _ := s.hashPassword("SecurePass@123")
@@ -455,24 +456,57 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
+		Salt:         "",
 		Active:       true,
 		MFAEnabled:   true,
-		MFASecret:    "", // No secret configured
+		MFASecret:    "", // Data-integrity anomaly: MFA enabled but no secret stored
 	}
 
-	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
+	const genericMsg = "Check your email address and password and try again"
 
-	req := LoginRequest{
-		Email:    "mfa@example.com",
-		Password: "SecurePass@123",
-		MFACode:  "123456",
-	}
+	// Right password, no MFA secret -- must return the generic error.
+	t.Run("correct password no MFA secret returns generic error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	resp, err := service.Login(ctx, req)
-	assert.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "MFA is enabled but not configured")
+		mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil).Once()
+
+		req := LoginRequest{
+			Email:    "mfa@example.com",
+			Password: "SecurePass@123",
+			MFACode:  "123456",
+		}
+
+		resp, err := service.Login(ctx, req)
+		assert.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Contains(t, err.Error(), genericMsg)
+	})
+
+	// Wrong password -- must return the identical generic error so the two cases
+	// are indistinguishable to the caller.
+	t.Run("wrong password returns same generic error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil).Once()
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+
+		req := LoginRequest{
+			Email:    "mfa@example.com",
+			Password: "wrongpassword",
+			MFACode:  "123456",
+		}
+
+		resp, err := service.Login(ctx, req)
+		assert.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Contains(t, err.Error(), genericMsg)
+	})
 }
 
 // Test UpdateUserProfile
