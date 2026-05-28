@@ -825,33 +825,15 @@ function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendatio
 function cellScoreFor(
   column: string,
   variants: LocalRecommendation[],
-  selectedRecs: ReadonlySet<string>,
 ): number | string {
-  // Selected-variant short-circuit: when one variant is selected in the cell,
-  // sort the cell by THAT variant's value. Matches the rendered summary row,
-  // which also surfaces the selected variant's individual values.
-  const selected = variants.find((r) => selectedRecs.has(r.id));
+  // Issue #768: do NOT vary the score by selection state. Passing selectedRecs
+  // into the comparator caused rows to reorder on every checkbox toggle because
+  // a selected variant's individual value differs from the cell-summary value
+  // used for unselected cells. Sort order is always derived from the
+  // deterministic cell-summary score below, independent of selection.
 
   const numericKey = SORTABLE_NUMERIC_COLUMNS[column];
   const stringKey = SORTABLE_STRING_COLUMNS[column];
-
-  if (selected) {
-    // Term uses the same termMin*100+termMax encoding for selected and
-    // non-selected cells so both paths produce comparable scores. (For a
-    // selected variant, min == max == selected.term, so the encoding
-    // simplifies to term*101, still ordered correctly against multi-variant
-    // cells encoded the same way.)
-    if (column === 'term') return selected.term * 100 + selected.term;
-    // Upfront uses raw selected.upfront_cost which matches the non-selected
-    // path's primary key (upfrontMin); the tiny tiebreaker term in the
-    // non-selected path is too small to flip a real comparison.
-    if (numericKey) return numericKey(selected);
-    if (stringKey && column === 'payment') {
-      // Selected-variant payment: use PAYMENT_ORDER index for semantic sort.
-      return String(PAYMENT_ORDER[selected.payment ?? ''] ?? 99);
-    }
-    if (stringKey) return stringKey(selected);
-  }
 
   if (variants.length === 0) {
     // Defensive: empty cells should not occur post-groupRecsByCell, but if one
@@ -929,7 +911,6 @@ function cellScoreFor(
 function groupsInSortOrder(
   groups: Map<string, LocalRecommendation[]>,
   sort: { column: string; direction: 'asc' | 'desc' },
-  selectedRecs: ReadonlySet<string>,
 ): string[] {
   const direction = sort.direction === 'asc' ? 1 : -1;
 
@@ -938,8 +919,8 @@ function groupsInSortOrder(
     const va = groups.get(ka)!;
     const vb = groups.get(kb)!;
 
-    const scoreA = cellScoreFor(sort.column, va, selectedRecs);
-    const scoreB = cellScoreFor(sort.column, vb, selectedRecs);
+    const scoreA = cellScoreFor(sort.column, va);
+    const scoreB = cellScoreFor(sort.column, vb);
 
     if (typeof scoreA === 'number' && typeof scoreB === 'number') {
       // Nulls are encoded as POSITIVE_INFINITY. Always sort them last
@@ -2561,7 +2542,9 @@ function buildListMarkup(
 
   // issues #225 + #226: group by cell, sort groups, then render.
   const groups = groupRecsByCell(recommendations);
-  const sortedKeys = groupsInSortOrder(groups, sort, selectedRecs);
+  // Issue #768: sort order is selection-independent; selectedRecs is used only
+  // for per-row rendering (checked state, CSS class) and the summary cards.
+  const sortedKeys = groupsInSortOrder(groups, sort);
 
   // Update module-level group key cache for the Expand-All button.
   // Only multi-variant cells count — single-variant cells render flat with no chevron.
