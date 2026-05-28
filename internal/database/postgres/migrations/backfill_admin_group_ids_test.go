@@ -14,13 +14,13 @@ import (
 )
 
 // TestMigration_BackfillAdminGroupIDs covers issue #546 acceptance criterion 2:
-// the SQL-level idempotent backfill (migration 000053) must repair a drifted
+// the SQL-level idempotent backfill (migration 000056) must repair a drifted
 // admin row even when migrations run WITHOUT an admin email (the restore /
 // no-ADMIN_EMAIL deployment path, where the Go-level assignAdminGroupAndWarn
 // never fires).
 //
 // Mechanism mirrors split_savingsplans_test: run all migrations, roll back the
-// last one (000053) so the DB sits at version 52, seed a drifted admin, then
+// last one (000056) so the DB sits at version 55, seed a drifted admin, then
 // re-run migrations with NO admin email so only the SQL migration can repair
 // the row. A pass therefore proves the migration (not the Go path) did it.
 func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
@@ -33,7 +33,7 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Up to head (includes 000053), then roll back 000053 -> version 52.
+	// Up to head (includes 000056), then roll back 000056 -> version 55.
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 
@@ -48,19 +48,19 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 	drifted := queryAdminGroupIDs(t, ctx, pool, adminEmail)
 	require.Empty(t, drifted, "test setup: admin should start with empty group_ids")
 
-	// Re-run migrations with NO admin email. m.Up() re-applies 000053; the
+	// Re-run migrations with NO admin email. m.Up() re-applies 000056; the
 	// Go-level assignAdminGroupAndWarn does NOT run (empty email), so any
 	// repair is attributable solely to the SQL migration.
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 	got := queryAdminGroupIDs(t, ctx, pool, adminEmail)
 	assert.Equal(t, []string{defaultAdminGroupIDTest}, got,
-		"migration 000053 must backfill the Administrators group onto a drifted admin row even without an admin email")
+		"migration 000056 must backfill the Administrators group onto a drifted admin row even without an admin email")
 
 	// Idempotent: re-running the migration path again must not duplicate.
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 	got = queryAdminGroupIDs(t, ctx, pool, adminEmail)
 	assert.Equal(t, []string{defaultAdminGroupIDTest}, got,
-		"re-applying migration 000053 must not duplicate the Administrators group entry")
+		"re-applying migration 000056 must not duplicate the Administrators group entry")
 }
