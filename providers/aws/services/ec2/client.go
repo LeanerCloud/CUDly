@@ -142,7 +142,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID, opts.OfferingClass)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -371,6 +371,23 @@ type ec2OfferingQuery struct {
 	scope            string
 	duration         int64
 	wantOfferingType types.OfferingTypeValues
+	offeringClass    types.OfferingClassType
+}
+
+// resolveOfferingClassType maps the GlobalConfig string value to the AWS SDK
+// type. "convertible" and "" both produce OfferingClassTypeConvertible so the
+// absence of a stored value preserves the pre-694 default. Any other string
+// is an explicit error: the caller must not silently fall back, because a DB
+// typo would otherwise buy the wrong class (feedback_empty_string_vs_error.md).
+func resolveOfferingClassType(s string) (types.OfferingClassType, error) {
+	switch s {
+	case "", "convertible":
+		return types.OfferingClassTypeConvertible, nil
+	case "standard":
+		return types.OfferingClassTypeStandard, nil
+	default:
+		return "", fmt.Errorf("unknown EC2 RI offering class %q: must be \"convertible\" or \"standard\"", s)
+	}
 }
 
 // buildEC2OfferingQuery resolves the typed lookup parameters from a rec,
@@ -407,13 +424,17 @@ func buildEC2OfferingQuery(rec common.Recommendation, details *common.ComputeDet
 // typed lookup. Typed fields land on AWS's primary indices; only scope has no
 // typed equivalent and stays in Filters[].
 func describeInputFromQuery(q ec2OfferingQuery, nextToken *string) *ec2.DescribeReservedInstancesOfferingsInput {
+	oc := q.offeringClass
+	if oc == "" {
+		oc = types.OfferingClassTypeConvertible
+	}
 	return &ec2.DescribeReservedInstancesOfferingsInput{
 		InstanceType:       q.instanceType,
 		ProductDescription: q.productDesc,
 		InstanceTenancy:    q.tenancy,
 		MinDuration:        aws.Int64(q.duration),
 		MaxDuration:        aws.Int64(q.duration),
-		OfferingClass:      types.OfferingClassTypeConvertible,
+		OfferingClass:      oc,
 		OfferingType:       q.wantOfferingType,
 		IncludeMarketplace: aws.Bool(false),
 		MaxResults:         aws.Int32(100),
@@ -458,11 +479,18 @@ func (c *Client) buildEC2QueryFromRec(rec common.Recommendation) (ec2OfferingQue
 //
 // execID is the purchase execution UUID for log correlation; pass "" when
 // calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
+// offeringClassStr is the GlobalConfig.OfferingClass value; "" is treated as
+// "convertible" to preserve pre-694 behaviour. Unknown values fail loudly.
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string, offeringClassStr string) (string, error) {
 	q, err := c.buildEC2QueryFromRec(rec)
 	if err != nil {
 		return "", err
 	}
+	oc, err := resolveOfferingClassType(offeringClassStr)
+	if err != nil {
+		return "", fmt.Errorf("offering class config error: %w", err)
+	}
+	q.offeringClass = oc
 
 	tag := execID
 	if tag == "" {
@@ -534,15 +562,19 @@ func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, wantType t
 	return ""
 }
 
-// ValidateOffering checks if an offering exists without purchasing
+// ValidateOffering checks if an offering exists without purchasing.
+// Uses the convertible class (empty = convertible default) since the
+// validation path has no GlobalConfig context.
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec, "")
+	_, err := c.findOfferingID(ctx, rec, "", "")
 	return err
 }
 
-// GetOfferingDetails retrieves offering details
+// GetOfferingDetails retrieves offering details.
+// Uses the convertible class (empty = convertible default) since the
+// details-fetch path has no GlobalConfig context.
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec, "")
+	offeringID, err := c.findOfferingID(ctx, rec, "", "")
 	if err != nil {
 		return nil, err
 	}

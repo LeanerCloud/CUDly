@@ -583,7 +583,7 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 			}, nil).Once()
 	}
 
-	_, err := client.findOfferingID(context.Background(), rec, "")
+	_, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "pagination cap reached")
@@ -626,7 +626,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 			},
 		}, nil).Once()
 
-	_, err := client.findOfferingID(context.Background(), rec, "")
+	_, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "no offerings found")
@@ -664,7 +664,7 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec, "")
+	id, err := client.findOfferingID(context.Background(), rec, "", "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
@@ -819,4 +819,69 @@ func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
 	assert.Equal(t, types.Tenancy("default"), q.tenancy)
+}
+
+func TestResolveOfferingClassType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input   string
+		want    types.OfferingClassType
+		wantErr bool
+	}{
+		{"convertible", types.OfferingClassTypeConvertible, false},
+		{"", types.OfferingClassTypeConvertible, false}, // empty = default = convertible
+		{"standard", types.OfferingClassTypeStandard, false},
+		{"STANDARD", "", true},    // case-sensitive
+		{"unknown", "", true},     // unknown value must error
+		{"Convertible", "", true}, // wrong case must error
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveOfferingClassType(tc.input)
+			if tc.wantErr {
+				assert.Error(t, err, "expected error for input %q", tc.input)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestDescribeInputFromQuery_OfferingClass(t *testing.T) {
+	t.Parallel()
+	base := ec2OfferingQuery{
+		instanceType:     types.InstanceTypeT3Micro,
+		productDesc:      types.RIProductDescriptionLinuxUnix,
+		tenancy:          types.TenancyDefault,
+		scope:            string(types.ScopeRegional),
+		duration:         94608000,
+		wantOfferingType: types.OfferingTypeValuesNoUpfront,
+	}
+
+	t.Run("convertible by default (empty field)", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = ""
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeConvertible, inp.OfferingClass)
+	})
+
+	t.Run("convertible explicit", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = types.OfferingClassTypeConvertible
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeConvertible, inp.OfferingClass)
+	})
+
+	t.Run("standard explicit", func(t *testing.T) {
+		t.Parallel()
+		q := base
+		q.offeringClass = types.OfferingClassTypeStandard
+		inp := describeInputFromQuery(q, nil)
+		assert.Equal(t, types.OfferingClassTypeStandard, inp.OfferingClass)
+	})
 }

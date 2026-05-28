@@ -537,10 +537,13 @@ describe('Settings Module', () => {
         notification_days_before: 3,
         // Grace-period inputs default to 7 per provider when the DOM
         // doesn't include the new inputs (older test harness setup).
-        // The save helper reads missing elements as "empty" → default 7.
+        // The save helper reads missing elements as "empty" -> default 7.
         grace_period_days: { aws: 7, azure: 7, gcp: 7 },
         recommendations_cache_stale_hours: 24,
         recommendations_lookback_days: 7,
+        // offering_class select is absent in this test harness (no DOM element);
+        // saveGlobalSettings falls back to 'convertible'.
+        offering_class: 'convertible',
       });
     });
 

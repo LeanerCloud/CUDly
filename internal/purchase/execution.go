@@ -490,6 +490,18 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 		ExecutionID: exec.ExecutionID,
 	}
 
+	// Load GlobalConfig to pick up the OfferingClass setting for EC2 RI
+	// purchases. A config-load failure is non-fatal: we fall back to the
+	// empty string which the EC2 client maps to "convertible" (pre-694
+	// behaviour). The error is logged so operators can diagnose a DB
+	// issue without the entire purchase batch failing.
+	if globalCfg, err := m.config.GetGlobalConfig(ctx); err != nil {
+		logging.Errorf("purchase[%s]: failed to load GlobalConfig for offering class (defaulting to convertible): %v",
+			exec.ExecutionID, err)
+	} else if globalCfg != nil {
+		opts.OfferingClass = globalCfg.OfferingClass
+	}
+
 	// Build the list of selected indices once so the fan-out closure only
 	// has to look up rec[i] (no second pass over the full slice).
 	selected := selectedIndices(exec.Recommendations)
