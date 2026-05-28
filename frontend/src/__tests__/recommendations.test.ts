@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -5252,7 +5252,7 @@ describe('Column visibility (issue #318)', () => {
   // --- TOGGLEABLE_COLUMNS and COLUMN_DEFS ---
 
   describe('COLUMN_DEFS and TOGGLEABLE_COLUMNS', () => {
-    test('COLUMN_DEFS contains all 13 column ids', () => {
+    test('COLUMN_DEFS contains all 14 column ids (13 data + usage_history sparkline)', () => {
       const keys = COLUMN_DEFS.map((c) => c.key);
       expect(keys).toContain('provider');
       expect(keys).toContain('account');
@@ -5267,7 +5267,9 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).toContain('monthly_cost');
       expect(keys).toContain('on_demand_monthly');
       expect(keys).toContain('effective_savings_pct');
-      expect(COLUMN_DEFS.length).toBe(13);
+      // issue #239: usage_history sparkline column added
+      expect(keys).toContain('usage_history');
+      expect(COLUMN_DEFS.length).toBe(14);
     });
 
     test('TOGGLEABLE_COLUMNS excludes fixed identity columns', () => {
@@ -5276,7 +5278,7 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).not.toContain('account');
       expect(keys).not.toContain('service');
       expect(keys).not.toContain('resource_type');
-      // All other 9 columns should be toggleable
+      // All other 10 columns (9 original + usage_history) should be toggleable.
       expect(keys).toContain('region');
       expect(keys).toContain('count');
       expect(keys).toContain('term');
@@ -5286,7 +5288,8 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).toContain('monthly_cost');
       expect(keys).toContain('on_demand_monthly');
       expect(keys).toContain('effective_savings_pct');
-      expect(keys.length).toBe(9);
+      expect(keys).toContain('usage_history');
+      expect(keys.length).toBe(10);
     });
   });
 });
@@ -6549,5 +6552,70 @@ describe('isHomogeneousSelection (#769)', () => {
       makeRec({ id: 'r2', payment: 'no-upfront' }),
     ];
     expect(isHomogeneousSelection(recs as never[])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #239: renderUsageSparkline unit tests
+// ---------------------------------------------------------------------------
+describe('renderUsageSparkline (issue #239)', () => {
+  test('returns em-dash for null', () => {
+    expect(renderUsageSparkline(null)).toBe('—');
+  });
+
+  test('returns em-dash for undefined', () => {
+    expect(renderUsageSparkline(undefined)).toBe('—');
+  });
+
+  test('returns em-dash for empty array', () => {
+    expect(renderUsageSparkline([])).toBe('—');
+  });
+
+  test('returns an SVG element for a single point', () => {
+    const html = renderUsageSparkline([75]);
+    expect(html).toContain('<svg');
+    expect(html).toContain('class="usage-sparkline"');
+    // Single-point path uses a circle.
+    expect(html).toContain('<circle');
+    expect(html).not.toContain('<polyline');
+  });
+
+  test('returns a polyline SVG for 7 points', () => {
+    const pcts = [80, 85, 90, 70, 95, 100, 60];
+    const html = renderUsageSparkline(pcts);
+    expect(html).toContain('<svg');
+    expect(html).toContain('class="usage-sparkline"');
+    expect(html).toContain('<polyline');
+    // 7 points produce 7 coordinate pairs in the points attribute.
+    const match = html.match(/points="([^"]+)"/);
+    expect(match).not.toBeNull();
+    const pairs = match![1]!.trim().split(' ').filter(Boolean);
+    expect(pairs).toHaveLength(7);
+    // No raw user input is interpolated; values are numbers only, no XSS vector.
+    expect(html).not.toContain('<script');
+  });
+
+  test('100% coverage maps point to top of SVG (y near pad)', () => {
+    const html = renderUsageSparkline([100]);
+    // With pad=1 and innerH=18: y = 1 + 18*(1-100/100) = 1.0
+    expect(html).toContain('cy="1.0"');
+  });
+
+  test('0% coverage maps point to bottom of SVG (y near h-pad)', () => {
+    const html = renderUsageSparkline([0]);
+    // With pad=1 and innerH=18: y = 1 + 18*(1-0/100) = 19.0
+    expect(html).toContain('cy="19.0"');
+  });
+
+  test('first and last x-coordinates span the full SVG width', () => {
+    const pcts = [50, 60, 70, 80, 90, 85, 75];
+    const html = renderUsageSparkline(pcts);
+    const match = html.match(/points="([^"]+)"/);
+    expect(match).not.toBeNull();
+    const pairs = match![1]!.trim().split(' ').filter(Boolean);
+    // First x must be 0.0 (i=0 => x = 0/(7-1)*56 = 0).
+    expect(pairs[0]).toMatch(/^0\.0,/);
+    // Last x must be 56.0 (i=6 => x = 6/6*56 = 56).
+    expect(pairs[6]).toMatch(/^56\.0,/);
   });
 });

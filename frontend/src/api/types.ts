@@ -122,6 +122,10 @@ export interface Recommendation {
   purchase_id?: string;
   error?: string;
   cloud_account_id?: string;
+  // usage_history carries the last 7 daily RI-coverage percentages (0-100,
+  // oldest-to-newest). Absent/null when the provider did not populate it
+  // (non-AWS providers or pre-#239 cached rows).
+  usage_history?: number[] | null;
 }
 
 export interface RecommendationFilters {

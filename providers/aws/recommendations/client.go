@@ -233,6 +233,14 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	if successCount == 0 && attempts > 0 && lastErr != nil {
 		return nil, fmt.Errorf("all (term, payment) variants failed for service %s: %w", service, lastErr)
 	}
+	// Enrich each rec with 7-day daily coverage history so the frontend
+	// can render a per-row sparkline (closes #239 Part 1). SavingsPlans
+	// are skipped inside AttachDailyUsageHistory (no per-SKU CE coverage
+	// breakdown available). Errors are logged and skipped per-tuple so a
+	// single CE failure doesn't suppress the rest of the collection.
+	if len(allRecs) > 0 {
+		c.AttachDailyUsageHistory(ctx, allRecs)
+	}
 	return allRecs, nil
 }
 

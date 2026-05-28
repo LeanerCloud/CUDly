@@ -360,6 +360,15 @@ type RecommendationRecord struct {
 	// newest created_at). The frontend badge deep-links to Purchase
 	// History filtered to this execution.
 	PrimarySuppressionExecutionID *string `json:"primary_suppression_execution_id,omitempty" dynamodbav:"primary_suppression_execution_id,omitempty"`
+	// UsageHistory is a short time-series of daily RI-coverage percentages
+	// (0-100) for the last N days of the lookback window, ordered from
+	// oldest to newest. nil means the collector did not populate it (e.g.
+	// provider not yet wired); an empty non-nil slice means the collector
+	// ran but returned no daily data. The frontend renders nil as "—" and
+	// a non-empty slice as a thumbnail sparkline. Stored inside the
+	// recommendations JSONB payload — no DDL change needed (closes #239
+	// Part 1 for AWS).
+	UsageHistory []float64 `json:"usage_history,omitempty" dynamodbav:"usage_history,omitempty"`
 }
 
 // PurchaseSuppression records the per-tuple grace window after a bulk
