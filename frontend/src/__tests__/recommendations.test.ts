@@ -3783,7 +3783,10 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // fetchOverridesForAccounts is a separate async function (one extra
+    // microtask boundary vs the previous inline Promise.all); four ticks
+    // are needed for openFanOutModal to finish populating the DOM.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     // The fan-out modal renders one section per bucket; the SP section
     // title carries the combined plan-type label.
