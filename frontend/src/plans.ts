@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, CURRENCY_DEFAULT_DIGITS } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -14,6 +14,7 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination, normaliz
 import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -109,17 +110,45 @@ async function loadPlannedPurchases(): Promise<void> {
   }
 }
 
+// Cached last-fetched planned purchases. The filter popover commits re-render
+// without re-fetching, so we hold the unfiltered set in module scope. Reset
+// on every successful loadPlannedPurchases() and consumed by
+// rerenderPlannedPurchases() (called by popover commits + Clear button).
+let lastLoadedPurchases: PlannedPurchase[] = [];
+
 /**
  * Render planned purchases list
  */
 function renderPlannedPurchases(purchases: PlannedPurchase[]): void {
+  lastLoadedPurchases = [...purchases];
+  renderPlannedPurchasesInternal();
+}
+
+// renderPlannedPurchasesInternal is the actual render — separate from
+// renderPlannedPurchases() so popover commits can re-render the table
+// against the cached unfiltered set without re-fetching from the API.
+function renderPlannedPurchasesInternal(): void {
   const container = document.getElementById('planned-purchases-list');
   if (!container) return;
 
+  const purchases = lastLoadedPurchases;
   if (!purchases || purchases.length === 0) {
     container.innerHTML = '<p class="empty">No planned purchases. Create a purchase plan to schedule automatic purchases.</p>';
     return;
   }
+
+  const filters = state.getPlansColumnFilters();
+  const filtered = applyPlansColumnFilters(purchases, filters);
+
+  const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
+    const active = filters[column] ? ' active' : '';
+    const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">⛛</button>`;
+  };
+
+  const tbody = filtered.length === 0
+    ? `<tr><td colspan="11" class="empty">No rows match these filters.</td></tr>`
+    : filtered.map(purchase => renderPlannedPurchaseRow(purchase)).join('');
 
   container.innerHTML = `
     <table class="planned-purchases-table">
@@ -127,24 +156,24 @@ function renderPlannedPurchases(purchases: PlannedPurchase[]): void {
         <tr>
           <th>Plan</th>
           <th>Scheduled Date</th>
-          <th>Provider</th>
-          <th>Service</th>
-          <th>Resource</th>
-          <th>Count</th>
-          <th>Term</th>
-          <th>Upfront</th>
-          <th>Est. Savings</th>
-          <th>Status</th>
+          <th><span>Provider</span>${filterBtn('provider', 'Provider')}</th>
+          <th><span>Service</span>${filterBtn('service', 'Service')}</th>
+          <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
+          <th><span>Count</span>${filterBtn('count', 'Count')}</th>
+          <th><span>Term</span>${filterBtn('term', 'Term')}${filterBtn('payment', 'Payment')}</th>
+          <th><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
+          <th><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
+          <th><span>Status</span>${filterBtn('status', 'Status')}</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        ${purchases.map(purchase => renderPlannedPurchaseRow(purchase)).join('')}
+        ${tbody}
       </tbody>
     </table>
   `;
 
-  // Add event listeners
+  // Add event listeners for row action buttons
   container.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(btn => {
     btn.addEventListener('click', () => void handlePlannedPurchaseAction(
       btn.dataset['action'] || '',
@@ -152,6 +181,475 @@ function renderPlannedPurchases(purchases: PlannedPurchase[]): void {
       btn.dataset['planId'] || ''
     ));
   });
+
+  // Per-column filter trigger buttons. e.stopPropagation prevents any future
+  // surrounding-th handlers (sort etc.) from firing on the same click.
+  container.querySelectorAll<HTMLButtonElement>('.column-filter-btn').forEach((btn) => {
+    const column = btn.dataset['column'] as state.PlansColumnId | undefined;
+    if (!column) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPlansColumnPopover(column, btn);
+    });
+  });
+
+  // Re-anchor any open popover to the freshly-rendered trigger so the
+  // popover survives table re-renders triggered by other state changes.
+  rebindOpenPlansPopoverAnchor();
+}
+
+// ---------------------------------------------------------------------------
+// Per-column filter pipeline (issue #166 follow-up to #570).
+//
+// Mirrors the canonical recommendations.ts wiring: cell extractors map each
+// row + column id to its raw value, numeric values are rounded to the cell's
+// display precision so filter predicates match what the user sees.
+// ---------------------------------------------------------------------------
+
+function applyPlansColumnFilters(
+  purchases: readonly PlannedPurchase[],
+  filters: state.PlansColumnFilters,
+): PlannedPurchase[] {
+  return applyColumnFiltersLib<PlannedPurchase, state.PlansColumnId>(
+    purchases,
+    filters,
+    {
+      categorical: categoricalCellValueForPlan,
+      numeric: (p, col) => roundForDisplay(numericCellValueForPlan(p, col), displayPrecisionForPlan(col)),
+    },
+  );
+}
+
+function categoricalCellValueForPlan(p: PlannedPurchase, col: state.PlansColumnId): string {
+  switch (col) {
+    case 'provider':       return p.provider ?? '';
+    case 'service':        return p.service ?? '';
+    case 'resource_type':  return p.resource_type ?? '';
+    case 'term':           return p.term == null ? '' : String(p.term);
+    case 'payment':        return p.payment ?? '';
+    case 'status':         return p.status ?? '';
+    // Numeric columns shouldn't reach this branch; return empty for type-safety.
+    case 'count':
+    case 'upfront_cost':
+    case 'estimated_savings':
+      return '';
+  }
+}
+
+function numericCellValueForPlan(p: PlannedPurchase, col: state.PlansColumnId): number {
+  switch (col) {
+    case 'count':              return p.count ?? 0;
+    case 'upfront_cost':       return p.upfront_cost ?? 0;
+    case 'estimated_savings':  return p.estimated_savings ?? 0;
+    case 'provider':
+    case 'service':
+    case 'resource_type':
+    case 'term':
+    case 'payment':
+    case 'status':
+      return Number.NaN;
+  }
+}
+
+// Issue #484 parity: filter predicates compare against the rounded display
+// value so "exact-match" filters work for rows whose raw value rounds to the
+// typed value. The planned-purchases table renders count as integer and
+// currency cells via formatCurrency (CURRENCY_DEFAULT_DIGITS = 0).
+function displayPrecisionForPlan(col: state.PlansColumnId): number {
+  switch (col) {
+    case 'count':
+      return 0;
+    case 'upfront_cost':
+    case 'estimated_savings':
+      return CURRENCY_DEFAULT_DIGITS;
+    case 'provider':
+    case 'service':
+    case 'resource_type':
+    case 'term':
+    case 'payment':
+    case 'status':
+      return CURRENCY_DEFAULT_DIGITS;
+  }
+}
+
+function roundForDisplay(n: number, precision: number): number {
+  if (!Number.isFinite(n)) return n;
+  return Number(n.toFixed(precision));
+}
+
+// ---------------------------------------------------------------------------
+// Plans column-filter popover (portal pattern — sibling of the one in
+// recommendations.ts). Lives appended to document.body so it survives the
+// table's innerHTML rewrite on every render.
+// ---------------------------------------------------------------------------
+
+const PLANS_NUMERIC_COLUMNS: ReadonlySet<state.PlansColumnId> = new Set<state.PlansColumnId>([
+  'count', 'upfront_cost', 'estimated_savings',
+]);
+
+interface PlansPopoverState {
+  column: state.PlansColumnId;
+  el: HTMLDivElement;
+  checkboxes: Map<string, HTMLInputElement>;
+  input: HTMLInputElement | null;
+  errorEl: HTMLElement | null;
+}
+
+let openPlansPopover: PlansPopoverState | null = null;
+let plansOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
+let plansEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+let plansResizeHandler: (() => void) | null = null;
+
+function plansColumnLabel(column: state.PlansColumnId): string {
+  switch (column) {
+    case 'provider':           return 'Provider';
+    case 'service':            return 'Service';
+    case 'resource_type':      return 'Resource Type';
+    case 'term':               return 'Term';
+    case 'payment':            return 'Payment';
+    case 'status':             return 'Status';
+    case 'count':              return 'Count';
+    case 'upfront_cost':       return 'Upfront';
+    case 'estimated_savings':  return 'Est. Savings';
+  }
+}
+
+function plansCategoricalDisplayLabel(column: state.PlansColumnId, value: string): string {
+  if (value === '') return '(empty)';
+  if (column === 'term') {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? formatTerm(n) : value;
+  }
+  if (column === 'provider') {
+    return value.toUpperCase();
+  }
+  return value;
+}
+
+function getPlansColumnTriggerButton(column: state.PlansColumnId): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    `#planned-purchases-list th .column-filter-btn[data-column="${column}"]`,
+  );
+}
+
+function positionPlansPopover(popover: HTMLElement, anchor: HTMLElement): void {
+  const rect = anchor.getBoundingClientRect();
+  popover.style.display = 'block';
+  const popRect = popover.getBoundingClientRect();
+  const margin = 8;
+
+  let top = rect.bottom + 4;
+  if (top + popRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - popRect.height - 4);
+  }
+  let left = rect.left;
+  if (left + popRect.width > window.innerWidth - margin) {
+    left = Math.max(margin, window.innerWidth - margin - popRect.width);
+  }
+  popover.style.position = 'absolute';
+  popover.style.top = `${top + window.scrollY}px`;
+  popover.style.left = `${left + window.scrollX}px`;
+}
+
+function plansDistinctValuesForColumn(
+  purchases: readonly PlannedPurchase[],
+  column: state.PlansColumnId,
+): string[] {
+  const seen = new Set<string>();
+  for (const p of purchases) {
+    seen.add(categoricalCellValueForPlan(p, column));
+  }
+  return Array.from(seen).sort((a, b) => {
+    if (a === '' && b !== '') return -1;
+    if (a !== '' && b === '') return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function buildPlansPopoverContent(
+  column: state.PlansColumnId,
+  purchases: readonly PlannedPurchase[],
+): { el: HTMLDivElement; checkboxes: Map<string, HTMLInputElement>; input: HTMLInputElement | null; errorEl: HTMLElement | null } {
+  const popover = document.createElement('div');
+  popover.className = 'column-filter-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-modal', 'false');
+
+  const headingId = `plans-column-filter-heading-${column}`;
+  popover.setAttribute('aria-labelledby', headingId);
+
+  const heading = document.createElement('h3');
+  heading.id = headingId;
+  heading.className = 'column-filter-heading';
+  heading.textContent = `Filter ${plansColumnLabel(column)}`;
+  popover.appendChild(heading);
+
+  const checkboxes = new Map<string, HTMLInputElement>();
+  let input: HTMLInputElement | null = null;
+  let errorEl: HTMLElement | null = null;
+  let commitAllRef: ((target: boolean) => void) | null = null;
+
+  if (PLANS_NUMERIC_COLUMNS.has(column)) {
+    const label = document.createElement('label');
+    label.className = 'column-filter-numeric-label';
+    label.textContent = 'Expression';
+    input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'column-filter-numeric-input';
+    input.placeholder = 'e.g. >100, 50..200, 5';
+    input.setAttribute('aria-describedby', `plans-column-filter-error-${column}`);
+    label.appendChild(input);
+    popover.appendChild(label);
+
+    errorEl = document.createElement('div');
+    errorEl.id = `plans-column-filter-error-${column}`;
+    errorEl.className = 'column-filter-error';
+    errorEl.setAttribute('role', 'status');
+    popover.appendChild(errorEl);
+
+    const commit = (): void => {
+      const expr = input!.value.trim();
+      if (expr === '') {
+        state.setPlansColumnFilter(column, null);
+        errorEl!.textContent = '';
+        rerenderPlannedPurchases();
+        return;
+      }
+      const parsed = parseNumericFilter(expr);
+      if (!parsed.ok) {
+        errorEl!.textContent = parsed.error;
+        return;
+      }
+      errorEl!.textContent = '';
+      state.setPlansColumnFilter(column, { kind: 'expr', expr });
+      rerenderPlannedPurchases();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+      }
+    });
+  } else {
+    const distinct = plansDistinctValuesForColumn(purchases, column);
+
+    const allLabel = document.createElement('label');
+    allLabel.className = 'column-filter-all';
+    const allBox = document.createElement('input');
+    allBox.type = 'checkbox';
+    allBox.dataset['role'] = 'all';
+    allLabel.appendChild(allBox);
+    const allText = document.createElement('span');
+    allText.textContent = '(All)';
+    allLabel.appendChild(allText);
+    popover.appendChild(allLabel);
+
+    const list = document.createElement('div');
+    list.className = 'column-filter-list';
+    for (const value of distinct) {
+      const itemLabel = document.createElement('label');
+      itemLabel.className = 'column-filter-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset['value'] = value;
+      itemLabel.appendChild(cb);
+      const text = document.createElement('span');
+      text.textContent = plansCategoricalDisplayLabel(column, value);
+      itemLabel.appendChild(text);
+      list.appendChild(itemLabel);
+      checkboxes.set(value, cb);
+    }
+    popover.appendChild(list);
+
+    const updateAllTriState = (): void => {
+      const total = checkboxes.size;
+      let checked = 0;
+      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
+      allBox.indeterminate = checked > 0 && checked < total;
+      allBox.checked = checked === total && total > 0;
+    };
+
+    const commit = (): void => {
+      const selected: string[] = [];
+      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
+      if (selected.length === checkboxes.size) {
+        state.setPlansColumnFilter(column, null);
+      } else {
+        state.setPlansColumnFilter(column, { kind: 'set', values: selected });
+      }
+      updateAllTriState();
+      rerenderPlannedPurchases();
+    };
+
+    const commitAll = (target: boolean): void => {
+      checkboxes.forEach((cb) => { cb.checked = target; });
+      if (target) {
+        state.setPlansColumnFilter(column, null);
+      } else {
+        state.setPlansColumnFilter(column, { kind: 'set', values: [] });
+      }
+      updateAllTriState();
+      rerenderPlannedPurchases();
+    };
+    commitAllRef = commitAll;
+
+    checkboxes.forEach((cb) => {
+      cb.addEventListener('change', commit);
+    });
+    allBox.addEventListener('change', () => {
+      commitAll(allBox.checked);
+    });
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'column-filter-footer';
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'column-filter-clear';
+  clearBtn.textContent = 'Clear';
+  clearBtn.addEventListener('click', () => {
+    if (input) {
+      state.setPlansColumnFilter(column, null);
+      input.value = '';
+      if (errorEl) errorEl.textContent = '';
+      rerenderPlannedPurchases();
+    } else {
+      commitAllRef?.(false);
+    }
+  });
+  footer.appendChild(clearBtn);
+  popover.appendChild(footer);
+
+  return { el: popover, checkboxes, input, errorEl };
+}
+
+function resyncOpenPlansPopover(): void {
+  if (!openPlansPopover) return;
+  const f = state.getPlansColumnFilters()[openPlansPopover.column];
+  if (openPlansPopover.input) {
+    if (document.activeElement !== openPlansPopover.input) {
+      const expr = f && f.kind === 'expr' ? f.expr : '';
+      openPlansPopover.input.value = expr;
+      if (openPlansPopover.errorEl) openPlansPopover.errorEl.textContent = '';
+    }
+    return;
+  }
+  if (f == null) {
+    openPlansPopover.checkboxes.forEach((cb) => { cb.checked = true; });
+  } else {
+    const values: ReadonlySet<string> = f.kind === 'set' ? new Set(f.values) : new Set();
+    openPlansPopover.checkboxes.forEach((cb, value) => {
+      cb.checked = values.has(value);
+    });
+  }
+  const allBox = openPlansPopover.el.querySelector<HTMLInputElement>('input[data-role="all"]');
+  if (allBox) {
+    const total = openPlansPopover.checkboxes.size;
+    let checked = 0;
+    openPlansPopover.checkboxes.forEach((cb) => { if (cb.checked) checked++; });
+    allBox.indeterminate = checked > 0 && checked < total;
+    allBox.checked = checked === total && total > 0;
+  }
+}
+
+function attachPlansPopoverGlobalListeners(): void {
+  if (plansOutsideClickHandler) return;
+  plansOutsideClickHandler = (e: MouseEvent): void => {
+    if (!openPlansPopover) return;
+    const target = e.target as Node | null;
+    if (!target) return;
+    if (openPlansPopover.el.contains(target)) return;
+    if (target instanceof Element && target.closest('.column-filter-btn')) return;
+    closePlansPopover();
+  };
+  plansEscKeyHandler = (e: KeyboardEvent): void => {
+    if (!openPlansPopover) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePlansPopover(true);
+    }
+  };
+  plansResizeHandler = (): void => {
+    if (!openPlansPopover) return;
+    const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
+    if (!trigger) {
+      closePlansPopover();
+      return;
+    }
+    positionPlansPopover(openPlansPopover.el, trigger);
+  };
+  document.addEventListener('mousedown', plansOutsideClickHandler);
+  document.addEventListener('keydown', plansEscKeyHandler);
+  window.addEventListener('resize', plansResizeHandler);
+}
+
+function detachPlansPopoverGlobalListeners(): void {
+  if (plansOutsideClickHandler) document.removeEventListener('mousedown', plansOutsideClickHandler);
+  if (plansEscKeyHandler) document.removeEventListener('keydown', plansEscKeyHandler);
+  if (plansResizeHandler) window.removeEventListener('resize', plansResizeHandler);
+  plansOutsideClickHandler = null;
+  plansEscKeyHandler = null;
+  plansResizeHandler = null;
+}
+
+function openPlansColumnPopover(column: state.PlansColumnId, anchor: HTMLElement): void {
+  if (openPlansPopover && !openPlansPopover.el.isConnected) {
+    detachPlansPopoverGlobalListeners();
+    openPlansPopover = null;
+  }
+  if (openPlansPopover && openPlansPopover.column === column) {
+    closePlansPopover(true);
+    return;
+  }
+  if (openPlansPopover) closePlansPopover();
+
+  const built = buildPlansPopoverContent(column, lastLoadedPurchases);
+  document.body.appendChild(built.el);
+  openPlansPopover = {
+    column,
+    el: built.el,
+    checkboxes: built.checkboxes,
+    input: built.input,
+    errorEl: built.errorEl,
+  };
+  resyncOpenPlansPopover();
+  positionPlansPopover(built.el, anchor);
+  anchor.setAttribute('aria-expanded', 'true');
+  attachPlansPopoverGlobalListeners();
+
+  const firstFocusable = built.input
+    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  firstFocusable?.focus();
+}
+
+function closePlansPopover(restoreFocus = false): void {
+  if (!openPlansPopover) return;
+  const { column, el } = openPlansPopover;
+  el.remove();
+  openPlansPopover = null;
+  detachPlansPopoverGlobalListeners();
+  const trigger = getPlansColumnTriggerButton(column);
+  if (trigger) {
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger.focus();
+  }
+}
+
+function rebindOpenPlansPopoverAnchor(): void {
+  if (!openPlansPopover) return;
+  const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
+  if (!trigger) {
+    closePlansPopover();
+    return;
+  }
+  trigger.setAttribute('aria-expanded', 'true');
+  positionPlansPopover(openPlansPopover.el, trigger);
+  resyncOpenPlansPopover();
+}
+
+function rerenderPlannedPurchases(): void {
+  renderPlannedPurchasesInternal();
 }
 
 /**

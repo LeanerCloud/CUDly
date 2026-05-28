@@ -35,6 +35,9 @@ jest.mock('../state', () => ({
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
   getCurrentUser: jest.fn(),
+  getPlansColumnFilters: jest.fn().mockReturnValue({}),
+  setPlansColumnFilter: jest.fn(),
+  clearAllPlansColumnFilters: jest.fn(),
 }));
 
 jest.mock('../history', () => ({ viewPlanHistory: jest.fn() }));
