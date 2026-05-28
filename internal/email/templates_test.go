@@ -613,3 +613,49 @@ func containsAnyStr(s string, subs ...string) bool {
 	}
 	return false
 }
+
+// TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection is the
+// SES-path regression test for #544 / #401: a CR+LF in the attacker-controlled
+// AccountName / Provider (sourced from the unauthenticated POST /api/register
+// endpoint) must be stripped before the subject reaches the SES SendEmail API,
+// so it cannot inject additional email headers. Mirrors the SMTP-path test.
+func TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.T) {
+	mockSES := new(MockSESClient)
+	// Production mode so the send proceeds straight to SendEmail.
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+
+	var capturedSubject string
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Run(func(args mock.Arguments) {
+			input := args.Get(1).(*sesv2.SendEmailInput)
+			capturedSubject = aws.ToString(input.Content.Simple.Subject.Data)
+		}).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-injection")}, nil)
+
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{
+		FromEmail: "noreply@example.com",
+	})
+
+	injectedName := "Acme\r\nBcc: attacker@evil.example.com"
+	injectedProvider := "aws\r\nX-Injected: yes"
+	data := RegistrationNotificationData{
+		AccountName:    injectedName,
+		Provider:       injectedProvider,
+		ExternalID:     "ext-123",
+		ContactEmail:   "registrant@example.com",
+		RecipientEmail: "admin@example.com",
+	}
+
+	ctx := context.Background()
+	err := sender.SendRegistrationReceivedNotification(ctx, data)
+	require.NoError(t, err)
+	mockSES.AssertExpectations(t)
+
+	// The subject that reached SES must contain no CR/LF characters.
+	assert.NotContains(t, capturedSubject, "\r", "SES subject must not contain CR: %q", capturedSubject)
+	assert.NotContains(t, capturedSubject, "\n", "SES subject must not contain LF: %q", capturedSubject)
+	// The injected header names must not survive into the subject as injectable headers.
+	assert.NotContains(t, capturedSubject, "\nBcc:")
+	assert.NotContains(t, capturedSubject, "\nX-Injected:")
+}
