@@ -9,6 +9,14 @@
  *   - Out-of-range input (< 0, > 30, non-integer) is rejected with a
  *     targeted toast instead of silently succeeding or being clamped.
  *   - Reset-to-defaults restores every input to 7.
+ *
+ * History: PR #478 aggregated per-provider validation errors into a single
+ * toast (one call listing every failing provider in input order rather than
+ * bailing on the first). The assertions here were originally written for the
+ * per-provider wording ("AWS grace period: Must be...") and updated in
+ * PR #548 to match the aggregated format ("Grace period must be a whole
+ * number between 0 and 30 days (AWS)."). Issue #514 tracked the pre-existing
+ * CI failure caused by the mismatch; PR #548 resolved it.
  */
 
 import { loadGlobalSettings, saveGlobalSettings, resetSettings, setupSettingsHandlers } from '../settings';
