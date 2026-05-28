@@ -156,6 +156,7 @@ export async function loadDashboard(): Promise<void> {
 
     renderDashboardSummary(summaryData!, recs);
     renderSavingsChart(summaryData!.by_service || {});
+    renderSavingsByService(recs);
     renderUpcomingPurchases(upcomingData?.purchases || []);
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
@@ -634,7 +635,8 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
 }
 
 /**
- * Per-service savings statistics derived from a window of data points.
+ * Per-service savings statistics derived from a window of data points or
+ * from a recommendations list.
  * Exported for unit testing only.
  */
 export interface ServiceSavingsStats {
@@ -643,6 +645,10 @@ export interface ServiceSavingsStats {
   sum: number;
   count: number;
   samples: number[];
+  /** Label of the recommendation option that produced the minimum savings (e.g. "1yr no-upfront"). */
+  minLabel?: string;
+  /** Label of the recommendation option that produced the maximum savings (e.g. "3yr all-upfront"). */
+  maxLabel?: string;
 }
 
 /**
@@ -650,6 +656,9 @@ export interface ServiceSavingsStats {
  * data point carries a by_service map of { serviceName: savingsValue }.
  * Points with no by_service entry (omitempty from backend) are skipped.
  * Exported for unit testing.
+ *
+ * @deprecated Used only by historical-data tests. New production code uses
+ * computeServiceStatsFromRecs for forward-looking potential savings.
  */
 export function computeServiceStats(
   dataPoints: readonly SavingsDataPoint[],
@@ -675,31 +684,69 @@ export function computeServiceStats(
 }
 
 /**
- * Compute the median of a sorted sample array.
- * Returns 0 for an empty array.
+ * Compute per-service potential-savings stats from a recommendations list.
+ *
+ * For each service, collects every recommendation row and treats each row's
+ * `savings` value as one "option". The bar's:
+ *   - floor  = min(savings) across all rows for that service
+ *   - upside = max(savings) - min(savings)
+ *
+ * When a service has only one recommendation row, the bar collapses to a
+ * single point (floor only, zero upside) — that is the correct visual.
+ *
+ * NOTE: The current recommendations response carries a single `savings` field
+ * per row rather than per-variant breakdowns (e.g. 1yr/3yr × no-upfront/
+ * all-upfront columns). When per-variant rows are shipped, min/max will
+ * automatically reflect the full option range; no code change is required.
+ * See #769 for context.
+ *
+ * Exported for unit testing.
  */
-function medianOf(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+export function computeServiceStatsFromRecs(
+  recs: readonly LocalRecommendation[],
+): Map<string, ServiceSavingsStats> {
+  const stats = new Map<string, ServiceSavingsStats>();
+  for (const rec of recs) {
+    const svc = rec.service;
+    const val = typeof rec.savings === 'number' ? rec.savings : 0;
+    const paymentLabel = rec.payment && rec.payment.trim().length > 0 ? rec.payment : 'unspecified';
+    const label = `${rec.term}yr ${paymentLabel}`;
+    const existing = stats.get(svc);
+    if (existing) {
+      if (val < existing.min) {
+        existing.min = val;
+        existing.minLabel = label;
+      }
+      if (val > existing.max) {
+        existing.max = val;
+        existing.maxLabel = label;
+      }
+      existing.sum += val;
+      existing.count += 1;
+      existing.samples.push(val);
+    } else {
+      stats.set(svc, { min: val, max: val, sum: val, count: 1, samples: [val], minLabel: label, maxLabel: label });
+    }
+  }
+  return stats;
 }
 
+
 /**
- * Render the per-service savings-range stacked bar chart (issue #765).
- * Accepts the same data_points array as the trend line chart.
+ * Render the per-service potential-savings range stacked bar chart (issue #769).
+ * Accepts the recommendations array from loadDashboard.
  *
  * Each bar is split into two stacked datasets:
- *   - "Floor"  (solid): height = min savings observed across the window.
- *   - "Range"  (translucent 35% opacity): height = max - min (the upside).
+ *   - "Min potential"  (solid): height = min potential savings across recommendation rows for that service.
+ *   - "Upside"  (translucent 35% opacity): height = max - min (the additional potential).
  *
- * Services are sorted by max savings descending; the top SAVINGS_BY_SERVICE_MAX
+ * Services are sorted by max potential savings descending; the top SAVINGS_BY_SERVICE_MAX
  * are shown. When truncated, the section heading notes "+N more".
  *
- * Empty state: when no service has positive savings, the canvas is hidden and
+ * Empty state: when no recommendations are available, the canvas is hidden and
  * the empty-state paragraph is shown.
  */
-export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]): void {
+export function renderSavingsByService(recs: readonly LocalRecommendation[]): void {
   const canvas = document.getElementById('savings-by-service-chart') as HTMLCanvasElement | null;
   const emptyEl = document.getElementById('savings-by-service-empty');
   const section = document.getElementById('savings-by-service-section');
@@ -711,7 +758,7 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
     savingsByServiceChart = null;
   }
 
-  const stats = computeServiceStats(dataPoints);
+  const stats = computeServiceStatsFromRecs(recs);
   const heading = section?.querySelector('h3');
 
   // Filter to services with positive savings, then sort by max desc.
@@ -719,7 +766,7 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
   positive.sort((a, b) => b[1].max - a[1].max);
 
   if (positive.length === 0) {
-    if (heading) heading.textContent = 'Savings range by service';
+    if (heading) heading.textContent = 'Potential savings range per service';
     canvas.classList.add('hidden');
     emptyEl?.classList.remove('hidden');
     return;
@@ -733,8 +780,8 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
   const visible = positive.slice(0, SAVINGS_BY_SERVICE_MAX);
   if (heading) {
     heading.textContent = truncated
-      ? `Savings range by service (+${positive.length - SAVINGS_BY_SERVICE_MAX} more)`
-      : 'Savings range by service';
+      ? `Potential savings range per service (+${positive.length - SAVINGS_BY_SERVICE_MAX} more)`
+      : 'Potential savings range per service';
   }
 
   const labels = visible.map(([svc]) => svc);
@@ -759,14 +806,14 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
       labels,
       datasets: [
         {
-          label: 'Floor',
+          label: 'Min potential',
           data: floorData,
           backgroundColor: bgColors,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
           stack: 'savings',
         },
         {
-          label: 'Range',
+          label: 'Upside',
           data: rangeData,
           backgroundColor: rangeColors,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
@@ -790,15 +837,16 @@ export function renderSavingsByService(dataPoints: readonly SavingsDataPoint[]):
               const s = stats.get(svc);
               if (!s) return '';
               const pct = totalSavings > 0 ? ((s.max / totalSavings) * 100).toFixed(1) : '0.0';
-              const med = medianOf(s.samples);
-              return [
+              const lines = [
                 `Service: ${svc}`,
-                `Min: $${s.min.toLocaleString()}`,
-                `Median: $${med.toLocaleString()}`,
-                `Max: $${s.max.toLocaleString()}`,
-                `Samples: ${s.count}`,
+                `Min potential: $${s.min.toLocaleString()}`,
+                `Max potential: $${s.max.toLocaleString()}`,
+                `Options: ${s.count}`,
                 `% of total: ${pct}%`,
               ];
+              if (s.minLabel) lines.push(`Min option: ${s.minLabel}`);
+              if (s.maxLabel) lines.push(`Max option: ${s.maxLabel}`);
+              return lines;
             },
           },
         },
@@ -931,17 +979,10 @@ export async function loadSavingsTrendChart(): Promise<void> {
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
       attachSparkline('ytd', []);
-      // Show empty state for the per-service bar chart as well.
-      renderSavingsByService([]);
       return;
     }
     canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
-
-    // Per-service savings-range bar chart (issue #765). Shares the same
-    // data_points response so no extra fetch is needed. The YTD sparkline
-    // is already populated earlier in this function via attachSparkline.
-    renderSavingsByService(data.data_points);
 
     if (savingsTrendChart) savingsTrendChart.destroy();
 
@@ -998,8 +1039,6 @@ export async function loadSavingsTrendChart(): Promise<void> {
       empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');
     }
-    // Degrade the per-service bar chart to its empty state too.
-    renderSavingsByService([]);
   }
 }
 

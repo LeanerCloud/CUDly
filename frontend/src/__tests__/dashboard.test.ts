@@ -1130,13 +1130,14 @@ describe('Dashboard Module', () => {
   });
 
   // Issue #765: per-service savings-range bar chart.
-  describe('renderSavingsByService (issue #765)', () => {
+  describe('renderSavingsByService (issue #769)', () => {
     // Import the public helpers from dashboard. The module is already
     // loaded above via the jest.mock chain, so we can import directly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { renderSavingsByService, computeServiceStats } = require('../dashboard') as {
-      renderSavingsByService: (dataPoints: unknown[]) => void;
+    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs } = require('../dashboard') as {
+      renderSavingsByService: (recs: unknown[]) => void;
       computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
+      computeServiceStatsFromRecs: (recs: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[]; minLabel?: string; maxLabel?: string }>;
     };
 
     function buildDOM(): void {
@@ -1148,11 +1149,30 @@ describe('Dashboard Module', () => {
       const section = document.createElement('section');
       section.id = 'savings-by-service-section';
       const h3 = document.createElement('h3');
-      h3.textContent = 'Savings range by service';
+      h3.textContent = 'Potential savings range per service';
       section.appendChild(h3);
       section.appendChild(canvas);
       section.appendChild(empty);
       document.body.appendChild(section);
+    }
+
+    /** Build a minimal recommendation fixture. */
+    function rec(service: string, savings: number, term = 1, payment = 'no_upfront'): unknown {
+      return {
+        id: `${service}-${savings}`,
+        provider: 'aws',
+        service,
+        region: 'us-east-1',
+        resource_type: 'Standard',
+        count: 1,
+        term,
+        payment,
+        upfront_cost: 0,
+        monthly_cost: 0,
+        savings,
+        selected: false,
+        purchased: false,
+      };
     }
 
     beforeEach(() => {
@@ -1168,8 +1188,8 @@ describe('Dashboard Module', () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue([]);
     });
 
-    // computeServiceStats unit tests.
-    describe('computeServiceStats', () => {
+    // computeServiceStats unit tests (retained: function still exported for legacy compatibility).
+    describe('computeServiceStats (legacy data-points path)', () => {
       test('returns empty map for empty data points', () => {
         const result = computeServiceStats([]);
         expect(result.size).toBe(0);
@@ -1234,9 +1254,84 @@ describe('Dashboard Module', () => {
       });
     });
 
-    // renderSavingsByService DOM behaviour tests.
+    // computeServiceStatsFromRecs unit tests.
+    describe('computeServiceStatsFromRecs', () => {
+      test('returns empty map for empty recommendations', () => {
+        expect(computeServiceStatsFromRecs([]).size).toBe(0);
+      });
+
+      test('single rec produces min === max (zero upside)', () => {
+        const result = computeServiceStatsFromRecs([rec('ec2', 100)]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.min).toBe(100);
+        expect(ec2?.max).toBe(100);
+        expect(ec2?.count).toBe(1);
+      });
+
+      test('two recs for same service: min is lower value, max is higher value', () => {
+        const result = computeServiceStatsFromRecs([
+          rec('ec2', 200, 1, 'no_upfront'),
+          rec('ec2', 500, 3, 'all_upfront'),
+        ]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.min).toBe(200);
+        expect(ec2?.max).toBe(500);
+        expect(ec2?.count).toBe(2);
+      });
+
+      test('tracks minLabel and maxLabel from term/payment option', () => {
+        const result = computeServiceStatsFromRecs([
+          rec('ec2', 200, 1, 'no_upfront'),
+          rec('ec2', 500, 3, 'all_upfront'),
+        ]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.minLabel).toBe('1yr no_upfront');
+        expect(ec2?.maxLabel).toBe('3yr all_upfront');
+      });
+
+      test('uses "unspecified" label when payment is undefined or empty string', () => {
+        const recNoPayment = { ...rec('ec2', 100) as Record<string, unknown> };
+        delete recNoPayment['payment'];
+        const recEmptyPayment = { ...rec('ec2', 200) as Record<string, unknown>, payment: '' };
+        const result = computeServiceStatsFromRecs([recNoPayment, recEmptyPayment] as unknown as Parameters<typeof computeServiceStatsFromRecs>[0]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.minLabel).toContain('unspecified');
+        expect(ec2?.maxLabel).toContain('unspecified');
+        expect(ec2?.minLabel).not.toContain('undefined');
+        expect(ec2?.maxLabel).not.toContain('undefined');
+      });
+
+      test('accumulates stats for multiple services independently', () => {
+        const result = computeServiceStatsFromRecs([
+          rec('ec2', 100, 1, 'no_upfront'),
+          rec('ec2', 400, 3, 'all_upfront'),
+          rec('rds', 50, 1, 'no_upfront'),
+          rec('rds', 80, 3, 'all_upfront'),
+        ]);
+        expect(result.size).toBe(2);
+        expect(result.get('ec2')?.min).toBe(100);
+        expect(result.get('ec2')?.max).toBe(400);
+        expect(result.get('rds')?.min).toBe(50);
+        expect(result.get('rds')?.max).toBe(80);
+      });
+
+      test('stores raw sample values', () => {
+        const result = computeServiceStatsFromRecs([
+          rec('ec2', 100),
+          rec('ec2', 300),
+          rec('ec2', 200),
+        ]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.samples).toHaveLength(3);
+        expect(ec2?.samples).toContain(100);
+        expect(ec2?.samples).toContain(200);
+        expect(ec2?.samples).toContain(300);
+      });
+    });
+
+    // renderSavingsByService DOM behaviour tests (now driven by recommendation fixtures).
     describe('DOM behaviour', () => {
-      test('shows empty state and hides canvas when no data points', () => {
+      test('shows empty state and hides canvas when no recommendations', () => {
         buildDOM();
         renderSavingsByService([]);
         const canvas = document.getElementById('savings-by-service-chart');
@@ -1245,37 +1340,31 @@ describe('Dashboard Module', () => {
         expect(empty?.classList.contains('hidden')).toBe(false);
       });
 
-      test('shows empty state when all data points have zero savings', () => {
+      test('shows empty state when all recommendations have zero savings', () => {
         buildDOM();
-        renderSavingsByService([
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 0 } },
-        ]);
+        renderSavingsByService([rec('ec2', 0)]);
         expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(true);
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(false);
       });
 
       test('resets heading text to default when dataset becomes empty after a truncated render', () => {
         buildDOM();
-        // First render with 2 services to get the default heading.
-        const points = [
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0,
-            by_service: { ec2: 100, rds: 50 } },
-        ];
-        renderSavingsByService(points);
+        renderSavingsByService([rec('ec2', 100), rec('rds', 50)]);
         const h3 = document.querySelector('#savings-by-service-section h3') as HTMLElement;
-        h3.textContent = 'Savings range by service (+3 more)'; // simulate stale suffix
+        h3.textContent = 'Potential savings range per service (+3 more)'; // simulate stale suffix
         // Second render with empty data -- heading must be reset.
         renderSavingsByService([]);
-        expect(h3.textContent).toBe('Savings range by service');
+        expect(h3.textContent).toBe('Potential savings range per service');
       });
 
       test('renders chart with exactly two services when two services have positive savings', () => {
         buildDOM();
-        const points = [
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 100, rds: 50 } },
-          { timestamp: 't2', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 300, rds: 80 } },
-        ];
-        renderSavingsByService(points);
+        renderSavingsByService([
+          rec('ec2', 100, 1, 'no_upfront'),
+          rec('ec2', 300, 3, 'all_upfront'),
+          rec('rds', 50, 1, 'no_upfront'),
+          rec('rds', 80, 3, 'all_upfront'),
+        ]);
         // Chart must be constructed (canvas visible, empty hidden).
         expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(false);
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(true);
@@ -1288,33 +1377,33 @@ describe('Dashboard Module', () => {
         expect(chartData.data.labels).toContain('rds');
       });
 
-      test('bar floor dataset uses min, range dataset uses (max - min)', () => {
+      test('bar floor dataset uses min potential, upside dataset uses (max - min)', () => {
         buildDOM();
-        const points = [
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 100 } },
-          { timestamp: 't2', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 400 } },
-        ];
-        renderSavingsByService(points);
+        // ec2: two recs with savings 100 and 400 -> floor=100, upside=300.
+        renderSavingsByService([
+          rec('ec2', 100, 1, 'no_upfront'),
+          rec('ec2', 400, 3, 'all_upfront'),
+        ]);
         const chartCtor = Chart as unknown as jest.Mock;
         const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
         const datasets = (lastCall?.[1] as { data: { datasets: { label: string; data: number[] }[] } }).data.datasets;
-        const floorDs = datasets.find((d) => d.label === 'Floor');
-        const rangeDs = datasets.find((d) => d.label === 'Range');
-        expect(floorDs?.data[0]).toBe(100);  // min
-        expect(rangeDs?.data[0]).toBe(300); // max - min
+        const floorDs = datasets.find((d) => d.label === 'Min potential');
+        const rangeDs = datasets.find((d) => d.label === 'Upside');
+        expect(floorDs?.data[0]).toBe(100);   // min potential savings
+        expect(rangeDs?.data[0]).toBe(300);   // max - min
       });
 
-      test('services are sorted by max savings descending', () => {
+      test('services are sorted by max potential savings descending', () => {
         buildDOM();
-        const points = [
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0,
-            by_service: { ec2: 100, rds: 500, lambda: 50 } },
-        ];
-        renderSavingsByService(points);
+        // ec2: max=200, rds: max=500, lambda: max=50 -- expected order: rds, ec2, lambda.
+        renderSavingsByService([
+          rec('ec2', 200),
+          rec('rds', 500),
+          rec('lambda', 50),
+        ]);
         const chartCtor = Chart as unknown as jest.Mock;
         const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
         const labels = (lastCall?.[1] as { data: { labels: string[] } }).data.labels;
-        // rds has max 500, ec2 100, lambda 50 — rds must be first.
         expect(labels[0]).toBe('rds');
         expect(labels[1]).toBe('ec2');
         expect(labels[2]).toBe('lambda');
@@ -1325,71 +1414,52 @@ describe('Dashboard Module', () => {
         const mockDestroyA = jest.fn();
         (Chart as unknown as jest.Mock).mockImplementationOnce(() => ({ destroy: mockDestroyA }));
 
-        const points = [
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 100 } },
-        ];
-        renderSavingsByService(points);
+        const recs = [rec('ec2', 100)];
+        renderSavingsByService(recs);
         // Second call must destroy the first chart.
-        renderSavingsByService(points);
+        renderSavingsByService(recs);
         expect(mockDestroyA).toHaveBeenCalled();
       });
 
       test('no-ops gracefully when canvas is missing from DOM', () => {
         // No buildDOM() call — canvas absent.
-        expect(() => renderSavingsByService([
-          { timestamp: 't1', total_savings: 0, total_upfront: 0, purchase_count: 0, cumulative_savings: 0, by_service: { ec2: 100 } },
-        ])).not.toThrow();
+        expect(() => renderSavingsByService([rec('ec2', 100)])).not.toThrow();
       });
-    });
 
-    // Filter chip change re-renders via loadSavingsTrendChart.
-    describe('filter integration via loadSavingsTrendChart', () => {
-      beforeEach(() => {
+      test('loadDashboard wires range bars to recommendations, not trend data', async () => {
+        // The range bar chart must receive the recs from getRecommendations,
+        // not from getSavingsAnalytics. Verify by providing recs but no analytics.
         buildDOM();
-        const canvas = document.createElement('canvas');
-        canvas.id = 'savings-trend-chart';
-        const empty = document.createElement('div');
-        empty.id = 'savings-trend-empty';
-        empty.className = 'hidden';
-        document.body.appendChild(canvas);
-        document.body.appendChild(empty);
-      });
+        const summaryEl = document.createElement('section');
+        summaryEl.id = 'summary';
+        const upcomingEl = document.createElement('div');
+        upcomingEl.id = 'upcoming-list';
+        const savingsChartSection = document.createElement('section');
+        savingsChartSection.id = 'savings-chart-section';
+        const savingsCanvas = document.createElement('canvas');
+        savingsCanvas.id = 'savings-chart';
+        savingsChartSection.appendChild(savingsCanvas);
+        document.body.appendChild(summaryEl);
+        document.body.appendChild(savingsChartSection);
+        document.body.appendChild(upcomingEl);
 
-      test('re-renders bar chart when trend chart is re-fetched due to filter change', async () => {
-        (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-          data_points: [
-            { timestamp: 't1', total_savings: 100, total_upfront: 0, purchase_count: 1, cumulative_savings: 100,
-              by_service: { ec2: 100, rds: 50 } },
-          ],
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+          potential_monthly_savings: 0,
+          total_recommendations: 1, active_commitments: 0, committed_monthly: 0,
+          target_coverage: 80, ytd_savings: 0,
+          by_service: {},
         });
-
-        await loadSavingsTrendChart();
-
-        const barCanvas = document.getElementById('savings-by-service-chart');
-        expect(barCanvas?.classList.contains('hidden')).toBe(false);
-        const chartCtor = Chart as unknown as jest.Mock;
-        // At least one Chart call must have been for the bar chart.
-        const barChartCall = chartCtor.mock.calls.find(
-          (call: unknown[]) => (call[1] as { type: string })?.type === 'bar'
-        );
-        expect(barChartCall).toBeDefined();
-      });
-
-      test('re-renders bar chart empty state when analytics data is empty', async () => {
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        // Provide a rec so the bar chart should render (not show empty state).
+        (api.getRecommendations as jest.Mock).mockResolvedValue([rec('ec2', 150)]);
+        // Analytics deliberately absent/empty -- bar chart should still render from recs.
         (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
 
-        await loadSavingsTrendChart();
+        await loadDashboard();
 
-        expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(true);
-        expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(false);
+        expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(false);
+        expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(true);
       });
-
-      // Note: provider is intentionally NOT forwarded to getSavingsAnalytics
-      // because the /history/analytics handler does not yet support a
-      // provider-scoped query (see dashboard.ts comment near the fetch call
-      // for the original CR finding and the deliberate decision). A test
-      // asserting the negative would be brittle; the comment in the
-      // production code is the source of truth.
     });
   });
 });
