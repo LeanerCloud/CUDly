@@ -112,7 +112,7 @@ func (c *Client) SetRPValidateClient(api RPValidateAPI) {
 
 // GetServiceType returns the service type for this client.
 func (c *Client) GetServiceType() common.ServiceType {
-	return common.ServiceSavingsPlans
+	return common.ServiceSavingsPlansAll
 }
 
 // GetRegion returns the region for this client.
@@ -174,7 +174,7 @@ func convertSavingsPlan(sp *armbillingbenefits.SavingsPlanModel, subscriptionID 
 		Account:        subscriptionID,
 		CommitmentID:   *sp.ID,
 		CommitmentType: common.CommitmentSavingsPlan,
-		Service:        common.ServiceSavingsPlans,
+		Service:        common.ServiceSavingsPlansAll,
 		Count:          1,
 		State:          "active",
 	}

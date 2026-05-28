@@ -261,7 +261,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 		// in the nonRDS slice for per-pool sizing.
 		recs := []common.Recommendation{
 			{Service: common.ServiceEC2, CommitmentType: common.CommitmentReservedInstance, Count: 3},
-			{Service: common.ServiceSavingsPlans, CommitmentType: common.CommitmentSavingsPlan, Count: 1},
+			{Service: common.ServiceSavingsPlansAll, CommitmentType: common.CommitmentSavingsPlan, Count: 1},
 			{
 				Service:        common.ServiceRDS,
 				CommitmentType: common.CommitmentReservedInstance,
@@ -280,7 +280,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 		require.Len(t, sized, 1, "only the RDS rec went through family-NU")
 		require.Len(t, nonRDS, 2, "EC2 + SP recs left for per-pool sizing")
 		assert.Equal(t, common.ServiceEC2, nonRDS[0].Service)
-		assert.Equal(t, common.ServiceSavingsPlans, nonRDS[1].Service)
+		assert.Equal(t, common.ServiceSavingsPlansAll, nonRDS[1].Service)
 	})
 
 	t.Run("ProjectedCoverage is cumulative across recs in a family", func(t *testing.T) {
@@ -379,7 +379,7 @@ func TestIsRDSRIRec(t *testing.T) {
 		{"RelationalDB alias", common.Recommendation{Service: common.ServiceRelationalDB, CommitmentType: common.CommitmentReservedInstance}, true},
 		{"EC2 RI", common.Recommendation{Service: common.ServiceEC2, CommitmentType: common.CommitmentReservedInstance}, false},
 		{"RDS SP (impossible but defensive)", common.Recommendation{Service: common.ServiceRDS, CommitmentType: common.CommitmentSavingsPlan}, false},
-		{"SP", common.Recommendation{Service: common.ServiceSavingsPlans, CommitmentType: common.CommitmentSavingsPlan}, false},
+		{"SP", common.Recommendation{Service: common.ServiceSavingsPlansAll, CommitmentType: common.CommitmentSavingsPlan}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

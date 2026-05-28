@@ -25,7 +25,7 @@ import (
 //     the per-plan-type split: each registered SP service makes its own
 //     Cost Explorer call with its own term/payment defaults.
 //  2. Otherwise, fall back to the legacy IncludeSPTypes/ExcludeSPTypes
-//     filter mechanism (for callers passing the umbrella ServiceSavingsPlans
+//     filter mechanism (for callers passing the umbrella ServiceSavingsPlansAll
 //     slug or for direct CLI invocations that haven't been migrated yet).
 func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
 	planTypes := planTypesForParams(params)
@@ -305,7 +305,7 @@ func planTypesForParams(params common.RecommendationParams) []types.SupportedSav
 
 // planTypeForServiceSlug maps a per-plan-type SP service slug to its
 // Cost Explorer plan-type enum. Returns false for non-SP slugs and for the
-// legacy umbrella ServiceSavingsPlans (which still triggers the iterate-all
+// umbrella sentinel ServiceSavingsPlansAll (which still triggers the iterate-all
 // fallback inside planTypesForParams).
 func planTypeForServiceSlug(s common.ServiceType) (types.SupportedSavingsPlansType, bool) {
 	switch s {
@@ -323,7 +323,7 @@ func planTypeForServiceSlug(s common.ServiceType) (types.SupportedSavingsPlansTy
 
 // serviceSlugForPlanType is the inverse of planTypeForServiceSlug. Used by
 // parseSavingsPlanDetail to tag each Recommendation with the per-plan-type
-// slug rather than the legacy umbrella, so downstream stats/filters can
+// slug rather than the umbrella sentinel, so downstream stats/filters can
 // distinguish Compute SP from SageMaker SP recommendations.
 func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceType {
 	switch pt {
@@ -336,7 +336,7 @@ func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceTy
 	case types.SupportedSavingsPlansTypeDatabaseSp:
 		return common.ServiceSavingsPlansDatabase
 	}
-	return common.ServiceSavingsPlans
+	return common.ServiceSavingsPlansAll
 }
 
 // getFilteredPlanTypes returns the list of Savings Plan types to query based

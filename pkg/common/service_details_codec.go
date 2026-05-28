@@ -121,14 +121,14 @@ func newDetailsForService(service string) (ServiceDetails, bool) {
 
 	// AWS Savings Plans — all umbrella + per-plan-type slugs use
 	// SavingsPlanDetails. The dash-free spellings are the canonical
-	// values of ServiceSavingsPlans / ServiceSavingsPlansCompute etc.;
+	// values of ServiceSavingsPlansAll / ServiceSavingsPlansCompute etc.;
 	// "savings-plans" (with a dash) is the legacy umbrella alias that
 	// internal/purchase/execution.go: mapSavingsPlansSlug still
 	// recognises so purchase_executions JSONB rows persisted before
 	// the rename in PR #94 still resolve. Recognising it here means a
 	// legacy direct-execute approval still decodes against the right
 	// type.
-	case string(ServiceSavingsPlans),
+	case string(ServiceSavingsPlansAll),
 		string(ServiceSavingsPlansCompute),
 		string(ServiceSavingsPlansEC2Instance),
 		string(ServiceSavingsPlansSageMaker),

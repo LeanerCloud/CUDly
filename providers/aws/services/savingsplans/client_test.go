@@ -220,7 +220,7 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 
 // TestClient_GetExistingCommitments_UmbrellaMode verifies that an SP client
 // constructed with an empty plan type (legacy umbrella mode, used by the
-// AWS provider's `case common.ServiceSavingsPlans` branch in GetServiceClient)
+// AWS provider's `case common.ServiceSavingsPlansAll` branch in GetServiceClient)
 // returns every commitment unfiltered — matching pre-issue-#22-split
 // behaviour for any persisted RecommendationRecord still tagged with the
 // umbrella slug.
@@ -411,7 +411,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
@@ -440,7 +440,7 @@ func TestClient_ValidateOffering_InvalidDetails(t *testing.T) {
 
 	// Use ComputeDetails instead of SavingsPlanDetails to test type assertion failure
 	rec := common.Recommendation{
-		Service: common.ServiceSavingsPlans,
+		Service: common.ServiceSavingsPlansAll,
 		Details: common.ComputeDetails{
 			InstanceType: "t3.micro",
 		},
@@ -459,7 +459,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		Count:         1,
 		PaymentOption: "all-upfront",
@@ -503,7 +503,7 @@ func TestClient_PurchaseCommitment_SetsClientTokenForIdempotency(t *testing.T) {
 	client := &Client{client: mockSP, region: "us-east-1"}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		Count:         1,
 		PaymentOption: "all-upfront",
@@ -545,7 +545,7 @@ func TestClient_PurchaseCommitment_NoClientTokenWhenUnset(t *testing.T) {
 	client := &Client{client: mockSP, region: "us-east-1"}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		Count:         1,
 		PaymentOption: "all-upfront",
@@ -577,7 +577,7 @@ func TestClient_PurchaseCommitment_InvalidDetails(t *testing.T) {
 
 	// Use ComputeDetails instead of SavingsPlanDetails to test type assertion failure
 	rec := common.Recommendation{
-		Service: common.ServiceSavingsPlans,
+		Service: common.ServiceSavingsPlansAll,
 		Details: common.ComputeDetails{
 			InstanceType: "t3.micro",
 		},
@@ -598,7 +598,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
 		Details: &common.SavingsPlanDetails{
@@ -628,7 +628,7 @@ func TestClient_PurchaseCommitment_CreateFails(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
 		Details: &common.SavingsPlanDetails{
@@ -663,7 +663,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
 		Details: &common.SavingsPlanDetails{
@@ -700,7 +700,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
@@ -741,7 +741,7 @@ func TestClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "EC2Instance",
 		PaymentOption: "partial-upfront",
 		Term:          "3yr",
@@ -781,7 +781,7 @@ func TestClient_GetOfferingDetails_NoUpfront(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		ResourceType:  "Compute",
 		PaymentOption: "no-upfront",
 		Term:          "1yr",
@@ -819,7 +819,7 @@ func TestClient_GetOfferingDetails_InvalidDetails(t *testing.T) {
 
 	// Use ComputeDetails instead of SavingsPlanDetails to test type assertion failure
 	rec := common.Recommendation{
-		Service: common.ServiceSavingsPlans,
+		Service: common.ServiceSavingsPlansAll,
 		Details: common.ComputeDetails{
 			InstanceType: "t3.micro",
 		},
@@ -840,7 +840,7 @@ func TestClient_GetOfferingDetails_RatesError(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
 		Details: &common.SavingsPlanDetails{
@@ -890,7 +890,7 @@ func TestClient_FindOfferingID_AllPlanTypes(t *testing.T) {
 			}
 
 			rec := common.Recommendation{
-				Service:       common.ServiceSavingsPlans,
+				Service:       common.ServiceSavingsPlansAll,
 				PaymentOption: "all-upfront",
 				Term:          "1yr",
 				Details: &common.SavingsPlanDetails{
@@ -951,7 +951,7 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 			}
 
 			rec := common.Recommendation{
-				Service:       common.ServiceSavingsPlans,
+				Service:       common.ServiceSavingsPlansAll,
 				PaymentOption: tt.paymentOption,
 				Term:          "1yr",
 				Details: &common.SavingsPlanDetails{
@@ -1007,7 +1007,7 @@ func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 			}
 
 			rec := common.Recommendation{
-				Service:       common.ServiceSavingsPlans,
+				Service:       common.ServiceSavingsPlansAll,
 				PaymentOption: "all-upfront",
 				Term:          tt.term,
 				Details: &common.SavingsPlanDetails{
@@ -1045,7 +1045,7 @@ func TestClient_FindOfferingID_APIError(t *testing.T) {
 	}
 
 	rec := common.Recommendation{
-		Service:       common.ServiceSavingsPlans,
+		Service:       common.ServiceSavingsPlansAll,
 		PaymentOption: "all-upfront",
 		Term:          "1yr",
 		Details: &common.SavingsPlanDetails{
