@@ -36,6 +36,15 @@ type AccountProvider = 'aws' | 'azure' | 'gcp';
 
 let cachedSourceCloud: string | undefined;
 
+// Cached global defaults surfaced by loadGlobalSettings. Used by the override
+// modal (issue #112) to show "Inherit (currently: X)" labels so the user can
+// see what they'd be overriding without switching tabs.
+let cachedGlobalDefaults: { term: number; payment: string; coverage: number } = {
+  term: 3,
+  payment: 'all-upfront',
+  coverage: 80,
+};
+
 // In-flight cache for /api/config so each modal open does not refetch (issue
 // #130d). The promise is captured the first time getConfig() is requested
 // and reused for the lifetime of the page; resetConfigCache() lets tests
@@ -58,6 +67,14 @@ function getCachedConfig(): Promise<ConfigResponse> {
 /** Reset the cached /api/config response. Test-only / future "reload" hook. */
 export function resetConfigCache(): void {
   cachedConfigPromise = undefined;
+}
+
+/**
+ * Override the cached global defaults used for the "Inherit (currently: X)"
+ * labels. Test-only; production code updates the cache via loadGlobalSettings.
+ */
+export function setGlobalDefaultsForTest(defaults: { term: number; payment: string; coverage: number }): void {
+  cachedGlobalDefaults = { ...defaults };
 }
 
 // sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
@@ -646,7 +663,9 @@ function buildPaymentOverrideSelect(
 
   const inheritOpt = document.createElement('option');
   inheritOpt.value = '';
-  inheritOpt.textContent = 'Inherit (default)';
+  // Issue #112: show the current global payment so the user knows what
+  // "Inherit" means without switching to the Purchasing tab.
+  inheritOpt.textContent = inheritCurrentlyLabel(paymentLabel(cachedGlobalDefaults.payment));
   select.appendChild(inheritOpt);
 
   // Filter the payment dropdown to only the (term, payment) combinations
@@ -768,7 +787,9 @@ function buildTermOverrideSelect(
 
   const inheritOpt = document.createElement('option');
   inheritOpt.value = '';
-  inheritOpt.textContent = 'Inherit (default)';
+  // Issue #112: show the current global term so the user knows what
+  // "Inherit" means without switching to the Purchasing tab.
+  inheritOpt.textContent = inheritCurrentlyLabel(termLabel(String(cachedGlobalDefaults.term)));
   select.appendChild(inheritOpt);
 
   // Filter the term dropdown to the (term, payment) combinations AWS
@@ -1451,6 +1472,20 @@ export function openOverrideModal(
   const errEl = document.getElementById('override-form-error');
   if (errEl) errEl.textContent = '';
 
+  // Issue #112: update the "Inherit" option on the term select to show the
+  // current global default so the user knows what they'd be inheriting.
+  const termInheritOpt = document.querySelector<HTMLOptionElement>('#override-term option[value=""]');
+  if (termInheritOpt) {
+    termInheritOpt.textContent = inheritCurrentlyLabel(termLabel(String(cachedGlobalDefaults.term)));
+  }
+
+  // Issue #112: update the coverage placeholder to show the current global
+  // default. Uses .placeholder (plain text assignment), not innerHTML -- safe.
+  const coverageInput = document.getElementById('override-coverage') as HTMLInputElement | null;
+  if (coverageInput) {
+    coverageInput.placeholder = inheritCurrentlyLabel(`${cachedGlobalDefaults.coverage}%`);
+  }
+
   // Populate the service dropdown with provider-specific services, excluding
   // any that already have an override for this account. Issue #109 extends
   // this to Azure and GCP (previously AWS-only per issue #104 follow-up).
@@ -1514,11 +1549,11 @@ function syncOverridePaymentOptions(provider: string): void {
   const previous = paymentSel.value;
   paymentSel.replaceChildren();
 
-  // Always include the "Inherit (default)" option — corresponds to leaving
-  // the field unset on the sparse PUT.
+  // Always include the "Inherit (currently: X)" option — corresponds to
+  // leaving the field unset on the sparse PUT (issue #112).
   const inheritOpt = document.createElement('option');
   inheritOpt.value = '';
-  inheritOpt.textContent = 'Inherit (default)';
+  inheritOpt.textContent = inheritCurrentlyLabel(paymentLabel(cachedGlobalDefaults.payment));
   paymentSel.appendChild(inheritOpt);
 
   // When service or term is unset, can't run the validity check yet —
@@ -2549,6 +2584,16 @@ function termLabel(value: string): string {
   return value === '1' ? '1 Year' : value === '3' ? '3 Years' : `${value} Years`;
 }
 
+/**
+ * Build the "Inherit (currently: X)" label for override-modal "Inherit"
+ * options (issue #112). `currentValue` must already be human-readable (e.g.,
+ * "3 Years", "All Upfront", "80%") -- callers are responsible for formatting.
+ * The value is injected via textContent, not innerHTML, so no escaping needed.
+ */
+function inheritCurrentlyLabel(currentValue: string): string {
+  return `Inherit (currently: ${currentValue})`;
+}
+
 function paymentLabel(value: string): string {
   switch (value) {
     case 'no-upfront': return 'No Upfront';
@@ -2779,6 +2824,15 @@ export async function loadGlobalSettings(): Promise<void> {
 
       const coverageInput = document.getElementById('setting-default-coverage') as HTMLInputElement | null;
       if (coverageInput) coverageInput.value = String(data.global.default_coverage || 80);
+
+      // Cache defaults for the override modal "Inherit (currently: X)" labels
+      // (issue #112). Must be updated here so reopening the override modal
+      // after a Settings save reflects any in-session changes.
+      cachedGlobalDefaults = {
+        term: data.global.default_term || 3,
+        payment: data.global.default_payment || 'all-upfront',
+        coverage: data.global.default_coverage || 80,
+      };
 
       const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
       if (notifyDaysInput) notifyDaysInput.value = String(data.global.notification_days_before || 3);
