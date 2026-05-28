@@ -262,3 +262,50 @@ export function setHiddenColumns(hidden: ReadonlySet<RecommendationsColumnId>): 
   const filtered = Array.from(hidden).filter((col) => !fixedColumns.has(col));
   hiddenColumns = new Set(filtered);
 }
+
+// ---------------------------------------------------------------------------
+// Plans / Planned Purchases per-column filters (issue #166 follow-up to #570).
+//
+// Mirrors RecommendationsColumnFilters but is scoped to the Plans tab's
+// Planned Purchases table. Kept as a separate slice (and column-id type) so
+// the Plans, History, and RI Exchange follow-up PRs can land in parallel
+// without contending on the same state shape.
+// ---------------------------------------------------------------------------
+
+export type PlansColumnId =
+  | 'provider' | 'service' | 'resource_type' | 'term' | 'payment' | 'status'
+  | 'count' | 'upfront_cost' | 'estimated_savings';
+
+export type PlansColumnFilter =
+  | { kind: 'set'; values: string[] }
+  | { kind: 'expr'; expr: string };
+
+export type PlansColumnFilters = Partial<Record<PlansColumnId, PlansColumnFilter>>;
+
+// In-memory only; survives tab switches within the SPA, resets on full reload.
+// Matches the recommendationsColumnFilters lifecycle.
+let plansColumnFilters: PlansColumnFilters = {};
+
+export function getPlansColumnFilters(): PlansColumnFilters {
+  return { ...plansColumnFilters };
+}
+
+export function setPlansColumnFilter(
+  column: PlansColumnId,
+  filter: PlansColumnFilter | null,
+): void {
+  if (filter === null) {
+    const next = { ...plansColumnFilters };
+    delete next[column];
+    plansColumnFilters = next;
+    return;
+  }
+  plansColumnFilters = {
+    ...plansColumnFilters,
+    [column]: filter,
+  };
+}
+
+export function clearAllPlansColumnFilters(): void {
+  plansColumnFilters = {};
+}
