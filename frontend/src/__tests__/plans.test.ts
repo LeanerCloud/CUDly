@@ -256,6 +256,66 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).not.toContain('Multiple');
     });
 
+    test('three-SP plan summary lists all three plan types comma-joined (issue #248)', async () => {
+      // Regression guard for issue #248: a plan targeting Compute SP,
+      // EC2 Instance SP, and SageMaker SP must show all three labels in
+      // the Service detail row of the plan card, comma-joined, rather
+      // than collapsing to just the first entry.
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-three-sp',
+            name: 'Three SP plan',
+            enabled: true,
+            auto_purchase: true,
+            services: {
+              'aws:savings-plans-compute': {
+                provider: 'aws',
+                service: 'savings-plans-compute',
+                enabled: true,
+                term: 3,
+                payment: 'no-upfront',
+                coverage: 80,
+              },
+              'aws:savings-plans-ec2instance': {
+                provider: 'aws',
+                service: 'savings-plans-ec2instance',
+                enabled: true,
+                term: 3,
+                payment: 'no-upfront',
+                coverage: 80,
+              },
+              'aws:savings-plans-sagemaker': {
+                provider: 'aws',
+                service: 'savings-plans-sagemaker',
+                enabled: true,
+                term: 3,
+                payment: 'no-upfront',
+                coverage: 80,
+              },
+            },
+            ramp_schedule: {
+              type: 'immediate',
+              percent_per_step: 100,
+              step_interval_days: 0,
+              current_step: 0,
+              total_steps: 1,
+            },
+          },
+        ],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).toContain('Compute SP');
+      expect(list?.innerHTML).toContain('EC2 Instance SP');
+      expect(list?.innerHTML).toContain('SageMaker SP');
+      // All three labels must appear together in the same Service detail value.
+      expect(list?.innerHTML).toMatch(/Compute SP.*EC2 Instance SP.*SageMaker SP/);
+    });
+
     test('single-service plan still renders one label (no regression)', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [
