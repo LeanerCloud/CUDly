@@ -1083,6 +1083,35 @@ func TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack(t *testi
 	assert.Equal(t, 0.0, details.MemoryGB, "MemoryGB left at 0 when catalogue fetch fails")
 }
 
+// TestComputeClient_FetchSKUCatalogue_CancelledContextFallsBack asserts
+// that a cancelled context is terminal in the SKU catalogue pagination
+// loop — the catalogue returns nil and Details.VCPU/MemoryGB stay at 0,
+// but the conversion itself succeeds (graceful-degradation contract).
+// Pins feedback_ctx_cancel_terminal.md for the compute SKU path.
+func TestComputeClient_FetchSKUCatalogue_CancelledContextFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so ctx.Err() is set on first loop iteration
+
+	mockPager := &vmSKUCatalogueMockPager{
+		pages: []armcompute.ResourceSKUsClientListResponse{
+			{
+				ResourceSKUsResult: armcompute.ResourceSKUsResult{
+					Value: []*armcompute.ResourceSKU{
+						buildVMSKU("Standard_D2s_v3", "eastus", 2, "8"),
+					},
+				},
+			},
+		},
+	}
+	client.SetResourceSKUsPager(mockPager)
+
+	result := client.fetchSKUCatalogue(ctx)
+	assert.Nil(t, result, "cancelled context must return nil catalogue")
+	assert.Equal(t, 0, mockPager.pageHits, "NextPage must not be called after context is already cancelled")
+}
+
 // TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero
 // asserts that when the recommendation's SKU isn't in the catalogue
 // (e.g. SKU listed for another region only), VCPU/MemoryGB stay at 0
