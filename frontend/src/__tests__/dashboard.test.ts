@@ -1289,6 +1289,18 @@ describe('Dashboard Module', () => {
         expect(ec2?.maxLabel).toBe('3yr all_upfront');
       });
 
+      test('uses "unspecified" label when payment is undefined or empty string', () => {
+        const recNoPayment = { ...rec('ec2', 100) as Record<string, unknown> };
+        delete recNoPayment['payment'];
+        const recEmptyPayment = { ...rec('ec2', 200) as Record<string, unknown>, payment: '' };
+        const result = computeServiceStatsFromRecs([recNoPayment, recEmptyPayment] as unknown as Parameters<typeof computeServiceStatsFromRecs>[0]);
+        const ec2 = result.get('ec2');
+        expect(ec2?.minLabel).toContain('unspecified');
+        expect(ec2?.maxLabel).toContain('unspecified');
+        expect(ec2?.minLabel).not.toContain('undefined');
+        expect(ec2?.maxLabel).not.toContain('undefined');
+      });
+
       test('accumulates stats for multiple services independently', () => {
         const result = computeServiceStatsFromRecs([
           rec('ec2', 100, 1, 'no_upfront'),
@@ -1432,8 +1444,8 @@ describe('Dashboard Module', () => {
         document.body.appendChild(upcomingEl);
 
         (api.getDashboardSummary as jest.Mock).mockResolvedValue({
-          potential_monthly_savings: 0, current_monthly_savings: 0,
-          total_recommendations: 1, active_reservations: 0,
+          potential_monthly_savings: 0,
+          total_recommendations: 1, active_commitments: 0, committed_monthly: 0,
           target_coverage: 80, ytd_savings: 0,
           by_service: {},
         });

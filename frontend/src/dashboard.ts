@@ -709,7 +709,8 @@ export function computeServiceStatsFromRecs(
   for (const rec of recs) {
     const svc = rec.service;
     const val = typeof rec.savings === 'number' ? rec.savings : 0;
-    const label = `${rec.term}yr ${rec.payment}`;
+    const paymentLabel = rec.payment && rec.payment.trim().length > 0 ? rec.payment : 'unspecified';
+    const label = `${rec.term}yr ${paymentLabel}`;
     const existing = stats.get(svc);
     if (existing) {
       if (val < existing.min) {
