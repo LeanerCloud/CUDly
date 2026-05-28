@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -6676,5 +6676,186 @@ describe('renderUsageSparkline (issue #239)', () => {
     expect(pairs[0]).toMatch(/^0\.0,/);
     // Last x must be 56.0 (i=6 => x = 6/6*56 = 56).
     expect(pairs[6]).toMatch(/^56\.0,/);
+  });
+});
+
+// ============================================================================
+// Issue #163: Column filter localStorage persistence
+// ============================================================================
+
+describe('Column filters localStorage persistence (issue #163)', () => {
+  beforeEach(() => {
+    resetColumnFiltersState();
+    // localStorageMock is reset by jest.clearAllMocks() in the global beforeEach
+  });
+
+  // --- loadColumnFilters ---
+
+  describe('loadColumnFilters', () => {
+    test('returns empty object when localStorage key is absent', () => {
+      // Default mock: getItem returns null
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('returns empty object on JSON parse error', () => {
+      localStorageMock.getItem.mockReturnValue('{not valid json}');
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('returns empty object when schemaVersion is wrong', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 99, filters: { region: { kind: 'set', values: ['us-east-1'] } } }),
+      );
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('returns empty object when filters is not an object', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, filters: 'not-an-object' }),
+      );
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('restores a categorical (set) filter correctly', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({
+          schemaVersion: 1,
+          filters: { region: { kind: 'set', values: ['us-east-1', 'eu-west-1'] } },
+        }),
+      );
+      const result = loadColumnFilters();
+      expect(result.region).toEqual({ kind: 'set', values: ['us-east-1', 'eu-west-1'] });
+      expect(Object.keys(result)).toHaveLength(1);
+    });
+
+    test('restores a numeric (expr) filter correctly', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({
+          schemaVersion: 1,
+          filters: { savings: { kind: 'expr', expr: '>100' } },
+        }),
+      );
+      const result = loadColumnFilters();
+      expect(result.savings).toEqual({ kind: 'expr', expr: '>100' });
+    });
+
+    test('silently drops unknown column keys', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({
+          schemaVersion: 1,
+          filters: {
+            region: { kind: 'set', values: ['us-east-1'] },
+            future_unknown_column: { kind: 'set', values: ['foo'] },
+          },
+        }),
+      );
+      const result = loadColumnFilters();
+      expect(result.region).toBeDefined();
+      expect((result as Record<string, unknown>)['future_unknown_column']).toBeUndefined();
+      expect(Object.keys(result)).toHaveLength(1);
+    });
+
+    test('silently drops filters with malformed shape', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({
+          schemaVersion: 1,
+          filters: {
+            region: { kind: 'set', values: 'not-an-array' },
+            savings: { kind: 'expr', expr: 42 },
+            count: { kind: 'unknown-kind', data: 'x' },
+          },
+        }),
+      );
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('silently drops expr filter with empty string expr', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({
+          schemaVersion: 1,
+          filters: { savings: { kind: 'expr', expr: '' } },
+        }),
+      );
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+  });
+
+  // --- saveColumnFilters ---
+
+  describe('saveColumnFilters', () => {
+    test('writes correct JSON shape to localStorage', () => {
+      saveColumnFilters({ region: { kind: 'set', values: ['us-east-1'] } });
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'cudly.recs.columnFilters.v1',
+        expect.stringContaining('"schemaVersion":1'),
+      );
+      const callArg = localStorageMock.setItem.mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(callArg);
+      expect(parsed.schemaVersion).toBe(1);
+      expect(parsed.filters.region).toEqual({ kind: 'set', values: ['us-east-1'] });
+    });
+
+    test('writes empty filters object when no filters active', () => {
+      saveColumnFilters({});
+      const callArg = localStorageMock.setItem.mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(callArg);
+      expect(parsed.filters).toEqual({});
+    });
+
+    test('round-trips a numeric expr filter', () => {
+      saveColumnFilters({ savings: { kind: 'expr', expr: '>500' } });
+      const callArg = localStorageMock.setItem.mock.calls[0]?.[1] as string;
+      const payload = JSON.parse(callArg);
+      expect(payload.filters.savings).toEqual({ kind: 'expr', expr: '>500' });
+    });
+  });
+
+  // --- round-trip and guard tests ---
+
+  describe('persistence round-trip', () => {
+    test('save then load restores same filter state', () => {
+      const filters = {
+        region: { kind: 'set' as const, values: ['ap-southeast-1'] },
+        savings: { kind: 'expr' as const, expr: '>200' },
+      };
+      const store = new Map<string, string>();
+      localStorageMock.getItem.mockImplementation((k: string) => store.get(k) ?? null);
+      localStorageMock.setItem.mockImplementation((k: string, v: string) => { store.set(k, v); });
+      saveColumnFilters(filters);
+      const restored = loadColumnFilters();
+      expect(restored.region).toEqual({ kind: 'set', values: ['ap-southeast-1'] });
+      expect(restored.savings).toEqual({ kind: 'expr', expr: '>200' });
+      expect(Object.keys(restored)).toHaveLength(2);
+    });
+
+    test('stored key with unknown column is silently dropped, no error', () => {
+      const store = new Map<string, string>([
+        ['cudly.recs.columnFilters.v1', JSON.stringify({
+          schemaVersion: 1,
+          filters: {
+            region: { kind: 'set', values: ['us-east-1'] },
+            deleted_account_col: { kind: 'set', values: ['123456789012'] },
+          },
+        })],
+      ]);
+      localStorageMock.getItem.mockImplementation((k: string) => store.get(k) ?? null);
+      expect(() => loadColumnFilters()).not.toThrow();
+      const result = loadColumnFilters();
+      expect(result.region).toBeDefined();
+      expect((result as Record<string, unknown>)['deleted_account_col']).toBeUndefined();
+    });
+
+    test('corrupted JSON in localStorage falls back to empty object, no error', () => {
+      localStorageMock.getItem.mockReturnValue('}{invalid json][');
+      expect(() => loadColumnFilters()).not.toThrow();
+      const result = loadColumnFilters();
+      expect(Object.keys(result)).toHaveLength(0);
+    });
   });
 });
