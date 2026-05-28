@@ -382,21 +382,8 @@ func checkValidateResponse(resp armbillingbenefits.RPClientValidatePurchaseRespo
 	return nil
 }
 
-// savingsPlanPriceItem is a single record from the Azure Retail Prices API used
-// by pricing.FetchAll as the type parameter T (requires a named type, not an
-// anonymous struct). NOTE: this struct mirrors the one in services/compute and
-// services/search; consolidating into internal/pricing is tracked as a follow-up.
-type savingsPlanPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetOfferingDetails retrieves pricing details for an Azure Savings Plan offering.
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
@@ -469,7 +456,7 @@ func (c *Client) fetchOnDemandRate(ctx context.Context, planType string) (float6
 	params.Add("api-version", "2023-01-01-preview")
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
-	items, err := pricing.FetchAll[savingsPlanPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch on-demand rate for plan type %s: %w", planType, err)
 	}
