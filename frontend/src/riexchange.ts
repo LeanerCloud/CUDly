@@ -17,6 +17,7 @@ import type {
   RIExchangeHistoryRecord,
   OfferingOption,
   TargetOffering,
+  ReshapeRecommendationsResponse,
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -226,13 +227,70 @@ export async function loadReshapeRecommendations(): Promise<void> {
   showSkeletonRows(container, 3, 8);
 
   try {
-    currentRecommendations = await api.getReshapeRecommendations();
+    const resp: ReshapeRecommendationsResponse = await api.getReshapeRecommendations();
+    currentRecommendations = resp.recommendations ?? [];
     renderRecommendations(container);
+    renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+/**
+ * Render (or clear) the staleness banner above the reshape-recommendations
+ * table. The banner slot is a sibling element with id
+ * "ri-exchange-recommendations-freshness"; it is created here if absent.
+ *
+ * staleness: "" or undefined clears any existing banner (fresh data).
+ * "soft"  : soft-warning copy ("data may be up to 12 h old").
+ * "hard"  : hard-warning copy ("data is more than 24 h old").
+ */
+export function renderReshapeStalenessBanner(
+  staleness: string | undefined,
+  collectedAt: string | null | undefined,
+): void {
+  const BANNER_ID = 'ri-exchange-recommendations-freshness';
+  // Locate or create the banner slot. It lives immediately before
+  // ri-exchange-recommendations-list in the DOM.
+  let banner = document.getElementById(BANNER_ID);
+  if (!banner) {
+    const listEl = document.getElementById('ri-exchange-recommendations-list');
+    if (!listEl || !listEl.parentElement) return;
+    banner = document.createElement('div');
+    banner.id = BANNER_ID;
+    listEl.parentElement.insertBefore(banner, listEl);
+  }
+
+  if (!staleness) {
+    banner.textContent = '';
+    banner.className = '';
+    return;
+  }
+
+  // Build the age label from collectedAt when available.
+  let ageLabel = '';
+  if (collectedAt) {
+    const ms = Date.now() - new Date(collectedAt).getTime();
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const mins = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    ageLabel = hours > 0 ? ` (last collected ${hours}h${mins > 0 ? ` ${mins}m` : ''} ago)` : ` (last collected ${mins}m ago)`;
+  }
+
+  const isSoft = staleness === 'soft';
+  banner.className = isSoft ? 'freshness-banner warning' : 'freshness-banner error';
+
+  const icon = isSoft ? '!' : '!!';
+  const copy = isSoft
+    ? `Cross-family alternatives are based on Cost Explorer recommendations that may be up to 24h old${ageLabel}. Some prices may be stale.`
+    : `Cross-family alternatives are based on Cost Explorer recommendations older than 24h${ageLabel}. Prices may be significantly out of date.`;
+
+  banner.textContent = '';
+  const strong = document.createElement('strong');
+  strong.textContent = icon + ' ';
+  banner.appendChild(strong);
+  banner.appendChild(document.createTextNode(copy));
 }
 
 function renderRecommendations(container: HTMLElement): void {
