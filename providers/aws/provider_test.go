@@ -251,8 +251,8 @@ func TestAWSProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceSavingsPlansEC2Instance)
 	assert.Contains(t, services, common.ServiceSavingsPlansSageMaker)
 	assert.Contains(t, services, common.ServiceSavingsPlansDatabase)
-	// Legacy umbrella SP slug for backward compat with persisted records.
-	assert.Contains(t, services, common.ServiceSavingsPlans)
+	// Umbrella SP sentinel for backward compat with persisted records.
+	assert.Contains(t, services, common.ServiceSavingsPlansAll)
 	// Legacy types
 	assert.Contains(t, services, common.ServiceEC2)
 	assert.Contains(t, services, common.ServiceRDS)
@@ -323,10 +323,10 @@ func TestAWSProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 		{common.ServiceSavingsPlansEC2Instance, common.ServiceSavingsPlansEC2Instance},
 		{common.ServiceSavingsPlansSageMaker, common.ServiceSavingsPlansSageMaker},
 		{common.ServiceSavingsPlansDatabase, common.ServiceSavingsPlansDatabase},
-		// Legacy umbrella: GetServiceClient returns an SP client with
+		// Umbrella sentinel: GetServiceClient returns an SP client with
 		// an empty plan-type filter (umbrella mode); GetServiceType
 		// reports the umbrella slug, matching pre-split behaviour.
-		{common.ServiceSavingsPlans, common.ServiceSavingsPlans},
+		{common.ServiceSavingsPlansAll, common.ServiceSavingsPlansAll},
 	}
 
 	for _, tc := range testCases {
