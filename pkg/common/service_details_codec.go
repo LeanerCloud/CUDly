@@ -119,15 +119,16 @@ func newDetailsForService(service string) (ServiceDetails, bool) {
 	case string(ServiceElastiCache), string(ServiceCache):
 		return &CacheDetails{}, true
 
-	// AWS Savings Plans — all umbrella + per-plan-type slugs use
+	// AWS Savings Plans -- all umbrella + per-plan-type slugs use
 	// SavingsPlanDetails. The dash-free spellings are the canonical
 	// values of ServiceSavingsPlans / ServiceSavingsPlansCompute etc.;
 	// "savings-plans" (with a dash) is the legacy umbrella alias that
 	// internal/purchase/execution.go: mapSavingsPlansSlug still
 	// recognises so purchase_executions JSONB rows persisted before
-	// the rename in PR #94 still resolve. Recognising it here means a
-	// legacy direct-execute approval still decodes against the right
-	// type.
+	// the rename in PR #94 (merged 2026-04-30) still resolve.
+	// TODO(#95): drop "savings-plans" here once the ~6-month retention
+	// window has passed (earliest 2026-10-30). See execution.go
+	// mapSavingsPlansSlug for the full removal checklist.
 	case string(ServiceSavingsPlans),
 		string(ServiceSavingsPlansCompute),
 		string(ServiceSavingsPlansEC2Instance),
