@@ -261,9 +261,27 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 
 	// Cancel the scheduled execution. The RETURNING clause gives us the
 	// parent plan_id so we can disable the plan in the same handler call.
+	//
+	// Idempotency: if TransitionExecutionStatus returns
+	// ErrExecutionNotInExpectedStatus the row is already in a terminal state
+	// (most likely "cancelled" from a previous attempt). In that case we
+	// fetch the execution to recover the PlanID and still attempt to disable
+	// the plan, so a retry never leaves plan.enabled=true.
 	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
 	if err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+		if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+			return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+		}
+		// The cancel already landed (e.g. a prior request succeeded and was
+		// retried). Recover the execution so we can still disable the plan.
+		existing, getErr := h.config.GetExecutionByID(ctx, executionID)
+		if getErr != nil {
+			return nil, fmt.Errorf("disable plan: failed to get execution %s after conflict: %w", executionID, getErr)
+		}
+		if existing == nil {
+			return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
+		}
+		cancelled = existing
 	}
 
 	// Set the parent plan's enabled flag to false so the Plans page toggle
@@ -271,22 +289,33 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	// execution was cancelled but plan.enabled was left true, causing
 	// inconsistent state between the Scheduled Purchases and Plans views.
 	if cancelled.PlanID != "" {
-		plan, err := h.config.GetPurchasePlan(ctx, cancelled.PlanID)
-		if err != nil {
-			return nil, fmt.Errorf("disable plan: failed to fetch plan %s: %w", cancelled.PlanID, err)
-		}
-		if plan == nil {
-			return nil, NewClientError(404, fmt.Sprintf("disable plan: plan %s not found", cancelled.PlanID))
-		}
-		if plan.Enabled {
-			plan.Enabled = false
-			if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
-				return nil, fmt.Errorf("disable plan: failed to update plan %s: %w", cancelled.PlanID, err)
-			}
+		if err := h.disablePlan(ctx, cancelled.PlanID); err != nil {
+			return nil, err
 		}
 	}
 
 	return &StatusResponse{Status: "cancelled"}, nil
+}
+
+// disablePlan fetches the plan identified by planID and sets Enabled=false if
+// it is currently true. It is idempotent: calling it against an already-
+// disabled plan is a no-op. Returns a 404 ClientError when the plan does not
+// exist, and a 500-wrapped error for any other store failure.
+func (h *Handler) disablePlan(ctx context.Context, planID string) error {
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		if errors.Is(err, config.ErrNotFound) {
+			return NewClientError(404, fmt.Sprintf("disable plan: plan %s not found", planID))
+		}
+		return fmt.Errorf("disable plan: failed to fetch plan %s: %w", planID, err)
+	}
+	if plan.Enabled {
+		plan.Enabled = false
+		if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
+			return fmt.Errorf("disable plan: failed to update plan %s: %w", planID, err)
+		}
+	}
+	return nil
 }
 
 // loadApproveExecution fetches an execution by ID, returns a 404 ClientError

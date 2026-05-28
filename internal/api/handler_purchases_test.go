@@ -1047,6 +1047,109 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	assert.Equal(t, "cancelled", result.Status)
 }
 
+// TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan covers the
+// idempotency path for Finding 1 of CR #781: when TransitionExecutionStatus
+// returns ErrExecutionNotInExpectedStatus (the cancel already landed in a
+// previous attempt), the handler must still disable the plan.
+func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	planID := "55555555-5555-5555-5555-555555555555"
+	execID := "66666666-6666-6666-6666-666666666666"
+
+	// TransitionExecutionStatus fails with a CAS conflict (cancel already
+	// applied by a previous attempt).
+	conflictErr := fmt.Errorf("%w: execution %s cannot transition", config.ErrExecutionNotInExpectedStatus, execID)
+
+	// GetExecutionByID is called to recover the PlanID after the conflict.
+	existingExec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      "cancelled",
+	}
+	plan := &config.PurchasePlan{
+		ID:      planID,
+		Name:    "Retry Plan",
+		Enabled: true,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(nil, conflictErr)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
+		return p.ID == planID && !p.Enabled
+	})).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.Status)
+	assert.False(t, plan.Enabled, "plan.Enabled must be false after conflict-retry disable")
+}
+
+// TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled verifies that
+// a second retry against an already-disabled plan is a no-op: UpdatePurchasePlan
+// must NOT be called.
+func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	planID := "77777777-7777-7777-7777-777777777777"
+	execID := "88888888-8888-8888-8888-888888888888"
+
+	conflictErr := fmt.Errorf("%w: execution %s cannot transition", config.ErrExecutionNotInExpectedStatus, execID)
+
+	existingExec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      "cancelled",
+	}
+	// Plan already disabled; UpdatePurchasePlan must NOT be called.
+	plan := &config.PurchasePlan{
+		ID:      planID,
+		Name:    "Already Disabled Retry Plan",
+		Enabled: false,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(nil, conflictErr)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	// UpdatePurchasePlan is intentionally NOT registered; AssertExpectations
+	// verifies it is never called.
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", result.Status)
+}
+
 func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

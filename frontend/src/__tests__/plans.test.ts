@@ -807,6 +807,10 @@ describe('Plans Module', () => {
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       window.confirm = jest.fn().mockReturnValue(true);
 
+      // Clear prior getPlans calls from setup so the assertion below only
+      // counts the reload triggered by the disable action itself.
+      (api.getPlans as jest.Mock).mockClear();
+
       const disableBtn = document.querySelector('[data-action="disable"]') as HTMLButtonElement;
       disableBtn?.click();
 
@@ -817,7 +821,7 @@ describe('Plans Module', () => {
       // Issue #774: after disable the Plans page must refresh so the toggle
       // reflects the backend's new enabled=false. getPlans is the API call
       // that loadPlans() fires to repopulate the Plans list.
-      expect(api.getPlans).toHaveBeenCalled();
+      expect(api.getPlans).toHaveBeenCalledTimes(1);
     });
 
     test('disable action cancelled by user', async () => {
