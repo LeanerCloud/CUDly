@@ -168,3 +168,48 @@ export async function createPlannedPurchases(planId: string, count: number, star
     body: JSON.stringify({ count, start_date: startDate })
   });
 }
+
+// ── RI Marketplace (issue #292) ───────────────────────────────────────────────
+
+export interface MarketplacePriceTier {
+  /** Number of months remaining this price tier covers. */
+  term_months: number;
+  /** USD list price per unit for this tier. */
+  price: number;
+}
+
+export interface MarketplaceListResult {
+  listing_id: string;
+  listing_state: string;
+  price_schedule: MarketplacePriceTier[];
+  aws_fee_percent: number;
+  note?: string;
+}
+
+/**
+ * Create an AWS RI Marketplace listing for a Standard Reserved Instance.
+ * purchaseId is the purchase_history.purchase_id (AWS ReservedInstancesId).
+ * priceSchedule is optional: when omitted the backend computes a default.
+ */
+export async function createMarketplaceListing(
+  purchaseId: string,
+  priceSchedule?: MarketplacePriceTier[],
+): Promise<MarketplaceListResult> {
+  const body = priceSchedule && priceSchedule.length > 0
+    ? JSON.stringify({ price_schedule: priceSchedule })
+    : undefined;
+  return apiRequest<MarketplaceListResult>(`/purchases/${purchaseId}/marketplace-list`, {
+    method: 'POST',
+    ...(body ? { body } : {}),
+  });
+}
+
+/**
+ * Cancel an active AWS RI Marketplace listing.
+ */
+export async function cancelMarketplaceListing(purchaseId: string): Promise<{ listing_id: string; listing_state: string }> {
+  return apiRequest<{ listing_id: string; listing_state: string }>(
+    `/purchases/${purchaseId}/marketplace-cancel`,
+    { method: 'POST' },
+  );
+}

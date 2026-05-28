@@ -282,6 +282,18 @@ export interface HistoryPurchase {
   revoked_at?: string;
   // revoked_via: "direct-api" or "support-case". Absent unless revoked.
   revoked_via?: string;
+
+  // OfferingClass is "standard" or "convertible" for EC2 RIs. Absent
+  // on non-EC2 rows and on rows written before migration 000060.
+  // The "Sell on Marketplace" button only renders when this equals
+  // "standard" (issue #292).
+  offering_class?: string;
+  // ListingID is the AWS ReservedInstancesListingId. Non-empty when an
+  // active or recently-closed marketplace listing exists (issue #292).
+  listing_id?: string;
+  // ListingState is the AWS marketplace listing state: "active",
+  // "cancelled", or "closed". Empty when not listed.
+  listing_state?: string;
 }
 
 // Savings Analytics types
