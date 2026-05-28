@@ -2833,3 +2833,178 @@ func TestHandler_approvalResponseRecipient_TrimsNonEmptyValue(t *testing.T) {
 	assert.Equal(t, "cristi@example.com", result,
 		"globalNotify with surrounding whitespace must be returned trimmed")
 }
+
+// --- Direct-execute path tests (issue #289) ---
+
+// recBody is a minimal valid recommendations JSON suitable for executePurchase
+// handler tests. Reused across the direct-execute suite to keep setup compact.
+const directExecRecBody = `{
+  "recommendations": [
+    {
+      "id": "rec-1",
+      "provider": "aws",
+      "service": "ec2",
+      "count": 1,
+      "term": 1,
+      "payment": "all-upfront",
+      "upfront_cost": 500.0,
+      "savings": 100.0
+    }
+  ],
+  "execute_mode": "direct"
+}`
+
+// setupDirectExecMocks wires the minimal store mocks needed by the
+// executePurchase handler up to (but not including) the email/execute branch.
+func setupDirectExecMocks(ctx context.Context, store *MockConfigStore) {
+	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
+}
+
+// TestHandler_executePurchase_DirectExec_NoPermission verifies the fail-closed
+// gate: a session with the base execute:purchases verb but without
+// execute-any or execute-own on purchases receives a 403 when it requests
+// execute_mode="direct". The handler must not fall through to the approval
+// path (issue #289).
+func TestHandler_executePurchase_DirectExec_NoPermission(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	userSession := &Session{
+		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		Email:  "user@example.com",
+		Role:   "user",
+	}
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	// Base execute:purchases grant — passes the validateExecutePurchaseRequest
+	// gate but does not carry execute-any or execute-own for the direct path.
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute", "purchases").Return(true, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute-own", "purchases").Return(false, nil)
+	// Scope check: no allowed_accounts restriction for this test.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, userSession.UserID).Return([]string{}, nil)
+	setupDirectExecMocks(ctx, mockStore)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+		Body:    directExecRecBody,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "execute-any or execute-own")
+}
+
+// TestHandler_executePurchase_DirectExec_ExecuteAny verifies that a session
+// with execute-any:purchases can direct-execute a purchase (no ownership
+// check). The handler must call ApproveAndExecute and return status=completed.
+func TestHandler_executePurchase_DirectExec_ExecuteAny(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// Admin role short-circuits the permission matrix (no HasPermissionAPI call
+	// expected) but we still need ApproveAndExecute on the purchase mock.
+	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), adminSession.Email).Return(nil)
+	setupDirectExecMocks(ctx, mockStore)
+
+	handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    directExecRecBody,
+	}
+	result, err := handler.executePurchase(ctx, req)
+	require.NoError(t, err)
+	resultMap := result.(map[string]any)
+	assert.Equal(t, "completed", resultMap["status"])
+	assert.Equal(t, true, resultMap["direct_execute"])
+	assert.Equal(t, 500.0, resultMap["total_upfront_cost"])
+}
+
+// TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner verifies that a
+// session with only execute-own:purchases can direct-execute when the
+// execution's creator matches the session user.
+func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
+
+	ownerID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	ownerSession := &Session{
+		UserID: ownerID,
+		Email:  "owner@example.com",
+		Role:   "user",
+	}
+	mockAuth.On("ValidateSession", ctx, "owner-token").Return(ownerSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute", "purchases").Return(true, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-own", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerID).Return([]string{}, nil)
+	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), ownerSession.Email).Return(nil)
+	setupDirectExecMocks(ctx, mockStore)
+
+	handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer owner-token"},
+		Body:    directExecRecBody,
+	}
+	result, err := handler.executePurchase(ctx, req)
+	require.NoError(t, err)
+	resultMap := result.(map[string]any)
+	assert.Equal(t, "completed", resultMap["status"])
+	assert.Equal(t, true, resultMap["direct_execute"])
+}
+
+// TestHandler_executePurchase_DirectExec_ExecuteOwn_NonOwner verifies the
+// execute-own ownership gate: a session with execute-own:purchases but a
+// different UserID than the execution creator receives a 403.
+//
+// Because executePurchase resolves the creator from the session (via
+// resolveCreatorUserID), a non-owner scenario is produced by using a
+// session whose UserID is non-empty and valid but differs from the creator
+// that gets stamped. In practice creatorID == session.UserID always after a
+// fresh submit (the creator IS the submitter), so the execute-own non-owner
+// case can only arise when execute-own is misapplied to a pre-existing
+// execution (not the fresh-submit path). We test the authorizeSessionExecuteDirect
+// function directly to cover the non-owner branch.
+func TestHandler_authorizeSessionExecuteDirect_ExecuteOwn_NonOwner(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	sessionUserID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	differentCreatorID := "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+	session := &Session{UserID: sessionUserID, Role: "user"}
+
+	mockAuth.On("HasPermissionAPI", ctx, sessionUserID, "execute-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, sessionUserID, "execute-own", "purchases").Return(true, nil)
+
+	handler := &Handler{auth: mockAuth}
+	err := handler.authorizeSessionExecuteDirect(ctx, session, differentCreatorID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "execute-own requires you to be the creator")
+}
