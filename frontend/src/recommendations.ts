@@ -67,6 +67,11 @@ const expandedCells = new Set<string>();
 // Expand-All button handler to populate expandedCells without re-computing.
 let lastVisibleGroupKeys: string[] = [];
 
+// issue #135: expand/collapse state for SP plan-type group rows.
+// Contains the spGroupKey strings the user has explicitly expanded.
+// Cleared together with expandedCells on page load / full refresh.
+const expandedSpGroups = new Set<string>();
+
 // #272 (CR follow-up): cache of the most-recent API-derived summary so
 // rerenders triggered by column-filter changes can keep total_count /
 // total_upfront_cost / avg_payback_months stable while the savings card
@@ -138,12 +143,13 @@ export function seedGlobalDefaults(term: 1 | 3, payment: CompatPayment): void {
 }
 
 /**
- * Reset cell expand/collapse state. Exported for testing only — not part of
- * the public API. Call in beforeEach to ensure tests don't share state.
+ * Reset cell and SP-group expand/collapse state. Exported for testing only.
+ * Call in beforeEach to ensure tests don't share module-level state.
  */
 export function resetExpandedCells(): void {
   expandedCells.clear();
   lastVisibleGroupKeys = [];
+  expandedSpGroups.clear();
 }
 
 /**
@@ -852,6 +858,59 @@ export function groupRecsByCell(recs: readonly LocalRecommendation[]): Map<strin
     }
   }
   return groups;
+}
+
+// issue #135: SP plan-type row grouping helpers.
+
+/**
+ * Canonical key for the SP group that collapses per-plan-type cell rows
+ * under a single parent row in the Recommendations table.
+ *
+ * Groups all AWS savings-plans-* cell rows that share the same
+ * (provider, account_id, region) scope. Each such triple produces at most
+ * one parent row in the table. Exported for tests.
+ */
+export function spGroupKey(rec: LocalRecommendation): string {
+  return `sp-group|${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.region}`;
+}
+
+/**
+ * Given the sorted cell-key list and the groups map (output of groupRecsByCell),
+ * return a Map of spGroupKey -> cellKey[] for every SP group that contains 2 or
+ * more distinct per-plan-type cell keys. Groups with only one cell key are not
+ * included (they render as a regular flat/cell row with no SP parent).
+ *
+ * Preserves the relative order of cell keys within each group as they appear in
+ * sortedKeys, so the rendered children respect the active sort order.
+ * Exported for tests.
+ */
+export function groupSpCellKeys(
+  sortedKeys: readonly string[],
+  groups: ReadonlyMap<string, LocalRecommendation[]>,
+): Map<string, string[]> {
+  // First pass: collect SP cell keys per scope key, in sort order.
+  const byScope = new Map<string, string[]>();
+  for (const key of sortedKeys) {
+    const recs = groups.get(key);
+    if (!recs || recs.length === 0) continue;
+    const rep = recs[0]!;
+    if (!isSavingsPlanService(rep.service)) continue;
+    const sk = spGroupKey(rep);
+    const existing = byScope.get(sk);
+    if (existing) {
+      existing.push(key);
+    } else {
+      byScope.set(sk, [key]);
+    }
+  }
+  // Second pass: drop singletons (one cell key = no parent row needed).
+  const result = new Map<string, string[]>();
+  for (const [sk, cellKeys] of byScope) {
+    if (cellKeys.length >= 2) {
+      result.set(sk, cellKeys);
+    }
+  }
+  return result;
 }
 
 /** Summary metrics for a single cell's variants. Exported for tests. */
@@ -2812,23 +2871,147 @@ function buildListMarkup(
   const summaryColspan = 1 + visibleToggleableCols.length;
   const visibleKeys = new Set(visibleCols.map((c) => c.key));
 
+  // issue #135: build SP plan-type group map for visual grouping.
+  // spCellGroups maps spGroupKey -> cellKey[] for scopes with 2+ SP cell keys.
+  const spCellGroups = groupSpCellKeys(sortedKeys, groups);
+  // Reverse index: cellKey -> spGroupKey, for O(1) lookup during row iteration.
+  const cellKeyToSpGroup = new Map<string, string>();
+  for (const [sgk, cellKeys] of spCellGroups) {
+    for (const ck of cellKeys) cellKeyToSpGroup.set(ck, sgk);
+  }
+  // Track which SP groups have already had their parent row emitted.
+  const renderedSpGroups = new Set<string>();
+
   // Build tbody rows: grouped for multi-variant cells, flat for single-variant.
+  // SP groups get an additional parent row that wraps the per-plan-type cells.
   const rows: string[] = [];
   for (const key of sortedKeys) {
     const variants = groups.get(key)!;
+    const sgk = cellKeyToSpGroup.get(key);
+
+    if (sgk !== undefined) {
+      // This cell key belongs to an SP group with 2+ plan types.
+      if (renderedSpGroups.has(sgk)) {
+        // Already rendered the parent row on a previous iteration; skip.
+        continue;
+      }
+      renderedSpGroups.add(sgk);
+
+      // Render the SP group parent row, then (if expanded) all child cell rows.
+      const childCellKeys = spCellGroups.get(sgk)!;
+      const spRep = groups.get(childCellKeys[0]!)![0]!;
+      const sgAccountName = spRep.cloud_account_id
+        ? (accountNamesCache.get(spRep.cloud_account_id) || spRep.cloud_account_id)
+        : '\u2014';
+      const isSpExpanded = expandedSpGroups.has(sgk);
+      const spChevron = isSpExpanded ? '\u25bc' : '\u25b6';
+      const spSlugs = childCellKeys.map((ck) => groups.get(ck)![0]!.service);
+      const spLabel = savingsPlansBucketLabel(spSlugs);
+      const planTypeCount = childCellKeys.length;
+      // Aggregate savings: sum the best-variant savings across all child cells.
+      const sfxLabel = periodSuffix(period);
+      let spSavingsTotal = 0;
+      for (const ck of childCellKeys) {
+        const cv = groups.get(ck)!;
+        spSavingsTotal += Math.max(...cv.map((r) => r.savings));
+      }
+      const scaledSpSavings = scaleCost(spSavingsTotal, period) ?? spSavingsTotal;
+      const spSavingsText = `${formatCostForPeriod(scaledSpSavings, period)}${sfxLabel}`;
+      const sgkAttr = escapeHtml(sgk);
+      rows.push(`
+  <tr class="rec-sp-group-row" data-sp-group-key="${sgkAttr}">
+    <td class="checkbox-col">
+      <button type="button" class="rec-sp-group-chevron" data-sp-group-key="${sgkAttr}" aria-expanded="${isSpExpanded}" aria-label="${isSpExpanded ? 'Collapse' : 'Expand'} Savings Plans plan types">
+        ${spChevron}
+      </button>
+    </td>
+    <td><span class="provider-badge ${providerBadgeClass(spRep.provider)}">${escapeHtml(providerDisplayName(spRep.provider))}</span></td>
+    <td>${escapeHtml(sgAccountName)}</td>
+    <td><span class="service-badge rec-sp-group-badge">${escapeHtml(spLabel)} <span class="rec-sp-plan-count">+${planTypeCount} plan types</span></span></td>
+    <td colspan="${summaryColspan}" class="rec-sp-group-summary">
+      <span class="rec-sp-group-savings">${spSavingsText}</span>
+    </td>
+  </tr>`);
+
+      if (!isSpExpanded) continue;
+
+      // Expanded: render each child cell (possibly itself multi-variant).
+      for (const ck of childCellKeys) {
+        const childVariants = groups.get(ck)!;
+        if (childVariants.length === 1) {
+          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, true, visibleCols));
+          continue;
+        }
+
+        // Multi-variant child cell inside an expanded SP group.
+        const isCellExpanded = expandedCells.has(ck);
+        const childSummary = cellSummary(childVariants);
+        const childRep = childVariants[0]!;
+        const childAccountName = childRep.cloud_account_id
+          ? (accountNamesCache.get(childRep.cloud_account_id) || childRep.cloud_account_id)
+          : '\u2014';
+        const selectedChildVariant = childVariants.find((r) => selectedRecs.has(r.id));
+        const scaledChildSavingsMin = scaleCost(childSummary.savingsMin, period) ?? childSummary.savingsMin;
+        const scaledChildSavingsMax = scaleCost(childSummary.savingsMax, period) ?? childSummary.savingsMax;
+        const childSavingsDisplay = selectedChildVariant
+          ? `${formatCostForPeriod(selectedChildVariant.savings, period)}${sfxLabel} <span class="rec-variants-count">(+${childVariants.length - 1} variants)</span>`
+          : `${formatScaledRange(scaledChildSavingsMin, scaledChildSavingsMax, period)}${sfxLabel}`;
+        const childUpfrontDisplay = selectedChildVariant
+          ? formatCurrency(selectedChildVariant.upfront_cost)
+          : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
+        const childTermDisplay = selectedChildVariant
+          ? formatTerm(selectedChildVariant.term)
+          : formatTermRange(childSummary.termMin, childSummary.termMax);
+        const cellChevron = isCellExpanded ? '\u25bc' : '\u25b6';
+        const childIdentityParts = [
+          `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
+        ];
+        if (visibleKeys.has('region')) childIdentityParts.push(escapeHtml(childRep.region));
+        childIdentityParts.push(`${childVariants.length} variants`);
+        const childRangeParts: string[] = [];
+        if (visibleKeys.has('savings')) childRangeParts.push(childSavingsDisplay);
+        if (visibleKeys.has('upfront_cost')) childRangeParts.push(`upfront: ${childUpfrontDisplay}`);
+        if (visibleKeys.has('term')) childRangeParts.push(`term: ${childTermDisplay}`);
+        const ckAttr = escapeHtml(ck);
+        rows.push(`
+  <tr class="rec-cell-summary-row rec-sp-group-child" data-cell-key="${ckAttr}">
+    <td class="checkbox-col">
+      <button type="button" class="rec-cell-chevron" data-cell-key="${ckAttr}" aria-expanded="${isCellExpanded}" aria-label="${isCellExpanded ? 'Collapse' : 'Expand'} cell variants">
+        ${cellChevron}
+      </button>
+    </td>
+    <td><span class="provider-badge ${providerBadgeClass(childRep.provider)}">${escapeHtml(providerDisplayName(childRep.provider))}</span></td>
+    <td>${escapeHtml(childAccountName)}</td>
+    <td><span class="service-badge">${escapeHtml(childRep.service)}</span></td>
+    <td colspan="${summaryColspan}" class="rec-cell-summary-content">
+      <span class="rec-cell-identity">${childIdentityParts.join(' &mdash; ')}</span>
+      ${childRangeParts.length > 0 ? `<span class="rec-cell-range">${childRangeParts.join(' &middot; ')}</span>` : ''}
+    </td>
+  </tr>`);
+        if (isCellExpanded) {
+          const sortedChildVariants = sortVariantsInCell(childVariants);
+          for (const v of sortedChildVariants) {
+            rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols));
+          }
+        }
+      }
+      continue;
+    }
+
+    // Non-SP cell (or SP singleton scope -- only one plan type in scope).
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
       rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols, showCheckboxes));
       continue;
     }
 
-    // Multi-variant cell.
+    // Multi-variant cell (non-SP).
     const isExpanded = expandedCells.has(key);
     const summary = cellSummary(variants);
     const rep = variants[0]!;
     const accountName = rep.cloud_account_id ? (accountNamesCache.get(rep.cloud_account_id) || rep.cloud_account_id) : '\u2014';
 
-    // Selected variant in this cell (if any) — used to show selected values on summary row.
+    // Selected variant in this cell (if any) -- used to show selected values on summary row.
     const selectedVariant = variants.find((r) => selectedRecs.has(r.id));
 
     // Summary row savings display: selected variant value if one is selected;
@@ -4214,6 +4397,21 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       const rec = recommendations.find((r) => r.id === recId);
       if (!rec) return;
       void openCreatePlanFromBottomBox([rec]);
+    });
+  });
+
+  // issue #135: SP group chevron click toggles expand/collapse for the plan-type group.
+  container.querySelectorAll<HTMLButtonElement>('.rec-sp-group-chevron').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = btn.dataset['spGroupKey'] ?? '';
+      if (!key) return;
+      if (expandedSpGroups.has(key)) {
+        expandedSpGroups.delete(key);
+      } else {
+        expandedSpGroups.add(key);
+      }
+      renderRecommendationsList(loadedRecs);
     });
   });
 }
