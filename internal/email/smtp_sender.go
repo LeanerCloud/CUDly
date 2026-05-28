@@ -403,14 +403,22 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendRIExchangePendingApproval sends an RI exchange approval email via SMTP.
+// SendRIExchangePendingApproval sends an RI exchange approval email via SMTP
+// as multipart/alternative (plain-text + styled HTML). The body carries live
+// approval tokens, so it is sent only to the resolved recipient (the
+// submitter's notification email, falling back to the static SMTP notify
+// address) plus the deduplicated CC list; it never broadcasts. Returns
+// ErrNoRecipient when neither address is configured. Issue #296.
 func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
-	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
-	body, err := RenderRIExchangePendingApprovalEmail(data)
-	if err != nil {
-		return fmt.Errorf("failed to render ri exchange pending approval email: %w", err)
+	recipient := data.RecipientEmail
+	if recipient == "" {
+		recipient = s.notifyEmail
 	}
-	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+	if recipient == "" {
+		return ErrNoRecipient
+	}
+	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
+	return sendRIExchangePendingApprovalVia(ctx, s, recipient, data.CCEmails, subject, data)
 }
 
 // SendRIExchangeCompleted sends an RI exchange completion email via SMTP.
