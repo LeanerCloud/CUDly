@@ -41,6 +41,82 @@ func TestHandler_getRecommendations(t *testing.T) {
 	assert.Equal(t, float64(0), result.Summary.TotalMonthlySavings)
 }
 
+// TestGetRecommendations_PushdownFilters verifies that service, region, and
+// account_id query params are translated into the RecommendationFilter that
+// reaches ListRecommendations (issue #162). The mock is registered with the
+// exact filter shape expected so testify's mock.AssertExpectations confirms
+// the backend does not silently drop any of the three values.
+func TestGetRecommendations_PushdownFilters(t *testing.T) {
+	ctx := context.Background()
+	validUUID := "12345678-1234-1234-1234-123456789abc"
+
+	t.Run("service and region params reach the filter", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+		mockScheduler.On(
+			"ListRecommendations", ctx,
+			config.RecommendationFilter{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+		).Return([]config.RecommendationRecord{}, nil)
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+		_, err := handler.getRecommendations(ctx, req, map[string]string{
+			"provider": "aws",
+			"service":  "ec2",
+			"region":   "us-east-1",
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("account_id param reaches the filter", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+		mockScheduler.On(
+			"ListRecommendations", ctx,
+			config.RecommendationFilter{AccountIDs: []string{validUUID}},
+		).Return([]config.RecommendationRecord{}, nil)
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+		_, err := handler.getRecommendations(ctx, req, map[string]string{
+			"account_ids": validUUID,
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid service slug returns 400", func(t *testing.T) {
+		handler := &Handler{apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+		_, err := handler.getRecommendations(ctx, req, map[string]string{
+			"service": "EC2 Reserved!", // uppercase + space + bang are invalid
+		})
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "expected ClientError, got %T", err)
+		assert.Equal(t, 400, ce.code)
+	})
+
+	t.Run("invalid region name returns 400", func(t *testing.T) {
+		handler := &Handler{apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+		_, err := handler.getRecommendations(ctx, req, map[string]string{
+			"region": "US EAST 1!", // spaces and bang are invalid
+		})
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "expected ClientError, got %T", err)
+		assert.Equal(t, 400, ce.code)
+	})
+}
+
 func TestHandler_getRecommendationsFreshness(t *testing.T) {
 	ctx := context.Background()
 

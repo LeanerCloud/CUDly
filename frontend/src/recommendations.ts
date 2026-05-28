@@ -118,8 +118,10 @@ export function resetAutoRefreshInFlight(): void {
 // populateRecommendationsAccountFilter / populateRegionFilter / the legacy
 // service-filter helpers were removed in Bundle B — those DOM elements are
 // gone from index.html. Provider / Account values now drive an API re-fetch
-// via the column-header popovers (see openColumnPopover wiring); Service /
-// Region filtering is purely client-side via applyColumnFilters.
+// via the column-header popovers (see openColumnPopover wiring). Service and
+// Region single-value categorical commits also trigger a re-fetch (issue
+// #162) so the backend WHERE clause prunes rows before they hit the wire;
+// multi-value and numeric column filters remain purely client-side.
 
 /**
  * Get the recommendations currently loaded in the purchase modal,
@@ -378,13 +380,31 @@ export async function loadRecommendations(): Promise<void> {
   }
 
   try {
-    // Provider + account_ids are still sent to the API as hints so the
-    // backend stays bounded for big multi-cloud tenants. Service / Region /
-    // numeric filters are pure client-side via applyColumnFilters.
+    // Provider + account_ids are sent to the API as push-down hints so the
+    // backend stays bounded for big multi-cloud tenants. Service and Region
+    // single-value categorical filters are also pushed down (issue #162):
+    // when the user has selected exactly one value in the service or region
+    // column popover the API receives that value and the backend applies the
+    // WHERE clause before returning rows, saving bandwidth on large tenants.
+    // Multi-value or absent service/region filters fall through unchanged and
+    // are applied client-side by applyColumnFilters below.
     const accountIDs = state.getCurrentAccountIDs();
+    const columnFilters = state.getRecommendationsColumnFilters();
+    const serviceFilter = columnFilters['service'];
+    const regionFilter = columnFilters['region'];
+    const pushedService =
+      serviceFilter?.kind === 'set' && serviceFilter.values.length === 1
+        ? serviceFilter.values[0]
+        : undefined;
+    const pushedRegion =
+      regionFilter?.kind === 'set' && regionFilter.values.length === 1
+        ? regionFilter.values[0]
+        : undefined;
     const filters: api.RecommendationFilters = {
       provider: state.getCurrentProvider(),
       account_ids: accountIDs.length > 0 ? accountIDs : undefined,
+      service: pushedService,
+      region: pushedRegion,
     };
 
     const [data, accounts, cfgResponse] = await Promise.all([
@@ -1550,6 +1570,34 @@ function categoricalDisplayLabel(
   return value;
 }
 
+// Columns whose single-value categorical filter is pushed down to the server
+// (issue #162). When a commit on one of these columns resolves to exactly one
+// selected value, loadRecommendations() re-fetches from the API with that
+// value as a query param; the backend applies it in the WHERE clause before
+// returning rows. For multi-value or cleared filters on these columns the
+// filter is still applied client-side so the UX stays consistent.
+// 'account' drives account_ids which is already a server-side hint; include
+// it here so clearing the account filter triggers a re-fetch like the others.
+const SERVER_PUSHDOWN_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set([
+  'service', 'region', 'account',
+]);
+
+// commitAndRefresh is called by every categorical popover commit. For
+// server-pushdown columns it fires loadRecommendations() (re-fetch) so the
+// backend can prune rows before they hit the wire; for all other columns it
+// calls rerenderRecommendations() (client-side filter, no extra API call).
+//
+// The re-fetch path is intentionally async/void: the popover commit returns
+// immediately and the table skeleton renders while the fetch is in flight,
+// matching the existing provider/account-change flow.
+function commitAndRefresh(column: state.RecommendationsColumnId): void {
+  if (SERVER_PUSHDOWN_COLUMNS.has(column)) {
+    void loadRecommendations();
+  } else {
+    rerenderRecommendations();
+  }
+}
+
 // Build the popover DOM for a given column. Categorical: checkbox list with
 // (All) tri-state + Clear footer. Numeric: free-text expression input with
 // inline error and Clear footer.
@@ -1706,6 +1754,9 @@ function buildPopoverContent(
     //     allow-list so unchecking the last value reaches the same
     //     zero-row state as the (All) checkbox and the Clear button,
     //     rather than snapping back to "all checked".
+    // For server-pushdown columns (service / region / account) a single-value
+    // selection triggers a re-fetch so the backend prunes rows before they
+    // hit the wire (issue #162). All other columns stay client-side only.
     const commit = (): void => {
       const selected: string[] = [];
       checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
@@ -1716,7 +1767,7 @@ function buildPopoverContent(
       }
       updateAllTriState();
       updateSPTriState();
-      rerenderRecommendations();
+      commitAndRefresh(column);
     };
 
     // (All) and Clear use commitAll(target) directly:
@@ -1734,7 +1785,7 @@ function buildPopoverContent(
       }
       updateAllTriState();
       updateSPTriState();
-      rerenderRecommendations();
+      commitAndRefresh(column);
     };
     // Expose commitAll to the Clear button handler outside this else-branch.
     commitAllRef = commitAll;
@@ -1786,7 +1837,8 @@ function buildPopoverContent(
       // Issue #700: call commitAllRef(false) (the same as commitAll(false)
       // inside the categorical branch) so updateAllTriState() is invoked and
       // the (All) checkbox reflects the cleared state. commitAllRef also
-      // calls rerenderRecommendations() internally.
+      // calls commitAndRefresh(column) internally, which re-fetches for
+      // server-pushdown columns (issue #162) or re-renders for the others.
       commitAllRef?.(false);
     }
   });
