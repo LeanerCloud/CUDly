@@ -270,8 +270,20 @@ func LoadApplicationConfig() ApplicationConfig {
 // SCHEDULED_TASK_SECRET env var) if the resolver is absent or the lookup
 // fails. Pulled out of NewApplicationFromDeps to keep it under the
 // cyclomatic limit.
+//
+// Security note: if both SCHEDULED_TASK_SECRET (plaintext) and
+// SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
+// because the plaintext value is visible in Lambda env / Terraform state.
+// The secret-store path is always preferred when both are present.
 func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) string {
-	if cfg.ScheduledTaskSecretName == "" || cfg.ScheduledTaskSecret != "" || resolver == nil {
+	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
+		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
+			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
+			"Lambda environment variables and Terraform state. " +
+			"Remove SCHEDULED_TASK_SECRET and rely on SCHEDULED_TASK_SECRET_NAME only.")
+	}
+
+	if cfg.ScheduledTaskSecretName == "" || resolver == nil {
 		return cfg.ScheduledTaskSecret
 	}
 	resolved, err := resolver.GetSecret(ctx, cfg.ScheduledTaskSecretName)

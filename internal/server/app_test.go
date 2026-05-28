@@ -615,3 +615,65 @@ func TestRunMigrationsBounded_PanicRecovered(t *testing.T) {
 		t.Fatalf("expected panic error to mention both 'panic' and 'boom'; got %q", err.Error())
 	}
 }
+
+// TestResolveScheduledTaskSecret_PreferSecretName verifies that when both
+// SCHEDULED_TASK_SECRET (plaintext) and SCHEDULED_TASK_SECRET_NAME are
+// configured, the secret-name path wins (not the plaintext value). This
+// is the security fix for #451: the plaintext path must not silently
+// override the secret-store path in production deployments.
+func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &mockSecretResolver{getResult: "from-secret-store"}
+	cfg := ApplicationConfig{
+		ScheduledTaskSecret:     "plaintext-value",
+		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
+	}
+
+	// Both set: secret-store value must win.
+	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertEqual(t, "from-secret-store", got)
+}
+
+// TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver verifies the
+// dev-only path: when no resolver is available, the plaintext value is
+// used (expected behaviour for local development).
+func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := ApplicationConfig{
+		ScheduledTaskSecret: "plaintext-dev",
+	}
+
+	got := resolveScheduledTaskSecret(ctx, cfg, nil)
+	testutil.AssertEqual(t, "plaintext-dev", got)
+}
+
+// TestResolveScheduledTaskSecret_SecretNameFallback verifies that a resolver
+// error causes a graceful fallback to the plaintext value.
+func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &mockSecretResolver{getErr: errors.New("SM unreachable")}
+	cfg := ApplicationConfig{
+		ScheduledTaskSecret:     "fallback-plaintext",
+		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
+	}
+
+	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertEqual(t, "fallback-plaintext", got)
+}
+
+// TestResolveScheduledTaskSecret_SecretNameOnly verifies the standard prod
+// path: only SCHEDULED_TASK_SECRET_NAME is set, plaintext is empty.
+func TestResolveScheduledTaskSecret_SecretNameOnly(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &mockSecretResolver{getResult: "prod-secret"}
+	cfg := ApplicationConfig{
+		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
+	}
+
+	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertEqual(t, "prod-secret", got)
+}
