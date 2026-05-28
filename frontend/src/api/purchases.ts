@@ -15,11 +15,26 @@ import type {
  * choice (1..100), recorded on the execution for audit; backend
  * math uses the already-scaled counts in the recommendations list.
  * Omit or pass 100 for "full capacity" (default).
+ *
+ * execute_mode controls the approval path (issue #289):
+ *   - undefined / omitted: standard approval-required flow.
+ *   - "direct": bypass the approval email and execute immediately.
+ *     Requires the session to hold execute-any:purchases or
+ *     execute-own:purchases; the backend returns 403 otherwise.
  */
-export async function executePurchase(recommendations: Recommendation[], capacityPercent?: number): Promise<PurchaseResult> {
-  const body: { recommendations: Recommendation[]; capacity_percent?: number } = { recommendations };
+export async function executePurchase(
+  recommendations: Recommendation[],
+  capacityPercent?: number,
+  executeMode?: string,
+): Promise<PurchaseResult> {
+  const body: { recommendations: Recommendation[]; capacity_percent?: number; execute_mode?: string } = {
+    recommendations,
+  };
   if (capacityPercent !== undefined && capacityPercent !== 100) {
     body.capacity_percent = capacityPercent;
+  }
+  if (executeMode) {
+    body.execute_mode = executeMode;
   }
   return apiRequest<PurchaseResult>('/purchases/execute', {
     method: 'POST',
