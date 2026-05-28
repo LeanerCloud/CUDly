@@ -446,3 +446,238 @@ func TestPassesDollarUnitsCheck(t *testing.T) {
 		})
 	}
 }
+
+// --- composite score ranking tests ---
+
+// floatPtr is a test helper that returns a pointer to a float64 value.
+func floatPtr(v float64) *float64 { return &v }
+
+// TestCompositeScore_SameGenOutranksTermMismatch asserts that a
+// near-perfect alternative (same family prefix, exact NF, high confidence)
+// outranks an alternative with identical savings but no family match and
+// no confidence signal.
+func TestCompositeScore_SameGenOutranksTermMismatch(t *testing.T) {
+	t.Parallel()
+	src := RIInfo{
+		InstanceType:        "m5.xlarge",
+		NormalizationFactor: 8,
+		MonthlyCost:         80,
+	}
+	// m6i.xlarge: same "m" prefix (gen jump bonus), exact NF, high confidence.
+	nearPerfect := OfferingOption{
+		InstanceType:        "m6i.xlarge",
+		EffectiveMonthlyCost: 85, // slightly more expensive
+		NormalizationFactor:  8,
+		SavingsAbs:           floatPtr(220),
+		RecommendationCount:  5,
+	}
+	// r5.xlarge: different prefix (no family gen bonus), same NF, no confidence.
+	crossFamily := OfferingOption{
+		InstanceType:        "r5.xlarge",
+		EffectiveMonthlyCost: 80, // same cost as source -- better raw price
+		NormalizationFactor:  8,
+	}
+	scoreNearPerfect := compositeScore(nearPerfect, src)
+	scoreCrossFamily := compositeScore(crossFamily, src)
+	assert.Greater(t, scoreNearPerfect, scoreCrossFamily,
+		"same-gen m6i should outrank cross-family r5 despite being slightly more expensive")
+}
+
+// TestCompositeScore_SameArchOutranksCrossArch asserts that a same-
+// architecture alternative ranks higher than a cross-arch offering when
+// all other signals (family prefix, cost, NF, confidence) are equal.
+// Both offerings share the same "c" family prefix as the source so the
+// family-gen component is identical and only the arch component differs.
+func TestCompositeScore_SameArchOutranksCrossArch(t *testing.T) {
+	t.Parallel()
+	src := RIInfo{
+		InstanceType:        "c5.xlarge", // Intel x86, prefix "c"
+		NormalizationFactor: 8,
+		MonthlyCost:         90,
+	}
+	// c6i: same "c" prefix (family gen bonus), Intel x86 (same arch).
+	sameArch := OfferingOption{
+		InstanceType:        "c6i.xlarge",
+		EffectiveMonthlyCost: 90,
+		NormalizationFactor:  8,
+	}
+	// c6g: same "c" prefix (family gen bonus), Graviton ARM (cross arch).
+	crossArch := OfferingOption{
+		InstanceType:        "c6g.xlarge",
+		EffectiveMonthlyCost: 90,
+		NormalizationFactor:  8,
+	}
+	assert.Greater(t, compositeScore(sameArch, src), compositeScore(crossArch, src),
+		"x86->x86 should outrank x86->ARM when family-gen bonus is equal for both")
+}
+
+// TestCompositeScore_HighConfidenceOutranksLow asserts that a high-
+// confidence recommendation (large savings + large fleet) ranks higher
+// than a low-confidence one at otherwise equal signals.
+func TestCompositeScore_HighConfidenceOutranksLow(t *testing.T) {
+	t.Parallel()
+	src := RIInfo{
+		InstanceType:        "c5.xlarge",
+		NormalizationFactor: 8,
+		MonthlyCost:         70,
+	}
+	highConf := OfferingOption{
+		InstanceType:        "r5.xlarge",
+		EffectiveMonthlyCost: 70,
+		NormalizationFactor:  8,
+		SavingsAbs:           floatPtr(250),
+		RecommendationCount:  4,
+	}
+	lowConf := OfferingOption{
+		InstanceType:        "r5.xlarge",
+		EffectiveMonthlyCost: 70,
+		NormalizationFactor:  8,
+		SavingsAbs:           floatPtr(10),
+		RecommendationCount:  1,
+	}
+	assert.Greater(t, compositeScore(highConf, src), compositeScore(lowConf, src),
+		"high-confidence CE rec should outrank low-confidence at equal cost")
+}
+
+// TestCompositeScore_AbsentSavingsIsNeutral asserts that an offering with
+// nil SavingsAbs does not get penalised relative to a low-confidence one.
+// Per the nullable-not-zero rule, absent data must not be coerced to 0.
+func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
+	t.Parallel()
+	src := RIInfo{
+		InstanceType:        "c5.xlarge",
+		NormalizationFactor: 8,
+		MonthlyCost:         70,
+	}
+	absentSavings := OfferingOption{
+		InstanceType:        "r6i.xlarge",
+		EffectiveMonthlyCost: 70,
+		NormalizationFactor:  8,
+		SavingsAbs:           nil, // not supplied
+	}
+	lowConf := OfferingOption{
+		InstanceType:        "r6i.xlarge",
+		EffectiveMonthlyCost: 70,
+		NormalizationFactor:  8,
+		SavingsAbs:           floatPtr(5), // explicitly low confidence
+	}
+	// absent must score >= low confidence (neutral 0.5 vs. 0.0)
+	assert.GreaterOrEqual(t, compositeScore(absentSavings, src), compositeScore(lowConf, src),
+		"nil SavingsAbs should be treated as neutral (0.5), not as low confidence (0.0)")
+}
+
+// TestCompositeScore_FamilyPrefixDetection confirms familyPrefix strips
+// generation digits and suffixes correctly for both x86 and ARM families.
+func TestCompositeScore_FamilyPrefixDetection(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		family string
+		want   string
+	}{
+		{"m5", "m"},
+		{"m6i", "m"},
+		{"m6g", "m"},
+		{"c6gn", "c"},
+		{"r5", "r"},
+		{"hpc7g", "hpc"},
+		{"t4g", "t"},
+	}
+	for _, c := range cases {
+		t.Run(c.family, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, c.want, familyPrefix(c.family))
+		})
+	}
+}
+
+// TestCompositeScore_ARMDetection confirms isARMFamily correctly classifies
+// Graviton (ARM) vs. non-Graviton (x86/AMD) families.
+func TestCompositeScore_ARMDetection(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		family string
+		arm    bool
+	}{
+		{"m6g", true},
+		{"m6gd", true},
+		{"m6gn", true},
+		{"m7g", true},
+		{"hpc7g", true},
+		{"t4g", true},
+		{"m6i", false},
+		{"c5n", false},
+		{"r6a", false}, // AMD, not ARM
+		{"m5", false},
+		{"r5d", false},
+	}
+	for _, c := range cases {
+		t.Run(c.family, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, c.arm, isARMFamily(c.family),
+				"isARMFamily(%q) should be %v", c.family, c.arm)
+		})
+	}
+}
+
+// TestAnalyzeReshapingWithRecs_CompositeScoreOrdersAlternatives is a
+// snapshot-style integration test: given three alternatives with distinct
+// composite score profiles, the slice must arrive in composite-score
+// (descending) order.
+//
+// Source: m5.xlarge, NF=8, MonthlyCost=10 (src_units = 80).
+// All alternatives use NF=8 and EMC=10 (units = 80 >= 80, passes the
+// dollar-units gate). Their composite ranking is determined entirely by
+// the non-cost signals:
+//
+//   - m6i.xlarge: same "m" prefix (family gen bonus=1), x86->x86 (arch=1), high confidence
+//   - m6g.xlarge: same "m" prefix (family gen bonus=1), x86->ARM (arch=0), medium confidence
+//   - c5.xlarge:  cross prefix (family gen=0), x86->x86 (arch=1), low confidence
+//
+// Expected order: m6i > m6g > c5.
+func TestAnalyzeReshapingWithRecs_CompositeScoreOrdersAlternatives(t *testing.T) {
+	t.Parallel()
+
+	highSavings := 220.0
+	medSavings := 60.0
+	lowSavings := 15.0
+
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		return []OfferingOption{
+			{
+				InstanceType: "c5.xlarge", OfferingID: "off-c5",
+				EffectiveMonthlyCost: 10, NormalizationFactor: 8, CurrencyCode: "USD",
+				SavingsAbs: &lowSavings, RecommendationCount: 1,
+			},
+			{
+				InstanceType: "m6g.xlarge", OfferingID: "off-m6g",
+				EffectiveMonthlyCost: 10, NormalizationFactor: 8, CurrencyCode: "USD",
+				SavingsAbs: &medSavings, RecommendationCount: 2,
+			},
+			{
+				InstanceType: "m6i.xlarge", OfferingID: "off-m6i",
+				EffectiveMonthlyCost: 10, NormalizationFactor: 8, CurrencyCode: "USD",
+				SavingsAbs: &highSavings, RecommendationCount: 4,
+			},
+		}, nil
+	}
+
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 10, CurrencyCode: "USD",
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	alts := recs[0].AlternativeTargets
+	require.Len(t, alts, 3, "all three cross-family alternatives must survive the eligibility gates")
+
+	// Assert composite-score ordering: m6i > m6g > c5.
+	assert.Equal(t, "m6i.xlarge", alts[0].InstanceType, "m6i: same prefix + high confidence should rank first")
+	assert.Equal(t, "m6g.xlarge", alts[1].InstanceType, "m6g: same prefix but ARM penalty places it second")
+	assert.Equal(t, "c5.xlarge", alts[2].InstanceType, "c5: no family bonus + low confidence should rank last")
+}

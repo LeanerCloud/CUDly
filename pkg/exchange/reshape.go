@@ -81,6 +81,19 @@ type OfferingOption struct {
 	// on either side falls back to "skip the term guard" for callers
 	// or fixtures that don't populate it.
 	TermSeconds int64 `json:"term_seconds,omitempty"`
+	// SavingsAbs is the absolute monthly savings (in CurrencyCode) that
+	// AWS Cost Explorer reported for this recommendation. Used by
+	// compositeScore to estimate savings % and derive a confidence
+	// signal. Zero means "not supplied" — the score component is omitted
+	// rather than coerced to 0 (which would falsely rank this offering
+	// last on the savings axis).
+	SavingsAbs *float64 `json:"savings_abs,omitempty"`
+	// RecommendationCount is the number of instances AWS Cost Explorer
+	// included in the recommendation. Used together with SavingsAbs to
+	// derive a confidence signal (large fleet + large savings = high
+	// confidence). Zero means "not supplied"; the confidence signal is
+	// skipped rather than treated as a 0-instance fleet.
+	RecommendationCount int `json:"recommendation_count,omitempty"`
 }
 
 // PurchaseRecLookup is the signature of the closure that resolves a
@@ -147,6 +160,186 @@ func passesDollarUnitsCheck(srcNF, srcMonthlyCost float64, srcCurrency string, t
 		return false
 	}
 	return target.NormalizationFactor*target.EffectiveMonthlyCost >= srcNF*srcMonthlyCost
+}
+
+// Composite score weights. Higher score = better alternative. The price term
+// is dominant; the remaining bonuses/penalties nudge the ranking but cannot
+// flip alternatives whose effective cost differs by more than a few percent.
+//
+//   - scoreWeightCost:        the cost term contributes the largest share
+//   - scoreWeightFamilyGen:   same-generation-jump bonus (m5->m6i beats m5->r5)
+//   - scoreWeightArch:        cross-architecture penalty (Intel->ARM requires AMI validation)
+//   - scoreWeightConfidence:  high/medium/low CE confidence bonus
+//   - scoreWeightNFProximity: normalized-capacity proximity bonus (1.0 = exact match)
+const (
+	scoreWeightCost        = 0.60
+	scoreWeightFamilyGen   = 0.15
+	scoreWeightArch        = 0.10
+	scoreWeightConfidence  = 0.10
+	scoreWeightNFProximity = 0.05
+)
+
+// compositeScore returns a score in the range [0, 1] for an offering
+// relative to the source RI. Higher is better. The five components are:
+//
+//  1. Cost (dominant, 60%): inverted effective monthly cost relative to the
+//     source RI so that cheaper offerings score higher. When source pricing
+//     is absent the component is replaced with a neutral 0.5 mid-point rather
+//     than 0 (which would unfairly penalise offerings for a data gap in src).
+//
+//  2. Family-generation fit (15%): a same-prefix generation-jump (m5->m6i)
+//     scores full marks; a cross-prefix alternative (m5->r5) scores zero.
+//
+//  3. Architecture match (10%): same architecture (both x86 or both ARM)
+//     avoids an AMI-compatibility concern; a cross-arch alternative pays a
+//     penalty. When the architecture is ambiguous (unknown family suffix)
+//     no penalty is applied.
+//
+//  4. CE confidence (10%): derived from SavingsAbs + RecommendationCount
+//     using the same heuristic as confidenceBucketFor in the API layer.
+//     High->1.0, medium->0.5, low->0.0. Zero-value signals are treated
+//     as absent (neutral 0.5) rather than "low" to avoid penalising
+//     offerings that predate the field.
+//
+//  5. NF proximity (5%): how close the alternative's normalization capacity
+//     is to the source RI's. score = 1 - min(|ratio-1|, 1). Exact match
+//     (ratio = 1) scores 1.0; double or half capacity scores 0.0.
+//     Zero/absent NF is treated as neutral 0.5.
+func compositeScore(off OfferingOption, src RIInfo) float64 {
+	return scoreWeightCost*costComponent(off, src) +
+		scoreWeightFamilyGen*familyGenComponent(off, src) +
+		scoreWeightArch*archComponent(off, src) +
+		scoreWeightConfidence*confidenceComponent(off) +
+		scoreWeightNFProximity*nfProximityComponent(off, src)
+}
+
+// costComponent returns a [0,1] cost score for the offering.
+// When src pricing is absent (MonthlyCost == 0) returns 0.5 (neutral) so
+// that a missing field does not falsely penalise or reward the offering.
+func costComponent(off OfferingOption, src RIInfo) float64 {
+	if src.MonthlyCost <= 0 || off.EffectiveMonthlyCost <= 0 {
+		return 0.5
+	}
+	// Cheaper than source scores close to 1.0; equal scores ~0.5;
+	// more expensive trends toward 0.0. Clamp to [0,1].
+	ratio := src.MonthlyCost / off.EffectiveMonthlyCost
+	// ratio > 1 means offering is cheaper (good); ratio < 1 means more expensive.
+	// Map via: score = ratio / (1 + ratio) which is monotone on (0,+inf),
+	// passes through 0.5 at ratio=1, and is bounded in [0,1].
+	return ratio / (1.0 + ratio)
+}
+
+// familyGenComponent returns 1.0 when the offering is a same-family-prefix
+// generation jump (e.g. m5->m6i), 0.0 otherwise. The prefix is the leading
+// letters of the family name before the generation digit.
+func familyGenComponent(off OfferingOption, src RIInfo) float64 {
+	srcFamily, _ := parseInstanceType(src.InstanceType)
+	offFamily, _ := parseInstanceType(off.InstanceType)
+	if srcFamily == "" || offFamily == "" {
+		return 0.0
+	}
+	if familyPrefix(srcFamily) == familyPrefix(offFamily) {
+		return 1.0
+	}
+	return 0.0
+}
+
+// familyPrefix returns the leading letter(s) from a family name, stripping
+// the generation number and suffix (e.g. "m6i" -> "m", "r5" -> "r",
+// "c6gn" -> "c"). Returns the whole string if no digit is found.
+func familyPrefix(family string) string {
+	for i, r := range family {
+		if r >= '0' && r <= '9' {
+			return family[:i]
+		}
+	}
+	return family
+}
+
+// archComponent returns 1.0 when source and offering share the same
+// processor architecture, 0.0 for a cross-arch pairing. When either
+// family is ambiguous (unknown suffix) returns 0.5 (neutral, no penalty).
+//
+// Architecture is inferred from the family suffix:
+//   - families ending in "g" or "gd" or "gn" use ARM (AWS Graviton)
+//   - all other known suffixes (blank, "i", "n", "d", "a", "id", etc.) use x86
+func archComponent(off OfferingOption, src RIInfo) float64 {
+	srcFamily, _ := parseInstanceType(src.InstanceType)
+	offFamily, _ := parseInstanceType(off.InstanceType)
+	if srcFamily == "" || offFamily == "" {
+		return 0.5
+	}
+	srcIsARM := isARMFamily(srcFamily)
+	offIsARM := isARMFamily(offFamily)
+	if srcIsARM == offIsARM {
+		return 1.0
+	}
+	return 0.0
+}
+
+// isARMFamily returns true when the EC2 family name indicates a Graviton
+// (ARM) processor. The Graviton suffix is always "g" or a "g"-prefixed
+// qualifier ("gd", "gn", "g2"). Detection: strip the generation digit+
+// cluster from the family and check whether the remainder ends in "g".
+// Examples: "m6g"->ARM, "m6gd"->ARM, "m6gn"->ARM, "m7g"->ARM,
+// "m6i"->x86, "c5n"->x86, "r6a"->x86 (AMD), "hpc7g"->ARM.
+func isARMFamily(family string) bool {
+	// Strip the leading prefix letters to get "generation+suffix".
+	genSuffix := strings.TrimLeft(family, "abcdefghijklmnopqrstuvwxyz")
+	// Strip leading digits (the generation number).
+	suffix := strings.TrimLeft(genSuffix, "0123456789")
+	// Graviton families have a suffix that starts with "g".
+	return strings.HasPrefix(suffix, "g")
+}
+
+// confidenceComponent maps SavingsAbs + RecommendationCount to a [0,1]
+// confidence score using the same thresholds as the API layer:
+//
+//	high   ($200+ savings, 3+ instances) -> 1.0
+//	medium ($50+ savings)                -> 0.5
+//	low    (otherwise)                   -> 0.0
+//
+// When SavingsAbs is nil (not supplied) the component returns 0.5 (neutral)
+// so that an absent field doesn't tilt the ranking.
+func confidenceComponent(off OfferingOption) float64 {
+	if off.SavingsAbs == nil {
+		return 0.5
+	}
+	savings := *off.SavingsAbs
+	count := off.RecommendationCount
+	if count < 1 {
+		count = 1
+	}
+	switch {
+	case savings >= 200 && count >= 3:
+		return 1.0
+	case savings >= 50:
+		return 0.5
+	default:
+		return 0.0
+	}
+}
+
+// nfProximityComponent returns a [0,1] score based on how close the
+// offering's total normalized capacity is to the source RI. An exact match
+// (ratio = 1.0) scores 1.0; a 2x or 0.5x difference scores 0.0. When
+// either NF is zero/absent (src.NormalizationFactor == 0 or
+// off.NormalizationFactor == 0) the component returns 0.5 (neutral).
+func nfProximityComponent(off OfferingOption, src RIInfo) float64 {
+	srcNF := src.NormalizationFactor
+	if srcNF <= 0 {
+		_, size := parseInstanceType(src.InstanceType)
+		srcNF = normalizationFactors[size]
+	}
+	if srcNF <= 0 || off.NormalizationFactor <= 0 {
+		return 0.5
+	}
+	ratio := off.NormalizationFactor / srcNF
+	deviation := math.Abs(ratio - 1.0)
+	if deviation >= 1.0 {
+		return 0.0
+	}
+	return 1.0 - deviation
 }
 
 // normalizationFactors maps EC2 instance sizes to their AWS normalization factors.
@@ -361,12 +554,13 @@ func AnalyzeReshapingWithRecs(
 // fillAlternativesFromRecs is the per-rec body of
 // AnalyzeReshapingWithRecs: for each rec it filters the offerings list
 // to cross-family options that match the source RI's term and pass the
-// dollar-units gate, then sorts them ascending by EffectiveMonthlyCost
-// so the cheapest lands first in the UI list. The source family and
-// the primary target are excluded so the alternatives slice is
-// meaningfully different from the primary suggestion. When source
-// pricing or the source/offering term is missing the relevant gate is
-// skipped for that rec (NF/MonthlyCost==0 / TermSeconds==0 cases).
+// dollar-units gate, then ranks them by compositeScore (descending) so
+// the best overall alternative lands first. Tie-break: ascending
+// EffectiveMonthlyCost. The source family and the primary target are
+// excluded so the alternatives slice is meaningfully different from the
+// primary suggestion. When source pricing or the source/offering term is
+// missing the relevant gate is skipped for that rec (NF/MonthlyCost==0
+// / TermSeconds==0 cases).
 func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []OfferingOption, risByID map[string]RIInfo) {
 	for i := range recs {
 		src, hasSrc := risByID[recs[i].SourceRIID]
@@ -379,6 +573,13 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 			filled = append(filled, off)
 		}
 		sort.Slice(filled, func(a, b int) bool {
+			// Higher composite score = better alternative. Tie-break by
+			// ascending EffectiveMonthlyCost so cheaper wins on equal scores.
+			sa := compositeScore(filled[a], src)
+			sb := compositeScore(filled[b], src)
+			if sa != sb {
+				return sa > sb
+			}
 			return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost
 		})
 		recs[i].AlternativeTargets = filled

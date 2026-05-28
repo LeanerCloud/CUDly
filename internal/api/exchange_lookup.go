@@ -100,14 +100,26 @@ func recommendationToOffering(rec config.RecommendationRecord, currencyCode stri
 	if rec.Term > 0 {
 		termSeconds = int64(rec.Term) * secondsPerYear
 	}
-	return exchange.OfferingOption{
+	opt := exchange.OfferingOption{
 		InstanceType:         rec.ResourceType,
 		OfferingID:           rec.ID,
 		EffectiveMonthlyCost: monthly,
 		NormalizationFactor:  exchange.NormalizationFactorForSize(size),
 		CurrencyCode:         currencyCode,
 		TermSeconds:          termSeconds,
+		RecommendationCount:  rec.Count,
 	}
+	// Propagate absolute savings from the CE recommendation into the
+	// OfferingOption so compositeScore can derive a confidence signal.
+	// Savings is always non-negative by convention; a zero value is
+	// indistinguishable from "not populated" only when combined with a
+	// zero Count, so we propagate whenever Savings > 0 to avoid the
+	// ambiguity.
+	if rec.Savings > 0 {
+		s := rec.Savings
+		opt.SavingsAbs = &s
+	}
+	return opt
 }
 
 // secondsPerYear is the AWS-canonical RI duration constant for a 1-year
