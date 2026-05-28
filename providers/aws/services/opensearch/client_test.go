@@ -1,8 +1,10 @@
 package opensearch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -1007,4 +1009,68 @@ func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
 		assert.Contains(t, err.Error(), "unsupported OpenSearch reservation term")
 	}
 	mockOS.AssertNotCalled(t, "DescribeReservedInstanceOfferings", mock.Anything, mock.Anything)
+}
+
+// TestPurchaseCommitment_TagFailure_StructuredLog asserts that when AddTags
+// returns an error after a successful purchase:
+//   - the purchase result is still Success=true (tag failure is non-fatal)
+//   - a line containing "OPENSEARCH_TAG_FAILED" is emitted to the log
+//   - the commitment ID is present in that log line (for operator lookup)
+//   - no AWS account ID or other PII appears in the log line
+func TestPurchaseCommitment_TagFailure_StructuredLog(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	mockSTS := &MockOpenSearchSTSClient{}
+	t.Cleanup(func() { mockOS.AssertExpectations(t); mockSTS.AssertExpectations(t) })
+
+	client := &Client{client: mockOS, stsClient: mockSTS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSearch,
+		ResourceType:  "m5.large.search",
+		Count:         1,
+		Term:          "1yr",
+		Region:        "us-east-1",
+		PaymentOption: "all-upfront",
+	}
+
+	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
+		Return(&opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []types.ReservedInstanceOffering{{
+				ReservedInstanceOfferingId: aws.String("off-tag-fail"),
+				InstanceType:               types.OpenSearchPartitionInstanceTypeM5LargeSearch,
+				Duration:                   31536000,
+				PaymentOption:              types.ReservedInstancePaymentOptionAllUpfront,
+			}},
+		}, nil)
+
+	const riID = "ri-tag-fail-abc123"
+	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
+		Return(&opensearch.PurchaseReservedInstanceOfferingOutput{
+			ReservedInstanceId: aws.String(riID),
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("000000000000")}, nil)
+
+	mockOS.On("AddTags", mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("ValidationException: invalid resource type"))
+
+	// Redirect log output to capture the structured line.
+	var buf bytes.Buffer
+	origWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(origWriter) })
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+
+	assert.NoError(t, err, "tag failure must not surface as a purchase error")
+	assert.True(t, result.Success, "purchase must remain successful when tagging fails")
+	assert.Equal(t, riID, result.CommitmentID)
+
+	logOut := buf.String()
+	assert.Contains(t, logOut, "OPENSEARCH_TAG_FAILED", "structured sentinel must appear in log")
+	assert.Contains(t, logOut, "commitment_id="+riID, "commitment ID must be present for operator lookup")
+	// The account ID (000000000000) must not be logged -- it is not PII but
+	// the structured line should stay minimal and scoped to the commitment.
+	assert.NotContains(t, logOut, "000000000000", "account ID must not appear in the tag-failure log line")
 }

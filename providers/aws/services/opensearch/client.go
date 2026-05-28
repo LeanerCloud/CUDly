@@ -131,14 +131,17 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 
 // PurchaseCommitment purchases an OpenSearch Reserved Instance.
 //
-// PurchaseReservedInstanceOfferingInput has no Tags field — tagging happens
+// PurchaseReservedInstanceOfferingInput has no Tags field -- tagging happens
 // post-purchase via opensearch:AddTags with a reserved-instance ARN
 // (arn:aws:es:<region>:<account>:reserved-instance/<uuid>). AWS hasn't
 // explicitly documented reserved-instance as a supported resource type for
 // AddTags (only domain/data-source/application), so the call may return a
-// validation error — in which case retry.ErrPermanent short-circuits and the
+// validation error -- in which case retry.ErrPermanent short-circuits and the
 // failure is logged without blocking the purchase. If AWS ever adds support,
 // this will start working with no code change.
+// On tagging failure a structured line is emitted (OPENSEARCH_TAG_FAILED) so
+// operator dashboards can alert on untagged RIs; see
+// runbooks/opensearch-untagged-ri.md for the manual remediation steps.
 func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
@@ -211,7 +214,9 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source); err != nil {
-		log.Printf("WARNING: failed to tag OpenSearch RI %s after purchase (RI is bought; tag missing, source recorded in purchase_history): %v", result.CommitmentID, err)
+		// Structured line for operator dashboards / alerting. The RI is
+		// purchased; only the tag is missing. Follow runbooks/opensearch-untagged-ri.md.
+		log.Printf("OPENSEARCH_TAG_FAILED commitment_id=%s error=%v", result.CommitmentID, err)
 	}
 
 	return result, nil
