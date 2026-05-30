@@ -50,7 +50,17 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 		if errors.Is(err, auth.ErrInvalidMFACode) {
 			return nil, NewClientError(401, "invalid_mfa_code")
 		}
-		return nil, NewClientError(401, err.Error())
+		// ErrMFANotConfigured (MFA enabled but secret missing) maps to
+		// "mfa_required" rather than a distinct message so an attacker
+		// cannot distinguish "MFA enrolled + working" from "MFA enrolled
+		// + broken secret" by probing the error response (issue #388).
+		if errors.Is(err, auth.ErrMFANotConfigured) {
+			return nil, NewClientError(401, "mfa_required")
+		}
+		// All other auth failures (wrong password, account not found,
+		// locked, etc.) collapse to a single opaque 401. Never forward
+		// err.Error() verbatim — it may reveal internal account state.
+		return nil, NewClientError(401, "invalid credentials")
 	}
 
 	return response, nil
@@ -498,8 +508,9 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 // package. The login handler maps these via errors.Is() to the
 // machine-readable response codes "mfa_required" / "invalid_mfa_code".
 var (
-	mfaRequiredSentinel = auth.ErrMFARequired
-	mfaInvalidSentinel  = auth.ErrInvalidMFACode
+	mfaRequiredSentinel      = auth.ErrMFARequired
+	mfaInvalidSentinel       = auth.ErrInvalidMFACode
+	mfaNotConfiguredSentinel = auth.ErrMFANotConfigured
 )
 
 // mapMFAServiceError maps a service-layer MFA error to the right

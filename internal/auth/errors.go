@@ -46,4 +46,12 @@ var (
 	// without substring-matching the human message. See issue #497.
 	ErrMFARequired    = errors.New("mfa_required")
 	ErrInvalidMFACode = errors.New("invalid_mfa_code")
+
+	// ErrMFANotConfigured is returned when a user has MFA flagged as
+	// enabled but the MFA secret is missing (e.g. enrollment was
+	// interrupted). The login handler maps this to "mfa_required" — the
+	// same response as ErrMFARequired — so an attacker cannot distinguish
+	// "MFA enrolled and working" from "MFA enrolled but secret missing"
+	// by observing the error message. See issue #388.
+	ErrMFANotConfigured = errors.New("MFA is enabled but not configured")
 )

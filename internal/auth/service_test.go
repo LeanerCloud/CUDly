@@ -472,7 +472,8 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "MFA is enabled but not configured")
+	assert.ErrorIs(t, err, ErrMFANotConfigured,
+		"Login with MFA enabled but no secret must return ErrMFANotConfigured")
 }
 
 // Test UpdateUserProfile

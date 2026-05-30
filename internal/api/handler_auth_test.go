@@ -1250,8 +1250,9 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 // auth package (errors.go); the api package's login handler maps
 // them via errors.Is(). Here we just wrap them so the mocked Login
 // returns the same value the real service would.
-func ErrMFARequired_test() error    { return mfaRequiredSentinel }
-func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }
+func ErrMFARequired_test() error      { return mfaRequiredSentinel }
+func ErrInvalidMFACode_test() error   { return mfaInvalidSentinel }
+func ErrMFANotConfigured_test() error { return mfaNotConfiguredSentinel }
 
 // Tests for GET /api/auth/me/permissions (issue #917).
 
@@ -1482,4 +1483,116 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 		"HTTP status must be identical for unknown-user and wrong-password paths")
 	assert.Equal(t, ceNotFound.Error(), ceWrongPass.Error(),
 		"error body must be identical for unknown-user and wrong-password paths to prevent enumeration")
+}
+
+// ---------------------------------------------------------------
+// Issue #388 — MFA enrollment status must not be leaked via login
+// error responses.
+//
+// An attacker who observes distinct error codes for
+//   (a) wrong credentials + no MFA enrolled
+//   (b) wrong credentials + MFA enrolled
+// can confirm whether a target account has MFA enabled without the
+// correct password. All failed-login paths must produce identical
+// response code and message.
+//
+// The tests below also verify that ErrMFANotConfigured (MFA flagged
+// on but secret missing) maps to "mfa_required" rather than a
+// distinct message — so "MFA enrolled + working" is
+// indistinguishable from "MFA enrolled + broken secret".
+// ---------------------------------------------------------------
+
+// TestLogin_FailedAuth_ResponseEquivalence asserts that two
+// failed-login attempts — one for a user without MFA (generic 401)
+// and one for a user with MFA enrolled (any non-mfa_required path)
+// — produce the exact same HTTP status code and error message.
+func TestLogin_FailedAuth_ResponseEquivalence(t *testing.T) {
+	ctx := context.Background()
+
+	genericErr := errors.New("Check your email address and password and try again")
+
+	for _, tc := range []struct {
+		name    string
+		authErr error
+	}{
+		{"no-MFA user wrong password", genericErr},
+		{"MFA-enrolled user wrong password", genericErr},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			mockAuth.On("Login", ctx, mock.Anything).
+				Return((*LoginResponse)(nil), tc.authErr).Once()
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+			handler := &Handler{auth: mockAuth}
+			req := &events.LambdaFunctionURLRequest{
+				Body: `{"email":"u@x.com","password":"` + b64("wrong") + `"}`,
+			}
+			_, err := handler.login(ctx, req)
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "%s: expected ClientError, got %T: %v", tc.name, err, err)
+			assert.Equal(t, 401, ce.code, "%s: status code mismatch", tc.name)
+			assert.Equal(t, "invalid credentials", ce.Error(), "%s: message mismatch", tc.name)
+		})
+	}
+}
+
+// TestLogin_MFANotConfigured_ReturnsMFARequired asserts that
+// ErrMFANotConfigured (MFA enabled + secret missing) produces the
+// same "mfa_required" response as ErrMFARequired, so an attacker
+// cannot distinguish a correctly-enrolled account from a
+// partially-enrolled one (issue #388).
+func TestLogin_MFANotConfigured_ReturnsMFARequired(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("Login", ctx, mock.Anything).
+		Return((*LoginResponse)(nil), ErrMFANotConfigured_test()).Once()
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"u@x.com","password":"` + b64("correct") + `","mfa_code":""}`,
+	}
+	_, err := handler.login(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError")
+	assert.Equal(t, 401, ce.code)
+	// Must be identical to the ErrMFARequired response — both paths must
+	// be indistinguishable to an external observer (issue #388).
+	assert.Equal(t, "mfa_required", ce.Error(),
+		"ErrMFANotConfigured must produce 'mfa_required', identical to ErrMFARequired")
+}
+
+// TestLogin_MFARequired_And_NotConfigured_ProduceSameResponse asserts
+// that the two MFA enrollment states (working vs broken secret) map
+// to IDENTICAL response bodies and status codes (issue #388).
+func TestLogin_MFARequired_And_NotConfigured_ProduceSameResponse(t *testing.T) {
+	ctx := context.Background()
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"u@x.com","password":"` + b64("correct") + `"}`,
+	}
+
+	getResponse := func(authErr error) (int, string) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("Login", ctx, mock.Anything).
+			Return((*LoginResponse)(nil), authErr).Once()
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		handler := &Handler{auth: mockAuth}
+		_, err := handler.login(ctx, req)
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		return ce.code, ce.Error()
+	}
+
+	codeA, msgA := getResponse(ErrMFARequired_test())
+	codeB, msgB := getResponse(ErrMFANotConfigured_test())
+
+	assert.Equal(t, codeA, codeB,
+		"ErrMFARequired and ErrMFANotConfigured must return the same HTTP status")
+	assert.Equal(t, msgA, msgB,
+		"ErrMFARequired and ErrMFANotConfigured must return identical response bodies (issue #388)")
 }

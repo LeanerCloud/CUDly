@@ -203,7 +203,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			return ErrMFARequired
 		}
 		if user.MFASecret == "" {
-			return fmt.Errorf("MFA is enabled but not configured")
+			return fmt.Errorf("%w", ErrMFANotConfigured)
 		}
 		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
 		// (base32 decode error), resulting in a comparison miss rather than a panic.
