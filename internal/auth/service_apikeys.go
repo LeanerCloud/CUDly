@@ -291,6 +291,11 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	keyID := key.ID
 	go func() {
 		if _, sfErr, _ := s.lastUsedSFG.Do(keyID, func() (any, error) {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Warnf("service_apikeys: UpdateLastUsed goroutine panic: %v", r)
+				}
+			}()
 			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.UpdateLastUsed(updateCtx, keyID); err != nil {

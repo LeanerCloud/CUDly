@@ -169,6 +169,11 @@ func (rl *DBRateLimiter) maybeCleanup() {
 	// Run cleanup in background
 	go func() {
 		defer rl.cleanupRunning.Store(false)
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("db_rate_limiter: cleanup goroutine panic: %v", r)
+			}
+		}()
 		rl.cleanup()
 	}()
 }
