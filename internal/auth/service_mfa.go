@@ -262,13 +262,13 @@ func (s *Service) MFASetup(ctx context.Context, userID, password string) (*MFASe
 	}
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("authentication failed")
+		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
 	if user == nil {
-		return nil, fmt.Errorf("authentication failed")
+		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
 	if !s.verifyPassword(password, user.PasswordHash) {
-		return nil, fmt.Errorf("invalid password")
+		return nil, fmt.Errorf("%w", ErrMFAInvalidPassword)
 	}
 
 	secret, err := generateMFASecret()
@@ -316,16 +316,16 @@ func (s *Service) generateAndHashRecoveryCodes() (plaintext, hashes []string, er
 // "no enrollment in progress" rather than "expired" forever.
 func (s *Service) validatePendingMFAEnrollment(ctx context.Context, user *User, code string) error {
 	if user.MFAPendingSecret == "" || user.MFAPendingSecretExpiresAt == nil {
-		return fmt.Errorf("no MFA enrollment in progress")
+		return fmt.Errorf("%w", ErrMFANoEnrollmentInProgress)
 	}
 	if time.Now().After(*user.MFAPendingSecretExpiresAt) {
 		user.MFAPendingSecret = ""
 		user.MFAPendingSecretExpiresAt = nil
 		_ = s.store.UpdateUser(ctx, user)
-		return fmt.Errorf("MFA enrollment expired")
+		return fmt.Errorf("%w", ErrMFAEnrollmentExpired)
 	}
 	if !verifyTOTP(user.MFAPendingSecret, code) {
-		return fmt.Errorf("invalid MFA code")
+		return fmt.Errorf("%w", ErrMFAInvalidCode)
 	}
 	return nil
 }
@@ -350,7 +350,7 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	}
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
-		return nil, fmt.Errorf("authentication failed")
+		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
 	if err := s.validatePendingMFAEnrollment(ctx, user, code); err != nil {
 		return nil, err
@@ -410,16 +410,16 @@ func (s *Service) MFADisable(ctx context.Context, userID, password, codeOrRecove
 	}
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
-		return fmt.Errorf("authentication failed")
+		return fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
 	if !s.verifyPassword(password, user.PasswordHash) {
-		return fmt.Errorf("invalid password")
+		return fmt.Errorf("%w", ErrMFAInvalidPassword)
 	}
 	if !user.MFAEnabled {
 		return s.disableMFAAlreadyOff(ctx, user)
 	}
 	if codeOrRecovery == "" {
-		return fmt.Errorf("MFA code or recovery code required")
+		return fmt.Errorf("%w", ErrMFACodeRequired)
 	}
 
 	// Try TOTP first (cheap), then fall back to recovery code (bcrypt
@@ -427,7 +427,7 @@ func (s *Service) MFADisable(ctx context.Context, userID, password, codeOrRecove
 	// fresh proof-of-possession.
 	matched := verifyTOTP(user.MFASecret, codeOrRecovery) || s.consumeRecoveryCode(user, codeOrRecovery)
 	if !matched {
-		return fmt.Errorf("invalid MFA code")
+		return fmt.Errorf("%w", ErrMFAInvalidCode)
 	}
 
 	clearMFAFromUser(user)
@@ -448,13 +448,13 @@ func (s *Service) MFARegenerateRecoveryCodes(ctx context.Context, userID, code s
 	}
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
-		return nil, fmt.Errorf("authentication failed")
+		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
 	if !user.MFAEnabled || user.MFASecret == "" {
-		return nil, fmt.Errorf("MFA is not enabled")
+		return nil, fmt.Errorf("%w", ErrMFANotEnabled)
 	}
 	if !verifyTOTP(user.MFASecret, code) {
-		return nil, fmt.Errorf("invalid MFA code")
+		return nil, fmt.Errorf("%w", ErrMFAInvalidCode)
 	}
 
 	plaintext, hashes, err := s.generateAndHashRecoveryCodes()
