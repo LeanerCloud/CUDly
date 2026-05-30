@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -587,6 +588,11 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 
 	logging.Infof("purchase[%s]: approvePurchaseViaSession completed in %s (auth=session)",
 		execution.ExecutionID, time.Since(t0))
+	// Best-effort post-execution notification email (issue #291). Fires
+	// after the synchronous purchase completes so the email carries the
+	// final committed state. Errors are logged inside sendPurchaseExecutedEmail
+	// and never propagate — the purchase is already done at this point.
+	h.sendPurchaseExecutedEmail(ctx, req, execution, session.Email)
 	return map[string]string{"status": "completed"}, nil
 }
 
@@ -969,6 +975,113 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 	}
 
 	return map[string]string{"status": "canceled"}, nil
+}
+
+// revokePurchase is the one-click revocation handler embedded in the
+// post-execution notification email (issue #291). It accepts the same
+// three-mode dispatch shape as approvePurchase / cancelPurchase:
+//
+//  1. Session present AND RBAC-authorized (admin / cancel-any /
+//     cancel-own) → session-authed path.
+//  2. token != "" → token-authed path via the email one-click link.
+//  3. No token, no qualifying session → 401.
+//
+// The revocation window check is intentionally limited in this
+// iteration: because the sibling "AWS RI/SP revocation via support case"
+// issue has not yet landed its dedicated revocation_window_closes_at
+// column, revokePurchase reuses the ApprovalToken. Once the sibling lands
+// and adds a RevocationToken + RevocationWindowClosesAt column, this
+// handler should validate RevocationWindowClosesAt here before
+// attempting the cancellation.
+//
+// At this scope the revoke action is equivalent to a cancel on a
+// completed/completed execution — the underlying cloud revocation
+// (AWS support-case path) is out of scope for this issue and is handled
+// by the sibling "AWS RI/SP revocation" issue.
+//
+// Present-day behaviour: calling this route within the AWS revocation
+// window requests the cancellation and returns {"status":"revocation_requested"}.
+// Past the window it returns a friendly 409 with a plain-language message
+// rather than a stack trace.
+func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
+	if err := validateUUID(execID); err != nil {
+		return nil, err
+	}
+	execution, err := h.config.GetExecutionByID(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return nil, NewClientError(404, "execution not found")
+	}
+
+	// Only completed/partially_completed purchases have anything to revoke.
+	// A pending/notified purchase should be cancelled instead.
+	switch execution.Status {
+	case "completed", "partially_completed":
+		// valid
+	case "pending", "notified":
+		return nil, NewClientError(409, fmt.Sprintf(
+			"execution %s is still pending — use the Cancel link instead of Revoke", execID))
+	default:
+		return nil, NewClientError(409, fmt.Sprintf(
+			"execution %s cannot be revoked (status=%s); the revocation window may have closed or the purchase was not completed",
+			execID, execution.Status))
+	}
+
+	// Three-mode dispatch — same shape as cancelPurchase.
+	if session := h.tryGetSession(ctx, req); session != nil {
+		switch sessErr := h.authorizeSessionCancel(ctx, session, execution); {
+		case sessErr == nil:
+			return h.revokeViaSession(ctx, execution, session.Email)
+		case isPermissionDenied(sessErr):
+			// Fall through to the token branch.
+		default:
+			return nil, sessErr
+		}
+	}
+
+	if token == "" {
+		return nil, NewClientError(401, "sign in or use the revocation link from the notification email")
+	}
+
+	// Token-authed path: validate the token (reusing the approval token for
+	// this iteration) and confirm the caller is the authorised contact email.
+	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+	if err != nil {
+		return nil, err
+	}
+	// Validate token against the execution's ApprovalToken using constant-time
+	// comparison to prevent timing attacks (same guard as ApproveExecution in
+	// internal/purchase/approvals.go).
+	if execution.ApprovalToken == "" {
+		return nil, NewClientError(403, "invalid revocation token")
+	}
+	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+		return nil, NewClientError(403, "invalid revocation token")
+	}
+	return h.revokeViaSession(ctx, execution, actor)
+}
+
+// revokeViaSession performs the post-execution revocation action by recording
+// a "revocation_requested" status on the execution. Actual cloud-side
+// revocation (AWS support-case) is out of scope for issue #291 — it is
+// handled by the sibling "AWS RI/SP revocation via support case" issue.
+// This call records the intent so the History UI can surface it.
+func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string) (any, error) {
+	execution.Status = "revocation_requested"
+	if revokedBy != "" {
+		rb := revokedBy
+		execution.CancelledBy = &rb
+	}
+	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+		return nil, fmt.Errorf("failed to record revocation request for execution %s: %w", execution.ExecutionID, err)
+	}
+	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, revokedBy)
+	return map[string]string{
+		"status":  "revocation_requested",
+		"message": "Revocation request recorded. Contact AWS Support to complete the cancellation within the allowed window.",
+	}, nil
 }
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
@@ -2163,6 +2276,164 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		}
 	}
 	return true, "", responseRecipient
+}
+
+// sendPurchaseExecutedEmail sends a post-execution notification to the
+// configured recipients after a purchase completes successfully. It follows
+// the same best-effort contract as sendPurchaseApprovalEmail: errors are
+// logged but never propagate to the caller — the purchase is already done.
+//
+// Recipients (deduped):
+//   - global notification_email (Settings → General)
+//   - per-account contact_email for each recommendation's account
+//   - email of the user who originally submitted the execution
+//     (looked up by CreatedByUserID via h.auth.GetUser)
+//
+// The revocation link uses the execution's ApprovalToken (reusing the same
+// token infrastructure). When the sibling "AWS RI/SP revocation via support
+// case" issue lands and adds a dedicated revocation token + window field,
+// this method should be updated to use those fields instead.
+func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, executedByEmail string) {
+	if h.emailNotifier == nil {
+		logging.Debug("sendPurchaseExecutedEmail: no email notifier configured, skipping")
+		return
+	}
+	if execution.ExecutionID == "" {
+		logging.Warn("sendPurchaseExecutedEmail: empty execution ID, skipping")
+		return
+	}
+
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		logging.Errorf("sendPurchaseExecutedEmail: failed to load global config: %v", err)
+		return
+	}
+	globalNotify := ""
+	if globalCfg != nil && globalCfg.NotificationEmail != nil {
+		globalNotify = strings.TrimSpace(*globalCfg.NotificationEmail)
+	}
+
+	// Gather per-account contact emails for the recommendations.
+	contactEmails, err := h.gatherAccountContactEmails(ctx, execution.Recommendations)
+	if err != nil {
+		logging.Errorf("sendPurchaseExecutedEmail: failed to gather contact emails: %v", err)
+		contactEmails = nil
+	}
+
+	// Look up the requester's email via their user ID (if available).
+	requesterEmail := ""
+	requesterName := ""
+	if h.auth != nil && execution.CreatedByUserID != nil && *execution.CreatedByUserID != "" {
+		if u, lookupErr := h.auth.GetUser(ctx, *execution.CreatedByUserID); lookupErr == nil && u != nil {
+			requesterEmail = u.Email
+		}
+		// Error is non-fatal — we just omit the field from the email body.
+	}
+
+	// Build the deduplicated To / Cc list.
+	// Priority: contact emails are To (first one) + Cc (rest); global notify
+	// and requester email are Cc. When there are no contact emails, the global
+	// notify becomes To (matching the approval-email fallback in resolveApprovalRecipients).
+	to, cc := resolveExecutedNotificationRecipients(contactEmails, globalNotify, requesterEmail)
+	if to == "" {
+		logging.Warn("sendPurchaseExecutedEmail: no recipients resolved, skipping")
+		return
+	}
+
+	summaries := make([]email.RecommendationSummary, 0, len(execution.Recommendations))
+	for _, rec := range execution.Recommendations {
+		summaries = append(summaries, email.RecommendationSummary{
+			Service:        rec.Service,
+			ResourceType:   rec.ResourceType,
+			Engine:         rec.Engine,
+			Region:         rec.Region,
+			Count:          rec.Count,
+			MonthlySavings: rec.Savings,
+			Term:           rec.Term,
+			Payment:        rec.Payment,
+			UpfrontCost:    rec.UpfrontCost,
+		})
+	}
+
+	dashboardBase := h.resolveDashboardURL(req)
+	data := email.NotificationData{
+		DashboardURL:     dashboardBase,
+		ExecutionID:      execution.ExecutionID,
+		TotalSavings:     execution.EstimatedSavings,
+		TotalUpfrontCost: execution.TotalUpfrontCost,
+		Recommendations:  summaries,
+		RecipientEmail:   to,
+		CCEmails:         cc,
+		// Reuse the approval token as the revocation token so the recipient can
+		// trigger a post-execution cancel via the /revoke route. A dedicated
+		// revocation token will be added when the sibling "AWS RI/SP revocation"
+		// issue lands its own DB column.
+		RevocationToken:  execution.ApprovalToken,
+		RequestedByEmail: requesterEmail,
+		RequestedByName:  requesterName,
+		RequestedAt:      executionTimestamp(execution),
+		ExecutedBy:       executedByEmail,
+		ExecutedAt:       time.Now().UTC().Format(time.RFC3339),
+	}
+	if dashboardBase != "" {
+		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"
+	}
+
+	if sendErr := h.emailNotifier.SendPurchaseExecutedNotification(ctx, data); sendErr != nil {
+		logging.Errorf("sendPurchaseExecutedEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
+	}
+}
+
+// resolveExecutedNotificationRecipients builds the To / Cc pair for the
+// post-execution notification from the three input email sets. The logic
+// mirrors resolveApprovalRecipients: first contact email is To; remaining
+// contact emails, globalNotify, and requesterEmail are Cc (deduped). When
+// no contact emails are present, globalNotify becomes To and requesterEmail
+// becomes Cc.
+func resolveExecutedNotificationRecipients(contactEmails []string, globalNotify, requesterEmail string) (to string, cc []string) {
+	seen := map[string]bool{}
+	addCc := func(addr string) {
+		norm := strings.ToLower(strings.TrimSpace(addr))
+		if norm == "" || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		cc = append(cc, addr)
+	}
+
+	if len(contactEmails) > 0 {
+		to = contactEmails[0]
+		seen[strings.ToLower(strings.TrimSpace(to))] = true
+		for _, addr := range contactEmails[1:] {
+			addCc(addr)
+		}
+		addCc(globalNotify)
+		addCc(requesterEmail)
+		return to, cc
+	}
+
+	// No contact emails: fall back to globalNotify as To.
+	if globalNotify != "" {
+		to = globalNotify
+		seen[strings.ToLower(strings.TrimSpace(to))] = true
+		addCc(requesterEmail)
+		return to, cc
+	}
+
+	// Last resort: requester email only.
+	to = strings.TrimSpace(requesterEmail)
+	return to, nil
+}
+
+// executionTimestamp returns a human-readable timestamp for when the execution
+// was submitted (ScheduledDate for web-submitted rows). Returns empty string
+// when the execution has no timestamp (shouldn't happen in practice but
+// guards against zero-value time panics in templates).
+func executionTimestamp(exec *config.PurchaseExecution) string {
+	if exec.ScheduledDate.IsZero() {
+		return ""
+	}
+	return exec.ScheduledDate.UTC().Format(time.RFC3339)
 }
 
 // resolveDashboardURL returns the absolute base URL to embed in email
