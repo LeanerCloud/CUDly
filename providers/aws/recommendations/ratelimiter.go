@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 	"time"
 )

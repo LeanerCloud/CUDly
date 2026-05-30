@@ -287,3 +287,49 @@ func TestRateLimiter_ExhaustsRetries(t *testing.T) {
 	assert.Equal(t, 2, limiter.GetRetryCount())
 	assert.Error(t, lastErr)
 }
+
+// TestWait_JitterRange verifies that the jitter added to the backoff delay spans
+// the expected range [0, 20% of delay). Over 200 iterations the observed jitter
+// must include at least one value above 5% of the base delay (non-zero spread)
+// and must never exceed 20% of the base delay (upper bound).
+func TestWait_JitterRange(t *testing.T) {
+	const iterations = 200
+	// Use a short base delay so the test runs quickly.
+	baseDelay := 100 * time.Millisecond
+	limiter := NewRateLimiterWithOptions(baseDelay, 10*time.Second, 100)
+
+	// retryCount=1 => delay = 2^0 * baseDelay = baseDelay; jitter <= 0.2*baseDelay.
+	limiter.retryCount = 1
+
+	maxJitter := time.Duration(float64(baseDelay) * 0.2) // 20 ms
+	var observedMax time.Duration
+
+	for i := 0; i < iterations; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		start := time.Now()
+		err := limiter.Wait(ctx)
+		elapsed := time.Since(start)
+		cancel()
+		require.NoError(t, err)
+
+		jitter := elapsed - baseDelay
+		if jitter < 0 {
+			jitter = 0
+		}
+		if jitter > observedMax {
+			observedMax = jitter
+		}
+		// Jitter must never exceed the 20% cap (add 5ms scheduling slack).
+		assert.LessOrEqual(t, jitter, maxJitter+5*time.Millisecond,
+			"jitter %s exceeds 20%% of base delay %s", jitter, baseDelay)
+
+		// Reset so the delay is the same each iteration.
+		limiter.retryCount = 1
+	}
+
+	// After 200 draws from [0, 0.2*delay), we must have seen at least one value
+	// above 5% of baseDelay -- confirming the source is not stuck at zero.
+	minSpread := time.Duration(float64(baseDelay) * 0.05) // 5 ms
+	assert.Greater(t, observedMax, minSpread,
+		"jitter appears stuck near zero (max observed %s over %d iterations)", observedMax, iterations)
+}
