@@ -321,13 +321,13 @@ func serviceRegionFilter(service, region string) *types.Expression {
 // Mirrors fetchUtilizationPage so the two paths fail and back off the
 // same way.
 func (c *Client) fetchCoveragePage(ctx context.Context, input *costexplorer.GetReservationCoverageInput) (*costexplorer.GetReservationCoverageOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 		result, err := c.costExplorerClient.GetReservationCoverage(ctx, input)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation coverage: %w", err)
 			}
