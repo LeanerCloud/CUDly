@@ -69,7 +69,7 @@ secret_recovery_window_days = 14
 # Frontend / CDN
 # ==============================================
 
-enable_cdn            = false
+enable_cdn            = true
 frontend_price_class  = "PriceClass_100"
 create_subdomain_zone = false
 
