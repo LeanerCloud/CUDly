@@ -36,7 +36,7 @@ func TestLogin_AccountLockout_BeforePasswordCheck(t *testing.T) {
 	resp, err := service.Login(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "Check your email address and password and try again") // Generic error to prevent user enumeration
+	assert.Contains(t, err.Error(), "invalid email or password") // Generic error to prevent user enumeration
 
 	mockStore.AssertExpectations(t)
 	// Verify UpdateUser was NOT called - lockout check happens first
@@ -297,7 +297,7 @@ func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 
 	// Error message should be generic to prevent user enumeration
 	// Should NOT reveal that account is locked
-	assert.Equal(t, "Check your email address and password and try again", err.Error())
+	assert.Equal(t, "invalid email or password", err.Error())
 
 	mockStore.AssertExpectations(t)
 }
@@ -360,27 +360,40 @@ func TestRecordFailedLogin(t *testing.T) {
 }
 
 // TestLogin_OWASPEnumerationInvariant guards against regression that re-introduces
-// distinct error messages for the 5 authentication failure modes (OWASP ASVS V3.3.4
-// / V14.2). All 5 paths MUST return an identical string so the login endpoint cannot
+// distinct error messages for the 6 authentication failure modes (OWASP ASVS V3.3.4
+// / V14.2). All 6 paths MUST return an identical string so the login endpoint cannot
 // be used as an email-existence oracle.
 //
 // If this test fails after a code change, that change almost certainly re-introduced
 // a username-enumeration vulnerability and MUST be reverted or fixed before landing.
+//
+// Issue #416 added the "store error" scenario: the real Postgres store returns
+// (nil, pgx.ErrNoRows) for a missing row, not (nil, nil). Both the error path and
+// the nil-user path now collapse to the same message "invalid email or password"
+// and the Login function runs a dummy bcrypt compare to equalise response timing.
 func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
-	const wantMsg = "Check your email address and password and try again"
+	const wantMsg = "invalid email or password"
 	ctx := context.Background()
 
 	lockUntil := time.Now().Add(10 * time.Minute)
 
 	type scenario struct {
-		name    string
-		getUser func(t *testing.T) *User // nil means "user not found"
+		name       string
+		getUser    func(t *testing.T) *User // nil means "user not found (nil return)"
+		storeError error                    // non-nil means GetUserByEmail returns an error
 	}
 
 	scenarios := []scenario{
 		{
-			name:    "user not found",
+			name:    "user not found (nil, nil from store)",
 			getUser: func(t *testing.T) *User { return nil },
+		},
+		{
+			// Real Postgres store path: scanUser returns pgx.ErrNoRows for a
+			// missing row, so GetUserByEmail returns (nil, error) not (nil, nil).
+			name:       "user not found (nil, error from store)",
+			getUser:    func(t *testing.T) *User { return nil },
+			storeError: fmt.Errorf("no rows in result set"),
 		},
 		{
 			name: "inactive account",
@@ -421,7 +434,7 @@ func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
 			service := createTestService(mockStore, mockEmail)
 
 			user := sc.getUser(t)
-			mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+			mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(user, sc.storeError).Once()
 			mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
 
 			req := LoginRequest{

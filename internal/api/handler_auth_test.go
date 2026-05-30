@@ -1369,3 +1369,55 @@ func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
 	require.Len(t, result.Permissions, 1)
 	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
 }
+
+// TestHandler_login_ErrorEquivalence verifies that two failed login attempts --
+// one for a non-existent user and one for a wrong password on an existing user
+// -- produce IDENTICAL ClientError status codes and messages at the handler
+// layer (issue #416).
+//
+// This is the regression guard for username-enumeration via distinct error
+// messages: if either the HTTP status or the error body differ between the two
+// paths, an attacker can determine whether an email address is registered.
+func TestHandler_login_ErrorEquivalence(t *testing.T) {
+	ctx := context.Background()
+	encodedPassword := base64.StdEncoding.EncodeToString([]byte("SomePassword1!"))
+
+	// Path 1: service returns the "user not found" message (maps to the
+	// GetUserByEmail-error path in the real service).
+	mockAuthNotFound := new(MockAuthService)
+	mockAuthNotFound.On("Login", ctx, mock.Anything).
+		Return((*LoginResponse)(nil), errors.New("invalid email or password")).Once()
+	t.Cleanup(func() { mockAuthNotFound.AssertExpectations(t) })
+
+	handlerNotFound := &Handler{auth: mockAuthNotFound}
+	reqNotFound := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"nonexistent@example.com","password":"` + encodedPassword + `"}`,
+	}
+	_, errNotFound := handlerNotFound.login(ctx, reqNotFound)
+	require.Error(t, errNotFound, "expected login to fail for unknown user")
+
+	ceNotFound, okNotFound := IsClientError(errNotFound)
+	require.True(t, okNotFound, "expected ClientError for unknown-user path")
+
+	// Path 2: service returns the "wrong password" message (existing user).
+	mockAuthWrongPass := new(MockAuthService)
+	mockAuthWrongPass.On("Login", ctx, mock.Anything).
+		Return((*LoginResponse)(nil), errors.New("invalid email or password")).Once()
+	t.Cleanup(func() { mockAuthWrongPass.AssertExpectations(t) })
+
+	handlerWrongPass := &Handler{auth: mockAuthWrongPass}
+	reqWrongPass := &events.LambdaFunctionURLRequest{
+		Body: `{"email":"existing@example.com","password":"` + encodedPassword + `"}`,
+	}
+	_, errWrongPass := handlerWrongPass.login(ctx, reqWrongPass)
+	require.Error(t, errWrongPass, "expected login to fail for wrong password")
+
+	ceWrongPass, okWrongPass := IsClientError(errWrongPass)
+	require.True(t, okWrongPass, "expected ClientError for wrong-password path")
+
+	// Assert IDENTICAL status code and message body for both failure paths.
+	assert.Equal(t, ceNotFound.code, ceWrongPass.code,
+		"HTTP status must be identical for unknown-user and wrong-password paths")
+	assert.Equal(t, ceNotFound.Error(), ceWrongPass.Error(),
+		"error body must be identical for unknown-user and wrong-password paths to prevent enumeration")
+}
