@@ -1093,13 +1093,13 @@
                     </div>
 
                     <!-- Multi-service toggle (issue #119) -->
-                    <label class="toggle-row">
-                        Apply to multiple services:
+                    <div class="toggle-row">
+                        <span id="override-bulk-toggle-label">Apply to multiple services:</span>
                         <label class="toggle-label">
-                            <input type="checkbox" id="override-bulk-toggle">
+                            <input type="checkbox" id="override-bulk-toggle" aria-labelledby="override-bulk-toggle-label">
                             <span class="slider"></span>
                         </label>
-                    </label>
+                    </div>
 
                     <!-- Checkbox list shown only in bulk mode (issue #119) -->
                     <div id="override-bulk-services" class="hidden" role="group" aria-labelledby="override-bulk-services-legend">
@@ -1148,10 +1148,10 @@
                         <label>Description: <textarea id="account-description" placeholder="Optional description"></textarea></label>
                         <label>Contact Email: <input type="email" id="account-contact-email" placeholder="team@example.com"></label>
                         <label>Account / Subscription / Project ID: <input type="text" id="account-external-id" required placeholder="123456789012"></label>
-                        <label class="toggle-row">
-                            Enabled:
-                            <label class="toggle-label"><input type="checkbox" id="account-enabled" checked><span class="slider"></span></label>
-                        </label>
+                        <div class="toggle-row">
+                            <span id="account-enabled-label">Enabled:</span>
+                            <label class="toggle-label"><input type="checkbox" id="account-enabled" checked aria-labelledby="account-enabled-label"><span class="slider"></span></label>
+                        </div>
                     </div>
 
                     <!-- AWS-specific fields -->
@@ -1212,10 +1212,10 @@
                             <label>Token File Path: <input type="text" id="account-aws-wif-token-file" placeholder="/var/run/secrets/token"></label>
                             <small>Path to the OIDC token file (Azure/GCP projected token). Leave blank to use AWS_WEB_IDENTITY_TOKEN_FILE env var.</small>
                         </div>
-                        <label class="toggle-row">
-                            AWS Org Root:
-                            <label class="toggle-label"><input type="checkbox" id="account-aws-is-org-root"><span class="slider"></span></label>
-                        </label>
+                        <div class="toggle-row">
+                            <span id="account-aws-is-org-root-label">AWS Org Root:</span>
+                            <label class="toggle-label"><input type="checkbox" id="account-aws-is-org-root" aria-labelledby="account-aws-is-org-root-label"><span class="slider"></span></label>
+                        </div>
                     </div>
 
                     <!-- Azure-specific fields -->
