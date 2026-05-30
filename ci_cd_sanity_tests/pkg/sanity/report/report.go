@@ -38,10 +38,14 @@ type Report struct {
 	Results   []CheckResult `json:"results"`
 }
 
+// Add appends a single check result to the report. Not safe for concurrent
+// use; callers running checks in goroutines must serialise Add calls.
 func (r *Report) Add(res CheckResult) {
 	r.Results = append(r.Results, res)
 }
 
+// HasFailures reports whether any recorded check ended in StatusFail. Skips
+// and passes do not count as failures.
 func (r *Report) HasFailures() bool {
 	for _, rr := range r.Results {
 		if rr.Status == StatusFail {
@@ -51,6 +55,8 @@ func (r *Report) HasFailures() bool {
 	return false
 }
 
+// WriteJSON serialises the report to path with indented JSON and 0600
+// permissions so it can be uploaded as a CI artefact.
 func (r *Report) WriteJSON(path string) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {

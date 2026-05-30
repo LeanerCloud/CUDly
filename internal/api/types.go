@@ -276,8 +276,10 @@ type Session struct {
 	Email  string `json:"email"`
 }
 
-// User is the full user record returned by admin endpoints; it extends UserInfo
-// with audit timestamps and is never embedded in public-facing auth responses.
+// User is the full user record returned by the admin user-management endpoints.
+// It mirrors UserInfo's identity fields and adds CreatedAt/UpdatedAt audit
+// timestamps; it is never embedded in the public-facing login or session
+// responses, which use the slimmer UserInfo / CurrentUserResponse types instead.
 type User struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
