@@ -50,7 +50,10 @@ type CostExplorerAPI interface {
 type Client struct {
 	costExplorerClient CostExplorerAPI
 	region             string
-	rateLimiter        *RateLimiter
+
+	// newRateLimiter is called once per API call (not shared across goroutines).
+	// Tests can replace it with a factory returning a faster limiter.
+	newRateLimiter func() *RateLimiter
 
 	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
 	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
@@ -82,7 +85,7 @@ func NewClient(cfg aws.Config) *Client {
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
-		rateLimiter:        NewRateLimiter(),
+		newRateLimiter:     NewRateLimiter,
 		ec2API:             ec2Client,
 		// Factory wraps the EC2 client so the paginator is created lazily
 		// on the first EC2 recommendation parse (not at construction time).
@@ -97,7 +100,7 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 	return &Client{
 		costExplorerClient: api,
 		region:             region,
-		rateLimiter:        NewRateLimiter(),
+		newRateLimiter:     NewRateLimiter,
 		// ec2API left nil: instanceTypeLookup falls back to VCPU=0/MemoryGB=0
 		// unless the caller sets instanceTypePagerFactory.
 	}
@@ -204,12 +207,12 @@ func (c *Client) fetchRIPageWithRetry(
 	ctx context.Context,
 	input *costexplorer.GetReservationPurchaseRecommendationInput,
 ) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
@@ -218,13 +221,13 @@ func (c *Client) fetchRIPageWithRetry(
 		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
 		concurrency.Release(ctx)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			break
 		}
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", c.rateLimiter.GetRetryCount(), err)
+		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", rl.GetRetryCount(), err)
 	}
 
 	return result, nil

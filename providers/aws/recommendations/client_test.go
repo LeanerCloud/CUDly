@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 // Mock CostExplorerAPI for testing
 type mockCostExplorerAPI struct {
+	mu                sync.Mutex
 	riRecommendations *costexplorer.GetReservationPurchaseRecommendationOutput
 	spRecommendations *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
 	riError           error
@@ -28,20 +30,28 @@ type mockCostExplorerAPI struct {
 }
 
 func (m *mockCostExplorerAPI) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	m.mu.Lock()
 	m.callCount++
 	m.riCalls = append(m.riCalls, params)
-	if m.riError != nil {
-		return nil, m.riError
+	riErr := m.riError
+	riRecs := m.riRecommendations
+	m.mu.Unlock()
+	if riErr != nil {
+		return nil, riErr
 	}
-	return m.riRecommendations, nil
+	return riRecs, nil
 }
 
 func (m *mockCostExplorerAPI) GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	m.mu.Lock()
 	m.callCount++
-	if m.spError != nil {
-		return nil, m.spError
+	spErr := m.spError
+	spRecs := m.spRecommendations
+	m.mu.Unlock()
+	if spErr != nil {
+		return nil, spErr
 	}
-	return m.spRecommendations, nil
+	return spRecs, nil
 }
 
 func (m *mockCostExplorerAPI) GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error) {
@@ -73,7 +83,7 @@ func TestNewClient(t *testing.T) {
 
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.costExplorerClient)
-	assert.NotNil(t, client.rateLimiter)
+	assert.NotNil(t, client.newRateLimiter)
 	assert.Equal(t, "us-west-2", client.region)
 }
 
@@ -86,7 +96,7 @@ func TestNewClientWithAPI(t *testing.T) {
 	assert.NotNil(t, client)
 	assert.Equal(t, mockAPI, client.costExplorerClient)
 	assert.Equal(t, region, client.region)
-	assert.NotNil(t, client.rateLimiter)
+	assert.NotNil(t, client.newRateLimiter)
 }
 
 func TestGetRecommendations_EC2_Success(t *testing.T) {
@@ -274,9 +284,11 @@ func TestGetRecommendations_Error(t *testing.T) {
 		riError: newThrottleError(),
 	}
 
-	// Use custom rate limiter to speed up test
+	// Use custom rate limiter factory to speed up test
 	client := NewClientWithAPI(mockAPI, "us-east-1")
-	client.rateLimiter = NewRateLimiterWithOptions(1*time.Millisecond, 10*time.Millisecond, 2)
+	client.newRateLimiter = func() *RateLimiter {
+		return NewRateLimiterWithOptions(1*time.Millisecond, 10*time.Millisecond, 2)
+	}
 
 	params := common.RecommendationParams{
 		Service:        common.ServiceEC2,
@@ -518,7 +530,9 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 	}
 
 	client := NewClientWithAPI(mockAPI, "us-east-1")
-	client.rateLimiter = NewRateLimiterWithOptions(100*time.Millisecond, 1*time.Second, 5)
+	client.newRateLimiter = func() *RateLimiter {
+		return NewRateLimiterWithOptions(100*time.Millisecond, 1*time.Second, 5)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
