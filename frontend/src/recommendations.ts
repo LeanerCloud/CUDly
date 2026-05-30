@@ -14,6 +14,7 @@ import {
   paymentOptionsFor,
   SAVINGS_PLANS_BUCKET_KEY,
   savingsPlansBucketLabel,
+  UMBRELLA_SLUGS,
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
@@ -3555,9 +3556,14 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   // plan types before submitting. Collapsed by default to keep the modal
   // compact; the chevron in the <summary> affords expand.
   if (isSPBucket) {
-    // Group recs by their per-rec service slug.
+    // Group recs by their per-rec service slug, excluding umbrella slugs
+    // (e.g. "savings-plans", "savingsplans") that represent the SP family
+    // as a whole rather than a specific plan type. Including them would
+    // inflate the "+N plan types" count and render a spurious non-concrete
+    // plan-type row. Issue #249.
     const byPlanType = new Map<string, LocalRecommendation[]>();
     for (const r of b.recs) {
+      if (UMBRELLA_SLUGS.has(r.service)) continue;
       const existing = byPlanType.get(r.service);
       if (existing) {
         existing.push(r);

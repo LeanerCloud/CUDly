@@ -109,7 +109,7 @@ const SP_SHORT_LABEL: Record<string, string> = {
 // slug and the legacy AWS SP umbrella (common.ServiceSavingsPlans). It is
 // a family marker, not a plan-type label, so it is treated the same way
 // as SAVINGS_PLANS_BUCKET_KEY.
-const UMBRELLA_SLUGS = new Set<string>([SAVINGS_PLANS_BUCKET_KEY, 'savingsplans']);
+export const UMBRELLA_SLUGS = new Set<string>([SAVINGS_PLANS_BUCKET_KEY, 'savingsplans']);
 
 // savingsPlansBucketLabel formats the bulk-buy bucket title for one
 // or more SP plan types. Returns:

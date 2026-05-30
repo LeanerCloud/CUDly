@@ -3494,6 +3494,36 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     expect(ec2Section).toBeDefined();
     expect(ec2Section!.querySelector('details.fanout-sp-plan-types')).toBeNull();
   });
+
+  // Issue #249 regression: umbrella slugs ("savings-plans", "savingsplans")
+  // must be excluded from byPlanType so they do not inflate the "+N plan
+  // types" count or render a spurious non-concrete plan-type row.
+  test('umbrella SP slugs excluded from plan-type fan-out count (issue #249)', async () => {
+    const recs = [
+      { id: 's1', provider: 'aws',   cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 2, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws',   cloud_account_id: 'a1', service: 'savings-plans',            resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      { id: 's3', provider: 'azure', cloud_account_id: 'a1', service: 'savingsplans',             resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings:  50, upfront_cost: 300 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const spSection = Array.from(document.querySelectorAll('.fanout-bucket')).find(
+      (s) => s.querySelector('h4')?.textContent?.includes('Savings Plans'),
+    );
+    expect(spSection).toBeDefined();
+
+    // Only 1 concrete plan type (Compute) after filtering umbrella slugs;
+    // the collapsible block must NOT be rendered (size < 2).
+    const details = spSection!.querySelector('details.fanout-sp-plan-types');
+    expect(details).toBeNull();
+  });
 });
 
 // Issue #658: Azure SP rows (service="savingsplans") must collapse into
