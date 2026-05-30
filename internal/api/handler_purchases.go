@@ -427,6 +427,13 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: approvePurchaseViaSession entry (auth=session)", execution.ExecutionID)
 
+	// These endpoints are AuthPublic so the outer middleware skips CSRF.
+	// Enforce it here for the session-authed sub-path: the session bearer
+	// token is cookie-equivalent and must be CSRF-protected.
+	if err := h.validateCSRF(ctx, req); err != nil {
+		return nil, NewClientError(403, "CSRF validation failed")
+	}
+
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
@@ -582,6 +589,13 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 // those rows in the same commit so a crash between the two writes can't
 // leave the rec list hiding capacity the user already cancelled.
 func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
+	// These endpoints are AuthPublic so the outer middleware skips CSRF.
+	// Enforce it here for the session-authed sub-path: the session bearer
+	// token is cookie-equivalent and must be CSRF-protected.
+	if err := h.validateCSRF(ctx, req); err != nil {
+		return nil, NewClientError(403, "CSRF validation failed")
+	}
+
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err

@@ -126,17 +126,24 @@ func (h *Handler) requiresCSRFValidation(method, path string) bool {
 		return false
 	}
 
-	// Auth endpoints that don't have a session yet are exempt
+	// Auth endpoints that don't have a session yet are exempt.
+	//
+	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
+	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
+	// validateSecurity() short-circuits before requiresCSRFValidation() is
+	// reached on the token-only (email-link) path. For the session-authed path
+	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
+	// directly inside those functions -- a blanket middleware exemption would
+	// leave session-authenticated POSTs to these endpoints unprotected (CSRF).
+	//
+	// Similarly, /api/ri-exchange/approve/ and /api/ri-exchange/reject/ are
+	// AuthPublic and therefore exempted by isPublicEndpoint(), not here.
 	csrfExemptPaths := []string{
 		"/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-		"/api/purchases/approve/",   // Token-based auth
-		"/api/purchases/cancel/",    // Token-based auth
-		"/api/ri-exchange/approve/", // Token-based auth
-		"/api/ri-exchange/reject/",  // Token-based auth
-		"/api/register",             // Public registration (no session)
+		"/api/register", // Public registration (no session)
 	}
 
 	for _, exempt := range csrfExemptPaths {
