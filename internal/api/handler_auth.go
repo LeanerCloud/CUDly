@@ -282,6 +282,11 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// Validate email format before decoding passwords (cheap check first).
+	if err := validateEmailFormat(profileReq.Email); err != nil {
+		return nil, err
+	}
+
 	// Decode base64-encoded passwords if provided
 	var currentPassword, newPassword string
 	if profileReq.CurrentPassword != "" {

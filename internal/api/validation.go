@@ -126,14 +126,23 @@ func validateProvider(provider string) error {
 }
 
 // validateEmailFormat returns a 400 error when email is non-empty but does not
-// parse as an RFC 5322 address. Empty strings are accepted (contact email is
-// optional on cloud accounts).
+// parse as an RFC 5322 address or lacks a TLD (e.g. name@hostonly). Empty
+// strings are accepted (contact email is optional on cloud accounts).
 func validateEmailFormat(email string) error {
 	if email == "" {
 		return nil
 	}
-	if _, err := mail.ParseAddress(email); err != nil {
-		return NewClientError(400, "contact_email is not a valid email address")
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return NewClientError(400, "invalid email format")
+	}
+	// mail.ParseAddress is RFC 5322-compliant and accepts single-label domains
+	// like "name@host" that have no TLD. Reject them here so the profile-update
+	// path applies the same constraint as sign-up. The address portion always
+	// contains exactly one "@" after a successful parse.
+	at := strings.LastIndex(addr.Address, "@")
+	if at < 0 || !strings.Contains(addr.Address[at+1:], ".") {
+		return NewClientError(400, "invalid email format")
 	}
 	return nil
 }
