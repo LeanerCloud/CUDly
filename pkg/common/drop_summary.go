@@ -31,10 +31,15 @@ func NewDropSummary() *DropSummary {
 	return &DropSummary{counts: make(map[string]int)}
 }
 
-// Add increments the drop count for the given reason by n.
+// Add increments the drop count for the given reason by n. Safe to call on a
+// zero-value DropSummary (e.g. var d DropSummary); the underlying map is
+// lazily initialized on first use.
 func (d *DropSummary) Add(reason string, n int) {
 	if d == nil || n == 0 {
 		return
+	}
+	if d.counts == nil {
+		d.counts = make(map[string]int)
 	}
 	d.counts[reason] += n
 }
