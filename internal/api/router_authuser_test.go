@@ -100,18 +100,22 @@ func TestRouterAuthPublic_NoCredentials_Accepts(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestRequireAuth_AdminAPIKey verifies the new requireAuth helper accepts
-// the admin API key.
+// TestRequireAuth_AdminAPIKey verifies that requireAuth accepts the admin
+// API key and returns a Principal of kind PrincipalAdminAPIKey.
 func TestRequireAuth_AdminAPIKey(t *testing.T) {
 	h := &Handler{apiKey: "admin-secret"}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"X-API-Key": "admin-secret"},
 	}
-	require.NoError(t, h.requireAuth(context.Background(), req))
+	p, err := h.requireAuth(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, PrincipalAdminAPIKey, p.Kind)
+	assert.Equal(t, "admin", p.Role)
 }
 
 // TestRequireAuth_UserSession verifies requireAuth accepts a valid
-// non-admin user session.
+// non-admin user session and returns a populated Principal.
 func TestRequireAuth_UserSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -121,7 +125,13 @@ func TestRequireAuth_UserSession(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer user-token"},
 	}
-	require.NoError(t, h.requireAuth(ctx, req))
+	p, err := h.requireAuth(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, PrincipalSession, p.Kind)
+	assert.Equal(t, "uid", p.UserID)
+	assert.Equal(t, "user", p.Role)
+	assert.Equal(t, userSession, p.Session)
 }
 
 // TestRequireAuth_NoCredential_Rejects verifies requireAuth returns a 401
@@ -130,7 +140,7 @@ func TestRequireAuth_NoCredential_Rejects(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
-	err := h.requireAuth(context.Background(), req)
+	_, err := h.requireAuth(context.Background(), req)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)

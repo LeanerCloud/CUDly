@@ -50,7 +50,34 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 	return false
 }
 
-// authenticate checks authentication via admin API key, user API key, or Bearer token.
+// PrincipalKind identifies which credential type was used to authenticate.
+type PrincipalKind string
+
+const (
+	// PrincipalAdminAPIKey is set when the request authenticated with the
+	// shared admin API key (X-API-Key header matching h.apiKey).
+	PrincipalAdminAPIKey PrincipalKind = "admin-api-key"
+	// PrincipalUserAPIKey is set when the request authenticated with a
+	// per-user API key issued via /api/api-keys.
+	PrincipalUserAPIKey PrincipalKind = "user-api-key"
+	// PrincipalSession is set when the request authenticated with a
+	// bearer-token session (X-Authorization / Authorization header).
+	PrincipalSession PrincipalKind = "session"
+)
+
+// Principal carries the resolved caller identity returned by
+// authenticatePrincipal and requireAuth. Handlers that need the caller's
+// identity read it from here rather than re-resolving it through a second
+// ValidateSession / ValidateUserAPIKeyAPI call.
+type Principal struct {
+	Kind    PrincipalKind
+	UserID  string   // empty for PrincipalAdminAPIKey
+	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
+	Role    string   // "admin" for admin-api-key; user's role otherwise
+	Session *Session // non-nil only for PrincipalSession
+}
+
+// authenticate checks authentication via admin API key, user API key, or Bearer token
 func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	apiKey := extractAPIKey(req)
 
@@ -63,6 +90,60 @@ func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	return h.checkBearerToken(ctx, req)
+}
+
+// authenticatePrincipal performs the same three-path credential check as
+// authenticate but returns the fully resolved Principal so callers do not
+// need to repeat the lookup. Returns a non-nil Principal on success; returns
+// nil and a 401 ClientError when no valid credential is present.
+func (h *Handler) authenticatePrincipal(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Principal, error) {
+	apiKey := extractAPIKey(req)
+
+	if h.checkAdminAPIKey(apiKey) {
+		return &Principal{Kind: PrincipalAdminAPIKey, Role: "admin"}, nil
+	}
+
+	if h.auth == nil {
+		return nil, NewClientError(401, "authentication required")
+	}
+
+	if apiKey != "" {
+		_, userRaw, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
+		if err == nil && userRaw != nil {
+			p := &Principal{Kind: PrincipalUserAPIKey, Role: "user"}
+			// userRaw is returned as any from the interface. Extract fields
+			// via a locally-scoped interface to avoid an import cycle.
+			if uf, ok := userRaw.(interface {
+				GetID() string
+				GetEmail() string
+				GetRole() string
+			}); ok {
+				p.UserID = uf.GetID()
+				p.Email = uf.GetEmail()
+				p.Role = uf.GetRole()
+			}
+			return p, nil
+		}
+		if err != nil {
+			logging.Debugf("User API key validation failed: %v", err)
+		}
+	}
+
+	token := h.extractBearerToken(req)
+	if token != "" {
+		session, err := h.auth.ValidateSession(ctx, token)
+		if err == nil && session != nil {
+			return &Principal{
+				Kind:    PrincipalSession,
+				UserID:  session.UserID,
+				Email:   session.Email,
+				Role:    session.Role,
+				Session: session,
+			}, nil
+		}
+	}
+
+	return nil, NewClientError(401, "authentication required")
 }
 
 func extractAPIKey(req *events.LambdaFunctionURLRequest) string {
@@ -289,12 +370,12 @@ func redactQueryParam(u, param string) string {
 // validateSecurity → authenticate already runs before dispatch, but if a
 // future refactor reorders middleware or a new route bypasses
 // validateSecurity, this check still rejects unauthenticated requests at
-// the router level. Returns nil on success, a 401 ClientError otherwise.
-func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURLRequest) error {
-	if h.authenticate(ctx, req) {
-		return nil
-	}
-	return NewClientError(401, "authentication required")
+// the router level. Returns the resolved Principal on success, a 401
+// ClientError otherwise. Callers should use the returned Principal rather
+// than re-resolving the caller's identity through a second ValidateSession
+// or ValidateUserAPIKeyAPI call.
+func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Principal, error) {
+	return h.authenticatePrincipal(ctx, req)
 }
 
 // requireAdmin gates the coarse admin-only routes (AuthAdmin). "Admin" is now
