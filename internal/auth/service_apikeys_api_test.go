@@ -151,6 +151,68 @@ func TestService_ListUserAPIKeysAPI(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
+	// #492: last_used_at must round-trip through ListUserAPIKeysAPI so the
+	// frontend can render "Last used" without a separate endpoint.
+	t.Run("last_used_at is present in response when key was used (issue #492)", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		createdAt := time.Now()
+		usedAt := createdAt.Add(-2 * time.Hour)
+		keys := []*UserAPIKey{
+			{
+				ID:         "key-used",
+				UserID:     "user-123",
+				Name:       "Used Key",
+				KeyPrefix:  "prefix1",
+				IsActive:   true,
+				CreatedAt:  createdAt,
+				LastUsedAt: &usedAt,
+			},
+		}
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.ListUserAPIKeysAPI(ctx, "user-123")
+
+		require.NoError(t, err)
+		resp := result.(*APIListAPIKeysResponse)
+		require.Len(t, resp.APIKeys, 1)
+		require.NotNil(t, resp.APIKeys[0].LastUsedAt, "last_used_at must be set in the API response")
+		assert.True(t, resp.APIKeys[0].LastUsedAt.Equal(usedAt))
+	})
+
+	// #492: last_used_at must be nil (not zero-time) for a never-used key.
+	t.Run("last_used_at is nil in response for never-used key (issue #492)", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		keys := []*UserAPIKey{
+			{
+				ID:        "key-new",
+				UserID:    "user-123",
+				Name:      "New Key",
+				KeyPrefix: "prefix2",
+				IsActive:  true,
+				CreatedAt: time.Now(),
+				// LastUsedAt intentionally nil
+			},
+		}
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.ListUserAPIKeysAPI(ctx, "user-123")
+
+		require.NoError(t, err)
+		resp := result.(*APIListAPIKeysResponse)
+		require.Len(t, resp.APIKeys, 1)
+		assert.Nil(t, resp.APIKeys[0].LastUsedAt, "last_used_at must be nil for a never-used key")
+	})
+
 	t.Run("return empty list when no keys", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
