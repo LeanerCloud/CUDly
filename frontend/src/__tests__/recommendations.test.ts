@@ -150,6 +150,8 @@ describe('Recommendations Module', () => {
   });
 
   describe('loadRecommendations', () => {
+    afterEach(() => (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({}));
+
     test('fetches with provider/account_ids when no column filter is set', async () => {
       // No column filters active: service and region are absent from the
       // API call (undefined); provider + account_ids carry the only hints.
