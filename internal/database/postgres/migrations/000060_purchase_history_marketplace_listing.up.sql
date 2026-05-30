@@ -13,6 +13,10 @@
 -- migration is idempotent on re-apply.
 
 ALTER TABLE purchase_history
-    ADD COLUMN IF NOT EXISTS offering_class  TEXT,
-    ADD COLUMN IF NOT EXISTS listing_id      TEXT,
-    ADD COLUMN IF NOT EXISTS listing_state   TEXT;
+    ADD COLUMN IF NOT EXISTS offering_class           TEXT,
+    ADD COLUMN IF NOT EXISTS listing_id               TEXT,
+    ADD COLUMN IF NOT EXISTS listing_state            TEXT,
+    ADD COLUMN IF NOT EXISTS listed_at                TIMESTAMP WITH TIME ZONE,
+    ADD COLUMN IF NOT EXISTS listing_price_schedule   JSONB,
+    ADD COLUMN IF NOT EXISTS listing_proceeds_received NUMERIC,
+    ADD COLUMN IF NOT EXISTS listing_fee_paid         NUMERIC;
