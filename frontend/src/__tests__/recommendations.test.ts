@@ -3514,15 +3514,16 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
-    const spSection = Array.from(document.querySelectorAll('.fanout-bucket')).find(
+    const spSections = Array.from(document.querySelectorAll('.fanout-bucket')).filter(
       (s) => s.querySelector('h4')?.textContent?.includes('Savings Plans'),
     );
-    expect(spSection).toBeDefined();
+    expect(spSections.length).toBeGreaterThan(0);
 
     // Only 1 concrete plan type (Compute) after filtering umbrella slugs;
-    // the collapsible block must NOT be rendered (size < 2).
-    const details = spSection!.querySelector('details.fanout-sp-plan-types');
-    expect(details).toBeNull();
+    // the collapsible block must NOT be rendered (size < 2) for any SP bucket.
+    for (const section of spSections) {
+      expect(section.querySelector('details.fanout-sp-plan-types')).toBeNull();
+    }
   });
 });
 
