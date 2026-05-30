@@ -22,6 +22,13 @@ import type { RecommendationsResponse, LocalRecommendation, RecommendationsSumma
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+
+// Issue #869: true when the current session can take any action on
+// recommendations (purchase or plan). Readonly/viewer sessions have neither
+// permission, so checkboxes and row-click selection are meaningless for them.
+function canActOnRecommendations(): boolean {
+  return canAccess('execute', 'purchases') || canAccess('create', 'plans');
+}
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
@@ -2438,6 +2445,7 @@ function buildVariantRowMarkup(
   selectedRecs: ReadonlySet<string>,
   isNested: boolean,
   cols: readonly ColumnDef[] = COLUMN_DEFS,
+  showCheckboxes = true,
 ): string {
   // issue #319: cost-bearing cells scale with the active period; resolved
   // once per row and threaded through ctx so renderColumnCell doesn't
@@ -2453,11 +2461,16 @@ function buildVariantRowMarkup(
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
+  // Issue #869: omit the checkbox cell entirely for viewer (readonly) sessions.
+  // The column header also omits the select-all checkbox, so the column is
+  // visually absent rather than present-but-empty, matching the no-actions
+  // experience on Plans and Purchases for the same role.
+  const checkboxCell = showCheckboxes
+    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation"></td>`
+    : '';
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
-    <td class="checkbox-col">
-      <input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">
-    </td>
+    ${checkboxCell}
     ${cols.map((c) => renderColumnCell(c.key, rec, cellCtx)).join('')}
   </tr>`;
 }
@@ -2467,6 +2480,7 @@ function buildListMarkup(
   recommendations: LocalRecommendation[],
   selectedRecs: ReadonlySet<string>,
   visibleCols: readonly ColumnDef[] = COLUMN_DEFS,
+  showCheckboxes = true,
 ): string {
   const sort = state.getRecommendationsSort();
   const filters = state.getRecommendationsColumnFilters();
@@ -2509,7 +2523,7 @@ function buildListMarkup(
     const variants = groups.get(key)!;
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
-      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols));
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols, showCheckboxes));
       continue;
     }
 
@@ -2579,7 +2593,7 @@ function buildListMarkup(
     if (isExpanded) {
       const sortedVariants = sortVariantsInCell(variants);
       for (const v of sortedVariants) {
-        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols));
+        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
       }
     }
   }
@@ -2590,24 +2604,26 @@ function buildListMarkup(
   // see openColumnPopover wiring + #224). Indeterminate is set via JS in
   // renderRecommendationsList's post-render hook because HTML attributes
   // can't express the indeterminate state.
-  const bestVariants = pickBestVariantPerCell(recommendations);
-  const bestVariantIds = new Set(bestVariants.map((r) => r.id));
-  let selectedBestCount = 0;
-  selectedRecs.forEach((id) => { if (bestVariantIds.has(id)) selectedBestCount++; });
-  const allSelected = bestVariants.length > 0 && selectedBestCount === bestVariants.length;
-  const selectAllCheckedAttr = allSelected ? ' checked' : '';
-  // Threaded to the renderer via a data attribute so the post-render hook
-  // can flip the .indeterminate property without re-deriving the counts.
-  const selectAllIndeterminate = selectedBestCount > 0 && selectedBestCount < bestVariants.length;
-  const selectAllDataIndeterminate = ` data-indeterminate="${selectAllIndeterminate ? 'true' : 'false'}"`;
+  // Issue #869: skip the tri-state computation entirely for viewer sessions
+  // to avoid dead-code paths when showCheckboxes is false.
+  let checkboxColHeader = '';
+  if (showCheckboxes) {
+    const bestVariants = pickBestVariantPerCell(recommendations);
+    const bestVariantIds = new Set(bestVariants.map((r) => r.id));
+    let selectedBestCount = 0;
+    selectedRecs.forEach((id) => { if (bestVariantIds.has(id)) selectedBestCount++; });
+    const allSelected = bestVariants.length > 0 && selectedBestCount === bestVariants.length;
+    const selectAllCheckedAttr = allSelected ? ' checked' : '';
+    const selectAllIndeterminate = selectedBestCount > 0 && selectedBestCount < bestVariants.length;
+    const selectAllDataIndeterminate = ` data-indeterminate="${selectAllIndeterminate ? 'true' : 'false'}"`;
+    checkboxColHeader = `<th class="checkbox-col"><input type="checkbox" id="select-all-recs" aria-label="Select all recommendations"${selectAllCheckedAttr}${selectAllDataIndeterminate}></th>`;
+  }
 
   return `
     <table>
       <thead>
         <tr>
-          <th class="checkbox-col">
-            <input type="checkbox" id="select-all-recs" aria-label="Select all recommendations"${selectAllCheckedAttr}${selectAllDataIndeterminate}>
-          </th>
+          ${checkboxColHeader}
           ${visibleCols.map((c) => sortHeader(c.key)).join('')}
         </tr>
       </thead>
@@ -3596,12 +3612,20 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // so header and row rendering use the same snapshot of column visibility state.
   const visibleCols = visibleColumns();
 
+  // Issue #869: viewer (readonly) sessions have no purchase/plan actions;
+  // hide the checkbox column entirely so the table doesn't have a useless
+  // selection surface. The bottom action box already hides its CTA buttons
+  // for this role (mountBottomActionBox, issue #365).
+  const showCheckboxes = canActOnRecommendations();
+
   const selectedIDs = state.getSelectedRecommendationIDs();
   // Dynamic table markup: every caller-provided value passes through
   // escapeHtml or is a number. The string is built in buildListMarkup.
   // NOTE: buildListMarkup also populates lastVisibleGroupKeys, so it MUST
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
-  container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols);
+  // safe: buildListMarkup escapes all API-derived values via escapeHtml.
+  // nosec: innerHTML is intentional here; see security note above.
+  container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols, showCheckboxes); // nosec
 
   // Issue #700: when the filter yields zero rows, preserve the <thead> by
   // injecting a hint row into the empty <tbody> rather than replacing the
@@ -3610,8 +3634,8 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   if (emptyResult) {
     const tbody = container.querySelector('tbody');
     if (tbody) {
-      // colspan = 1 (checkbox col) + all visible data columns.
-      const colspan = 1 + visibleCols.length;
+      // colspan = checkbox col (1 when shown, 0 when hidden) + all visible data columns.
+      const colspan = (showCheckboxes ? 1 : 0) + visibleCols.length;
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.setAttribute('colspan', String(colspan));
@@ -3684,71 +3708,101 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
     });
   });
 
-  // Add event listeners
-  const selectAllCheckbox = document.getElementById('select-all-recs') as HTMLInputElement | null;
-  if (selectAllCheckbox) {
-    // Issue #479: indeterminate is a DOM property only, so apply it from
-    // the data attribute the renderer threaded through. Without this, a
-    // partial selection shows no visual cue and clicking the header
-    // repeatedly becomes a no-op because the checkbox's .checked never
-    // flips.
-    selectAllCheckbox.indeterminate = selectAllCheckbox.dataset['indeterminate'] === 'true';
-    selectAllCheckbox.addEventListener('change', () => {
-      if (selectAllCheckbox.checked) {
-        // Issue #224: select-all picks ONE variant per cell (highest-effective-
-        // savings) rather than every visible row. After PR #195's per-(term,
-        // payment) fan-out, naive "select every row" produces 6× the intended
-        // commitments per resource — wrong purchase intent. Clear current
-        // selection first so a stale choice from a different filter context
-        // doesn't bleed through.
-        state.clearSelectedRecommendations();
-        for (const r of pickBestVariantPerCell(recommendations)) {
-          state.addSelectedRecommendation(r.id);
+  // Issue #869: selection handlers are only meaningful when the session can
+  // act on recommendations (admin/operator). Skip wiring them for viewer
+  // (readonly) sessions: the checkboxes are absent from the DOM anyway
+  // (showCheckboxes === false), and the row-click handler would be inert
+  // because there is no checkbox to toggle.
+  if (showCheckboxes) {
+    // Add event listeners
+    const selectAllCheckbox = document.getElementById('select-all-recs') as HTMLInputElement | null;
+    if (selectAllCheckbox) {
+      // Issue #479: indeterminate is a DOM property only, so apply it from
+      // the data attribute the renderer threaded through. Without this, a
+      // partial selection shows no visual cue and clicking the header
+      // repeatedly becomes a no-op because the checkbox's .checked never
+      // flips.
+      selectAllCheckbox.indeterminate = selectAllCheckbox.dataset['indeterminate'] === 'true';
+      selectAllCheckbox.addEventListener('change', () => {
+        if (selectAllCheckbox.checked) {
+          // Issue #224: select-all picks ONE variant per cell (highest-effective-
+          // savings) rather than every visible row. After PR #195's per-(term,
+          // payment) fan-out, naive "select every row" produces 6x the intended
+          // commitments per resource -- wrong purchase intent. Clear current
+          // selection first so a stale choice from a different filter context
+          // doesn't bleed through.
+          state.clearSelectedRecommendations();
+          for (const r of pickBestVariantPerCell(recommendations)) {
+            state.addSelectedRecommendation(r.id);
+          }
+        } else {
+          state.clearSelectedRecommendations();
         }
-      } else {
-        state.clearSelectedRecommendations();
-      }
-      renderRecommendationsList(recommendations);
+        renderRecommendationsList(recommendations);
+      });
+    }
+
+    // ID-keyed selection toggles. data-rec-id persists across filter
+    // changes so a stale selection from a previous filter is a no-op
+    // once the user narrows, rather than pointing at whichever rec
+    // happens to occupy the old index position.
+    //
+    // Issue #224: enforce one-variant-per-cell radio behaviour on check.
+    // When the user checks a variant, deselect any other variant of the
+    // same cell that's already selected -- a single physical resource
+    // can only carry one (term, payment) commitment at a time.
+    container.querySelectorAll<HTMLInputElement>('input[data-rec-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const id = cb.dataset['recId'] || '';
+        if (!id) return;
+        if (cb.checked) {
+          const newRec = recommendations.find((r) => r.id === id);
+          if (newRec) {
+            const newCell = cellKey(newRec);
+            const selected = state.getSelectedRecommendationIDs();
+            // Scan the full loaded set (not just the filtered view) so that
+            // hidden siblings (e.g. filtered-out term variants) are also
+            // deselected, preserving the one-variant-per-cell contract.
+            const allLoaded = state.getRecommendations() as unknown as LocalRecommendation[];
+            for (const r of allLoaded) {
+              if (r.id !== id && selected.has(r.id) && cellKey(r) === newCell) {
+                state.removeSelectedRecommendation(r.id);
+              }
+            }
+          }
+          state.addSelectedRecommendation(id);
+        } else {
+          state.removeSelectedRecommendation(id);
+        }
+        renderRecommendationsList(recommendations);
+      });
+    });
+
+    // Row-click toggles selection (issue #344 T4'). Clicking anywhere on
+    // the row's body now toggles the row's checkbox + dispatches the
+    // existing change handler -- which already enforces the
+    // one-variant-per-cell radio behaviour (issue #224) and rerenders.
+    // Skip clicks on the checkbox itself (its native click already
+    // toggles) and on any interactive child (button / a / input / label /
+    // select / [data-action]) so per-row controls keep their own
+    // semantics. The previous row-click -> openDetailDrawer behaviour was
+    // dropped: see plan.md T4 (the detail drawer's payload duplicated
+    // the table, with backend-deferred fields the only differentiators).
+    container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
+      tr.addEventListener('click', (e) => {
+        if (!(e.target instanceof Element)) return;
+        const target = e.target as HTMLElement;
+        if (target.closest('input, button, a, label, select, [data-action]')) return;
+        const cb = tr.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]');
+        if (!cb) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      });
     });
   }
 
-  // ID-keyed selection toggles. data-rec-id persists across filter
-  // changes so a stale selection from a previous filter is a no-op
-  // once the user narrows, rather than pointing at whichever rec
-  // happens to occupy the old index position.
-  //
-  // Issue #224: enforce one-variant-per-cell radio behaviour on check.
-  // When the user checks a variant, deselect any other variant of the
-  // same cell that's already selected — a single physical resource
-  // can only carry one (term, payment) commitment at a time.
-  container.querySelectorAll<HTMLInputElement>('input[data-rec-id]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const id = cb.dataset['recId'] || '';
-      if (!id) return;
-      if (cb.checked) {
-        const newRec = recommendations.find((r) => r.id === id);
-        if (newRec) {
-          const newCell = cellKey(newRec);
-          const selected = state.getSelectedRecommendationIDs();
-          // Scan the full loaded set (not just the filtered view) so that
-          // hidden siblings (e.g. filtered-out term variants) are also
-          // deselected, preserving the one-variant-per-cell contract.
-          const allLoaded = state.getRecommendations() as unknown as LocalRecommendation[];
-          for (const r of allLoaded) {
-            if (r.id !== id && selected.has(r.id) && cellKey(r) === newCell) {
-              state.removeSelectedRecommendation(r.id);
-            }
-          }
-        }
-        state.addSelectedRecommendation(id);
-      } else {
-        state.removeSelectedRecommendation(id);
-      }
-      renderRecommendationsList(recommendations);
-    });
-  });
-
   // issues #225 + #226: chevron click toggles expand/collapse for a cell group.
+  // Available for all roles (expand/collapse is a view-only operation).
   container.querySelectorAll<HTMLButtonElement>('.rec-cell-chevron').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3760,28 +3814,6 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
         expandedCells.add(key);
       }
       renderRecommendationsList(loadedRecs);
-    });
-  });
-
-  // Row-click toggles selection (issue #344 T4'). Clicking anywhere on
-  // the row's body now toggles the row's checkbox + dispatches the
-  // existing change handler — which already enforces the
-  // one-variant-per-cell radio behaviour (issue #224) and rerenders.
-  // Skip clicks on the checkbox itself (its native click already
-  // toggles) and on any interactive child (button / a / input / label /
-  // select / [data-action]) so per-row controls keep their own
-  // semantics. The previous row-click → openDetailDrawer behaviour was
-  // dropped: see plan.md §T4 (the detail drawer's payload duplicated
-  // the table, with backend-deferred fields the only differentiators).
-  container.querySelectorAll<HTMLTableRowElement>('tr.recommendation-row').forEach((tr) => {
-    tr.addEventListener('click', (e) => {
-      if (!(e.target instanceof Element)) return;
-      const target = e.target as HTMLElement;
-      if (target.closest('input, button, a, label, select, [data-action]')) return;
-      const cb = tr.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]');
-      if (!cb) return;
-      cb.checked = !cb.checked;
-      cb.dispatchEvent(new Event('change', { bubbles: true }));
     });
   });
 }
