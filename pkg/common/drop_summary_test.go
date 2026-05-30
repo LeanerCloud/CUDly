@@ -33,6 +33,17 @@ func TestDropSummary_NilReceiver_Safe(t *testing.T) {
 	assert.Equal(t, "", d.FormatOneLine())
 }
 
+// Regression: a zero-value DropSummary (declared without NewDropSummary)
+// must not panic on Add because the internal map is lazily initialized.
+func TestDropSummary_ZeroValue_Safe(t *testing.T) {
+	var d DropSummary
+	d.Add(DropMinPoolSize, 3) // must not panic on nil map
+	d.Add(DropTargetAlreadyMet, 2)
+	assert.Equal(t, 5, d.Total())
+	assert.False(t, d.IsEmpty())
+	assert.Equal(t, "Dropped 5 recs: --min-pool-size=3, target-already-met=2", d.FormatOneLine())
+}
+
 func TestDropSummary_FormatOneLine(t *testing.T) {
 	tests := []struct {
 		name     string
