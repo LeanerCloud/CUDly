@@ -13,6 +13,9 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 )
 
+// Output is the JSON-serialised result written to disk after a quote or
+// exchange execution; it captures inputs, the AWS quote, and any error so the
+// CI step can archive the artefact and surface a human-readable summary.
 type Output struct {
 	Quote            any      `json:"quote"`
 	Mode             string   `json:"mode"`
