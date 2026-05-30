@@ -61,19 +61,22 @@ func setupReshapeHandlerIntegration(ctx context.Context, t *testing.T) (*config.
 // reshape-recommendations path touches. AWS config is pre-populated
 // so `h.loadAWSConfigWithRegion` returns without trying to hit real
 // AWS. Factories are injected so AWS calls go to the fakes.
-func buildReshapeHandler(store *config.PostgresStore, ec2Fake *fakeReshapeEC2, recsFake *fakeReshapeRecs) *Handler {
+//
+// resolveAccount controls which CloudAccount UUID the reshape
+// recommendations path is scoped to. Pass nil for the unscoped
+// "no-AccountIDs-filter" path (equivalent to no registered account
+// match). Pass a concrete resolver for scoped-branch tests.
+func buildReshapeHandler(store *config.PostgresStore, ec2Fake *fakeReshapeEC2, recsFake *fakeReshapeRecs, resolveAccount func(context.Context) (string, error)) *Handler {
+	if resolveAccount == nil {
+		resolveAccount = func(_ context.Context) (string, error) { return "", nil }
+	}
 	h := &Handler{
-		config:             store,
-		auth:               &mockAuthForExchange{},
-		apiKey:             "test-api-key",
-		reshapeEC2Factory:  func(_ aws.Config) reshapeEC2Client { return ec2Fake },
-		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient { return recsFake },
-		// Bypass STS GetCallerIdentity so the test runs without real
-		// AWS credentials. Empty cloud-account ID = no AccountIDs
-		// filter on the recs lookup, which is the legitimate
-		// "no-scope-filter" path; tests that assert scope filtering
-		// would set this to a UUID matching a seeded CloudAccount.
-		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
+		config:                 store,
+		auth:                   &mockAuthForExchange{},
+		apiKey:                 "test-api-key",
+		reshapeEC2Factory:      func(_ aws.Config) reshapeEC2Client { return ec2Fake },
+		reshapeRecsFactory:     func(_ aws.Config) reshapeRecsClient { return recsFake },
+		reshapeAccountResolver: resolveAccount,
 	}
 	// Pre-populate the AWS config cache so loadAWSConfigWithRegion
 	// returns immediately without LoadDefaultConfig. The Region field
@@ -140,7 +143,7 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 			{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
 		},
 	}
-	h := buildReshapeHandler(store, ec2Fake, recsFake)
+	h := buildReshapeHandler(store, ec2Fake, recsFake, nil)
 
 	resp, err := h.getReshapeRecommendations(ctx, reshapeRequest())
 	require.NoError(t, err)
@@ -202,7 +205,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 			{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
 		},
 	}
-	h := buildReshapeHandler(store, ec2Fake, recsFake)
+	h := buildReshapeHandler(store, ec2Fake, recsFake, nil)
 
 	// Cold call.
 	_, err := h.getReshapeRecommendations(ctx, reshapeRequest())
@@ -238,7 +241,7 @@ func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *te
 			{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
 		},
 	}
-	h := buildReshapeHandler(store, ec2Fake, recsFake)
+	h := buildReshapeHandler(store, ec2Fake, recsFake, nil)
 
 	resp, err := h.getReshapeRecommendations(ctx, reshapeRequest())
 	require.NoError(t, err, "handler must not fail when the recommendations cache is empty")
@@ -339,13 +342,12 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 			{ReservedInstanceID: "ri-1", UtilizationPercent: 50.0},
 		},
 	}
-	h := buildReshapeHandler(store, ec2Fake, recsFake)
-	// Override the unscoped default the helper sets: pretend the
-	// running AWS account resolves to Tenant A's CloudAccount UUID.
-	// Equivalent to h.resolveAWSCloudAccountID returning a real match.
-	h.reshapeAccountResolver = func(_ context.Context) (string, error) {
+	// Pass the resolver inline: simulates the production path where the
+	// running AWS account resolves to Tenant A's CloudAccount UUID via
+	// h.resolveAWSCloudAccountID.
+	h := buildReshapeHandler(store, ec2Fake, recsFake, func(_ context.Context) (string, error) {
 		return accountAID, nil
-	}
+	})
 
 	resp, err := h.getReshapeRecommendations(ctx, reshapeRequest())
 	require.NoError(t, err)
