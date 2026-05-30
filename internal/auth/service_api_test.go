@@ -210,6 +210,80 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
+	// Regression for issue #892: before the fix, UpdateUserAPI dropped
+	// req.Email on the floor; the API would return 200, the success
+	// toast would fire, but the users.email column was never touched. We
+	// assert that (a) the email-uniqueness lookup happens (proves the
+	// admin path runs the same validation as self-edit), and (b) the
+	// user persisted via store.UpdateUser carries the new email value,
+	// NOT just that the call succeeded.
+	t.Run("successful email update persists to store", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		existingUser := &User{
+			ID:    "user-123",
+			Email: "old@example.com",
+			Role:  RoleAdmin,
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
+		// Uniqueness check: new email not yet in use.
+		mockStore.On("GetUserByEmail", ctx, "new@example.com").Return(nil, nil).Once()
+		// Capture the User passed to UpdateUser and assert its email is
+		// the NEW one. Without the fix, this fails because the User would
+		// still carry old@example.com.
+		mockStore.On("UpdateUser", ctx, mock.MatchedBy(func(u *User) bool {
+			return u != nil && u.ID == "user-123" && u.Email == "new@example.com"
+		})).Return(nil).Once()
+
+		req := APIUpdateUserRequest{
+			Email: "new@example.com",
+		}
+
+		result, err := service.UpdateUserAPI(ctx, "user-123", req)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		apiUser, ok := result.(*APIUser)
+		require.True(t, ok)
+		assert.Equal(t, "new@example.com", apiUser.Email,
+			"returned APIUser must reflect the new email; the frontend's success toast keys off this response")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("email update rejects duplicate address", func(t *testing.T) {
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		existingUser := &User{
+			ID:    "user-123",
+			Email: "old@example.com",
+			Role:  RoleAdmin,
+		}
+		conflictingUser := &User{
+			ID:    "user-456",
+			Email: "taken@example.com",
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
+		mockStore.On("GetUserByEmail", ctx, "taken@example.com").Return(conflictingUser, nil).Once()
+
+		req := APIUpdateUserRequest{
+			Email: "taken@example.com",
+		}
+
+		result, err := service.UpdateUserAPI(ctx, "user-123", req)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "email already in use")
+
+		mockStore.AssertExpectations(t)
+	})
+
 	t.Run("invalid request type", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)

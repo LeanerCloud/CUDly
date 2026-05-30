@@ -231,6 +231,14 @@ func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface
 	if req.Role != "" {
 		authReq.Role = &req.Role
 	}
+	// Wire email through so admins can edit other users' email addresses.
+	// Before #892 this field was silently dropped: the API accepted email
+	// in the JSON, the handler returned 200, and the user's email column
+	// was never touched, producing a false-positive success toast and
+	// (worst case) a sign-in lockout once the user lost the old address.
+	if req.Email != "" {
+		authReq.Email = &req.Email
+	}
 	user, err := s.UpdateUser(ctx, userID, authReq)
 	if err != nil {
 		return nil, err
