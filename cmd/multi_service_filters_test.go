@@ -113,7 +113,7 @@ func TestApplyFilters(t *testing.T) {
 			toolCfg.ExcludeInstanceTypes = tt.excludeInstanceTypes
 
 			// Apply filters with Config (empty currentRegion for test)
-			result := applyFilters(tt.recommendations, &toolCfg, make(map[string][]InstanceEngineVersion), make(map[string]MajorEngineVersionInfo), "")
+			result := applyFilters(tt.recommendations, &toolCfg, make(map[string][]InstanceEngineVersion), make(map[string]MajorEngineVersionInfo), "", nil)
 
 			// Check count
 			assert.Equal(t, tt.expectedCount, len(result))

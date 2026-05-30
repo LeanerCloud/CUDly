@@ -839,7 +839,7 @@ func TestApplyFilters_RegionFiltering(t *testing.T) {
 				ExcludeRegions: tt.excludeRegions,
 			}
 
-			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, tt.currentRegion)
+			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, tt.currentRegion, nil)
 			assert.Equal(t, tt.expectedCount, len(result), "Expected %d recommendations, got %d", tt.expectedCount, len(result))
 		})
 	}
@@ -884,7 +884,7 @@ func TestApplyFilters_InstanceTypeFiltering(t *testing.T) {
 				ExcludeInstanceTypes: tt.excludeInstanceTypes,
 			}
 
-			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "")
+			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "", nil)
 			assert.Equal(t, tt.expectedCount, len(result))
 		})
 	}
@@ -959,7 +959,7 @@ func TestApplyFilters_EngineFiltering(t *testing.T) {
 				ExcludeEngines: tt.excludeEngines,
 			}
 
-			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "")
+			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "", nil)
 			assert.Equal(t, tt.expectedCount, len(result))
 		})
 	}
@@ -1023,7 +1023,7 @@ func TestApplyFilters_AccountFiltering(t *testing.T) {
 				ExcludeAccounts: tt.excludeAccounts,
 			}
 
-			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "")
+			result := applyFilters(tt.recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "", nil)
 			assert.Equal(t, tt.expectedCount, len(result))
 		})
 	}
@@ -1044,7 +1044,7 @@ func TestApplyFilters_CombinedFilters(t *testing.T) {
 		IncludeAccounts:      []string{"prod", "dev"},
 	}
 
-	result := applyFilters(recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "")
+	result := applyFilters(recs, &cfg, map[string][]InstanceEngineVersion{}, map[string]MajorEngineVersionInfo{}, "", nil)
 
 	// Only the first two should pass all filters
 	assert.Equal(t, 2, len(result))

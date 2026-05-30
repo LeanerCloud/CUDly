@@ -124,7 +124,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details: &common.DatabaseDetails{Engine: "aurora-mysql", AZConfig: "single-az"},
 			},
 		}
-		sized, nonRDS := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, nonRDS, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1, "RDS rec kept (target NU > 0)")
 		assert.Empty(t, nonRDS, "no non-RDS recs in this fixture")
 		assert.Equal(t, 15, sized[0].Count, "AWS-rec NU already matches target → count preserved")
@@ -155,7 +155,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:              &common.DatabaseDetails{Engine: "mysql", AZConfig: "multi-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1)
 		// Scale 32/20 = 1.6 → newCount = 8 → monthly = 100 × 8/5 = 160
 		assert.Equal(t, 8, sized[0].Count)
@@ -186,7 +186,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:                     &common.DatabaseDetails{Engine: "mysql", AZConfig: "multi-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1)
 		assert.Equal(t, 8, sized[0].Count, "scale 32/20 = 1.6 × 5 = 8 RIs to deliver 32 NU at 80% target")
 		assert.InDelta(t, 5000*8.0/5.0, sized[0].CommitmentCost, 0.01, "CommitmentCost scales by 8/5")
@@ -212,7 +212,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:        &common.DatabaseDetails{Engine: "mysql", AZConfig: "multi-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1)
 		assert.Equal(t, 8, sized[0].Count, "AWS over-proposed; scale down to family target")
 	})
@@ -234,7 +234,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:        &common.DatabaseDetails{Engine: "aurora-mysql", AZConfig: "single-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		assert.Empty(t, sized, "family already covered → drop all recs")
 	})
 
@@ -251,7 +251,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:        &common.DatabaseDetails{Engine: "aurora-mysql", AZConfig: "single-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, PoolCoverageMap{}, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, PoolCoverageMap{}, 80)
 		require.Len(t, sized, 1, "rec preserved as-is when no family-NU signal")
 		assert.Equal(t, 5, sized[0].Count)
 	})
@@ -276,7 +276,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Pct: 0.0, AvgInstancesPerHour: 10,
 			},
 		}
-		sized, nonRDS := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, nonRDS, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1, "only the RDS rec went through family-NU")
 		require.Len(t, nonRDS, 2, "EC2 + SP recs left for per-pool sizing")
 		assert.Equal(t, common.ServiceEC2, nonRDS[0].Service)
@@ -322,7 +322,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:        &common.DatabaseDetails{Engine: "aurora-postgresql", AZConfig: "single-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 2, "both recs kept after scaling")
 		// Both recs see the SAME cumulative projection.
 		assert.InDelta(t, sized[0].ProjectedCoverage, sized[1].ProjectedCoverage, 0.001,
@@ -360,7 +360,7 @@ func TestApplyFamilyNUSizingRDS(t *testing.T) {
 				Details:        &common.DatabaseDetails{Engine: "aurora-mysql", AZConfig: "single-az"},
 			},
 		}
-		sized, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
+		sized, _, _ := ApplyFamilyNUSizingRDS(recs, cov, 80)
 		require.Len(t, sized, 1)
 		assert.Equal(t, 12, sized[0].Count, "family-NU need includes .xlarge demand even though AWS rec is at .large")
 	})

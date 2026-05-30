@@ -131,7 +131,11 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 
 	// Phase 1: collect all recommendations without purchasing.
 	AppLogger.Printf("\n📥 Fetching recommendations from all services...\n")
-	allRecs := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
+	allRecs, drops := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
+
+	if line := drops.FormatOneLine(); line != "" {
+		AppLogger.Printf("\n%s\n", line)
+	}
 
 	// Phase 2: score and display.
 	scoredResult := scoreAndDisplay(allRecs, cfg)
@@ -425,9 +429,10 @@ func filterAndAdjustRecommendations(recs []common.Recommendation, csvModeCoverag
 		log.Printf("✅ Found support information for %d major engine versions", len(versionInfo))
 	}
 
-	// Apply filters (empty currentRegion since we're processing from CSV, not iterating regions)
+	// Apply filters (empty currentRegion since we're processing from CSV, not iterating regions).
+	// Drop tracking is skipped on the CSV path (nil drops).
 	originalCount := len(recs)
-	recs = applyFilters(recs, &cfg, instanceVersions, versionInfo, "")
+	recs = applyFilters(recs, &cfg, instanceVersions, versionInfo, "", nil)
 	if len(recs) < originalCount {
 		AppLogger.Printf("🔍 After filters: %d recs (filtered out %d)\n", len(recs), originalCount-len(recs))
 	}
@@ -438,7 +443,7 @@ func filterAndAdjustRecommendations(recs []common.Recommendation, csvModeCoverag
 	// CSV-path short-circuit is conditional on TargetCoverage == 0.
 	if cfg.TargetCoverage > 0 || csvModeCoverage < 100 {
 		beforeSize := len(recs)
-		recs = applySizing(recs, cfg, csvModeCoverage)
+		recs = applySizing(recs, cfg, csvModeCoverage, nil)
 		if cfg.TargetCoverage > 0 {
 			AppLogger.Printf("🎯 Applying %.1f%% target-coverage: %d recs selected (from %d)\n", cfg.TargetCoverage, len(recs), beforeSize)
 		} else {
