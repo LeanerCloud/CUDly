@@ -65,6 +65,8 @@ paths:
                 $ref: '#/components/schemas/DashboardSummary'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/dashboard/upcoming:
     get:
@@ -80,6 +82,8 @@ paths:
                 $ref: '#/components/schemas/UpcomingPurchaseResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ---- Configuration ------------------------------------------------------
   /api/config:
@@ -119,6 +123,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/config/service/{service}:
     parameters:
@@ -166,6 +172,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/commitment-options:
     get:
@@ -221,6 +229,8 @@ paths:
                 $ref: '#/components/schemas/RecommendationsResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/recommendations/refresh:
     post:
@@ -238,6 +248,8 @@ paths:
                 $ref: '#/components/schemas/CollectResult'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ---- Purchase Plans -----------------------------------------------------
   /api/plans:
@@ -260,6 +272,8 @@ paths:
                 $ref: '#/components/schemas/PlansResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       operationId: createPlan
       tags: [Plans]
@@ -293,6 +307,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/plans/{id}:
     parameters:
@@ -310,6 +326,8 @@ paths:
                 $ref: '#/components/schemas/PurchasePlan'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
     put:
@@ -335,6 +353,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
     patch:
@@ -360,6 +380,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
     delete:
@@ -377,6 +399,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -406,6 +430,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -434,6 +460,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/purchases/approve/{id}:
     parameters:
@@ -511,6 +539,8 @@ paths:
                 $ref: '#/components/schemas/PlannedPurchasesResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/purchases/planned/{id}/pause:
     parameters:
@@ -530,6 +560,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -551,6 +583,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -572,6 +606,8 @@ paths:
                 $ref: '#/components/schemas/RunPurchaseResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -593,6 +629,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -613,6 +651,8 @@ paths:
                 $ref: '#/components/schemas/PurchaseExecution'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -909,6 +949,8 @@ paths:
                 $ref: '#/components/schemas/HistoryResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/history/analytics:
     get:
@@ -928,6 +970,8 @@ paths:
                 $ref: '#/components/schemas/AnalyticsResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/history/breakdown:
     get:
@@ -953,6 +997,8 @@ paths:
                 $ref: '#/components/schemas/BreakdownResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ---- Analytics ----------------------------------------------------------
   /api/analytics/collect:
@@ -1183,6 +1229,8 @@ paths:
                   $ref: '#/components/schemas/APIKeyInfo'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       operationId: createAPIKey
       tags: [APIKeys]
@@ -1206,6 +1254,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/api-keys/{id}/revoke:
     parameters:
@@ -1225,6 +1275,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1246,6 +1298,8 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
