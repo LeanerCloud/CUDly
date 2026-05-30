@@ -2,7 +2,8 @@ package oidc
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"fmt"
 	"sync"
@@ -23,16 +24,18 @@ type AWSKMSClient interface {
 // The private key never leaves KMS.
 type AWSKMSSigner struct {
 	client AWSKMSClient
-	err    error
-	pubKey *rsa.PublicKey
 	keyID  string
-	kid    string
+
 	once   sync.Once
+	pubKey *ecdsa.PublicKey
+	kid    string
+	err    error
 }
 
 // NewAWSKMSSigner constructs a signer bound to the given KMS key. The
-// keyID may be the key ARN, alias ARN, or alias name — anything
-// accepted by kms:Sign and kms:GetPublicKey.
+// keyID may be the key ARN, alias ARN, or alias name -- anything
+// accepted by kms:Sign and kms:GetPublicKey. The KMS key must be an
+// ECC_NIST_P256 key configured for signing (ES256).
 func NewAWSKMSSigner(ctx context.Context, keyID string) (*AWSKMSSigner, error) {
 	if keyID == "" {
 		return nil, fmt.Errorf("oidc: empty AWS KMS keyID")
@@ -51,14 +54,13 @@ func NewAWSKMSSignerFromClient(client AWSKMSClient, keyID string) *AWSKMSSigner 
 }
 
 // Sign calls kms:Sign with the raw SHA-256 digest and the signing
-// algorithm RSASSA_PKCS1_V1_5_SHA_256, which matches what RS256 JWS
-// signatures expect.
+// algorithm ECDSA_SHA_256, which matches what ES256 JWS signatures expect.
 func (s *AWSKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 	out, err := s.client.Sign(ctx, &kms.SignInput{
 		KeyId:            &s.keyID,
 		Message:          digest,
 		MessageType:      types.MessageTypeDigest,
-		SigningAlgorithm: types.SigningAlgorithmSpecRsassaPkcs1V15Sha256,
+		SigningAlgorithm: types.SigningAlgorithmSpecEcdsaSha256,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("oidc: kms:Sign: %w", err)
@@ -68,7 +70,7 @@ func (s *AWSKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 
 // PublicKey fetches the public half of the KMS key once and caches it.
 // Subsequent calls return the cached value.
-func (s *AWSKMSSigner) PublicKey(ctx context.Context) (*rsa.PublicKey, error) {
+func (s *AWSKMSSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
 	s.resolveOnce(ctx)
 	return s.pubKey, s.err
 }
@@ -91,17 +93,17 @@ func (s *AWSKMSSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: parse kms public key: %w", err)
 			return
 		}
-		rsaPub, ok := pub.(*rsa.PublicKey)
+		ecPub, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
-			s.err = fmt.Errorf("oidc: kms key is not RSA (got %T)", pub)
+			s.err = fmt.Errorf("oidc: kms key is not ECDSA (got %T); key must be ECC_NIST_P256", pub)
 			return
 		}
-		kid, err := ComputeKeyID(rsaPub)
+		kid, err := ComputeKeyID(ecPub)
 		if err != nil {
 			s.err = err
 			return
 		}
-		s.pubKey = rsaPub
+		s.pubKey = ecPub
 		s.kid = kid
 	})
 }
