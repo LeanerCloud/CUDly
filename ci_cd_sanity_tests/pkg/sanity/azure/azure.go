@@ -1,3 +1,5 @@
+// Package azure implements read-only Azure sanity checks used in CI/CD to verify
+// that deploy credentials have sufficient RBAC permissions before a real deploy.
 package azure
 
 import (
@@ -12,6 +14,8 @@ import (
 	"github.com/LeanerCloud/CUDly/ci_cd_sanity_tests/pkg/sanity/report"
 )
 
+// Options controls which Azure subscription to target and optional safety
+// assertions applied during the sanity run.
 type Options struct {
 	SubscriptionID   string
 	ExpectedTenantID string // optional
@@ -80,6 +84,10 @@ func validateAccountExpectations(opts Options, accountOut []byte) report.CheckRe
 	return check
 }
 
+// Run executes all Azure sanity checks in sequence via the az CLI and returns
+// a Report summarising each result. It returns an error only for fatal setup
+// failures (missing subscription ID); individual check failures are captured
+// inside the Report so callers can surface them all rather than stopping at the first.
 func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	if opts.SubscriptionID == "" {
 		opts.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")

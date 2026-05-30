@@ -1,3 +1,4 @@
+// Package report defines the structured output types for CI/CD sanity-test runs.
 package report
 
 import (
@@ -6,6 +7,7 @@ import (
 	"time"
 )
 
+// Status is the outcome of a single sanity check.
 type Status string
 
 const (
@@ -14,6 +16,8 @@ const (
 	StatusSkip Status = "SKIP"
 )
 
+// CheckResult records the outcome of one named sanity check, including timing
+// and optional key/value details for post-hoc debugging.
 type CheckResult struct {
 	Name      string            `json:"name"`
 	Status    Status            `json:"status"`
@@ -23,6 +27,8 @@ type CheckResult struct {
 	EndedAt   time.Time         `json:"ended_at"`
 }
 
+// Report aggregates the results of a full sanity-test run against a single cloud
+// provider and is serialised to JSON for upload to the CI artefact store.
 type Report struct {
 	RunID     string        `json:"run_id"`
 	Cloud     string        `json:"cloud"`
