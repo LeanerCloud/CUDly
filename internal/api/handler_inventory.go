@@ -70,16 +70,42 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 }
 
 // fetchCommitmentRecords reads purchase history from the store, honouring
-// an optional `account_id` query param the same way fetchPurchaseHistory
-// does for /api/history. Limit defaults to MaxListLimit — commitments
-// are a strict subset of purchase history (we drop expired rows before
-// returning) so a high cap is appropriate; an over-truncation here
-// would silently hide rows the user is entitled to see.
+// optional `account_id` and `provider` query params the same way
+// fetchPurchaseHistory does for /api/history. Limit defaults to
+// MaxListLimit — commitments are a strict subset of purchase history (we
+// drop expired rows before returning) so a high cap is appropriate; an
+// over-truncation here would silently hide rows the user is entitled to.
+//
+// `provider` filtering is applied in-memory after the store read so that
+// the existing single-account and all-accounts store paths remain
+// unchanged; the record set is small enough that a post-read filter has
+// negligible cost.
 func (h *Handler) fetchCommitmentRecords(ctx context.Context, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
+	var rows []config.PurchaseHistoryRecord
+	var err error
 	if accountID := params["account_id"]; accountID != "" {
-		return h.config.GetPurchaseHistory(ctx, accountID, config.MaxListLimit)
+		rows, err = h.config.GetPurchaseHistory(ctx, accountID, config.MaxListLimit)
+	} else {
+		rows, err = h.config.GetAllPurchaseHistory(ctx, config.MaxListLimit)
 	}
-	return h.config.GetAllPurchaseHistory(ctx, config.MaxListLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply provider filter in-memory. An absent or empty param means
+	// "all providers". Case-sensitive match — providers are always
+	// lowercase in the store (aws, azure, gcp).
+	if provider := params["provider"]; provider != "" {
+		filtered := rows[:0]
+		for _, r := range rows {
+			if r.Provider == provider {
+				filtered = append(filtered, r)
+			}
+		}
+		rows = filtered
+	}
+
+	return rows, nil
 }
 
 // buildInventoryCommitment maps a PurchaseHistoryRecord to the
@@ -167,7 +193,11 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 		}
 	}
 	onDemandByKey := make(map[string]float64)
+	providerFilter := params["provider"]
 	for _, rec := range recs {
+		if providerFilter != "" && rec.Provider != providerFilter {
+			continue
+		}
 		onDemandByKey[rec.Provider+":"+rec.Service] += rec.Savings
 	}
 

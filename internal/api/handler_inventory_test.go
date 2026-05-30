@@ -165,6 +165,54 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
 }
 
+// TestHandler_listActiveCommitments_ProviderFilter verifies the provider
+// query param filters results in-memory, returning only commitments whose
+// Provider field matches the requested value (issue #866).
+func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	now := time.Now()
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-aws",
+			Provider:    "aws",
+			Service:     "ec2",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			Count:       1,
+			MonthlyCost: 80.0,
+		},
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-azure",
+			Provider:    "azure",
+			Service:     "compute",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			Count:       2,
+			MonthlyCost: 120.0,
+		},
+	}
+
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
+	}
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.listActiveCommitments(ctx, req, map[string]string{"provider": "aws"})
+	require.NoError(t, err)
+
+	resp := result.(InventoryCommitmentsResponse)
+	require.Len(t, resp.Commitments, 1, "only the aws commitment should pass the provider filter")
+	assert.Equal(t, "aws", resp.Commitments[0].Provider)
+	assert.Equal(t, "p-aws", splitPurchaseID(resp.Commitments[0].ID))
+}
+
 // TestHandler_listActiveCommitments_SortedByExpiry verifies soonest-expiring
 // is first — the dashboard framing is "what do I need to renew next?", so
 // surfacing the imminent end_date on top keeps the UI's order intuitive

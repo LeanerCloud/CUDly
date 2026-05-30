@@ -10,14 +10,23 @@
 import { apiRequest } from './client';
 import type { CoverageBreakdownResponse, InventoryCommitment } from './types';
 
+/** Shared filter params for the two Inventory endpoints. */
+export interface InventoryFilter {
+  provider?: string;
+  accountID?: string;
+}
+
 /**
  * List active (non-expired) commitments across the user's accessible
- * accounts. Pass `accountID` to scope the read to a single account; omit
- * for the full cross-account list. The backend always filters expired
- * rows out and sorts by soonest-expiring first.
+ * accounts. Both `provider` and `accountID` are forwarded as query params
+ * so the global topbar chips propagate into the result set (issue #866).
+ * The backend filters expired rows and sorts by soonest-expiring first.
  */
-export async function listActiveCommitments(accountID?: string): Promise<InventoryCommitment[]> {
-  const qs = accountID ? `?account_id=${encodeURIComponent(accountID)}` : '';
+export async function listActiveCommitments(filter: InventoryFilter = {}): Promise<InventoryCommitment[]> {
+  const parts: string[] = [];
+  if (filter.accountID) parts.push(`account_id=${encodeURIComponent(filter.accountID)}`);
+  if (filter.provider) parts.push(`provider=${encodeURIComponent(filter.provider)}`);
+  const qs = parts.length > 0 ? `?${parts.join('&')}` : '';
   const resp = await apiRequest<{ commitments: InventoryCommitment[] }>(`/inventory/commitments${qs}`);
   return resp.commitments ?? [];
 }
@@ -26,7 +35,13 @@ export async function listActiveCommitments(accountID?: string): Promise<Invento
  * Fetch per-provider, per-service coverage breakdowns.
  * Returns one section per known provider (aws, azure, gcp). A provider
  * with no usage data has services=null and overall_coverage_pct=null.
+ * Both `provider` and `accountID` are forwarded as query params so the
+ * global topbar chips propagate into coverage data (issue #866).
  */
-export async function getCoverageBreakdown(): Promise<CoverageBreakdownResponse> {
-  return apiRequest<CoverageBreakdownResponse>('/inventory/coverage');
+export async function getCoverageBreakdown(filter: InventoryFilter = {}): Promise<CoverageBreakdownResponse> {
+  const parts: string[] = [];
+  if (filter.accountID) parts.push(`account_id=${encodeURIComponent(filter.accountID)}`);
+  if (filter.provider) parts.push(`provider=${encodeURIComponent(filter.provider)}`);
+  const qs = parts.length > 0 ? `?${parts.join('&')}` : '';
+  return apiRequest<CoverageBreakdownResponse>(`/inventory/coverage${qs}`);
 }

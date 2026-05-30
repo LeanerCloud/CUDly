@@ -1,9 +1,10 @@
 /**
- * Tests for the inventory API module (issue #340 deferred sub-task).
+ * Tests for the inventory API module (issue #340 deferred sub-task, #866).
  *
  * Verifies the wire format / envelope handling for
- * GET /api/inventory/commitments. The backend handler logic is covered
- * in handler_inventory_test.go; here we lock down the client adapter.
+ * GET /api/inventory/commitments and GET /api/inventory/coverage,
+ * including the provider + account_id query params added by issue #866.
+ * Backend handler logic is covered in handler_inventory_test.go.
  */
 
 import { apiRequest } from '../api/client';
@@ -18,7 +19,7 @@ describe('listActiveCommitments', () => {
     (apiRequest as jest.Mock).mockReset();
   });
 
-  test('calls /inventory/commitments without query string by default', async () => {
+  test('calls /inventory/commitments without query string when no filter', async () => {
     (apiRequest as jest.Mock).mockResolvedValue({ commitments: [] });
 
     const result = await listActiveCommitments();
@@ -30,9 +31,27 @@ describe('listActiveCommitments', () => {
   test('appends URL-encoded account_id when scoped to one account', async () => {
     (apiRequest as jest.Mock).mockResolvedValue({ commitments: [] });
 
-    await listActiveCommitments('acc/with special');
+    await listActiveCommitments({ accountID: 'acc/with special' });
 
     expect(apiRequest).toHaveBeenCalledWith('/inventory/commitments?account_id=acc%2Fwith%20special');
+  });
+
+  test('appends provider query param when provider filter is set', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ commitments: [] });
+
+    await listActiveCommitments({ provider: 'aws' });
+
+    expect(apiRequest).toHaveBeenCalledWith('/inventory/commitments?provider=aws');
+  });
+
+  test('appends both account_id and provider when both are set', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ commitments: [] });
+
+    await listActiveCommitments({ accountID: 'acc-1', provider: 'azure' });
+
+    const url = (apiRequest as jest.Mock).mock.calls[0][0] as string;
+    expect(url).toContain('account_id=acc-1');
+    expect(url).toContain('provider=azure');
   });
 
   test('returns the commitments array unwrapped from the envelope', async () => {
@@ -74,12 +93,38 @@ describe('getCoverageBreakdown', () => {
     (apiRequest as jest.Mock).mockReset();
   });
 
-  test('calls /inventory/coverage', async () => {
+  test('calls /inventory/coverage without query string when no filter', async () => {
     (apiRequest as jest.Mock).mockResolvedValue({ providers: [] });
 
     await getCoverageBreakdown();
 
     expect(apiRequest).toHaveBeenCalledWith('/inventory/coverage');
+  });
+
+  test('appends provider query param when provider filter is set', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ providers: [] });
+
+    await getCoverageBreakdown({ provider: 'gcp' });
+
+    expect(apiRequest).toHaveBeenCalledWith('/inventory/coverage?provider=gcp');
+  });
+
+  test('appends account_id query param when accountID filter is set', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ providers: [] });
+
+    await getCoverageBreakdown({ accountID: 'acc-42' });
+
+    expect(apiRequest).toHaveBeenCalledWith('/inventory/coverage?account_id=acc-42');
+  });
+
+  test('appends both params when both are set', async () => {
+    (apiRequest as jest.Mock).mockResolvedValue({ providers: [] });
+
+    await getCoverageBreakdown({ accountID: 'acc-1', provider: 'aws' });
+
+    const url = (apiRequest as jest.Mock).mock.calls[0][0] as string;
+    expect(url).toContain('account_id=acc-1');
+    expect(url).toContain('provider=aws');
   });
 
   test('returns the full response envelope including providers array', async () => {
