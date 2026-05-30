@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -48,6 +49,10 @@ func (c *globalConfigCache) lookup(ctx context.Context, store AccountConfigReade
 	}
 	fetched, err := store.GetServiceConfig(ctx, provider, service)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			c.missing[k] = true
+			return nil, nil
+		}
 		return nil, fmt.Errorf("get service config %s/%s: %w", provider, service, err)
 	}
 	if fetched == nil {
