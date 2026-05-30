@@ -121,7 +121,11 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 
 	// Phase 1: collect all recommendations without purchasing.
 	AppLogger.Printf("\n📥 Fetching recommendations from all services...\n")
-	allRecs := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
+	allRecs, drops := fetchAllRecs(ctx, awsCfg, recClient, accountCache, servicesToProcess, engineData, cfg, coverageMap)
+
+	if line := drops.FormatOneLine(); line != "" {
+		AppLogger.Printf("\n%s\n", line)
+	}
 
 	// Phase 2: score and display.
 	scoredResult := scoreAndDisplay(allRecs, cfg)
@@ -392,9 +396,10 @@ func filterAndAdjustRecommendations(recommendations []common.Recommendation, csv
 		log.Printf("✅ Found support information for %d major engine versions", len(versionInfo))
 	}
 
-	// Apply filters (empty currentRegion since we're processing from CSV, not iterating regions)
+	// Apply filters (empty currentRegion since we're processing from CSV, not iterating regions).
+	// Drop tracking is skipped on the CSV path (nil drops).
 	originalCount := len(recommendations)
-	recommendations = applyFilters(recommendations, cfg, instanceVersions, versionInfo, "")
+	recommendations = applyFilters(recommendations, cfg, instanceVersions, versionInfo, "", nil)
 	if len(recommendations) < originalCount {
 		AppLogger.Printf("🔍 After filters: %d recommendations (filtered out %d)\n", len(recommendations), originalCount-len(recommendations))
 	}
@@ -405,7 +410,7 @@ func filterAndAdjustRecommendations(recommendations []common.Recommendation, csv
 	// CSV-path short-circuit is conditional on TargetCoverage == 0.
 	if cfg.TargetCoverage > 0 || csvModeCoverage < 100 {
 		beforeSize := len(recommendations)
-		recommendations = applySizing(recommendations, cfg, csvModeCoverage)
+		recommendations = applySizing(recommendations, cfg, csvModeCoverage, nil)
 		if cfg.TargetCoverage > 0 {
 			AppLogger.Printf("🎯 Applying %.1f%% target-coverage: %d recommendations selected (from %d)\n", cfg.TargetCoverage, len(recommendations), beforeSize)
 		} else {
