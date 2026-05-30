@@ -138,6 +138,11 @@ type FamilyDropCounts struct {
 	// AlreadyAtTarget is the number of recs from families where the
 	// existing coverage already meets or exceeds the target (gap <= 0).
 	AlreadyAtTarget int
+	// NoNUSignal is the number of recs dropped because the family's
+	// AWS-recommended counts summed to zero NU (e.g. all recs at
+	// unknown/unrecognised sizes), so there is no scalable NU to apply
+	// the family target against. This is distinct from AlreadyAtTarget.
+	NoNUSignal int
 	// SizedToZero is the number of recs dropped because the family-wide
 	// scale factor produced a floor(0) count for that rec's size.
 	SizedToZero int
@@ -182,6 +187,7 @@ func ApplyFamilyNUSizingRDS(
 		sized, familyDrops := sizeRDSFamilyRecs(recs, indices, familyCov[fk], targetPct)
 		sizedRDS = append(sizedRDS, sized...)
 		drops.AlreadyAtTarget += familyDrops.AlreadyAtTarget
+		drops.NoNUSignal += familyDrops.NoNUSignal
 		drops.SizedToZero += familyDrops.SizedToZero
 	}
 	return sizedRDS, nonRDS, drops
@@ -254,8 +260,9 @@ func sizeRDSFamilyRecs(
 		currentNU += float64(recs[i].Count) * rdsInstanceNUFromType(recs[i].ResourceType)
 	}
 	if currentNU <= 0 {
-		// Recs sum to zero NU — nothing to scale.
-		drops.AlreadyAtTarget = len(indices)
+		// Recs sum to zero NU — family lookup returned no scalable signal.
+		// This is not the same as "already at target"; record separately.
+		drops.NoNUSignal = len(indices)
 		return nil, drops
 	}
 	scale := targetNU / currentNU

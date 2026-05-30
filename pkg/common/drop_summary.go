@@ -14,7 +14,8 @@ const (
 	DropTargetAlreadyMet    = "target-already-met"
 	DropTargetSizedToZero   = "target-sized-to-zero"
 	DropFamilyAlreadyAtTarget = "family-nu-already-at-target"
-	DropFamilySizedToZero   = "family-nu-sized-to-zero"
+	DropFamilyNoNUSignal     = "family-nu-no-nu-signal"
+	DropFamilySizedToZero    = "family-nu-sized-to-zero"
 	DropDuplicateDedup      = "duplicate-dedup"
 )
 

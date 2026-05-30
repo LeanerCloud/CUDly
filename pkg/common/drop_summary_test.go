@@ -80,12 +80,13 @@ func TestDropSummary_FormatOneLine(t *testing.T) {
 				d.Add(DropTargetAlreadyMet, 3)
 				d.Add(DropTargetSizedToZero, 4)
 				d.Add(DropFamilyAlreadyAtTarget, 5)
-				d.Add(DropFamilySizedToZero, 6)
-				d.Add(DropDuplicateDedup, 7)
+				d.Add(DropFamilyNoNUSignal, 6)
+				d.Add(DropFamilySizedToZero, 7)
+				d.Add(DropDuplicateDedup, 8)
 			},
-			expected: "Dropped 28 recs: --include-extended-support=2, --min-pool-size=1, " +
-				"duplicate-dedup=7, family-nu-already-at-target=5, family-nu-sized-to-zero=6, " +
-				"target-already-met=3, target-sized-to-zero=4",
+			expected: "Dropped 36 recs: --include-extended-support=2, --min-pool-size=1, " +
+				"duplicate-dedup=8, family-nu-already-at-target=5, family-nu-no-nu-signal=6, " +
+				"family-nu-sized-to-zero=7, target-already-met=3, target-sized-to-zero=4",
 		},
 	}
 
