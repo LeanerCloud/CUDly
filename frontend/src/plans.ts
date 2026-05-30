@@ -1343,22 +1343,15 @@ export async function savePlan(e: Event): Promise<void> {
   plan.target_accounts = accountIds;
 
   try {
-    let savedPlanId = planId;
     if (planId) {
       await api.updatePlan(planId, plan as unknown as api.CreatePlanRequest);
+      // Update flow: push the selected account list via the dedicated endpoint.
+      await api.setPlanAccounts(planId, accountIds);
     } else {
-      const created = await api.createPlan(plan as unknown as api.CreatePlanRequest) as unknown as { id: string };
-      savedPlanId = created.id;
-    }
-
-    // On update, the create path's atomic plan_accounts insert doesn't fire
-    // (we only POST /plans on create). For updates we still need to push the
-    // selected account list via the dedicated endpoint. On create, we also
-    // re-push here so that subsequent reselection is reflected even if the
-    // backend later opens an "atomic-create-only" path that diverges from
-    // PUT semantics — same call already handles dedupe via DELETE+INSERT.
-    if (savedPlanId) {
-      await api.setPlanAccounts(savedPlanId, accountIds);
+      await api.createPlan(plan as unknown as api.CreatePlanRequest);
+      // Create flow: backend inserted plan_accounts atomically from
+      // target_accounts in the POST body (see internal/api/handler_plans.go
+      // createPlan). No follow-up account-write needed.
     }
 
     closePlanModal();
