@@ -1,10 +1,14 @@
 /**
- * Settings page permission gating for issue #365.
+ * Settings page permission gating for issue #365 and issue #870.
  *
  * The /admin/general + /admin/purchasing sub-tabs are reachable for
  * every signed-in role (only /admin/accounts and /admin/users are
  * navigation.ts-redirected). Render the form read-only for non-admin
  * sessions: disable every control, hide Save and Reset.
+ *
+ * Issue #870: the Purchasing Policies panel (#purchasing-panel) is a
+ * sibling <section> outside #global-settings-form. The viewer role must
+ * see all its inputs as disabled and both Save/Reset buttons hidden.
  */
 import { loadGlobalSettings } from '../settings';
 
@@ -130,7 +134,30 @@ const setupDom = () => {
   err.id = 'settings-error';
   err.className = 'hidden';
 
-  document.body.append(loading, form, err);
+  // Purchasing Policies panel: a sibling <section> outside #global-settings-form.
+  // Only the grace-period inputs (unique to this panel) and the action buttons
+  // are included here to avoid duplicate IDs with the form above. In the real
+  // HTML the term/payment/coverage selects also live in this panel; that does
+  // not affect the read-only gate logic since applyReadOnlySettings queries
+  // #purchasing-panel independently of #global-settings-form.
+  const purchasingPanel = document.createElement('section');
+  purchasingPanel.id = 'purchasing-panel';
+  for (const id of ['setting-grace-aws', 'setting-grace-azure', 'setting-grace-gcp']) {
+    const inp = document.createElement('input');
+    inp.id = id;
+    inp.type = 'number';
+    inp.value = '7';
+    purchasingPanel.appendChild(inp);
+  }
+  const savePurchBtn = document.createElement('button');
+  savePurchBtn.id = 'save-purchasing-btn';
+  savePurchBtn.type = 'button';
+  const resetPurchBtn = document.createElement('button');
+  resetPurchBtn.id = 'reset-purchasing-btn';
+  resetPurchBtn.type = 'button';
+  purchasingPanel.append(savePurchBtn, resetPurchBtn);
+
+  document.body.append(loading, form, err, purchasingPanel);
 };
 
 describe('Settings page permission gating (issue #365)', () => {
@@ -185,5 +212,60 @@ describe('Settings page permission gating (issue #365)', () => {
     expect(save.hidden).toBe(true);
     const emailInput = document.getElementById('setting-notification-email') as HTMLInputElement;
     expect(emailInput.disabled).toBe(true);
+  });
+});
+
+describe('Purchasing Policies panel permission gating (issue #870)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDom();
+  });
+
+  test('admin: purchasing inputs enabled and Save/Reset buttons visible', async () => {
+    mockUser('admin');
+    await loadGlobalSettings();
+    const save = document.getElementById('save-purchasing-btn') as HTMLButtonElement;
+    const reset = document.getElementById('reset-purchasing-btn') as HTMLButtonElement;
+    expect(save.hidden).toBe(false);
+    expect(reset.hidden).toBe(false);
+    const inputs = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      '#purchasing-panel input, #purchasing-panel select',
+    );
+    expect(inputs.length).toBeGreaterThan(0);
+    inputs.forEach((el) => expect(el.disabled).toBe(false));
+  });
+
+  test('readonly role: purchasing inputs disabled and Save/Reset buttons hidden', async () => {
+    mockUser('readonly');
+    await loadGlobalSettings();
+    const save = document.getElementById('save-purchasing-btn') as HTMLButtonElement;
+    const reset = document.getElementById('reset-purchasing-btn') as HTMLButtonElement;
+    expect(save.hidden).toBe(true);
+    expect(reset.hidden).toBe(true);
+    const inputs = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      '#purchasing-panel input, #purchasing-panel select',
+    );
+    expect(inputs.length).toBeGreaterThan(0);
+    inputs.forEach((el) => expect(el.disabled).toBe(true));
+  });
+
+  test('user role: purchasing inputs disabled and Save/Reset buttons hidden', async () => {
+    mockUser('user');
+    await loadGlobalSettings();
+    const save = document.getElementById('save-purchasing-btn') as HTMLButtonElement;
+    const reset = document.getElementById('reset-purchasing-btn') as HTMLButtonElement;
+    expect(save.hidden).toBe(true);
+    expect(reset.hidden).toBe(true);
+    const graceInput = document.getElementById('setting-grace-aws') as HTMLInputElement;
+    expect(graceInput.disabled).toBe(true);
+  });
+
+  test('null user: purchasing inputs disabled and Save/Reset buttons hidden', async () => {
+    mockUser(null);
+    await loadGlobalSettings();
+    const save = document.getElementById('save-purchasing-btn') as HTMLButtonElement;
+    expect(save.hidden).toBe(true);
+    const graceGcp = document.getElementById('setting-grace-gcp') as HTMLInputElement;
+    expect(graceGcp.disabled).toBe(true);
   });
 });

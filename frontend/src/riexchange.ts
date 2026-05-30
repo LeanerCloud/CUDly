@@ -22,6 +22,7 @@ import type {
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { applyReadOnlySettings } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 
@@ -987,6 +988,12 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
       }
     });
   }
+
+  // Issue #870: re-apply the purchasing-panel read-only gate after rendering
+  // so the dynamically-injected RI Exchange inputs are covered for non-admin
+  // sessions (loadGlobalSettings runs concurrently and may complete before
+  // these inputs exist).
+  applyReadOnlySettings(null);
 }
 
 export async function saveAutomationSettings(): Promise<void> {
