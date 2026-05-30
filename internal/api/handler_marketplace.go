@@ -15,8 +15,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -24,6 +27,7 @@ import (
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	smithy "github.com/aws/smithy-go"
 	"github.com/google/uuid"
 )
 
@@ -113,6 +117,11 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		}
 	}
 
+	// Compute actual remaining months from the purchase timestamp and total
+	// term so the default price schedule reflects real remaining value
+	// rather than the full contract term (which overprices older RIs).
+	remainingMonths := computeRemainingMonths(row.Timestamp, row.Term)
+
 	// Validate and normalise the price schedule. MonthlyCost is nullable
 	// (nil means the provider returned no recurring breakdown); treat absent
 	// as $0 recurring for the default price-schedule computation.
@@ -120,7 +129,7 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	if row.MonthlyCost != nil {
 		monthlyCost = *row.MonthlyCost
 	}
-	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, row.Term, row.UpfrontCost, monthlyCost)
+	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.UpfrontCost, monthlyCost)
 	if err != nil {
 		return nil, NewClientError(400, err.Error())
 	}
@@ -147,18 +156,21 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		PriceSchedule:       awsSchedule,
 	})
 	if err != nil {
-		// Preserve the AWS error message verbatim for 4xx errors (e.g. missing
-		// seller account, invalid listing) so the frontend can surface it.
 		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed: %v", purchaseID, err)
-		return nil, NewClientError(502, "AWS marketplace listing failed: "+err.Error())
+		return nil, mapAWSMarketplaceError("AWS marketplace listing failed", err)
 	}
 
-	// Persist the listing ID and state.
+	// Persist the listing ID and state. On DB failure, attempt a compensating
+	// rollback (cancel the just-created listing) to avoid a desync where the
+	// user sees success but the listing is invisible in subsequent renders.
 	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
-		// Log the error but return success to the caller — the listing was
-		// created in AWS; a DB write failure here must not be surfaced as a
-		// 5xx that could cause the user to create a duplicate listing.
-		logging.Errorf("marketplace: listing created (%s / %s) but DB update failed: %v", result.ListingID, result.State, dbErr)
+		logging.Errorf("marketplace: listing created (%s / %s) but DB update failed: %v — attempting rollback", result.ListingID, result.State, dbErr)
+		if _, rollbackErr := ec2Client.CancelMarketplaceListing(ctx, result.ListingID); rollbackErr != nil {
+			logging.Errorf("marketplace: rollback cancel for listing %s also failed: %v", result.ListingID, rollbackErr)
+		} else {
+			logging.Warnf("marketplace: listing %s rolled back (cancelled) after DB failure", result.ListingID)
+		}
+		return nil, fmt.Errorf("listing created but could not be persisted; listing has been rolled back: %w", dbErr)
 	}
 
 	return &MarketplaceListResponse{
@@ -207,11 +219,15 @@ func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunct
 	result, err := ec2Client.CancelMarketplaceListing(ctx, row.ListingID)
 	if err != nil {
 		logging.Warnf("marketplace: CancelReservedInstancesListing for listing %s failed: %v", row.ListingID, err)
-		return nil, NewClientError(502, "AWS cancel listing failed: "+err.Error())
+		return nil, mapAWSMarketplaceError("AWS cancel listing failed", err)
 	}
 
+	// The listing is already cancelled in AWS; there is no compensating rollback
+	// available if the DB write fails. Return an internal error so the caller
+	// knows the state is out of sync and can retry or contact an administrator.
 	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
-		logging.Errorf("marketplace: listing cancelled (%s) but DB update failed: %v", result.ListingID, dbErr)
+		logging.Errorf("marketplace: listing cancelled in AWS (%s) but DB update failed: %v — state is out of sync", result.ListingID, dbErr)
+		return nil, fmt.Errorf("listing cancelled in AWS but could not be persisted: %w", dbErr)
 	}
 
 	return map[string]string{"listing_id": result.ListingID, "listing_state": result.State}, nil
@@ -296,14 +312,63 @@ func (h *Handler) authorizeAllowedAccount(ctx context.Context, session *Session,
 	return NewClientError(403, "permission denied: purchase is in a cloud account not covered by your session's allowed accounts")
 }
 
+// computeRemainingMonths returns the number of whole months remaining on an RI
+// given its purchase timestamp and total term in months. The result is floored
+// at 1 so defensive callers always get a positive value.
+func computeRemainingMonths(purchaseTime time.Time, termMonths int) int {
+	if purchaseTime.IsZero() || termMonths <= 0 {
+		return 1
+	}
+	elapsed := time.Since(purchaseTime)
+	elapsedMonths := elapsed.Hours() / (24 * 30.4375)
+	remaining := float64(termMonths) - elapsedMonths
+	r := int(math.Floor(remaining))
+	if r < 1 {
+		return 1
+	}
+	return r
+}
+
+// awsMarketplaceClientFaultCodes is the set of AWS error codes that represent
+// client-side faults for Marketplace listing operations. These map to 4xx
+// responses so the caller receives an actionable message. Server-side AWS
+// errors remain 5xx.
+var awsMarketplaceClientFaultCodes = map[string]bool{
+	"InvalidReservedInstancesId":            true,
+	"InvalidReservedInstancesId.NotFound":   true,
+	"InvalidParameterValue":                 true,
+	"InvalidParameter":                      true,
+	"IncorrectState":                        true,
+	"InvalidReservedInstancesListingId":     true,
+	"ReservedInstancesListingAlreadyExists": true,
+	"SellerNotRegistered":                   true,
+	"AuthFailure":                           true,
+	"UnauthorizedOperation":                 true,
+}
+
+// mapAWSMarketplaceError maps an AWS SDK error to an appropriate ClientError.
+// AWS client-fault errors (4xx-category codes) produce a 4xx response with the
+// original AWS message so the caller gets actionable feedback. All other errors
+// produce a 502 (AWS-side failure).
+func mapAWSMarketplaceError(opMsg string, err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if awsMarketplaceClientFaultCodes[apiErr.ErrorCode()] || apiErr.ErrorFault() == smithy.FaultClient {
+			return NewClientError(400, apiErr.ErrorMessage())
+		}
+	}
+	return NewClientError(502, opMsg+": "+err.Error())
+}
+
 // resolveMarketplacePriceSchedule returns a normalised price schedule for the
 // given RI. When the caller supplied an explicit schedule it is validated and
 // returned unchanged. When the caller omitted the schedule (nil / empty), a
 // single-tier default is computed: total remaining value * 0.95 (5% discount
 // to attract buyers; the 12% AWS fee is applied by the Marketplace on top).
 //
-// remainingMonths is rec.Term (AWS RI term in months), upfrontCost is the
-// original upfront paid, monthlyCost is the ongoing recurring charge.
+// remainingMonths must be the actual remaining months (computed via
+// computeRemainingMonths from purchase timestamp and total term — NOT the raw
+// term field, which would overprice older RIs).
 func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths int, upfrontCost, monthlyCost float64) ([]MarketplacePriceTier, error) {
 	if len(supplied) > 0 {
 		for i, t := range supplied {
