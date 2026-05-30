@@ -502,6 +502,7 @@ func TestMFAEnable_NoPending_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFANoEnrollmentInProgress),
 		"MFAEnable with no pending enrollment must return ErrMFANoEnrollmentInProgress, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFAEnable_ExpiredPending_ReturnsSentinel(t *testing.T) {
@@ -521,6 +522,7 @@ func TestMFAEnable_ExpiredPending_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFAEnrollmentExpired),
 		"MFAEnable with expired enrollment must return ErrMFAEnrollmentExpired, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFAEnable_WrongCode_ReturnsSentinel(t *testing.T) {
@@ -539,6 +541,7 @@ func TestMFAEnable_WrongCode_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
 		"MFAEnable wrong code must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFADisable_WrongPassword_ReturnsSentinel(t *testing.T) {
@@ -555,6 +558,7 @@ func TestMFADisable_WrongPassword_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFAInvalidPassword),
 		"MFADisable wrong password must return ErrMFAInvalidPassword, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFADisable_NoCode_ReturnsSentinel(t *testing.T) {
@@ -571,6 +575,7 @@ func TestMFADisable_NoCode_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFACodeRequired),
 		"MFADisable empty code must return ErrMFACodeRequired, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFADisable_WrongCode_ReturnsSentinel(t *testing.T) {
@@ -588,6 +593,7 @@ func TestMFADisable_WrongCode_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
 		"MFADisable wrong code must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFARegenerateRecoveryCodes_NotEnabled_ReturnsSentinel(t *testing.T) {
@@ -603,6 +609,7 @@ func TestMFARegenerateRecoveryCodes_NotEnabled_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFANotEnabled),
 		"MFARegenerateRecoveryCodes when disabled must return ErrMFANotEnabled, got: %v", err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFARegenerateRecoveryCodes_WrongCode_ReturnsSentinel(t *testing.T) {
@@ -619,4 +626,5 @@ func TestMFARegenerateRecoveryCodes_WrongCode_ReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
 		"MFARegenerateRecoveryCodes wrong TOTP must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
 }

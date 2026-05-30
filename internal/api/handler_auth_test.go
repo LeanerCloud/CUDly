@@ -1140,6 +1140,7 @@ func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
 	assert.Equal(t, "mfa_required", ce.Error())
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
@@ -1157,6 +1158,7 @@ func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
 	assert.Equal(t, "invalid_mfa_code", ce.Error())
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaSetup_HappyPath(t *testing.T) {
@@ -1172,6 +1174,7 @@ func TestHandler_mfaSetup_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SECRET123", resp.Secret)
 	assert.Contains(t, resp.ProvisioningURI, "otpauth://")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
@@ -1192,6 +1195,7 @@ func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.Error(), "invalid password")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaEnable_HappyPath(t *testing.T) {
@@ -1206,6 +1210,7 @@ func TestHandler_mfaEnable_HappyPath(t *testing.T) {
 	resp, err := handler.mfaEnable(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 2)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaEnable_NoSession(t *testing.T) {
@@ -1219,6 +1224,7 @@ func TestHandler_mfaEnable_NoSession(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaDisable_HappyPath(t *testing.T) {
@@ -1231,6 +1237,7 @@ func TestHandler_mfaDisable_HappyPath(t *testing.T) {
 	handler := &Handler{auth: mockAuth}
 	_, err := handler.mfaDisable(ctx, authedReq("tok", `{"password":"`+b64("pw")+`","code":"123456"}`))
 	require.NoError(t, err)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
@@ -1245,6 +1252,7 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	resp, err := handler.mfaRegenerateRecoveryCodes(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 1)
+	mockAuth.AssertExpectations(t)
 }
 
 // ErrMFARequired_test / ErrInvalidMFACode_test return the sentinel
@@ -1541,4 +1549,15 @@ func TestMapMFAServiceError_EnrollmentExpired_Is400(t *testing.T) {
 
 func TestMapMFAServiceError_NotEnabled_Is400(t *testing.T) {
 	testMFASentinel400(t, auth.ErrMFANotEnabled, "ErrMFANotEnabled")
+}
+
+func TestMapMFAServiceError_AuthFailed_Is401(t *testing.T) {
+	// ErrMFAAuthFailed must map to 401 (not 400) to prevent user enumeration:
+	// both "user not found" and "DB error" paths surface as opaque 401.
+	wrapped := fmt.Errorf("some context: %w", auth.ErrMFAAuthFailed)
+	got := mapMFAServiceError(wrapped)
+	ce, ok := IsClientError(got)
+	require.True(t, ok, "ErrMFAAuthFailed must map to a ClientError")
+	assert.Equal(t, 401, ce.code, "ErrMFAAuthFailed must map to HTTP 401")
+	assert.Contains(t, ce.Error(), auth.ErrMFAAuthFailed.Error())
 }
