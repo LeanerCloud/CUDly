@@ -22,6 +22,26 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
 )
 
+// serviceRecsGetter is the narrow interface satisfied by each per-service
+// client (compute, database, cache, cosmosdb). The interface exists solely to
+// allow tests to substitute fake implementations; production code uses the
+// concrete types via the newXxxClientFn variables below.
+type serviceRecsGetter interface {
+	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+}
+
+// newComputeClientFn, newDatabaseClientFn, newCacheClientFn, and
+// newCosmosDBClientFn default to the real constructors and are overridden in
+// tests to inject fakes. The variables are package-level (not fields on the
+// adapter) so that the constructor signature stays unchanged and the injection
+// is limited to the test package that owns the test binary's address space.
+var (
+	newComputeClientFn  func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter { return compute.NewClient(cred, sub, region) }
+	newDatabaseClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter { return database.NewClient(cred, sub, region) }
+	newCacheClientFn    func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter { return cache.NewClient(cred, sub, region) }
+	newCosmosDBClientFn func(azcore.TokenCredential, string, string) serviceRecsGetter = func(cred azcore.TokenCredential, sub, region string) serviceRecsGetter { return cosmosdb.NewClient(cred, sub, region) }
+)
+
 // RecommendationsClientAdapter aggregates Azure reservation recommendations across all services.
 //
 // Invariant: subscriptionID must be non-empty. Downstream converters use it as
@@ -109,7 +129,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Compute (VM) recommendations — subscription-wide.
 	if includeCompute {
 		goService(&computeErr, func() {
-			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
+			computeClient := newComputeClientFn(r.cred, r.subscriptionID, "")
 			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -117,7 +137,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Database (SQL) recommendations — subscription-wide.
 	if includeDB {
 		goService(&dbErr, func() {
-			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
+			dbClient := newDatabaseClientFn(r.cred, r.subscriptionID, "")
 			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -125,7 +145,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Cache (Redis) recommendations — subscription-wide.
 	if includeCache {
 		goService(&cacheErr, func() {
-			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
+			cacheClient := newCacheClientFn(r.cred, r.subscriptionID, "")
 			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
 		})
 	}
@@ -133,7 +153,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// CosmosDB (NoSQL) recommendations — subscription-wide.
 	if includeCosmos {
 		goService(&cosmosErr, func() {
-			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
+			cosmosClient := newCosmosDBClientFn(r.cred, r.subscriptionID, "")
 			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
 		})
 	}
