@@ -1579,7 +1579,13 @@ function applyOverrideBulkMode(
   if (bulkDiv)   bulkDiv.classList.toggle('hidden', !bulk);
 
   if (!bulk) {
-    // Returning to single-service mode: the single <select> controls submit state.
+    // Returning to single-service mode: recompute disabled state from the
+    // single-service <select> so the button is not left stuck disabled after
+    // toggling back from bulk mode.
+    if (submitBtn) {
+      const singleSelect = singleRow?.querySelector('select') as HTMLSelectElement | null;
+      submitBtn.disabled = (singleSelect?.value ?? '') === '';
+    }
     return;
   }
 
@@ -1774,6 +1780,20 @@ async function submitBulkOverrideForm(
     const errEl = document.getElementById('override-form-error');
     if (errEl) errEl.textContent = 'Select at least one service.';
     return;
+  }
+
+  // Validate (provider, service, term, payment) combinations before fanning out.
+  if (req.term != null && req.payment) {
+    const invalid = checked.filter(
+      service => !isValidCombination(ctx.provider, service, req.term!, req.payment!),
+    );
+    if (invalid.length > 0) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) {
+        errEl.textContent = `${invalid.join(', ')}: does not support ${req.term}-year ${req.payment}. Pick a different term or payment.`;
+      }
+      return;
+    }
   }
 
   const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
