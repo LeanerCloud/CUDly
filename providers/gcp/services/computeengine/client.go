@@ -29,8 +29,8 @@ const maxRecsPages = 20
 // maxCommitmentsPages caps GCP committed-use discount iteration.
 const maxCommitmentsPages = 50
 
-// maxMachineTypesPages caps GCP machine types iteration.
-const maxMachineTypesPages = 20
+// maxMachineTypeItems caps GCP machine types iteration (one item per Next() call).
+const maxMachineTypeItems = 20
 
 // CommitmentsService interface for commitments operations (enables mocking)
 type CommitmentsService interface {
@@ -653,12 +653,12 @@ func (c *ComputeEngineClient) GetValidResourceTypes(ctx context.Context) ([]stri
 	machineTypes := make([]string, 0)
 	it := svc.List(ctx, req)
 
-	for pageIdx := 0; ; pageIdx++ {
+	for itemIdx := 0; ; itemIdx++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
 		}
-		if pageIdx >= maxMachineTypesPages {
-			return nil, fmt.Errorf("computeengine: GetValidResourceTypes iteration cap (%d items) reached", maxMachineTypesPages)
+		if itemIdx >= maxMachineTypeItems {
+			return nil, fmt.Errorf("computeengine: GetValidResourceTypes iteration cap (%d items) reached", maxMachineTypeItems)
 		}
 		machineType, err := it.Next()
 		if err == iterator.Done {
