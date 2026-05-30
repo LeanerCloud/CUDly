@@ -60,6 +60,11 @@ export type Resource =
   | 'users'
   | 'groups'
   | 'api-keys'
+  // ri-exchange is a separate resource from purchases so that execute:ri-exchange
+  // can be granted independently. RI exchanges are financially irreversible;
+  // keeping the permission disjoint prevents execute:purchases from implicitly
+  // covering the exchange path (issue #660).
+  | 'ri-exchange'
   | '*';
 
 /**

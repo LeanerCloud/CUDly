@@ -576,8 +576,10 @@ func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 }
 
 // executeExchange executes an RI exchange with a spend-cap guardrail.
+// Requires execute:ri-exchange (deliberately separate from execute:purchases)
+// because RI exchanges are financially irreversible once submitted to AWS.
 func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "execute", "purchases"); err != nil {
+	if _, err := h.requirePermission(ctx, req, "execute", "ri-exchange"); err != nil {
 		return nil, err
 	}
 
