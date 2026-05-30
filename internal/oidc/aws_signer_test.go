@@ -2,9 +2,9 @@ package oidc
 
 import (
 	"context"
-	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -15,15 +15,15 @@ import (
 
 var base64RawURL = base64.RawURLEncoding
 
-// fakeKMSClient is a minimal AWSKMSClient backed by an in-process RSA
-// key. It lets TestAWSKMSSigner exercise the Signer contract without
+// fakeKMSClient is a minimal AWSKMSClient backed by an in-process P-256
+// ECDSA key. It lets TestAWSKMSSigner exercise the Signer contract without
 // touching real AWS.
 type fakeKMSClient struct {
-	key *rsa.PrivateKey
+	key *ecdsa.PrivateKey
 }
 
 func (f *fakeKMSClient) Sign(_ context.Context, in *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
-	sig, err := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, in.Message)
+	sig, err := ecdsa.SignASN1(rand.Reader, f.key, in.Message)
 	if err != nil {
 		return nil, err
 	}
@@ -40,19 +40,23 @@ func (f *fakeKMSClient) GetPublicKey(_ context.Context, _ *kms.GetPublicKeyInput
 
 func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("gen key: %v", err)
 	}
 	signer := NewAWSKMSSignerFromClient(&fakeKMSClient{key: key}, "alias/test-key")
 
-	// Signer contract: PublicKey returns the RSA pub half.
-	pub, err := signer.PublicKey(ctx)
+	// Signer contract: PublicKey returns the ECDSA pub half.
+	rawPub, err := signer.PublicKey(ctx)
 	if err != nil {
 		t.Fatalf("public key: %v", err)
 	}
-	if pub.N.Cmp(key.PublicKey.N) != 0 {
-		t.Fatal("public key modulus mismatch")
+	ecPub, ok := rawPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("public key is not *ecdsa.PublicKey, got %T", rawPub)
+	}
+	if ecPub.X.Cmp(key.PublicKey.X) != 0 || ecPub.Y.Cmp(key.PublicKey.Y) != 0 {
+		t.Fatal("public key point mismatch")
 	}
 
 	// KeyID stable across calls.
@@ -62,7 +66,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 		t.Errorf("kid unstable or empty: %s vs %s", k1, k2)
 	}
 
-	// Mint a JWT and verify the signature end-to-end.
+	// Mint a JWT and verify the ECDSA signature end-to-end.
 	jws, err := Mint(ctx, signer, map[string]any{
 		"iss": "https://cudly.example.com",
 		"sub": "cudly-controller",
@@ -71,16 +75,17 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	// Verify using the underlying pub half.
+	// Verify header asserts ES256 algorithm.
 	parts := splitJWS(t, jws)
+	// Verify using the underlying EC pub half.
 	signingInput := parts[0] + "." + parts[1]
 	digest := sha256.Sum256([]byte(signingInput))
-	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], decodeB64(t, parts[2])); err != nil {
-		t.Errorf("signature verify: %v", err)
+	if !ecdsa.VerifyASN1(ecPub, digest[:], decodeB64(t, parts[2])) {
+		t.Errorf("ECDSA signature verify failed")
 	}
 }
 
-// helpers — unit tests only, kept private
+// helpers -- unit tests only, kept private
 func splitJWS(t *testing.T, jws string) [3]string {
 	t.Helper()
 	var out [3]string
