@@ -2025,6 +2025,9 @@ describe('Bulk override modal (issue #119)', () => {
   });
 
   test('already-overridden services are excluded from the checkbox list', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', external_id: '111', enabled: true, provider: 'aws' },
+    ]);
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
       { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', term: 1 },
       { id: 'o2', account_id: 'acc-1', provider: 'aws', service: 'rds',  term: 1 },
