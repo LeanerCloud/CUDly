@@ -503,6 +503,7 @@ func applyCoverageAndOverrides(recs []common.Recommendation, cfg Config, coverag
 		var familyDrops recommendations.FamilyDropCounts
 		sizedRDS, rest, familyDrops = recommendations.ApplyFamilyNUSizingRDS(recs, coverageMap, cfg.TargetCoverage)
 		drops.Add(common.DropFamilyAlreadyAtTarget, familyDrops.AlreadyAtTarget)
+		drops.Add(common.DropFamilyNoNUSignal, familyDrops.NoNUSignal)
 		drops.Add(common.DropFamilySizedToZero, familyDrops.SizedToZero)
 	}
 	filteredRecs := applySizing(rest, cfg, cfg.Coverage, drops)
