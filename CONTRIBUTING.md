@@ -72,6 +72,51 @@ go build -o cudly cmd/*.go
 go test ./...
 ```
 
+### Go workspace and worktrees (gopls setup)
+
+The repo ships a `go.work` that lists only the primary module (`.`). This is
+enough for standard clones. When you are working across multiple git worktrees
+simultaneously, gopls needs each worktree's module added to the workspace or it
+flags every file in the sibling trees with `BrokenImport` / `undefined: <Type>`.
+
+**Do not edit the committed `go.work`** for local paths -- they vary per
+developer and per session.
+
+Instead, create a `go.work.local` next to `go.work` (it is gitignored) and add
+your active worktrees there:
+
+```go
+// go.work.local -- gitignored, developer-local
+go 1.25.0
+
+use (
+    .
+    ../.worktrees/CUDly/fix-516
+    ../.worktrees/CUDly/feat-something
+)
+```
+
+Then point gopls at it by setting `GOWORK` before launching your editor, or by
+symlinking it over `go.work` temporarily:
+
+```bash
+# Option A: set GOWORK in your shell profile or editor launcher
+export GOWORK="$PWD/go.work.local"
+
+# Option B: create go.work.local and let gopls auto-discover it
+# (gopls respects GOWORK when set; otherwise it walks up for go.work)
+```
+
+After adding or removing a worktree, update `go.work.local` to match:
+
+```bash
+# Quick regeneration from git worktree list
+go work edit -use $(git worktree list --porcelain | awk '/^worktree/{print $2}' | tail -n +2 | tr '\n' ' ') 2>/dev/null || true
+```
+
+The committed `go.work` (listing only `.`) keeps `go build ./...` and CI clean
+for everyone without requiring any local setup.
+
 ### Running Tests
 
 ```bash
