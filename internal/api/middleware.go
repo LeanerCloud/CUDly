@@ -20,6 +20,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/version", // Public build-version endpoint (version / git SHA / build time)
 		"/api/purchases/approve/",
 		"/api/purchases/cancel/",
+		"/api/purchases/revoke/",
 		"/api/ri-exchange/approve/",
 		"/api/ri-exchange/reject/",
 		"/api/auth/login",

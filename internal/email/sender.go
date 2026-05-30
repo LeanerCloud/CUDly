@@ -475,15 +475,32 @@ type NotificationData struct {
 	// with the 7-day enrollment window. Empty silently omits the block so
 	// existing callers that haven't been updated yet are unaffected.
 	ArcheraEducationURL string
+	// RevocationToken is the one-time token embedded in the revocation link
+	// of a post-execution notification email. When non-empty, the template
+	// renders a "Revoke this purchase" CTA that hits
+	// /api/purchases/revoke/{ExecutionID}?token=<RevocationToken>.
+	// Empty silently omits the revocation panel so other email flows are
+	// unaffected.
+	RevocationToken string
 	// RevocationWindowClosesAt is the human-readable UTC timestamp when the
 	// Gmail-style pre-fire revocation window closes (issue #291 wave-2). Used
 	// by SendPurchaseScheduledNotification to tell the user until when they
-	// can revoke at zero cost. Empty means "not applicable" (immediate execute).
+	// can revoke at zero cost. Also used in post-execution notifications as
+	// the deadline up to which the purchase can be revoked.
+	// Empty means "not applicable" (immediate execute) or omits the deadline note.
 	RevocationWindowClosesAt string
 	// RevokeURL is the deep-link URL to revoke the scheduled purchase from the
 	// dashboard (issue #291 wave-2). Embedded in the scheduled-notification
 	// email so the user can revoke with one click.
 	RevokeURL string
+	// ExecutedAt is the ISO-8601 / RFC-3339 timestamp the purchase was
+	// executed at. Used in the post-execution notification body.
+	// Empty omits the timestamp from the body.
+	ExecutedAt string
+	// ExecutedBy is the email of the user who triggered execution (approved
+	// the purchase). Used in the post-execution notification body.
+	// Empty omits the field.
+	ExecutedBy string
 }
 
 // RecommendationSummary is a simplified recommendation for email display

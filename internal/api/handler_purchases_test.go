@@ -3904,3 +3904,211 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 	assert.Equal(t, 409, ce.code, "concurrent cancel CAS race must map to 409, not 500")
 	mockConfig.AssertExpectations(t)
 }
+
+// ---------------------------------------------------------------------------
+// revokePurchase handler tests (issue #291)
+// ---------------------------------------------------------------------------
+
+// buildCompletedExec returns a completed execution suitable for revoke tests.
+func buildCompletedExec(execID, approvalToken string) *config.PurchaseExecution {
+	return &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: approvalToken,
+		Status:        "completed",
+	}
+}
+
+// TestHandler_revokePurchase_ValidToken verifies that a valid token on a
+// completed execution records a revocation_requested status.
+func TestHandler_revokePurchase_ValidToken(t *testing.T) {
+	ctx := context.Background()
+	execID := "11111111-1111-1111-1111-111111111111"
+	token := "abc123validtoken"
+	revokerEmail := "contact@acct.example.com"
+	accountID := "acct-1"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: token,
+		Status:        "completed",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// authorizeApprovalAction: GetGlobalConfig for global notify
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	// GetCloudAccount returns the contact email so authorizeApprovalAction can
+	// resolve the approver and verify the session's email matches.
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: revokerEmail}, nil
+	}
+	// SavePurchaseExecution for the revocation_requested update.
+	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == execID && e.Status == "revocation_requested"
+	})).Return(nil)
+
+	mockAuth := new(MockAuthService)
+	// Provide a session for the revoker so authorizeApprovalAction resolves actor.
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: revokerEmail}, nil)
+	// RBAC: revoker has no cancel-any or cancel-own, so falls through to token path.
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		QueryStringParameters: map[string]string{"token": token},
+	}
+	result, err := handler.revokePurchase(ctx, req, execID, token)
+	require.NoError(t, err, "valid token on completed execution must not error")
+	resultMap := result.(map[string]string)
+	assert.Equal(t, "revocation_requested", resultMap["status"])
+	mockStore.AssertExpectations(t)
+}
+
+// TestHandler_revokePurchase_InvalidToken verifies that a wrong token returns 403.
+// The session provides an email that matches the contact email (so
+// authorizeApprovalAction passes), but the token itself is wrong.
+func TestHandler_revokePurchase_InvalidToken(t *testing.T) {
+	ctx := context.Background()
+	execID := "22222222-2222-2222-2222-222222222222"
+	contactEmail := "contact@acct.example.com"
+	accountID := "acct-1"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "the-real-token",
+		Status:        "completed",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		QueryStringParameters: map[string]string{"token": "wrong-token"},
+	}
+	_, err := handler.revokePurchase(ctx, req, execID, "wrong-token")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 403, ce.code)
+}
+
+// TestHandler_revokePurchase_PendingExecution verifies that a pending execution
+// returns 409 with a friendly message directing the user to Cancel instead.
+func TestHandler_revokePurchase_PendingExecution(t *testing.T) {
+	ctx := context.Background()
+	execID := "33333333-3333-3333-3333-333333333333"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "tok",
+		Status:        "pending",
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	handler := &Handler{config: mockStore}
+	req := &events.LambdaFunctionURLRequest{
+		QueryStringParameters: map[string]string{"token": "tok"},
+	}
+	_, err := handler.revokePurchase(ctx, req, execID, "tok")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.message, "Cancel")
+}
+
+// TestHandler_revokePurchase_NotFound verifies 404 when the execution does not exist.
+func TestHandler_revokePurchase_NotFound(t *testing.T) {
+	ctx := context.Background()
+	execID := "44444444-4444-4444-4444-444444444444"
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(nil, nil)
+
+	handler := &Handler{config: mockStore}
+	req := &events.LambdaFunctionURLRequest{}
+	_, err := handler.revokePurchase(ctx, req, execID, "some-token")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 404, ce.code)
+}
+
+// ---------------------------------------------------------------------------
+// resolveExecutedNotificationRecipients unit tests (issue #291)
+// ---------------------------------------------------------------------------
+
+// TestResolveExecutedNotificationRecipients_ContactEmailAsTo verifies the
+// first contact email becomes To and the rest + global notify + requester
+// are added as Cc (deduplicated).
+func TestResolveExecutedNotificationRecipients_ContactEmailAsTo(t *testing.T) {
+	to, cc := resolveExecutedNotificationRecipients(
+		[]string{"contact@a.example.com", "contact@b.example.com"},
+		"notify@example.com",
+		"requester@example.com",
+	)
+	assert.Equal(t, "contact@a.example.com", to)
+	assert.Contains(t, cc, "contact@b.example.com")
+	assert.Contains(t, cc, "notify@example.com")
+	assert.Contains(t, cc, "requester@example.com")
+	// No duplicates.
+	assert.Equal(t, 3, len(cc))
+}
+
+// TestResolveExecutedNotificationRecipients_GlobalNotifyFallback verifies that
+// when no contact emails are available, the global notification email becomes To.
+func TestResolveExecutedNotificationRecipients_GlobalNotifyFallback(t *testing.T) {
+	to, cc := resolveExecutedNotificationRecipients(
+		nil,
+		"notify@example.com",
+		"requester@example.com",
+	)
+	assert.Equal(t, "notify@example.com", to)
+	assert.Contains(t, cc, "requester@example.com")
+	assert.Equal(t, 1, len(cc))
+}
+
+// TestResolveExecutedNotificationRecipients_RequesterOnlyFallback verifies that
+// when neither contact emails nor global notify are set, the requester email
+// becomes To (last resort).
+func TestResolveExecutedNotificationRecipients_RequesterOnlyFallback(t *testing.T) {
+	to, cc := resolveExecutedNotificationRecipients(nil, "", "requester@example.com")
+	assert.Equal(t, "requester@example.com", to)
+	assert.Empty(t, cc)
+}
+
+// TestResolveExecutedNotificationRecipients_Deduplication verifies that the
+// same email in multiple lists is not repeated.
+func TestResolveExecutedNotificationRecipients_Deduplication(t *testing.T) {
+	// Same email in all three slots.
+	to, cc := resolveExecutedNotificationRecipients(
+		[]string{"same@example.com"},
+		"SAME@example.com", // case-insensitive dedup
+		"same@example.com",
+	)
+	assert.Equal(t, "same@example.com", to)
+	assert.Empty(t, cc, "duplicate emails must be deduplicated")
+}
