@@ -1006,9 +1006,9 @@ func (c *Client) CreateMarketplaceListing(ctx context.Context, req MarketplaceLi
 	if listing.Status != "" {
 		state = string(listing.Status)
 	}
-	listingID := ""
-	if listing.ReservedInstancesListingId != nil {
-		listingID = aws.ToString(listing.ReservedInstancesListingId)
+	listingID := aws.ToString(listing.ReservedInstancesListingId)
+	if listingID == "" {
+		return MarketplaceListingResult{}, fmt.Errorf("CreateReservedInstancesListing returned a listing with an empty ID")
 	}
 	return MarketplaceListingResult{ListingID: listingID, State: state}, nil
 }
