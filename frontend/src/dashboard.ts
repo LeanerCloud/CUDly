@@ -65,6 +65,19 @@ function isHomeTabActive(): boolean {
 }
 
 /**
+ * Build a short human-readable description of the active topbar filter
+ * for use in empty-state messages on the Home charts. Returns '' when no
+ * filter is active so callers can distinguish "unfiltered empty" from
+ * "filtered empty". Mirrors buildTrendFilterDesc used in loadSavingsTrendChart.
+ */
+export function buildFilterDesc(provider: string, accountIDs: readonly string[]): string {
+  const parts: string[] = [];
+  if (provider && provider.toLowerCase() !== 'all') parts.push(provider.toUpperCase());
+  if (accountIDs.length > 0) parts.push(accountIDs[0] ?? '');
+  return parts.join(', ');
+}
+
+/**
  * Setup dashboard event handlers
  */
 export function setupDashboardHandlers(): void {
@@ -154,9 +167,13 @@ export async function loadDashboard(): Promise<void> {
       throw summaryResult.reason as Error;
     }
 
+    // Build a human-readable filter description for filter-aware empty states
+    // on both Home charts. Mirrors the pattern from loadSavingsTrendChart (#747).
+    const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
+
     renderDashboardSummary(summaryData!, recs);
-    renderSavingsChart(summaryData!.by_service || {});
-    renderSavingsByService(recs);
+    renderSavingsChart(summaryData!.by_service || {}, filterDesc);
+    renderSavingsByService(recs, filterDesc);
     renderUpcomingPurchases(upcomingData?.purchases || []);
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
@@ -323,7 +340,7 @@ function attachSparkline(key: string, values: readonly number[]): void {
 
 export const __test__ = { sparklinePoints, attachSparkline, computeServiceStats };
 
-function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
+function renderSavingsChart(byService: Record<string, ServiceSavings>, filterDesc = ''): void {
   const ctx = document.getElementById('savings-chart') as HTMLCanvasElement | null;
   if (!ctx) return;
 
@@ -339,16 +356,21 @@ function renderSavingsChart(byService: Record<string, ServiceSavings>): void {
 
   // No data → hide the canvas and render an empty-state message so the
   // chart doesn't render with a synthetic $0–$1 y-axis.
+  // When a filter is active, mention it so the user understands why the
+  // chart is blank (mirrors the savings-trend empty-state pattern from #747).
   const section = ctx.parentElement;
   let emptyState = section?.querySelector<HTMLParagraphElement>('.chart-empty');
   if (labels.length === 0) {
     ctx.classList.add('hidden');
+    const emptyText = filterDesc
+      ? `No savings data for the selected filter (${filterDesc}).`
+      : 'No savings data yet. Add accounts and wait for recommendations.';
     if (section && !emptyState) {
       emptyState = document.createElement('p');
       emptyState.className = 'chart-empty empty';
-      emptyState.textContent = 'No savings data yet. Add accounts and wait for recommendations.';
       section.appendChild(emptyState);
     }
+    if (emptyState) emptyState.textContent = emptyText;
     return;
   }
   // Data is back — restore the canvas and remove any stale empty state.
@@ -746,7 +768,7 @@ export function computeServiceStatsFromRecs(
  * Empty state: when no recommendations are available, the canvas is hidden and
  * the empty-state paragraph is shown.
  */
-export function renderSavingsByService(recs: readonly LocalRecommendation[]): void {
+export function renderSavingsByService(recs: readonly LocalRecommendation[], filterDesc = ''): void {
   const canvas = document.getElementById('savings-by-service-chart') as HTMLCanvasElement | null;
   const emptyEl = document.getElementById('savings-by-service-empty');
   const section = document.getElementById('savings-by-service-section');
@@ -768,7 +790,14 @@ export function renderSavingsByService(recs: readonly LocalRecommendation[]): vo
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
     canvas.classList.add('hidden');
-    emptyEl?.classList.remove('hidden');
+    if (emptyEl) {
+      // When a filter is active and excluded all results, surface it so the
+      // user understands why the chart is blank (mirrors #747 pattern).
+      emptyEl.textContent = filterDesc
+        ? `No recommendations for the selected filter (${filterDesc}).`
+        : 'No positive potential savings found for current recommendations.';
+      emptyEl.classList.remove('hidden');
+    }
     return;
   }
 
