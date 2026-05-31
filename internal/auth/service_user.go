@@ -290,6 +290,16 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserR
 		return nil, err
 	}
 
+	// Email is mutated through updateUserEmail rather than applyUpdateUserRequest
+	// because it requires a DB lookup (uniqueness check) and format validation
+	// (same rules as the self-edit profile path; see updateUserEmail and #868
+	// for the TLD constraint). Issue #892.
+	if req.Email != nil {
+		if err := s.updateUserEmail(ctx, user, *req.Email); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.store.UpdateUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to update user: %w", err)
 	}

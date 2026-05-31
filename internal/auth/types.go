@@ -235,8 +235,15 @@ type CreateUserRequest struct {
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
-// UpdateUserRequest for updating user details
+// UpdateUserRequest for updating user details.
+//
+// Email is a pointer so callers can distinguish "not sending email" (nil)
+// from "explicitly setting email to a new value". This matters because the
+// service layer applies email changes via updateUserEmail, which performs
+// format validation and uniqueness checks that must NOT run on no-op
+// updates that only touch role/groups/active.
 type UpdateUserRequest struct {
+	Email    *string  `json:"email,omitempty"`
 	Role     *string  `json:"role,omitempty"`
 	GroupIDs []string `json:"group_ids,omitempty"`
 	Active   *bool    `json:"active,omitempty"`
