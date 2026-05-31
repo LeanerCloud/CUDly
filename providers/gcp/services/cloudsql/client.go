@@ -17,6 +17,9 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// maxRecsPages caps GCP Recommender API iteration.
+const maxRecsPages = 20
+
 // SQLAdminService interface for SQL admin operations (enables mocking)
 type SQLAdminService interface {
 	ListInstances(projectID string) (*sqladmin.InstancesListResponse, error)
@@ -160,14 +163,20 @@ func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.R
 	}
 
 	it := recClient.ListRecommendations(ctx, req)
-	for {
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("cloudsql: GetRecommendations iteration cap (%d items) reached", maxRecsPages)
+		}
 		rec, err := it.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
 			// Iterator errors must propagate so callers don't silently act
-			// on a partial recommendation list — see the computeengine
+			// on a partial recommendation list -- see the computeengine
 			// client for the full rationale.
 			return nil, fmt.Errorf("cloudsql: iterate recommendations: %w", err)
 		}

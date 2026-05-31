@@ -58,6 +58,19 @@ type HTTPClient interface {
 // Either field stays at the zero value when the capability is missing
 // or unparseable; common.ComputeDetails treats 0 as "unknown" (the
 // JSON tags on VCPU/MemoryGB are omitempty).
+
+// maxRecsPages caps Consumption API recommendation pagination to avoid
+// burning a Lambda deadline on a stalled or unexpectedly deep result set.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+// Large orgs may have hundreds of reservations spread over many pages.
+const maxReservationsPages = 50
+
+// maxSKUPages caps Azure ResourceSKUs pagination.
+// The SKU catalogue for a subscription can run to many pages.
+const maxSKUPages = 20
+
 type vmSKUEntry struct {
 	vCPUs    int
 	memoryGB float64
@@ -185,7 +198,13 @@ func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.Re
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("compute: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get VM recommendations: %w", err)
@@ -238,7 +257,13 @@ func (c *ComputeClient) createReservationsPager() (ReservationsDetailsPager, err
 func (c *ComputeClient) collectVMReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("compute: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("compute: list reservations: %w", err)
@@ -553,7 +578,13 @@ func (c *ComputeClient) createResourceSKUsPager() (ResourceSKUsPager, error) {
 func (c *ComputeClient) collectVMSizesFromSKUs(ctx context.Context, pager ResourceSKUsPager) ([]string, error) {
 	vmSizes := make([]string, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxSKUPages {
+			return nil, fmt.Errorf("compute: GetValidResourceTypes pagination cap (%d pages) reached", maxSKUPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list VM sizes: %w", err)
@@ -777,10 +808,18 @@ func (c *ComputeClient) fetchSKUCatalogue(ctx context.Context) map[string]vmSKUE
 		return nil
 	}
 	out := make(map[string]vmSKUEntry)
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			logging.Warnf("azure compute: SKU catalogue fetch cancelled for region %s after %d pages: %v; partial cache discarded", c.region, pageIdx, err)
+			return nil
+		}
+		if pageIdx >= maxSKUPages {
+			logging.Warnf("azure compute: SKU catalogue pagination cap (%d pages) reached for region %s; partial cache (%d entries) used", maxSKUPages, c.region, len(out))
+			break
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			logging.Warnf("azure compute: SKU catalogue page fetch failed for region %s: %v — partial cache (%d entries) discarded, Details.VCPU/MemoryGB left at 0", c.region, err, len(out))
+			logging.Warnf("azure compute: SKU catalogue page fetch failed for region %s: %v; partial cache (%d entries) discarded, Details.VCPU/MemoryGB left at 0", c.region, err, len(out))
 			return nil
 		}
 		c.populateVMSKUMapFromPage(out, page.Value)

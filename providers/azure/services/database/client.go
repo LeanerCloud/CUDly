@@ -25,6 +25,12 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+const maxReservationsPages = 50
+
 // sqlSKUEntry holds the SKU-catalogue-derived fields the converter
 // wants for each Azure SQL SKU. Sourced from the
 // armsql.CapabilitiesClient.ListByLocation response which embeds the
@@ -168,7 +174,13 @@ func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.R
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("database: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get SQL recommendations: %w", err)
@@ -218,7 +230,13 @@ func (c *DatabaseClient) createReservationsPager() (ReservationsDetailsPager, er
 func (c *DatabaseClient) collectSQLReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("database: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("database: list reservations: %w", err)

@@ -22,6 +22,16 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/retry"
 )
 
+// maxRecsPages caps GCP Recommender API iteration to avoid burning a Lambda
+// deadline on a stalled or unexpectedly large result set.
+const maxRecsPages = 20
+
+// maxCommitmentsPages caps GCP committed-use discount iteration.
+const maxCommitmentsPages = 50
+
+// maxMachineTypeItems caps GCP machine types iteration (one item per Next() call).
+const maxMachineTypeItems = 20
+
 // CommitmentsService interface for commitments operations (enables mocking)
 type CommitmentsService interface {
 	List(ctx context.Context, req *computepb.ListRegionCommitmentsRequest) CommitmentsIterator
@@ -205,14 +215,20 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 	}
 
 	it := recClient.ListRecommendations(ctx, req)
-	for {
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("computeengine: GetRecommendations iteration cap (%d items) reached", maxRecsPages)
+		}
 		rec, err := it.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
 			// Iterator errors (quota, auth, transient 5xx) must propagate so
-			// callers don't silently act on a partial recommendation list —
+			// callers don't silently act on a partial recommendation list --
 			// a missed recommendation can lead to under-committing or
 			// double-purchasing. Callers should retry.
 			return nil, fmt.Errorf("computeengine: iterate recommendations: %w", err)
@@ -263,7 +279,13 @@ func (c *ComputeEngineClient) collectCommitments(ctx context.Context, svc Commit
 	commitments := make([]common.Commitment, 0)
 
 	it := svc.List(ctx, req)
-	for {
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxCommitmentsPages {
+			return nil, fmt.Errorf("computeengine: GetExistingCommitments iteration cap (%d items) reached", maxCommitmentsPages)
+		}
 		commitment, err := it.Next()
 		if err == iterator.Done {
 			break
@@ -631,7 +653,13 @@ func (c *ComputeEngineClient) GetValidResourceTypes(ctx context.Context) ([]stri
 	machineTypes := make([]string, 0)
 	it := svc.List(ctx, req)
 
-	for {
+	for itemIdx := 0; ; itemIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if itemIdx >= maxMachineTypeItems {
+			return nil, fmt.Errorf("computeengine: GetValidResourceTypes iteration cap (%d items) reached", maxMachineTypeItems)
+		}
 		machineType, err := it.Next()
 		if err == iterator.Done {
 			break

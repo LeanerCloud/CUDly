@@ -263,6 +263,9 @@ func (c *Client) fetchCoveragePaged(
 ) error {
 	var token *string
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("coverage: pagination cancelled: %w", err)
+		}
 		input.NextPageToken = token
 		result, err := c.fetchCoveragePage(ctx, input)
 		if err != nil {

@@ -25,6 +25,15 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+const maxReservationsPages = 50
+
+// maxCachesPages caps Redis cache list pagination.
+const maxCachesPages = 20
+
 // redisSKUEntry holds the SKU-catalogue-derived fields the converter
 // wants for each Redis SKU. Sourced from the cache's Properties:
 //   - shardCount: Properties.ShardCount (Premium-tier clustered caches).
@@ -166,7 +175,13 @@ func (c *CacheClient) GetRecommendations(ctx context.Context, params common.Reco
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("cache: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Redis Cache recommendations: %w", err)
@@ -216,7 +231,13 @@ func (c *CacheClient) createReservationsPager() (ReservationsDetailsPager, error
 func (c *CacheClient) collectRedisReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("cache: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("cache: list reservations: %w", err)
@@ -403,7 +424,10 @@ func (c *CacheClient) GetValidResourceTypes(ctx context.Context) ([]string, erro
 		return c.getCommonSKUs(), nil
 	}
 
-	skuSet := c.collectSKUsFromCaches(ctx, pager)
+	skuSet, err := c.collectSKUsFromCaches(ctx, pager)
+	if err != nil {
+		return nil, err
+	}
 
 	// If we found SKUs from existing caches, use those
 	if len(skuSet) > 0 {
@@ -429,11 +453,20 @@ func (c *CacheClient) createRedisCachesPager() (RedisCachesPager, error) {
 	return client.NewListBySubscriptionPager(nil), nil
 }
 
-// collectSKUsFromCaches collects SKUs from existing Redis caches
-func (c *CacheClient) collectSKUsFromCaches(ctx context.Context, pager RedisCachesPager) map[string]bool {
+// collectSKUsFromCaches collects SKUs from existing Redis caches.
+// Returns (nil, err) on context cancellation so callers can propagate the error
+// instead of silently using a partial result set.
+func (c *CacheClient) collectSKUsFromCaches(ctx context.Context, pager RedisCachesPager) (map[string]bool, error) {
 	skuSet := make(map[string]bool)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("cache: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
+		}
+		if pageIdx >= maxCachesPages {
+			log.Printf("WARNING: cache: GetValidResourceTypes pagination cap (%d pages) reached", maxCachesPages)
+			break
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			// If we can't list existing caches, fall back to known SKU families
@@ -447,7 +480,7 @@ func (c *CacheClient) collectSKUsFromCaches(ctx context.Context, pager RedisCach
 		}
 	}
 
-	return skuSet
+	return skuSet, nil
 }
 
 // extractSKUFromCache extracts the full SKU name from a cache resource

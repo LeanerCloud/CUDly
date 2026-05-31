@@ -23,6 +23,15 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
+// maxRecsPages caps Consumption API recommendation pagination.
+const maxRecsPages = 10
+
+// maxReservationsPages caps reservation-detail pagination.
+const maxReservationsPages = 50
+
+// maxServicesPages caps Search service list pagination.
+const maxServicesPages = 20
+
 // HTTPClient interface for HTTP operations (enables mocking)
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -141,7 +150,13 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 		pager = client.NewListPager(scope, &armconsumption.ReservationRecommendationsClientListOptions{Filter: &filter})
 	}
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("search: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Search recommendations: %w", err)
@@ -191,7 +206,13 @@ func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, erro
 func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
-	for pager.More() {
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxReservationsPages {
+			return nil, fmt.Errorf("search: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
+		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("search: list reservations: %w", err)
@@ -371,36 +392,16 @@ func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recomm
 
 // GetValidResourceTypes returns valid Search SKUs from Azure API
 func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	skuSet := make(map[string]bool)
-
-	// Use injected pager if available (for testing)
-	var pager SearchServicesPager
-	if c.searchServicesPager != nil {
-		pager = c.searchServicesPager
-	} else {
-		client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			return c.getCommonSKUs(), nil
-		}
-		pager = client.NewListBySubscriptionPager(nil, nil)
+	pager, ok := c.resolveServicesPager()
+	if !ok {
+		return c.getCommonSKUs(), nil
 	}
 
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			// If we can't list existing services, fall back to known SKU families
-			break
-		}
-
-		for _, service := range page.Value {
-			if service.SKU != nil && service.SKU.Name != nil {
-				skuName := string(*service.SKU.Name)
-				skuSet[skuName] = true
-			}
-		}
+	skuSet, err := c.collectSKUsFromPager(ctx, pager)
+	if err != nil {
+		return nil, err
 	}
 
-	// If we found SKUs from existing services, use those
 	if len(skuSet) > 0 {
 		skus := make([]string, 0, len(skuSet))
 		for sku := range skuSet {
@@ -409,8 +410,41 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 		return skus, nil
 	}
 
-	// Otherwise, return common SKU tiers that support reservations
 	return c.getCommonSKUs(), nil
+}
+
+func (c *SearchClient) resolveServicesPager() (SearchServicesPager, bool) {
+	if c.searchServicesPager != nil {
+		return c.searchServicesPager, true
+	}
+	client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, false
+	}
+	return client.NewListBySubscriptionPager(nil, nil), true
+}
+
+func (c *SearchClient) collectSKUsFromPager(ctx context.Context, pager SearchServicesPager) (map[string]bool, error) {
+	skuSet := make(map[string]bool)
+	for pageIdx := 0; pager.More(); pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("search: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
+		}
+		if pageIdx >= maxServicesPages {
+			log.Printf("WARNING: search: GetValidResourceTypes pagination cap (%d pages) reached", maxServicesPages)
+			break
+		}
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			break
+		}
+		for _, service := range page.Value {
+			if service.SKU != nil && service.SKU.Name != nil {
+				skuSet[string(*service.SKU.Name)] = true
+			}
+		}
+	}
+	return skuSet, nil
 }
 
 // getCommonSKUs returns common Search SKUs
