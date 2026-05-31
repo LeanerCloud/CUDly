@@ -75,6 +75,10 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 		nextPageToken = result.NextPageToken
 	}
 
+	return buildUtilizations(agg), nil
+}
+
+func buildUtilizations(agg map[string]*riAccumulator) []RIUtilization {
 	utilizations := make([]RIUtilization, 0, len(agg))
 	for id, a := range agg {
 		pct := 0.0
@@ -89,8 +93,7 @@ func (c *Client) GetRIUtilization(ctx context.Context, lookbackDays int) ([]RIUt
 			UnusedHours:        a.unusedHours,
 		})
 	}
-
-	return utilizations, nil
+	return utilizations
 }
 
 // fetchUtilizationPage calls the Cost Explorer API with rate-limit retry.

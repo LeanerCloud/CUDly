@@ -392,20 +392,40 @@ func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recomm
 
 // GetValidResourceTypes returns valid Search SKUs from Azure API
 func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
-	skuSet := make(map[string]bool)
-
-	// Use injected pager if available (for testing)
-	var pager SearchServicesPager
-	if c.searchServicesPager != nil {
-		pager = c.searchServicesPager
-	} else {
-		client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
-		if err != nil {
-			return c.getCommonSKUs(), nil
-		}
-		pager = client.NewListBySubscriptionPager(nil, nil)
+	pager, ok := c.resolveServicesPager()
+	if !ok {
+		return c.getCommonSKUs(), nil
 	}
 
+	skuSet, err := c.collectSKUsFromPager(ctx, pager)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(skuSet) > 0 {
+		skus := make([]string, 0, len(skuSet))
+		for sku := range skuSet {
+			skus = append(skus, sku)
+		}
+		return skus, nil
+	}
+
+	return c.getCommonSKUs(), nil
+}
+
+func (c *SearchClient) resolveServicesPager() (SearchServicesPager, bool) {
+	if c.searchServicesPager != nil {
+		return c.searchServicesPager, true
+	}
+	client, err := armsearch.NewServicesClient(c.subscriptionID, c.cred, nil)
+	if err != nil {
+		return nil, false
+	}
+	return client.NewListBySubscriptionPager(nil, nil), true
+}
+
+func (c *SearchClient) collectSKUsFromPager(ctx context.Context, pager SearchServicesPager) (map[string]bool, error) {
+	skuSet := make(map[string]bool)
 	for pageIdx := 0; pager.More(); pageIdx++ {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("search: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
@@ -416,29 +436,15 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			// If we can't list existing services, fall back to known SKU families
 			break
 		}
-
 		for _, service := range page.Value {
 			if service.SKU != nil && service.SKU.Name != nil {
-				skuName := string(*service.SKU.Name)
-				skuSet[skuName] = true
+				skuSet[string(*service.SKU.Name)] = true
 			}
 		}
 	}
-
-	// If we found SKUs from existing services, use those
-	if len(skuSet) > 0 {
-		skus := make([]string, 0, len(skuSet))
-		for sku := range skuSet {
-			skus = append(skus, sku)
-		}
-		return skus, nil
-	}
-
-	// Otherwise, return common SKU tiers that support reservations
-	return c.getCommonSKUs(), nil
+	return skuSet, nil
 }
 
 // getCommonSKUs returns common Search SKUs
