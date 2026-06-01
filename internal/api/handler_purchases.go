@@ -84,15 +84,28 @@ func buildSuppressions(recs []config.RecommendationRecord, executionID string, c
 	return out
 }
 
+// plannedListStatuses are the execution statuses surfaced in the Scheduled
+// (Planned) Purchases list. It deliberately includes "paused" so a paused
+// execution stays VISIBLE with its badge instead of silently dropping out of
+// the list. It does NOT use GetPendingExecutions, which the
+// scheduler relies on to decide what to FIRE: paused rows must be listed but
+// never fired, so the two concerns use different status sets.
+var plannedListStatuses = []string{"pending", "notified", "paused"}
+
 func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlannedPurchasesResponse, error) {
 	session, err := h.requirePermission(ctx, req, "view", "purchases")
 	if err != nil {
 		return nil, err
 	}
 
-	executions, err := h.config.GetPendingExecutions(ctx)
+	// GetPlannedExecutions orders scheduled_date ASC at the DB level so the
+	// soonest-first list isn't truncated when total rows exceed MaxListLimit.
+	// (GetExecutionsByStatuses uses DESC + LIMIT for History; mixing them here
+	// drops the genuinely-soonest rows, exactly the rows this list must show.
+	// An in-memory re-sort cannot recover what LIMIT already discarded.)
+	executions, err := h.config.GetPlannedExecutions(ctx, plannedListStatuses, config.MaxListLimit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get pending executions: %w", err)
+		return nil, fmt.Errorf("failed to get planned executions: %w", err)
 	}
 
 	plans, err := h.config.ListPurchasePlans(ctx, config.PurchasePlanFilter{})

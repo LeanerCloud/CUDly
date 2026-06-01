@@ -922,6 +922,45 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 	return s.queryExecutions(ctx, query, statuses, limit)
 }
 
+// GetPlannedExecutions returns executions whose Status is any of the supplied
+// values, ordered by scheduled_date ASC (soonest first), capped at `limit`.
+// Used by the Planned Purchases handler where the user expects to act on
+// imminent rows first.
+//
+// Distinct from GetExecutionsByStatuses (DESC + LIMIT for History's
+// newest-first semantics): when total rows exceed `limit`, a DESC truncation
+// drops the soonest rows, exactly the ones this list must surface. Sorting
+// the already-truncated subset in-memory cannot recover them.
+//
+// Secondary sort by id ASC keeps ordering stable when multiple rows share a
+// scheduled_date. NULLS LAST is defensive: the schema makes scheduled_date
+// NOT NULL today, but the clause guards against a future relaxation silently
+// hiding rows at the top of the list.
+func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	query := `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at
+		FROM purchase_executions
+		WHERE status = ANY($1)
+		ORDER BY scheduled_date ASC NULLS LAST, id ASC
+		LIMIT $2
+	`
+	return s.queryExecutions(ctx, query, statuses, limit)
+}
+
 // GetStaleApprovedExecutions returns executions stuck in the "approved" status
 // whose last update is older than olderThan. These are executions that were
 // flipped to "approved" by ApproveAndExecute but whose synchronous purchase run

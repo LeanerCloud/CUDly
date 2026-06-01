@@ -1021,7 +1021,7 @@ func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "Test Plan", Services: map[string]config.ServiceConfig{"aws/rds": {Provider: "aws", Service: "rds"}}},
 	}
 
-	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}

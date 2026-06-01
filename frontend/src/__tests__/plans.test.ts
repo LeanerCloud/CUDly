@@ -640,6 +640,11 @@ describe('Plans Module', () => {
       const container = document.getElementById('planned-purchases-list');
       expect(container?.innerHTML).toContain('data-action="resume"');
       expect(container?.innerHTML).toContain('data-action="run"');
+      // Paused rows stay visible with a Paused badge and are NOT replaced by
+      // the empty-state message.
+      expect(container?.innerHTML).toContain('status-paused');
+      expect(container?.innerHTML).toContain('>paused<');
+      expect(container?.innerHTML).not.toContain('No planned purchases');
     });
 
     test('renders running purchase without pause/resume buttons', async () => {
@@ -800,6 +805,9 @@ describe('Plans Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.pausePlannedPurchase).toHaveBeenCalledWith('purchase-1');
+      // Pause must give visible feedback via a success toast.
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Purchase paused', kind: 'success' }));
     });
 
     test('disable action deletes planned purchase with confirmation', async () => {
@@ -932,6 +940,9 @@ describe('Plans Module', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(api.resumePlannedPurchase).toHaveBeenCalledWith('purchase-1');
+      // Resume must give visible feedback via a success toast.
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Purchase resumed', kind: 'success' }));
     });
   });
 
