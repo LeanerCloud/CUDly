@@ -69,7 +69,7 @@ export function switchInventorySubSection(name: string): void {
 
 const ACTIVE_COMMITMENTS_LIST_ID = 'active-commitments-list';
 const ACTIVE_COMMITMENTS_REFRESH_BTN_ID = 'active-commitments-refresh-btn';
-const ACTIVE_COMMITMENTS_COLS = 10;
+const ACTIVE_COMMITMENTS_COLS = 11;
 
 /**
  * Fetch and render the active-commitments table. Replaces #active-commitments-list
@@ -153,7 +153,7 @@ function renderActiveCommitmentsTable(container: HTMLElement, commitments: api.I
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Expires'];
+  const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Monthly savings', 'Expires'];
   for (const label of headers) {
     const th = document.createElement('th');
     th.textContent = label;
@@ -183,6 +183,7 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   appendCell(tr, `${c.term_years}y`);
   appendCell(tr, c.payment_option ?? '');
   appendCell(tr, formatCurrency(c.monthly_cost));
+  appendCell(tr, formatCurrency(c.estimated_savings));
   appendCell(tr, formatDate(c.end_date));
 
   return tr;

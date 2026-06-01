@@ -215,7 +215,7 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     // (or drops) a column trips the test.
     const headers = Array.from(list.querySelectorAll('thead th')).map(th => th.textContent);
     expect(headers).toEqual([
-      'Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Expires',
+      'Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Monthly savings', 'Expires',
     ]);
 
     const rows = list.querySelectorAll('tbody tr');
@@ -223,6 +223,12 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     // Account cell contains the account name AND its monospaced ID.
     expect(rows[0]!.textContent).toContain('Prod');
     expect(rows[0]!.textContent).toContain('ec2');
+
+    // Monthly Savings column (10th, 0-indexed 9) must render the estimated_savings value.
+    // makeCommitment defaults estimated_savings to 80.0; formatCurrency mock returns "$80".
+    const savingsCell = rows[0]!.querySelector('td:nth-child(10)');
+    expect(savingsCell).not.toBeNull();
+    expect(savingsCell!.textContent).toContain('80');
   });
 
   test('renders an empty paragraph when no commitments are returned', async () => {

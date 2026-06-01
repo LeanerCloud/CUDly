@@ -246,6 +246,50 @@ describe('History Module', () => {
       expect(list?.innerHTML).toContain('table');
       expect(list?.innerHTML).toContain('ec2');
       expect(list?.innerHTML).toContain('us-east-1');
+      // Both Monthly Cost and Monthly Savings columns must be present (issue #788).
+      expect(list?.innerHTML).toContain('Monthly Cost');
+      expect(list?.innerHTML).toContain('Monthly Savings');
+    });
+
+    test('renders monthly_cost cell with value when present, dash when absent (issue #788)', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          {
+            timestamp: '2024-01-15T00:00:00Z',
+            provider: 'aws',
+            service: 'ec2',
+            resource_type: 't3.medium',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            upfront_cost: 500,
+            monthly_cost: 42.5,
+            estimated_savings: 20,
+          },
+          {
+            timestamp: '2024-01-16T00:00:00Z',
+            provider: 'aws',
+            service: 'rds',
+            resource_type: 'db.m5.large',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            upfront_cost: 0,
+            // monthly_cost intentionally absent
+            estimated_savings: 10,
+          },
+        ]
+      });
+
+      await loadHistory();
+
+      const list = document.getElementById('history-list');
+      const html = list?.innerHTML || '';
+      // Row with monthly_cost=42.5: formatCurrency mock returns "$42.5".
+      expect(html).toContain('$42.5');
+      // Row without monthly_cost: must render the muted dash, not "$0".
+      expect(html).toContain('class="muted"');
     });
 
     test('shows empty message when no purchases', async () => {
