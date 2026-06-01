@@ -98,16 +98,15 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	executions, err := h.config.GetExecutionsByStatuses(ctx, plannedListStatuses, config.MaxListLimit)
+	// GetPlannedExecutions orders scheduled_date ASC at the DB level so the
+	// soonest-first list isn't truncated when total rows exceed MaxListLimit.
+	// (GetExecutionsByStatuses uses DESC + LIMIT for History; mixing them here
+	// drops the genuinely-soonest rows, exactly the rows this list must show.
+	// An in-memory re-sort cannot recover what LIMIT already discarded.)
+	executions, err := h.config.GetPlannedExecutions(ctx, plannedListStatuses, config.MaxListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get planned executions: %w", err)
 	}
-	// GetExecutionsByStatuses orders scheduled_date DESC; the planned list
-	// reads soonest-first, so restore the ascending order GetPendingExecutions
-	// used before paused rows were folded in.
-	sort.SliceStable(executions, func(i, j int) bool {
-		return executions[i].ScheduledDate.Before(executions[j].ScheduledDate)
-	})
 
 	plans, err := h.config.ListPurchasePlans(ctx, config.PurchasePlanFilter{})
 	if err != nil {

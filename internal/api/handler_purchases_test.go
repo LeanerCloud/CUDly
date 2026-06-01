@@ -754,7 +754,7 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 	// The planned list must request paused executions alongside pending/notified
 	// so a paused row stays VISIBLE. Assert the status set
 	// explicitly rather than mock.Anything to lock the invariant.
-	mockStore.On("GetExecutionsByStatuses", ctx,
+	mockStore.On("GetPlannedExecutions", ctx,
 		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
 		Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
@@ -797,7 +797,7 @@ func TestHandler_getPlannedPurchases_ErrorGettingExecutions(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).
 		Return(nil, errors.New("database error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -814,8 +814,8 @@ func TestHandler_getPlannedPurchases_ErrorGettingExecutions(t *testing.T) {
 }
 
 // TestHandler_getPlannedPurchases_PausedStaysVisible is a regression guard:
-// a paused execution must remain in the list (not silently disappear), and
-// rows stay ordered soonest-first regardless of the store's native DESC ordering.
+// a paused execution must remain in the list (not silently disappear) and
+// rows must be ordered soonest-first end-to-end.
 func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -829,21 +829,22 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 
 	soon := time.Now().AddDate(0, 0, 3)
 	later := time.Now().AddDate(0, 0, 10)
-	// Returned newest-first by the store (DESC); the handler must re-sort ASC.
+	// GetPlannedExecutions returns rows soonest-first (ASC); the handler
+	// preserves that order with no in-memory re-sort.
 	executions := []config.PurchaseExecution{
-		{
-			ExecutionID:   "22222222-2222-2222-2222-222222222222",
-			PlanID:        "11111111-1111-1111-1111-111111111111",
-			Status:        "paused",
-			ScheduledDate: later,
-			StepNumber:    2,
-		},
 		{
 			ExecutionID:   "33333333-3333-3333-3333-333333333333",
 			PlanID:        "11111111-1111-1111-1111-111111111111",
 			Status:        "pending",
 			ScheduledDate: soon,
 			StepNumber:    1,
+		},
+		{
+			ExecutionID:   "22222222-2222-2222-2222-222222222222",
+			PlanID:        "11111111-1111-1111-1111-111111111111",
+			Status:        "paused",
+			ScheduledDate: later,
+			StepNumber:    2,
 		},
 	}
 	plans := []config.PurchasePlan{
@@ -856,7 +857,7 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx,
+	mockStore.On("GetPlannedExecutions", ctx,
 		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
 		Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
@@ -878,6 +879,86 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 		statuses = append(statuses, p.Status)
 	}
 	assert.Contains(t, statuses, "paused")
+}
+
+// TestHandler_getPlannedPurchases_SoonestRowsNotTruncated is the end-to-end
+// regression guard for CodeRabbit's truncation finding on PR #904: when total
+// pending/notified/paused rows exceed MaxListLimit, the store's DESC + LIMIT
+// drops the soonest rows entirely, and an in-memory ASC re-sort of the
+// already-truncated subset cannot recover them.
+//
+// The fix routes the handler through GetPlannedExecutions (ASC + LIMIT) and
+// removes the post-fetch in-memory sort. This test:
+//   - registers a mock expectation on GetPlannedExecutions and asserts
+//     GetExecutionsByStatuses is NOT called (regressing to the DESC path
+//     would surface here),
+//   - returns rows in ASC order (mimicking what the real SQL would produce)
+//     and asserts the handler preserves that order without re-shuffling,
+//   - asserts all 5 rows survive (none are dropped by the handler itself).
+func TestHandler_getPlannedPurchases_SoonestRowsNotTruncated(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	now := time.Now()
+	// 5 rows, soonest first, the order the store will return them when
+	// ORDER BY scheduled_date ASC is used (the fix). Pre-fix code called
+	// GetExecutionsByStatuses (DESC) and re-sorted in-memory, but the
+	// regression scenario is that the DB has truncated the soonest rows
+	// away before the in-memory sort sees them.
+	soonest := []config.PurchaseExecution{
+		{ExecutionID: "11111111-1111-1111-1111-111111111111", PlanID: "00000000-0000-0000-0000-000000000001", Status: "pending", ScheduledDate: now.AddDate(0, 0, 1), StepNumber: 1},
+		{ExecutionID: "22222222-2222-2222-2222-222222222222", PlanID: "00000000-0000-0000-0000-000000000001", Status: "notified", ScheduledDate: now.AddDate(0, 0, 2), StepNumber: 2},
+		{ExecutionID: "33333333-3333-3333-3333-333333333333", PlanID: "00000000-0000-0000-0000-000000000001", Status: "paused", ScheduledDate: now.AddDate(0, 0, 3), StepNumber: 3},
+		{ExecutionID: "44444444-4444-4444-4444-444444444444", PlanID: "00000000-0000-0000-0000-000000000001", Status: "pending", ScheduledDate: now.AddDate(0, 0, 4), StepNumber: 4},
+		{ExecutionID: "55555555-5555-5555-5555-555555555555", PlanID: "00000000-0000-0000-0000-000000000001", Status: "pending", ScheduledDate: now.AddDate(0, 0, 5), StepNumber: 5},
+	}
+	plans := []config.PurchasePlan{
+		{
+			ID:           "00000000-0000-0000-0000-000000000001",
+			Name:         "Test Plan",
+			Services:     map[string]config.ServiceConfig{"aws/rds": {Provider: "aws", Service: "rds", Term: 3, Payment: "no-upfront"}},
+			RampSchedule: config.RampSchedule{TotalSteps: 5},
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// Strict args lock the contract: planned statuses + MaxListLimit (so the
+	// DB receives the same cap the handler intends, no off-by-one budget).
+	mockStore.On("GetPlannedExecutions", ctx,
+		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
+		Return(soonest, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.getPlannedPurchases(ctx, req)
+	require.NoError(t, err)
+	mockStore.AssertExpectations(t)
+	// Regression anchor: the handler must NOT fall back to the DESC path.
+	// AssertNotCalled fails if some refactor re-introduces a parallel
+	// GetExecutionsByStatuses call on the planned list code path.
+	mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything)
+
+	require.Len(t, result.Purchases, 5, "all 5 rows must reach the response, none dropped by handler post-processing")
+	// Ordering preserved end-to-end: the store returns ASC, the handler must
+	// pass that through unchanged (the in-memory re-sort has been removed).
+	for i, expected := range []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+		"33333333-3333-3333-3333-333333333333",
+		"44444444-4444-4444-4444-444444444444",
+		"55555555-5555-5555-5555-555555555555",
+	} {
+		assert.Equal(t, expected, result.Purchases[i].ID, "row %d (soonest-first) must be %s", i, expected)
+	}
 }
 
 func TestHandler_pausePlannedPurchase(t *testing.T) {
@@ -1385,7 +1466,7 @@ func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 	executions := []config.PurchaseExecution{{ExecutionID: "11111111-1111-1111-1111-111111111111", PlanID: "11111111-1111-1111-1111-111111111111"}}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(executions, nil)
+	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("database error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
