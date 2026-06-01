@@ -751,7 +751,12 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	// The planned list must request paused executions alongside pending/notified
+	// so a paused row stays VISIBLE. Assert the status set
+	// explicitly rather than mock.Anything to lock the invariant.
+	mockStore.On("GetExecutionsByStatuses", ctx,
+		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
+		Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -763,6 +768,7 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 	}
 	result, err := handler.getPlannedPurchases(ctx, req)
 	require.NoError(t, err)
+	mockStore.AssertExpectations(t)
 
 	assert.Len(t, result.Purchases, 1)
 	assert.Equal(t, "11111111-1111-1111-1111-111111111111", result.Purchases[0].ID)
@@ -791,7 +797,8 @@ func TestHandler_getPlannedPurchases_ErrorGettingExecutions(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return(nil, errors.New("database error"))
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+		Return(nil, errors.New("database error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -803,7 +810,74 @@ func TestHandler_getPlannedPurchases_ErrorGettingExecutions(t *testing.T) {
 	result, err := handler.getPlannedPurchases(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to get pending executions")
+	assert.Contains(t, err.Error(), "failed to get planned executions")
+}
+
+// TestHandler_getPlannedPurchases_PausedStaysVisible is a regression guard:
+// a paused execution must remain in the list (not silently disappear), and
+// rows stay ordered soonest-first regardless of the store's native DESC ordering.
+func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+		Role:   "admin",
+	}
+
+	soon := time.Now().AddDate(0, 0, 3)
+	later := time.Now().AddDate(0, 0, 10)
+	// Returned newest-first by the store (DESC); the handler must re-sort ASC.
+	executions := []config.PurchaseExecution{
+		{
+			ExecutionID:   "22222222-2222-2222-2222-222222222222",
+			PlanID:        "11111111-1111-1111-1111-111111111111",
+			Status:        "paused",
+			ScheduledDate: later,
+			StepNumber:    2,
+		},
+		{
+			ExecutionID:   "33333333-3333-3333-3333-333333333333",
+			PlanID:        "11111111-1111-1111-1111-111111111111",
+			Status:        "pending",
+			ScheduledDate: soon,
+			StepNumber:    1,
+		},
+	}
+	plans := []config.PurchasePlan{
+		{
+			ID:           "11111111-1111-1111-1111-111111111111",
+			Name:         "Test Plan",
+			Services:     map[string]config.ServiceConfig{"aws/rds": {Provider: "aws", Service: "rds", Term: 3, Payment: "no-upfront"}},
+			RampSchedule: config.RampSchedule{TotalSteps: 5},
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx,
+		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
+		Return(executions, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
+
+	result, err := handler.getPlannedPurchases(ctx, req)
+	require.NoError(t, err)
+	mockStore.AssertExpectations(t)
+
+	require.Len(t, result.Purchases, 2)
+	// Soonest-first ordering.
+	assert.Equal(t, "pending", result.Purchases[0].Status)
+	assert.Equal(t, "paused", result.Purchases[1].Status)
+	// The paused row is present, not dropped.
+	var statuses []string
+	for _, p := range result.Purchases {
+		statuses = append(statuses, p.Status)
+	}
+	assert.Contains(t, statuses, "paused")
 }
 
 func TestHandler_pausePlannedPurchase(t *testing.T) {
@@ -1311,7 +1385,7 @@ func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 	executions := []config.PurchaseExecution{{ExecutionID: "11111111-1111-1111-1111-111111111111", PlanID: "11111111-1111-1111-1111-111111111111"}}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("database error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}

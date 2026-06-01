@@ -232,10 +232,15 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
         }
         break;
       case 'pause':
+        // Pause is reversible and scoped to a single execution: the plan stays
+        // enabled (unlike Disable plan) and the row stays listed with a Paused
+        // badge (unlike the old silent-removal behaviour).
         await api.pausePlannedPurchase(purchaseId);
+        showToast({ message: 'Purchase paused', kind: 'success', timeout: 5_000 });
         break;
       case 'resume':
         await api.resumePlannedPurchase(purchaseId);
+        showToast({ message: 'Purchase resumed', kind: 'success', timeout: 5_000 });
         break;
       case 'edit':
         // Open edit modal for the parent plan using plan_id, not the purchase id.
