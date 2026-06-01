@@ -75,6 +75,30 @@ func (m *MockEC2Client) CreateTags(ctx context.Context, params *ec2.CreateTagsIn
 	return args.Get(0).(*ec2.CreateTagsOutput), args.Error(1)
 }
 
+func (m *MockEC2Client) CreateReservedInstancesListing(ctx context.Context, params *ec2.CreateReservedInstancesListingInput, optFns ...func(*ec2.Options)) (*ec2.CreateReservedInstancesListingOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.CreateReservedInstancesListingOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) DescribeReservedInstancesListings(ctx context.Context, params *ec2.DescribeReservedInstancesListingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesListingsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.DescribeReservedInstancesListingsOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) CancelReservedInstancesListing(ctx context.Context, params *ec2.CancelReservedInstancesListingInput, optFns ...func(*ec2.Options)) (*ec2.CancelReservedInstancesListingOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.CancelReservedInstancesListingOutput), args.Error(1)
+}
+
 func TestNewClient(t *testing.T) {
 	t.Parallel()
 	cfg := aws.Config{
