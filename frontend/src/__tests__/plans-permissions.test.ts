@@ -41,6 +41,7 @@ jest.mock('../history', () => ({ viewPlanHistory: jest.fn() }));
 
 import * as api from '../api';
 import * as state from '../state';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 const samplePlan = {
   id: 'plan-1',
@@ -74,7 +75,7 @@ const samplePlannedPurchase = {
 
 const mockUser = (role: string | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? ['00000000-0000-5000-8000-000000000001'] : [] },
+    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID] : [] },
   );
 };
 

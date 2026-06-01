@@ -2,6 +2,7 @@
  * Auth module tests
  */
 import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from '../auth';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 // Mock the api module
 jest.mock('../api', () => {
@@ -439,7 +440,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'admin-1',
         email: 'admin@example.com',
-        groups: ['00000000-0000-5000-8000-000000000001']
+        groups: [ADMINISTRATORS_GROUP_ID]
       });
 
       updateUserUI();

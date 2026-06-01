@@ -69,8 +69,9 @@ import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] };
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
 const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
 const OTHER_UUID = 'other-uuid';
 

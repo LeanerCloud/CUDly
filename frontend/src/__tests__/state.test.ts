@@ -17,6 +17,7 @@ import {
   setSavingsChart
 } from '../state';
 import type { Recommendation } from '../api';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 describe('State Module', () => {
   // Reset state before each test
@@ -34,13 +35,13 @@ describe('State Module', () => {
     });
 
     test('setCurrentUser and getCurrentUser work correctly', () => {
-      const user = { id: '123', email: 'test@example.com', groups: ['00000000-0000-5000-8000-000000000001'] };
+      const user = { id: '123', email: 'test@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
       setCurrentUser(user);
       expect(getCurrentUser()).toEqual(user);
     });
 
     test('setCurrentUser with null clears user', () => {
-      setCurrentUser({ id: '123', email: 'test@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
+      setCurrentUser({ id: '123', email: 'test@example.com', groups: [ADMINISTRATORS_GROUP_ID] });
       setCurrentUser(null);
       expect(getCurrentUser()).toBeNull();
     });
