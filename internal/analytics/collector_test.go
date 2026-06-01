@@ -429,6 +429,12 @@ func (m *mockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ i
 func (m *mockConfigStore) UpsertRIUtilizationCache(_ context.Context, _ string, _ int, _ []byte, _ time.Time) error {
 	return nil
 }
+func (m *mockConfigStore) UpsertNotificationMute(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (m *mockConfigStore) IsNotificationMuted(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
 
 func (m *mockConfigStore) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
 	return nil

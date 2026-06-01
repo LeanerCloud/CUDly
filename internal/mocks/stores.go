@@ -1390,6 +1390,7 @@ func (m *MockConfigStore) UpsertLadderConfig(ctx context.Context, cfg *config.La
 	return v, args.Error(1)
 }
 
+<<<<<<< HEAD
 // SaveLadderRun mocks the SaveLadderRun operation.
 // Returns (nil, nil) when no expectation is registered.
 func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
@@ -1502,6 +1503,25 @@ func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id stri
 		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
+}
+
+// UpsertNotificationMute mocks the UpsertNotificationMute operation.
+// Defaults to nil when no expectation is registered.
+func (m *MockConfigStore) UpsertNotificationMute(ctx context.Context, recipientEmail, scope, unmuteToken string) error {
+	if !isExpected(&m.Mock, "UpsertNotificationMute") {
+		return nil
+	}
+	return m.Called(ctx, recipientEmail, scope, unmuteToken).Error(0)
+}
+
+// IsNotificationMuted mocks the IsNotificationMuted operation.
+// Defaults to (false, nil) when no expectation is registered.
+func (m *MockConfigStore) IsNotificationMuted(ctx context.Context, recipientEmail, scope string) (bool, error) {
+	if !isExpected(&m.Mock, "IsNotificationMuted") {
+		return false, nil
+	}
+	args := m.Called(ctx, recipientEmail, scope)
+	return args.Bool(0), args.Error(1)
 }
 
 // isExpected reports whether mock has any .On() expectation for method.

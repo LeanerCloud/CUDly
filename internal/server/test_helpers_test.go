@@ -378,3 +378,11 @@ func (m *mockConfigStoreForHealth) ClaimMarketplaceListingSlot(_ context.Context
 func (m *mockConfigStoreForHealth) StampOfferingClass(_ context.Context, _, _ string) error {
 	return nil
 }
+
+func (m *mockConfigStoreForHealth) UpsertNotificationMute(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) IsNotificationMuted(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
