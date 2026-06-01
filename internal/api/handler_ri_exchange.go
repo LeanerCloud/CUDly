@@ -234,10 +234,34 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 	return cfg, nil
 }
 
-// listConvertibleRIs returns all active convertible Reserved Instances.
+// listConvertibleRIs returns all active convertible Reserved Instances for
+// the running AWS account.
+//
+// The optional ?account_id= query parameter narrows the listing to a single
+// AWS account so the page honours the Main Header global account filter
+// (issue #871). Convertible RIs are read from the deployment's ambient AWS
+// credentials, which resolve to exactly one account number; when the chip
+// selects a different account, none of these RIs belong to it, so we return
+// an empty list rather than the unscoped fleet. A real STS failure fails
+// closed (returns an error) instead of silently leaking the ambient account's
+// RIs under another account's filter.
 func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
+	}
+
+	if accountID := req.QueryStringParameters["account_id"]; accountID != "" {
+		resolve := h.resolveAWSAccountID
+		if h.riInstancesAccountResolver != nil {
+			resolve = h.riInstancesAccountResolver
+		}
+		runningAccountID, err := resolve(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve running AWS account for RI scope: %w", err)
+		}
+		if runningAccountID != accountID {
+			return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
+		}
 	}
 
 	region := req.QueryStringParameters["region"]
