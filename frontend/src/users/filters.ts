@@ -2,6 +2,7 @@
  * User filtering functionality
  */
 
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import {
   allUsers,
   filteredUsers,
@@ -29,9 +30,13 @@ export function applyFilters(): void {
       return false;
     }
 
-    // Role filter
-    if (roleFilter && user.role !== roleFilter) {
-      return false;
+    // Role filter: map legacy role values to group membership checks
+    // (PR #912 dropped user.role; admin = Administrators group member).
+    if (roleFilter) {
+      const isAdminUser = Array.isArray(user.groups) &&
+        user.groups.includes(ADMINISTRATORS_GROUP_ID);
+      if (roleFilter === 'admin' && !isAdminUser) return false;
+      if (roleFilter !== 'admin' && isAdminUser) return false;
     }
 
     // MFA filter

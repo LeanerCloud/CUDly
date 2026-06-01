@@ -11,9 +11,13 @@ export type RampSchedule = 'immediate' | 'weekly-25pct' | 'monthly-10pct' | 'cus
 export interface User {
   id: string;
   email: string;
-  role: string;
+  // groups holds the UUIDs of the groups this user belongs to.
+  // Authorization is now derived entirely from group membership
+  // (PR #912 drops the role column). Admin status = member of
+  // Administrators group (00000000-0000-5000-8000-000000000001).
+  groups: string[];
   // Whether two-factor authentication is enabled on this user
-  // account. Optional for backward compatibility — older login
+  // account. Optional for backward compatibility -- older login
   // responses may not include it. The profile/MFA section in
   // auth.ts treats `mfa_enabled === true` (strict) as "enabled".
   mfa_enabled?: boolean;
@@ -341,7 +345,9 @@ export interface PlannedPurchase {
 export interface APIUser {
   id: string;
   email: string;
-  role: string;
+  // role is intentionally absent: authorization is now purely
+  // group-membership based (PR #912). The groups array is the
+  // single source of truth for what a user can do.
   groups: string[];
   mfa_enabled: boolean;
   created_at?: string;
@@ -352,8 +358,9 @@ export interface APIUser {
 export interface CreateUserRequest {
   email: string;
   password: string;
-  role: string;
-  groups?: string[];
+  // groups is required (>= 1) by the backend (PR #912). Sending an
+  // empty array is rejected with 400.
+  groups: string[];
 }
 
 // CreateUserResponse extends APIUser with optional invite-delivery
@@ -370,7 +377,7 @@ export interface CreateUserResponse extends APIUser {
 
 export interface UpdateUserRequest {
   email?: string;
-  role?: string;
+  // role is removed; update group membership to change authorization.
   groups?: string[];
 }
 

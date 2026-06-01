@@ -1,5 +1,10 @@
 /**
  * User modal functionality
+ *
+ * PR #912: role removed from the user API contract. Group membership
+ * is now required (>= 1 group) on create and update. The role selector
+ * has been replaced by a required group multi-select that mirrors the
+ * backend's cardinality >= 1 constraint.
  */
 
 import * as api from '../api';
@@ -37,7 +42,7 @@ export function openCreateUserModal(): void {
     (document.getElementById('user-password') as HTMLInputElement).required = false;
   }
 
-  // Populate groups dropdown
+  // Populate groups dropdown (no pre-selection for new user)
   populateGroupsDropdown();
 
   openModal(modal);
@@ -60,7 +65,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
     title.textContent = 'Edit User';
     (document.getElementById('user-id') as HTMLInputElement).value = user.id;
     (document.getElementById('user-email') as HTMLInputElement).value = user.email;
-    (document.getElementById('user-role') as HTMLSelectElement).value = user.role;
+    // role field no longer exists in the API response (PR #912).
 
     // Hide password field for editing
     const passwordFields = document.getElementById('password-fields');
@@ -69,7 +74,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
       (document.getElementById('user-password') as HTMLInputElement).required = false;
     }
 
-    // Populate and select groups
+    // Populate and pre-select groups
     populateGroupsDropdown(user.groups);
 
     openModal(modal);
@@ -91,23 +96,34 @@ export function closeUserModal(): void {
 }
 
 /**
- * Save user (create or update)
+ * Save user (create or update).
+ *
+ * Groups are required (>= 1). The backend enforces this with a DB
+ * CHECK constraint (migration 000057); the frontend mirrors it with
+ * a pre-submit validation so the user gets a clear message rather
+ * than a generic 400 from the server.
  */
 export async function saveUser(e: Event): Promise<void> {
   e.preventDefault();
 
   const email = (document.getElementById('user-email') as HTMLInputElement).value;
   const password = (document.getElementById('user-password') as HTMLInputElement).value;
-  const role = (document.getElementById('user-role') as HTMLSelectElement).value;
+  // role selector removed: PR #912 drops the role column.
   const groupsSelect = document.getElementById('user-groups') as HTMLSelectElement;
   const selectedGroups = Array.from(groupsSelect.selectedOptions).map(opt => opt.value);
+
+  // Enforce >= 1 group on the client side so the user gets a clear
+  // validation message rather than a 400 from the backend.
+  if (selectedGroups.length === 0) {
+    showError('At least one group is required. Select one or more groups for this user.');
+    return;
+  }
 
   try {
     if (currentEditingUser) {
       // Update existing user
       await api.updateUser(currentEditingUser.id, {
         email,
-        role,
         groups: selectedGroups
       });
       showSuccess('User updated successfully');
@@ -126,13 +142,12 @@ export async function saveUser(e: Event): Promise<void> {
       const result = await api.createUser({
         email,
         password,
-        role,
         groups: selectedGroups
       });
       // Three outcomes: password-up-front (no invite),
       // password-omitted + invite delivered, password-omitted + invite
       // send failed (user row exists but the recipient is unreachable
-      // — surface a warning so the admin knows to re-mail the link via
+      // -- surface a warning so the admin knows to re-mail the link via
       // Forgot Password).
       if (password) {
         showSuccess('User created successfully');
@@ -144,7 +159,7 @@ export async function saveUser(e: Event): Promise<void> {
         );
       } else {
         showSuccess(
-          `Invitation email sent to ${email} — they will set their password on first login`
+          `Invitation email sent to ${email} -- they will set their password on first login`
         );
       }
     }
@@ -159,15 +174,17 @@ export async function saveUser(e: Event): Promise<void> {
 }
 
 /**
- * Populate groups dropdown
+ * Populate groups multi-select. Options are generated from the
+ * availableGroups list loaded in loadUsers(); preSelectedGroups holds
+ * the user's current group UUIDs (empty for new users).
  */
-function populateGroupsDropdown(selectedGroups: string[] = []): void {
+function populateGroupsDropdown(preSelectedGroups: string[] = []): void {
   const groupsSelect = document.getElementById('user-groups') as HTMLSelectElement;
   if (!groupsSelect) return;
 
   groupsSelect.innerHTML = availableGroups
     .map(group => `
-      <option value="${group.id}" ${selectedGroups.includes(group.id) ? 'selected' : ''}>
+      <option value="${escapeHtml(group.id)}" ${preSelectedGroups.includes(group.id) ? 'selected' : ''}>
         ${escapeHtml(group.name)}
       </option>
     `)

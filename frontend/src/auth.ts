@@ -913,12 +913,11 @@ export function updateUserUI(): void {
       userEmailEl.parentNode?.replaceChild(freshEmailEl, userEmailEl);
       freshEmailEl.addEventListener('click', () => void openProfileModal());
     }
-    // Show role badge for admin users. The parenthesised form was
-    // visually indistinct from the email address (read as a domain
-    // suffix); drop the parens and rely on the pill styling for
-    // separation.
+    // Show admin badge when the user is a member of the Administrators
+    // group. PR #912 removed user.role from the API response; use the
+    // group-membership-based isAdmin() predicate instead.
     if (roleEl) {
-      if (currentUser.role === 'admin') {
+      if (permissionsIsAdmin()) {
         roleEl.textContent = 'admin';
         roleEl.classList.remove('hidden');
       } else {
@@ -931,7 +930,7 @@ export function updateUserUI(): void {
       userInfoEl.classList.remove('hidden');
     }
 
-    const adminOnly = currentUser.role === 'admin';
+    const adminOnly = permissionsIsAdmin();
     document.querySelectorAll<HTMLElement>('.admin-only').forEach(el => {
       el.classList.toggle('visible', adminOnly);
     });

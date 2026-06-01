@@ -66,7 +66,7 @@ import * as state from '../state';
 
 const mockUser = (role: string | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', role },
+    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? ['00000000-0000-5000-8000-000000000001'] : [] },
   );
 };
 
@@ -122,13 +122,16 @@ describe('Recommendations action-box permission gating (issue #365)', () => {
     expect(plan.hidden).toBe(false);
   });
 
-  test('user role hides Purchase but keeps Create Plan', async () => {
+  test('non-admin user hides both Purchase and Create Plan (PR #912: no /me/permissions yet)', async () => {
+    // PR #912: canAccess() returns false for non-admin users until the
+    // /me/permissions endpoint lands. All non-admin users see the same
+    // read-only view as before.
     mockUser('user');
     await loadRecommendations();
     const purchase = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
     const plan = document.getElementById('create-plan-btn') as HTMLButtonElement;
     expect(purchase.hidden).toBe(true);
-    expect(plan.hidden).toBe(false);
+    expect(plan.hidden).toBe(true);
   });
 
   test('readonly role hides both Purchase and Create Plan', async () => {
@@ -149,9 +152,9 @@ describe('Recommendations action-box permission gating (issue #365)', () => {
     expect(plan.hidden).toBe(true);
   });
 
-  test('the action-box capacity input stays visible for every role', async () => {
-    // Readonly users still browse the bottom box for the selection summary;
-    // only the mutating CTAs disappear.
+  test('the action-box capacity input stays visible for all sessions', async () => {
+    // Non-mutating elements stay visible regardless of group membership;
+    // only the action CTAs gate on permissions.
     for (const role of ['admin', 'user', 'readonly']) {
       setupDom();
       mockUser(role);
@@ -214,18 +217,21 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     expect(rowCheckboxes.length).toBeGreaterThan(0);
   });
 
-  test('user (operator) role: select-all checkbox is present', async () => {
+  test('non-admin user: no select-all checkbox (PR #912: canAccess returns false without /me/permissions)', async () => {
+    // PR #912: only Administrators-group members get checkboxes.
+    // The /me/permissions endpoint that would restore Standard Users'
+    // checkbox access is deferred to a follow-up.
     mockUser('user');
     await loadRecommendations();
-    expect(document.getElementById('select-all-recs')).not.toBeNull();
+    expect(document.getElementById('select-all-recs')).toBeNull();
   });
 
-  test('user (operator) role: per-row checkbox is present', async () => {
+  test('non-admin user: no per-row checkboxes (PR #912: canAccess returns false without /me/permissions)', async () => {
     mockUser('user');
     await loadRecommendations();
     const list = document.getElementById('recommendations-list');
     const rowCheckboxes = list?.querySelectorAll('input[data-rec-id]') ?? [];
-    expect(rowCheckboxes.length).toBeGreaterThan(0);
+    expect(rowCheckboxes.length).toBe(0);
   });
 
   test('readonly role: grouped-row summary has no checkbox-col and column span is aligned', async () => {

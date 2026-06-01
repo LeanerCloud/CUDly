@@ -62,7 +62,7 @@ jest.mock('../state', () => ({
   setCostPeriod: jest.fn(),
   getHiddenColumns: jest.fn().mockReturnValue(new Set()),
   setHiddenColumns: jest.fn(),
-  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
 }));
 
 jest.mock('../utils', () => ({

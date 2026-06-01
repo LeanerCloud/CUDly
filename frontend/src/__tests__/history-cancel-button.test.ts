@@ -61,8 +61,8 @@ import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', role: 'admin' };
-const REG_USER = { id: 'user-uuid', email: 'user@example.com', role: 'user' };
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] };
+const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
 const OTHER_UUID = 'other-uuid';
 
 function setupDOM(): void {

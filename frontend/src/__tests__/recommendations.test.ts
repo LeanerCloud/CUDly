@@ -88,7 +88,7 @@ jest.mock('../state', () => ({
   // tests below see both #bulk-purchase-btn and #create-plan-btn
   // unconditionally. Permission-gating coverage lives in
   // recommendations-permissions.test.ts.
-  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
   // Issue #477: setupRecommendationsHandlers subscribes to provider/account
   // changes; expose jest.fn() shims so tests can capture the callback and
   // simulate a change without going through the real listener set.

@@ -49,7 +49,7 @@ jest.mock('../state', () => ({
   // click-handler counts, plan-card layout) keeps passing unchanged.
   // The permission-gating tests in plans-permissions.test.ts override
   // this per-case to exercise readonly / user / null sessions.
-  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
 }));
 
 // Mock history module

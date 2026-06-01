@@ -68,7 +68,7 @@ import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
 import { getAccountName } from '../recommendations';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', role: 'admin' };
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] };
 
 function setupDOM(): void {
   while (document.body.firstChild) document.body.removeChild(document.body.firstChild);

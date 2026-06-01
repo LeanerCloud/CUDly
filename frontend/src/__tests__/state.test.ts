@@ -34,13 +34,13 @@ describe('State Module', () => {
     });
 
     test('setCurrentUser and getCurrentUser work correctly', () => {
-      const user = { id: '123', email: 'test@example.com', role: 'admin' };
+      const user = { id: '123', email: 'test@example.com', groups: ['00000000-0000-5000-8000-000000000001'] };
       setCurrentUser(user);
       expect(getCurrentUser()).toEqual(user);
     });
 
     test('setCurrentUser with null clears user', () => {
-      setCurrentUser({ id: '123', email: 'test@example.com', role: 'admin' });
+      setCurrentUser({ id: '123', email: 'test@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
       setCurrentUser(null);
       expect(getCurrentUser()).toBeNull();
     });
@@ -194,7 +194,7 @@ describe('State Module', () => {
   describe('State Integration', () => {
     test('state changes are reflected across getters', () => {
       // Set various state
-      setCurrentUser({ id: '1', email: 'a@b.com', role: 'user' });
+      setCurrentUser({ id: '1', email: 'a@b.com', groups: [] });
       setCurrentProvider('aws');
       setRecommendations([{
         id: '1',

@@ -984,18 +984,10 @@
                         <small class="form-help">Leave blank to send the user an invitation email; they will set their own password on first login. If you enter a password it must be at least 12 characters and include upper / lower / number / special.</small>
                     </div>
                     <div class="form-group">
-                        <label for="user-role">Role</label>
-                        <select id="user-role" required>
-                            <option value="readonly">Viewer</option>
-                            <option value="user">Editor</option>
-                            <option value="admin">Admin</option>
+                        <label for="user-groups">Groups <span class="required-indicator" aria-hidden="true">*</span></label>
+                        <select id="user-groups" multiple required>
                         </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="user-groups">Groups</label>
-                        <select id="user-groups" multiple>
-                        </select>
-                        <small class="form-help">Hold Ctrl/Cmd to select multiple groups</small>
+                        <small class="form-help">At least one group is required. Hold Ctrl/Cmd to select multiple groups. Authorization is determined entirely by group membership.</small>
                     </div>
                     <div class="modal-buttons">
                         <button type="button" id="close-user-modal-btn">Cancel</button>

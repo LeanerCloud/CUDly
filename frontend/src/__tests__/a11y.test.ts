@@ -33,8 +33,7 @@ describe('accessibility smoke', () => {
         {
           id: 'u1',
           email: 'alice@example.com',
-          role: 'admin',
-          groups: [],
+          groups: ['00000000-0000-5000-8000-000000000001'],
           mfa_enabled: false,
           created_at: '2024-01-01T00:00:00Z',
           last_login: '2024-06-01T00:00:00Z',
@@ -57,7 +56,6 @@ describe('accessibility smoke', () => {
         {
           id: 'u1',
           email: 'bob@example.com',
-          role: 'user',
           groups: [],
           mfa_enabled: true,
           created_at: '2024-01-01T00:00:00Z',

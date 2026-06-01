@@ -1,15 +1,16 @@
 /**
  * Permissions helper tests.
  *
- * The role-default sets MUST match the backend constants in
- * `internal/auth/types.go` (DefaultAdminPermissions /
- * DefaultUserPermissions / DefaultReadOnlyPermissions). These tests
- * enumerate every entry so a drift between this mirror and the
- * backend fails fast in CI rather than at runtime as a wrong-positive
- * (button shown, click 403s) or wrong-negative (functionality hidden
- * from a user who should have it).
+ * PR #912 replaced role-based gating with group-membership-based
+ * gating. isAdmin() now returns true when the current user is a member
+ * of the Administrators group (UUID 00000000-0000-5000-8000-000000000001).
+ * canAccess() is currently a pass-through to isAdmin() -- non-admin users
+ * always get false because the /me/permissions endpoint is deferred.
+ *
+ * getRolePermissions() is kept for the effective-permissions display in
+ * the admin Users page and still returns the same sets as before.
  */
-import { canAccess, getRolePermissions, isAdmin } from '../permissions';
+import { canAccess, getRolePermissions, isAdmin, ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 jest.mock('../state', () => ({
   getCurrentUser: jest.fn(),
@@ -17,13 +18,27 @@ jest.mock('../state', () => ({
 
 import * as state from '../state';
 
-const mockUser = (role: string | null) => {
+const ADMIN_GID = ADMINISTRATORS_GROUP_ID;
+const STD_GID = '00000000-0000-5000-8000-000000000005';
+const RO_GID = '00000000-0000-5000-8000-000000000006';
+
+const mockUserWithGroups = (groups: string[]) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u1', email: 'u@example.com', role },
+    { id: 'u1', email: 'u@example.com', groups },
   );
 };
 
+const mockNoUser = () => {
+  (state.getCurrentUser as jest.Mock).mockReturnValue(null);
+};
+
 describe('permissions', () => {
+  describe('ADMINISTRATORS_GROUP_ID', () => {
+    test('has the expected UUID', () => {
+      expect(ADMINISTRATORS_GROUP_ID).toBe('00000000-0000-5000-8000-000000000001');
+    });
+  });
+
   describe('getRolePermissions', () => {
     test('admin role grants admin:*', () => {
       const perms = getRolePermissions('admin');
@@ -68,9 +83,48 @@ describe('permissions', () => {
     });
   });
 
+  describe('isAdmin', () => {
+    test('Administrators group member is admin', () => {
+      mockUserWithGroups([ADMIN_GID]);
+      expect(isAdmin()).toBe(true);
+    });
+
+    test('Administrators group member alongside other groups is still admin', () => {
+      mockUserWithGroups([STD_GID, ADMIN_GID, RO_GID]);
+      expect(isAdmin()).toBe(true);
+    });
+
+    test('Standard Users group member is not admin', () => {
+      mockUserWithGroups([STD_GID]);
+      expect(isAdmin()).toBe(false);
+    });
+
+    test('Read-Only Users group member is not admin', () => {
+      mockUserWithGroups([RO_GID]);
+      expect(isAdmin()).toBe(false);
+    });
+
+    test('user with empty groups is not admin', () => {
+      mockUserWithGroups([]);
+      expect(isAdmin()).toBe(false);
+    });
+
+    test('null user (logged out) is not admin', () => {
+      mockNoUser();
+      expect(isAdmin()).toBe(false);
+    });
+
+    test('user with non-array groups field is not admin (defense-in-depth)', () => {
+      (state.getCurrentUser as jest.Mock).mockReturnValue(
+        { id: 'u1', email: 'u@example.com', groups: null },
+      );
+      expect(isAdmin()).toBe(false);
+    });
+  });
+
   describe('canAccess', () => {
-    test('admin sees everything (admin:* superuser short-circuit)', () => {
-      mockUser('admin');
+    test('Administrators group member passes all checks', () => {
+      mockUserWithGroups([ADMIN_GID]);
       expect(canAccess('admin', '*')).toBe(true);
       expect(canAccess('view', 'users')).toBe(true);
       expect(canAccess('delete', 'plans')).toBe(true);
@@ -78,89 +132,30 @@ describe('permissions', () => {
       expect(canAccess('view', 'accounts')).toBe(true);
     });
 
-    test('user role: explicit grants', () => {
-      mockUser('user');
-      expect(canAccess('view', 'recommendations')).toBe(true);
-      expect(canAccess('view', 'plans')).toBe(true);
-      expect(canAccess('view', 'purchases')).toBe(true);
-      expect(canAccess('view', 'history')).toBe(true);
-      expect(canAccess('create', 'plans')).toBe(true);
-      expect(canAccess('update', 'plans')).toBe(true);
-      expect(canAccess('cancel-own', 'purchases')).toBe(true);
-      expect(canAccess('retry-own', 'purchases')).toBe(true);
-      expect(canAccess('approve-own', 'purchases')).toBe(true);
-    });
-
-    test('user role: denied for admin-gated actions', () => {
-      mockUser('user');
-      // delete:plans is now a default user permission (PR #660); no longer admin-gated.
-      expect(canAccess('delete', 'plans')).toBe(true);
-      // execute:purchases was NOT added to user defaults; remains admin-only.
-      expect(canAccess('execute', 'purchases')).toBe(false);
+    test('Standard Users group member fails all checks (no /me/permissions endpoint yet)', () => {
+      mockUserWithGroups([STD_GID]);
+      expect(canAccess('view', 'recommendations')).toBe(false);
+      expect(canAccess('view', 'plans')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
-      expect(canAccess('view', 'users')).toBe(false);
-      expect(canAccess('view', 'accounts')).toBe(false);
-      expect(canAccess('view', 'groups')).toBe(false);
-      expect(canAccess('view', 'api-keys')).toBe(false);
-      expect(canAccess('view', 'config')).toBe(false);
     });
 
-    test('readonly role: only view grants on rec/plans/history', () => {
-      mockUser('readonly');
-      expect(canAccess('view', 'recommendations')).toBe(true);
-      expect(canAccess('view', 'plans')).toBe(true);
-      expect(canAccess('view', 'history')).toBe(true);
-    });
-
-    test('readonly role: denied for purchases view + every mutation', () => {
-      mockUser('readonly');
-      expect(canAccess('view', 'purchases')).toBe(false);
-      expect(canAccess('create', 'plans')).toBe(false);
-      expect(canAccess('update', 'plans')).toBe(false);
-      expect(canAccess('delete', 'plans')).toBe(false);
-      expect(canAccess('execute', 'purchases')).toBe(false);
-      expect(canAccess('cancel-own', 'purchases')).toBe(false);
-      expect(canAccess('retry-own', 'purchases')).toBe(false);
-      expect(canAccess('approve-own', 'purchases')).toBe(false);
+    test('Read-Only Users group member fails all checks', () => {
+      mockUserWithGroups([RO_GID]);
+      expect(canAccess('view', 'recommendations')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
-      expect(canAccess('view', 'users')).toBe(false);
-      expect(canAccess('view', 'accounts')).toBe(false);
     });
 
-    test('null user (logged out) → false for everything', () => {
-      mockUser(null);
+    test('empty-groups user fails all checks', () => {
+      mockUserWithGroups([]);
+      expect(canAccess('view', 'recommendations')).toBe(false);
+      expect(canAccess('admin', '*')).toBe(false);
+    });
+
+    test('null user (logged out) fails all checks', () => {
+      mockNoUser();
       expect(canAccess('view', 'recommendations')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
       expect(canAccess('create', 'plans')).toBe(false);
-    });
-
-    test('unknown role → false for everything', () => {
-      mockUser('operator');
-      expect(canAccess('view', 'recommendations')).toBe(false);
-      expect(canAccess('admin', '*')).toBe(false);
-      expect(canAccess('execute', 'purchases')).toBe(false);
-    });
-  });
-
-  describe('isAdmin', () => {
-    test('admin role → true', () => {
-      mockUser('admin');
-      expect(isAdmin()).toBe(true);
-    });
-
-    test('user role → false', () => {
-      mockUser('user');
-      expect(isAdmin()).toBe(false);
-    });
-
-    test('readonly role → false', () => {
-      mockUser('readonly');
-      expect(isAdmin()).toBe(false);
-    });
-
-    test('null user → false', () => {
-      mockUser(null);
-      expect(isAdmin()).toBe(false);
     });
   });
 });
