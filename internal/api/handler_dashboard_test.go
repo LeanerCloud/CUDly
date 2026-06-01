@@ -255,6 +255,9 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 			total, byService := summarizeRecommendationsWithCoverage(tc.recs, tc.coverage)
 			assert.InDelta(t, tc.wantTotal, total, 0.0001)
 			assert.InDelta(t, tc.wantTotal, byService["rds"].PotentialSavings, 0.0001)
+			// Issue #908: CurrentSavings (committed/realized) is sourced from
+			// the same coverage-scaled amount, so it tracks the scaled total.
+			assert.InDelta(t, tc.wantTotal, byService["rds"].CurrentSavings, 0.0001)
 		})
 	}
 }
@@ -307,6 +310,46 @@ func TestSummarizeRecommendationsWithCoverage_100PctContract(t *testing.T) {
 	rawTotal, _ := summarizeRecommendationsWithCoverage(recs, nil)
 	assert.InDelta(t, 1500.0, rawTotal, 0.001,
 		"nil coverage map must return un-scaled savings (issue #201 contract)")
+}
+
+// TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings is the
+// issue #908 regression: by_service[svc].current_savings must be populated
+// (and keyed/scaled identically to potential) so the Home chart's
+// current-savings underlay renders instead of being a flat $0 series.
+//
+// Before the fix, summarizeRecommendationsWithCoverage set only
+// PotentialSavings, leaving CurrentSavings at its float64 zero value for
+// every service regardless of configured coverage.
+func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing.T) {
+	acctA := "acct-A"
+	keyEC2 := config.AccountConfigKey(acctA, "aws", "ec2")
+	keyRDS := config.AccountConfigKey(acctA, "aws", "rds")
+
+	recs := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Savings: 1000.0, CloudAccountID: &acctA},
+		{Provider: "aws", Service: "rds", Savings: 400.0, CloudAccountID: &acctA},
+	}
+
+	// 60% coverage on ec2, 25% on rds.
+	coverage := map[string]float64{keyEC2: 60, keyRDS: 25}
+
+	_, byService := summarizeRecommendationsWithCoverage(recs, coverage)
+
+	// current_savings is non-zero where coverage exists and is scaled the
+	// same way potential is (rec.Savings * coverage/100), keyed per service.
+	assert.InDelta(t, 600.0, byService["ec2"].CurrentSavings, 0.001,
+		"ec2 current_savings = 1000 * 60/100")
+	assert.InDelta(t, 100.0, byService["rds"].CurrentSavings, 0.001,
+		"rds current_savings = 400 * 25/100")
+
+	// And it matches PotentialSavings (both flow from the same scaled amount).
+	assert.InDelta(t, byService["ec2"].PotentialSavings, byService["ec2"].CurrentSavings, 0.001)
+	assert.InDelta(t, byService["rds"].PotentialSavings, byService["rds"].CurrentSavings, 0.001)
+
+	// Sanity: every populated service has a strictly positive current_savings
+	// when coverage is configured (the bug produced 0 here).
+	require.Positive(t, byService["ec2"].CurrentSavings)
+	require.Positive(t, byService["rds"].CurrentSavings)
 }
 
 func TestHandler_getUpcomingPurchases(t *testing.T) {

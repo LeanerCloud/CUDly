@@ -153,6 +153,17 @@ func summarizeRecommendationsWithCoverage(
 		total += scaled
 		svc := byService[rec.Service]
 		svc.PotentialSavings += scaled
+		// CurrentSavings is the committed/realized monthly savings for the
+		// service: the full 100%-coverage potential (rec.Savings) projected
+		// down to the operator-configured coverage %. scaledSavings already
+		// computes exactly that (rec.Savings * min(coverage,100)/100), so we
+		// reuse it rather than re-deriving the coverage lookup. When no
+		// coverage override exists the rec falls through to full savings, so
+		// CurrentSavings == PotentialSavings (nothing committed-away yet); a
+		// configured coverage < 100 pulls CurrentSavings below the potential.
+		// Issue #908: this field was previously never set, so the Home
+		// chart's current-savings underlay always rendered as $0.
+		svc.CurrentSavings += scaled
 		byService[rec.Service] = svc
 	}
 	return total, byService
