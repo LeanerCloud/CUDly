@@ -99,6 +99,13 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		}, nil
 	}
 
+	return h.dispatchProviderRevoke(ctx, record)
+}
+
+// dispatchProviderRevoke routes a revocation request to the correct
+// provider-specific implementation. Extracted from revokePurchase to keep
+// that function's cyclomatic complexity within the project limit.
+func (h *Handler) dispatchProviderRevoke(ctx context.Context, record *config.PurchaseHistoryRecord) (any, error) {
 	switch record.Provider {
 	case "azure":
 		return h.revokeAzurePurchase(ctx, record)
@@ -136,18 +143,26 @@ func (h *Handler) authorizeSessionRevoke(ctx context.Context, session *Session, 
 		return NewClientError(403, "permission denied: requires revoke-any or revoke-own on purchases")
 	}
 
-	// revoke-own ownership check: the purchase must be in an account the
-	// session user can access. Purchase history rows pre-date
-	// created_by_user_id; ownership is via account access (same model as
-	// the per-account-perms middleware used elsewhere in the history view).
-	if record.CloudAccountID != nil && *record.CloudAccountID != "" {
-		allowed, err := h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
-		if err != nil {
-			return fmt.Errorf("account access check failed: %w", err)
-		}
-		if len(allowed) > 0 && !stringInSlice(*record.CloudAccountID, allowed) {
-			return NewClientError(403, "permission denied: purchase is in an account you do not have access to")
-		}
+	return h.checkRevokeOwnAccountAccess(ctx, session.UserID, record)
+}
+
+// checkRevokeOwnAccountAccess enforces the account-scope ownership constraint
+// for revoke-own: the purchase must be in a cloud account the session user
+// is allowed to access. Extracted from authorizeSessionRevoke to keep that
+// function's cyclomatic complexity within the project limit.
+func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string, record *config.PurchaseHistoryRecord) error {
+	// Purchase history rows pre-date created_by_user_id; ownership is via
+	// account access (same model as the per-account-perms middleware used
+	// elsewhere in the history view).
+	if record.CloudAccountID == nil || *record.CloudAccountID == "" {
+		return nil
+	}
+	allowed, err := h.auth.GetAllowedAccountsAPI(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("account access check failed: %w", err)
+	}
+	if len(allowed) > 0 && !stringInSlice(*record.CloudAccountID, allowed) {
+		return NewClientError(403, "permission denied: purchase is in an account you do not have access to")
 	}
 	return nil
 }
