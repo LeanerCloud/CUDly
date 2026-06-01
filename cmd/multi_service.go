@@ -145,14 +145,19 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 	allResults := executePurchasePipeline(ctx, awsCfg, scoredResult.Passed, isDryRun, runID, cfg)
 
 	// Produce summary outputs.
-	serviceStats := buildServiceStats(scoredResult.Passed, allResults)
+	writeReportAndSummary(scoredResult.Passed, allResults, isDryRun, cfg)
+}
+
+// writeReportAndSummary writes the CSV report and prints the final summary.
+func writeReportAndSummary(passed []common.Recommendation, allResults []common.PurchaseResult, isDryRun bool, cfg Config) {
+	serviceStats := buildServiceStats(passed, allResults)
 	finalCSVOutput := generateCSVFilename(isDryRun, cfg)
 	if err := writeMultiServiceCSVReport(allResults, finalCSVOutput); err != nil {
 		log.Printf("Warning: Failed to write CSV output: %v", err)
 	} else {
 		AppLogger.Printf("\n📋 CSV report written to: %s\n", finalCSVOutput)
 	}
-	printMultiServiceSummary(scoredResult.Passed, allResults, serviceStats, isDryRun)
+	printMultiServiceSummary(passed, allResults, serviceStats, isDryRun)
 }
 
 // loadAWSConfig builds an aws.Config from the tool config.
