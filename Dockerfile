@@ -21,6 +21,14 @@ FROM golang:1.25.4-alpine3.21@sha256:3289aac2aac769e031d644313d094dbda745f28af81
 ARG TARGETARCH
 ARG TARGETOS
 
+# Build metadata stamped into the binary via ldflags and surfaced by the
+# public GET /version endpoint. GIT_COMMIT and BUILD_DATE are supplied by the
+# terraform build module (modules/build); they default to "unknown" so a bare
+# `docker build .` still succeeds without git context.
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE
+
 # Install build dependencies
 RUN apk add --no-cache \
     git \
@@ -66,9 +74,10 @@ COPY . .
 # Supports both ARM64 and AMD64 via build args
 # Default: ARM64 for cost optimization (20% savings on AWS Fargate)
 RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
+    BUILD_TIME="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -p 6 \
-    -ldflags="-s -w -X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -ldflags="-s -w -X main.Version=${VERSION:-dev} -X main.BuildTime=${BUILD_TIME} -X main.GitSHA=${GIT_COMMIT:-unknown}" \
     -o /app/cudly \
     ./cmd/server
 

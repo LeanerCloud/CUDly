@@ -13,10 +13,11 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/server"
 )
 
-// Version and BuildTime are set at build time via ldflags
+// Version, BuildTime, and GitSHA are set at build time via ldflags.
 var (
 	Version   = "dev"
 	BuildTime = "unknown"
+	GitSHA    = "unknown"
 )
 
 func main() {
@@ -27,10 +28,13 @@ func main() {
 	flag.Parse()
 
 	// Print version info
-	log.Printf("CUDly Server v%s (built: %s)", Version, BuildTime)
+	log.Printf("CUDly Server v%s (git: %s, built: %s)", Version, GitSHA, BuildTime)
 
-	// Set version in environment for the application
+	// Export build metadata to the environment so the api package can read it
+	// without importing main (which would create an import cycle).
 	os.Setenv("VERSION", Version)
+	os.Setenv("BUILD_TIME", BuildTime)
+	os.Setenv("GIT_SHA", GitSHA)
 
 	ctx := context.Background()
 

@@ -16,6 +16,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/health",     // Root health endpoint (no /api prefix)
 		"/api/health", // API health endpoint
 		"/api/info",
+		"/version", // Public build-version endpoint (version / git SHA / build time)
 		"/api/purchases/approve/",
 		"/api/purchases/cancel/",
 		"/api/ri-exchange/approve/",
