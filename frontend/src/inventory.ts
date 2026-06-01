@@ -15,6 +15,7 @@ import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { formatCurrency, formatDate } from './utils';
+import * as state from './state';
 
 type InventorySubSection = 'active-commitments' | 'coverage' | 'ri-exchange';
 
@@ -76,6 +77,9 @@ const ACTIVE_COMMITMENTS_COLS = 11;
  * children with a shimmer skeleton on entry, then either the rendered
  * table or an empty-state / error paragraph on completion. Idempotent —
  * safe to call on every sub-tab switch and on every refresh click.
+ *
+ * Reads the current provider/account chips from state so that changing a
+ * chip while on this sub-tab re-fetches with the new scope (issue #866).
  */
 export async function loadActiveCommitments(): Promise<void> {
   const container = document.getElementById(ACTIVE_COMMITMENTS_LIST_ID);
@@ -83,14 +87,19 @@ export async function loadActiveCommitments(): Promise<void> {
 
   wireRefreshButton();
 
+  const provider = state.getCurrentProvider();
+  const accountIDs = state.getCurrentAccountIDs();
+  // account chip is single-select; forward only when exactly one is active.
+  const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
+
   // 5 rows × 10 cols matches the rendered table shape (see
   // renderActiveCommitmentsTable). The renderer wipes the container's
   // children for a clean handoff from the skeleton.
   showSkeletonRows(container, 5, ACTIVE_COMMITMENTS_COLS);
 
   try {
-    const commitments = await api.listActiveCommitments();
-    renderActiveCommitmentsTable(container, commitments);
+    const commitments = await api.listActiveCommitments({ provider: provider || undefined, accountID });
+    renderActiveCommitmentsTable(container, commitments, provider, accountID);
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
@@ -134,17 +143,44 @@ function renderEmptyParagraph(container: HTMLElement, message: string): void {
 }
 
 /**
+ * Build a context-aware empty-state message for the active-commitments
+ * table. When chip filters are active the message names the scope so
+ * the user knows the result is filtered rather than globally empty.
+ */
+function buildActiveCommitmentsEmptyMessage(provider?: string, accountID?: string): string {
+  if (provider && accountID) {
+    return `No active commitments for provider "${provider}" and account ${accountID}.`;
+  }
+  if (provider) {
+    return `No active commitments for provider "${provider}".`;
+  }
+  if (accountID) {
+    return `No active commitments for account ${accountID}.`;
+  }
+  return 'No active commitments found across your registered accounts.';
+}
+
+/**
  * Render the per-commitment table into `container`. Empty list yields
  * an inline `.empty` paragraph instead of an empty table so the user
  * gets a real message ("no active commitments"), not a blank header.
+ *
+ * When a chip filter is active the empty-state message names the scope
+ * so the user understands the result is filtered, not globally empty.
  *
  * All text uses textContent / DOM construction — no innerHTML — to
  * keep the section safe by default against any unescaped backend
  * field (issue #340 XSS posture).
  */
-function renderActiveCommitmentsTable(container: HTMLElement, commitments: api.InventoryCommitment[]): void {
+function renderActiveCommitmentsTable(
+  container: HTMLElement,
+  commitments: api.InventoryCommitment[],
+  provider?: string,
+  accountID?: string,
+): void {
   if (!commitments || commitments.length === 0) {
-    renderEmptyParagraph(container, 'No active commitments found across your registered accounts.');
+    const msg = buildActiveCommitmentsEmptyMessage(provider, accountID);
+    renderEmptyParagraph(container, msg);
     return;
   }
 
@@ -229,6 +265,9 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
  * Fetch and render per-provider coverage breakdowns into #coverage-providers.
  * Shows a skeleton on entry, then either the rendered sections or an error.
  * Idempotent — safe to call on every sub-tab switch and on every refresh click.
+ *
+ * Reads the current provider/account chips from state so that changing a
+ * chip while on this sub-tab re-fetches with the new scope (issue #866).
  */
 export async function loadCoverageBreakdown(): Promise<void> {
   const container = document.getElementById(COVERAGE_CONTAINER_ID);
@@ -236,11 +275,15 @@ export async function loadCoverageBreakdown(): Promise<void> {
 
   wireCoverageRefreshButton();
 
+  const provider = state.getCurrentProvider();
+  const accountIDs = state.getCurrentAccountIDs();
+  const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
+
   // One skeleton row per known provider while loading.
   showSkeletonRows(container, 3, 1);
 
   try {
-    const data = await api.getCoverageBreakdown();
+    const data = await api.getCoverageBreakdown({ provider: provider || undefined, accountID });
     renderCoverageBreakdown(container, data.providers);
   } catch (error) {
     teardownSkeleton(container);
@@ -382,11 +425,71 @@ function wireSubNavListeners(): void {
 }
 
 /**
+ * True when the Inventory & Coverage tab is the currently-visible top-level
+ * tab. The chip-subscription reload skips the fetch when this returns false
+ * so we don't burn an API call (or trigger a skeleton flash) for a section
+ * the user isn't looking at — switchTab('inventory') runs loadInventory()
+ * on next entry anyway, which re-fetches with the current chip state.
+ */
+function isInventoryTabActive(): boolean {
+  return document.getElementById('inventory-tab')?.classList.contains('active') === true;
+}
+
+// Unsubscribe handles for the chip subscriptions. Re-assigned each time
+// loadInventory() wires them so repeated tab-switches don't stack duplicate
+// listeners — the old pair is torn down before a new pair is registered.
+let unsubscribeProvider: (() => void) | null = null;
+let unsubscribeAccount: (() => void) | null = null;
+
+/**
+ * Wire provider + account chip subscriptions (issue #866).
+ *
+ * Mirrors the pattern from PR #741 (Purchases) and PR #747 (Home):
+ *   - Active-tab guard: only fire when the Inventory tab is active.
+ *   - queueMicrotask coalescing: topbar-filters.ts fires BOTH the
+ *     account-clear AND the provider-set subscribers synchronously on a
+ *     single chip change. Without coalescing the two back-to-back fires
+ *     would kick off two fetches; with it they collapse into one.
+ *   - Re-check the active-tab guard inside the microtask: a tab switch
+ *     between the chip change and the microtask flush cancels the
+ *     now-unneeded fetch.
+ *
+ * Called from loadInventory() on every Inventory tab-switch. Tears down
+ * the previous subscription pair first so repeated switches don't stack
+ * duplicate listeners.
+ */
+function wireChipSubscriptions(): void {
+  // Tear down any existing subscriptions to avoid stacking on repeated
+  // tab-switches.
+  if (unsubscribeProvider) { unsubscribeProvider(); unsubscribeProvider = null; }
+  if (unsubscribeAccount) { unsubscribeAccount(); unsubscribeAccount = null; }
+
+  let reloadQueued = false;
+  const scheduleReload = (): void => {
+    if (!isInventoryTabActive() || reloadQueued) return;
+    reloadQueued = true;
+    queueMicrotask(() => {
+      reloadQueued = false;
+      if (!isInventoryTabActive()) return;
+      if (currentSubSection === 'active-commitments') {
+        void loadActiveCommitments();
+      } else if (currentSubSection === 'coverage') {
+        void loadCoverageBreakdown();
+      }
+    });
+  };
+
+  unsubscribeProvider = state.subscribeProvider(scheduleReload);
+  unsubscribeAccount = state.subscribeAccount(scheduleReload);
+}
+
+/**
  * Initialize the Inventory & Coverage section. Called by navigation.ts'
  * switchTab when 'inventory' is selected. Defaults to active-commitments
  * if the user hasn't selected a sub-section this session.
  */
 export function loadInventory(): void {
   wireSubNavListeners();
+  wireChipSubscriptions();
   switchInventorySubSection(currentSubSection ?? DEFAULT_SUB_SECTION);
 }

@@ -165,6 +165,54 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
 }
 
+// TestHandler_listActiveCommitments_ProviderFilter verifies the provider
+// query param filters results in-memory, returning only commitments whose
+// Provider field matches the requested value (issue #866).
+func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	now := time.Now()
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-aws",
+			Provider:    "aws",
+			Service:     "ec2",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			Count:       1,
+			MonthlyCost: 80.0,
+		},
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-azure",
+			Provider:    "azure",
+			Service:     "compute",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			Count:       2,
+			MonthlyCost: 120.0,
+		},
+	}
+
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
+	}
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.listActiveCommitments(ctx, req, map[string]string{"provider": "aws"})
+	require.NoError(t, err)
+
+	resp := result.(InventoryCommitmentsResponse)
+	require.Len(t, resp.Commitments, 1, "only the aws commitment should pass the provider filter")
+	assert.Equal(t, "aws", resp.Commitments[0].Provider)
+	assert.Equal(t, "p-aws", splitPurchaseID(resp.Commitments[0].ID))
+}
+
 // TestHandler_listActiveCommitments_SortedByExpiry verifies soonest-expiring
 // is first — the dashboard framing is "what do I need to renew next?", so
 // surfacing the imminent end_date on top keeps the UI's order intuitive
@@ -406,4 +454,122 @@ func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
 	require.NotNil(t, aws.OverallCoveragePct)
 	// coverage = 150 / (150+350) * 100 = 30%
 	assert.InDelta(t, 30.0, *aws.OverallCoveragePct, 0.001)
+}
+
+// TestHandler_getCoverageBreakdown_ProviderAndAccountChip locks down the CR
+// follow-up to PR #881: when the Main Header chips select BOTH a provider and
+// an account, getCoverageBreakdown must scope the on-demand (recommendations)
+// side AND the covered (commitments) side to the same account. Before the
+// fix the on-demand leg called ListRecommendations with a zero filter, so
+// the covered side respected the account chip while the on-demand side
+// bled in other accounts' gaps — producing misleading per-service coverage.
+//
+// The test seeds commitments + recs spanning two accounts and two providers,
+// then asserts:
+//   - GetPurchaseHistory is called with the selected account (single-account
+//     read path), GetAllPurchaseHistory is NOT called.
+//   - ListRecommendations is called with RecommendationFilter.AccountIDs set
+//     to the selected account — the assertion the regression hinges on.
+//   - The aws provider section reflects only the acc-1+aws rows on both
+//     sides (covered=200, on-demand=300 → 40% coverage).
+func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockScheduler.AssertExpectations(t)
+	})
+
+	now := time.Now()
+	// Only the acc-1 + aws commitment should reach the aws section.
+	// GetPurchaseHistory(acc-1) is the single-account read path; the
+	// account_id chip routes through it, so the store only returns acc-1
+	// rows here. The provider chip is applied in-memory by
+	// fetchCommitmentRecords to drop the azure row.
+	acc1Purchases := []config.PurchaseHistoryRecord{
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-aws-acc1",
+			Provider:    "aws",
+			Service:     "ec2",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			MonthlyCost: 200.0,
+		},
+		{
+			AccountID:   "acc-1",
+			PurchaseID:  "p-azure-acc1",
+			Provider:    "azure",
+			Service:     "compute",
+			Timestamp:   now.AddDate(0, -3, 0),
+			Term:        1,
+			MonthlyCost: 999.0, // must be dropped by the provider=aws chip
+		},
+	}
+
+	// The mock scheduler simulates a real store: it only returns recs that
+	// match the filter. The assertion that AccountIDs is plumbed lives on
+	// the mock's expected-argument match — if the handler regresses to
+	// passing RecommendationFilter{} the mock won't match and the test
+	// will fail with an unexpected-call message naming the actual call.
+	acc1Recs := []config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Savings: 300.0, CloudAccountID: strPtr("acc-1")},
+		// An azure rec for the same account exists in the real store but
+		// would be filtered out by aggregateOnDemandByKey's provider chip.
+		{Provider: "azure", Service: "compute", Savings: 999.0, CloudAccountID: strPtr("acc-1")},
+	}
+
+	mockStore.On("GetPurchaseHistory", ctx, "acc-1", config.MaxListLimit).Return(acc1Purchases, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{
+			{ID: "acc-1", Name: "Account One"},
+			{ID: "acc-2", Name: "Account Two"},
+		}, nil
+	}
+	// The crux of the F1 fix: the on-demand fetch MUST scope by account_id.
+	mockScheduler.On(
+		"ListRecommendations",
+		ctx,
+		config.RecommendationFilter{AccountIDs: []string{"acc-1"}},
+	).Return(acc1Recs, nil)
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
+
+	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{
+		"provider":   "aws",
+		"account_id": "acc-1",
+	})
+	require.NoError(t, err)
+
+	resp, ok := result.(CoverageBreakdownResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Providers, 3, "envelope always carries 3 known providers")
+
+	// Locate the aws section by provider (knownProviders ordering is stable
+	// but we look it up by name so a future reorder doesn't masquerade as a
+	// real regression).
+	var aws *ProviderCoverageSection
+	for i := range resp.Providers {
+		if resp.Providers[i].Provider == "aws" {
+			aws = &resp.Providers[i]
+			break
+		}
+	}
+	require.NotNil(t, aws)
+	require.NotNil(t, aws.Services, "aws section must have services from the acc-1 rows")
+	require.Len(t, aws.Services, 1, "only ec2 contributes after provider=aws chip")
+
+	ec2 := aws.Services[0]
+	assert.Equal(t, "ec2", ec2.Service)
+	assert.Equal(t, 200.0, ec2.CoveredMonthly, "covered comes from acc-1 purchase only")
+	assert.Equal(t, 300.0, ec2.OnDemandMonthly, "on-demand comes from acc-1 rec only")
+	require.NotNil(t, ec2.CoveragePct)
+	// 200 / (200+300) * 100 = 40
+	assert.InDelta(t, 40.0, *ec2.CoveragePct, 0.001)
+
+	// GetAllPurchaseHistory must NOT be called when account_id is set —
+	// belt-and-braces with the per-account read path on the covered side.
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
 }

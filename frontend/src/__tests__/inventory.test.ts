@@ -1,8 +1,10 @@
 /**
- * Inventory & Coverage section tests (issue #340 T4, #754).
+ * Inventory & Coverage section tests (issue #340 T4, #754, #866).
  *
  * Verifies the sub-tab switching machinery for the umbrella section AND
- * the per-commitment / coverage fetch+render flows.
+ * the per-commitment / coverage fetch+render flows, AND the chip-
+ * subscription pattern (issue #866: Main Header chips must propagate to
+ * both sub-tabs).
  */
 
 // loadRIExchange is a side-effect import from a module that touches the
@@ -20,9 +22,22 @@ jest.mock('../api', () => ({
   getCoverageBreakdown: jest.fn(),
 }));
 
+// Mock state so chip subscription tests can control provider/account
+// values and capture the registered callbacks. subscribeProvider and
+// subscribeAccount must return a function (the unsubscribe handle) since
+// inventory.ts calls the return value to tear down old subscriptions on
+// repeated loadInventory() calls (feedback_event_listener_dedup pattern).
+jest.mock('../state', () => ({
+  subscribeProvider: jest.fn(() => jest.fn()),
+  subscribeAccount: jest.fn(() => jest.fn()),
+  getCurrentProvider: jest.fn(() => ''),
+  getCurrentAccountIDs: jest.fn(() => []),
+}));
+
 import { loadInventory, switchInventorySubSection, loadActiveCommitments, loadCoverageBreakdown } from '../inventory';
 import { loadRIExchange } from '../riexchange';
 import * as api from '../api';
+import * as state from '../state';
 import type { ProviderCoverageSection } from '../api';
 
 function buildInventoryDOM(): void {
@@ -126,6 +141,13 @@ describe('Inventory & Coverage sub-section switching', () => {
     // getCoverageBreakdown is invoked when switching to the coverage sub-tab.
     (api.getCoverageBreakdown as jest.Mock).mockReset();
     (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({ providers: [] });
+    // Reset state mocks to defaults. subscribeProvider/Account must keep
+    // returning an unsubscribe function so inventory.ts can call it during
+    // teardown without throwing.
+    (state.subscribeProvider as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -193,6 +215,10 @@ describe('loadActiveCommitments — fetch + render flow', () => {
   beforeEach(() => {
     buildInventoryDOM();
     (api.listActiveCommitments as jest.Mock).mockReset();
+    (state.subscribeProvider as jest.Mock).mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -301,6 +327,10 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
   beforeEach(() => {
     buildInventoryDOM();
     (api.getCoverageBreakdown as jest.Mock).mockReset();
+    (state.subscribeProvider as jest.Mock).mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -417,5 +447,198 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     expect(barTh).not.toBeNull();
     expect(barTh!.textContent).toBe('Coverage bar');
     expect(barTh!.getAttribute('aria-label')).toBe('Coverage bar');
+  });
+});
+
+// ──────────────────────────────────────────────
+// Chip subscription wiring (issue #866)
+//
+// Main Header global chips (Provider + Account) must propagate to the
+// Active Commitments and Coverage sub-tabs. Mirrors the savings-history
+// subscriber tests (PR #741) and dashboard tests (PR #747).
+// ──────────────────────────────────────────────
+
+describe('chip subscriptions (issue #866)', () => {
+  /**
+   * Add an inventory-tab div with the .active class so isInventoryTabActive()
+   * returns true. The DOM is built fresh in buildInventoryDOM but doesn't
+   * receive the .active class — add it here for the guard to pass.
+   */
+  function activateInventoryTab(): void {
+    const tab = document.getElementById('inventory-tab');
+    if (tab) tab.classList.add('active');
+  }
+
+  beforeEach(() => {
+    buildInventoryDOM();
+    (api.listActiveCommitments as jest.Mock).mockResolvedValue([]);
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({ providers: [] });
+    // Each test's loadInventory() call will call subscribeProvider/Account;
+    // return a fresh jest.fn() as the unsubscribe handle each time.
+    (state.subscribeProvider as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    clearDOM();
+  });
+
+  test('loadInventory registers callbacks with state.subscribeProvider and state.subscribeAccount', () => {
+    loadInventory();
+
+    expect(state.subscribeProvider).toHaveBeenCalledTimes(1);
+    expect(state.subscribeAccount).toHaveBeenCalledTimes(1);
+    expect(typeof (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+    expect(typeof (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0]).toBe('function');
+  });
+
+  test('account chip change re-fetches Active Commitments when inventory tab is active', async () => {
+    activateInventoryTab();
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-X']);
+
+    // Start on active-commitments sub-tab. Force the sub-section in case
+    // a prior test left module-scoped currentSubSection at 'coverage'.
+    loadInventory();
+    switchInventorySubSection('active-commitments');
+
+    // Clear the initial load call, then simulate chip change.
+    (api.listActiveCommitments as jest.Mock).mockClear();
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+    accountCb();
+    // queueMicrotask drains within a setTimeout(0).
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.listActiveCommitments).toHaveBeenCalledTimes(1);
+    expect(api.listActiveCommitments).toHaveBeenCalledWith(
+      expect.objectContaining({ accountID: 'acct-X' })
+    );
+  });
+
+  test('provider chip change re-fetches Active Commitments when inventory tab is active', async () => {
+    activateInventoryTab();
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+
+    loadInventory();
+    switchInventorySubSection('active-commitments');
+
+    (api.listActiveCommitments as jest.Mock).mockClear();
+    const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+    providerCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.listActiveCommitments).toHaveBeenCalledTimes(1);
+    expect(api.listActiveCommitments).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'aws' })
+    );
+  });
+
+  test('provider chip change re-fetches Coverage when coverage sub-tab is active', async () => {
+    activateInventoryTab();
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('azure');
+
+    loadInventory();
+    // Switch to the coverage sub-tab.
+    switchInventorySubSection('coverage');
+    (api.getCoverageBreakdown as jest.Mock).mockClear();
+
+    const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+    providerCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.getCoverageBreakdown).toHaveBeenCalledTimes(1);
+    expect(api.getCoverageBreakdown).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'azure' })
+    );
+  });
+
+  test('account chip change re-fetches Coverage when coverage sub-tab is active', async () => {
+    activateInventoryTab();
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-Y']);
+
+    loadInventory();
+    switchInventorySubSection('coverage');
+    (api.getCoverageBreakdown as jest.Mock).mockClear();
+
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+    accountCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.getCoverageBreakdown).toHaveBeenCalledTimes(1);
+    expect(api.getCoverageBreakdown).toHaveBeenCalledWith(
+      expect.objectContaining({ accountID: 'acct-Y' })
+    );
+  });
+
+  test('does NOT re-fetch when inventory tab is inactive (active-tab guard)', async () => {
+    // First load with tab active to fix module-scoped currentSubSection
+    // to 'active-commitments'. Then deactivate the tab and verify the
+    // chip callbacks early-return.
+    activateInventoryTab();
+    loadInventory();
+    switchInventorySubSection('active-commitments');
+    const tab = document.getElementById('inventory-tab');
+    if (tab) tab.classList.remove('active');
+
+    (api.listActiveCommitments as jest.Mock).mockClear();
+    (api.getCoverageBreakdown as jest.Mock).mockClear();
+    const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+    providerCb();
+    accountCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.listActiveCommitments).not.toHaveBeenCalled();
+    expect(api.getCoverageBreakdown).not.toHaveBeenCalled();
+  });
+
+  test('coalesces back-to-back provider+account fires into one fetch', async () => {
+    activateInventoryTab();
+
+    loadInventory();
+    switchInventorySubSection('active-commitments');
+    (api.listActiveCommitments as jest.Mock).mockClear();
+
+    const providerCb = (state.subscribeProvider as jest.Mock).mock.calls[0]?.[0] as () => void;
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+
+    // Simulate topbar: clear accounts then set provider synchronously.
+    accountCb();
+    providerCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.listActiveCommitments).toHaveBeenCalledTimes(1);
+  });
+
+  test('filter-aware empty state: shows provider name when provider chip is set', async () => {
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('gcp');
+
+    await loadActiveCommitments();
+
+    const list = document.getElementById('active-commitments-list')!;
+    const empty = list.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toContain('"gcp"');
+  });
+
+  test('filter-aware empty state: shows account ID when account chip is set', async () => {
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-42']);
+
+    await loadActiveCommitments();
+
+    const list = document.getElementById('active-commitments-list')!;
+    const empty = list.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toContain('acct-42');
+  });
+
+  test('generic empty state: shown when no chip filters are active', async () => {
+    await loadActiveCommitments();
+
+    const list = document.getElementById('active-commitments-list')!;
+    const empty = list.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toMatch(/no active commitments found across your registered accounts/i);
   });
 });
