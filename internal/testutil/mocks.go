@@ -13,6 +13,7 @@ import (
 type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context) (*scheduler.CollectResult, error)
 	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	GetRecommendationByIDFunc  func(ctx context.Context, id string) (*config.RecommendationRecord, []string, error)
 }
 
 func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
@@ -27,6 +28,13 @@ func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.R
 		return m.ListRecommendationsFunc(ctx, filter)
 	}
 	return []config.RecommendationRecord{}, nil
+}
+
+func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {
+	if m.GetRecommendationByIDFunc != nil {
+		return m.GetRecommendationByIDFunc(ctx, id)
+	}
+	return nil, nil, nil
 }
 
 // MockPurchaseManager is a mock implementation of server.PurchaseManagerInterface

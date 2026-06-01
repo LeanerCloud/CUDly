@@ -332,9 +332,9 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 
 // TestGetRecommendationByID exercises the three acceptance cases from issue #214:
 //
-//   (a) rec visible: returns rec, nil hiddenBy
-//   (b) rec hidden by override: returns rec + hiddenBy reasons (no 404)
-//   (c) rec genuinely absent: returns nil, nil, nil
+//	(a) rec visible: returns rec, nil hiddenBy
+//	(b) rec hidden by override: returns rec + hiddenBy reasons (no 404)
+//	(c) rec genuinely absent: returns nil, nil, nil
 func TestGetRecommendationByID_VisibleRec(t *testing.T) {
 	ctx := context.Background()
 	rec := rdsRec("acct-A", "us-east-1", "mysql")
