@@ -4,7 +4,7 @@
 
 A Terraform workflow fails with an error similar to:
 
-```
+```text
 Error: Error acquiring the state lock
 ...
 Lock Info:
