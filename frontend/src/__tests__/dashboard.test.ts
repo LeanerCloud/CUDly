@@ -1135,7 +1135,7 @@ describe('Dashboard Module', () => {
     // loaded above via the jest.mock chain, so we can import directly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs } = require('../dashboard') as {
-      renderSavingsByService: (recs: unknown[]) => void;
+      renderSavingsByService: (recs: unknown[], filterDesc?: string) => void;
       computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
       computeServiceStatsFromRecs: (recs: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[]; minLabel?: string; maxLabel?: string }>;
     };
@@ -1424,6 +1424,43 @@ describe('Dashboard Module', () => {
       test('no-ops gracefully when canvas is missing from DOM', () => {
         // No buildDOM() call — canvas absent.
         expect(() => renderSavingsByService([rec('ec2', 100)])).not.toThrow();
+      });
+
+      // Issue #867: filter-aware empty state.
+      test('empty state shows generic text when no filter is active', () => {
+        buildDOM();
+        renderSavingsByService([], '');
+        const empty = document.getElementById('savings-by-service-empty');
+        expect(empty?.classList.contains('hidden')).toBe(false);
+        expect(empty?.textContent).toBe('No positive potential savings found for current recommendations.');
+      });
+
+      test('empty state mentions filter when provider chip is active and result is empty', () => {
+        buildDOM();
+        renderSavingsByService([], 'AWS');
+        const empty = document.getElementById('savings-by-service-empty');
+        expect(empty?.classList.contains('hidden')).toBe(false);
+        expect(empty?.textContent).toContain('AWS');
+        expect(empty?.textContent).toContain('selected filter');
+      });
+
+      test('empty state mentions filter when account chip is active and result is empty', () => {
+        buildDOM();
+        renderSavingsByService([], 'uuid-acct-1');
+        const empty = document.getElementById('savings-by-service-empty');
+        expect(empty?.classList.contains('hidden')).toBe(false);
+        expect(empty?.textContent).toContain('uuid-acct-1');
+      });
+
+      test('empty state text updates when filter changes between renders', () => {
+        buildDOM();
+        // First render with data -- chart shown, empty hidden.
+        renderSavingsByService([rec('ec2', 100)]);
+        // Second render with filter-narrowed empty result.
+        renderSavingsByService([], 'AWS, uuid-acct-2');
+        const empty = document.getElementById('savings-by-service-empty');
+        expect(empty?.classList.contains('hidden')).toBe(false);
+        expect(empty?.textContent).toContain('AWS, uuid-acct-2');
       });
 
       test('loadDashboard wires range bars to recommendations, not trend data', async () => {
