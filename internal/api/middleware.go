@@ -107,43 +107,65 @@ func (h *Handler) authenticatePrincipal(ctx context.Context, req *events.LambdaF
 		return nil, NewClientError(401, "authentication required")
 	}
 
-	if apiKey != "" {
-		_, userRaw, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
-		if err == nil && userRaw != nil {
-			p := &Principal{Kind: PrincipalUserAPIKey, Role: "user"}
-			// userRaw is returned as any from the interface. Extract fields
-			// via a locally-scoped interface to avoid an import cycle.
-			if uf, ok := userRaw.(interface {
-				GetID() string
-				GetEmail() string
-				GetRole() string
-			}); ok {
-				p.UserID = uf.GetID()
-				p.Email = uf.GetEmail()
-				p.Role = uf.GetRole()
-			}
-			return p, nil
-		}
-		if err != nil {
-			logging.Debugf("User API key validation failed: %v", err)
-		}
+	if p := h.principalFromUserAPIKey(ctx, apiKey); p != nil {
+		return p, nil
 	}
 
-	token := h.extractBearerToken(req)
-	if token != "" {
-		session, err := h.auth.ValidateSession(ctx, token)
-		if err == nil && session != nil {
-			return &Principal{
-				Kind:    PrincipalSession,
-				UserID:  session.UserID,
-				Email:   session.Email,
-				Role:    session.Role,
-				Session: session,
-			}, nil
-		}
+	if p := h.principalFromBearerToken(ctx, req); p != nil {
+		return p, nil
 	}
 
 	return nil, NewClientError(401, "authentication required")
+}
+
+// principalFromUserAPIKey resolves a Principal from a user API key.
+// Returns nil when the key is empty, validation fails, or the user record
+// cannot be retrieved.
+func (h *Handler) principalFromUserAPIKey(ctx context.Context, apiKey string) *Principal {
+	if apiKey == "" {
+		return nil
+	}
+	_, userRaw, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
+	if err != nil {
+		logging.Debugf("User API key validation failed: %v", err)
+		return nil
+	}
+	if userRaw == nil {
+		return nil
+	}
+	p := &Principal{Kind: PrincipalUserAPIKey, Role: "user"}
+	// userRaw is returned as any from the interface. Extract fields
+	// via a locally-scoped interface to avoid an import cycle.
+	if uf, ok := userRaw.(interface {
+		GetID() string
+		GetEmail() string
+		GetRole() string
+	}); ok {
+		p.UserID = uf.GetID()
+		p.Email = uf.GetEmail()
+		p.Role = uf.GetRole()
+	}
+	return p
+}
+
+// principalFromBearerToken resolves a Principal from a session bearer token.
+// Returns nil when no token is present or the session is invalid.
+func (h *Handler) principalFromBearerToken(ctx context.Context, req *events.LambdaFunctionURLRequest) *Principal {
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil
+	}
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil || session == nil {
+		return nil
+	}
+	return &Principal{
+		Kind:    PrincipalSession,
+		UserID:  session.UserID,
+		Email:   session.Email,
+		Role:    session.Role,
+		Session: session,
+	}
 }
 
 func extractAPIKey(req *events.LambdaFunctionURLRequest) string {
