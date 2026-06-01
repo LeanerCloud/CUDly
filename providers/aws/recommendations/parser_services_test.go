@@ -512,7 +512,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 
 	t.Run("empty ResourceType returns error", func(t *testing.T) {
 		rec := &common.Recommendation{}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.Error(t, err, "should fail loudly when ResourceType is empty")
 		assert.Contains(t, err.Error(), "ResourceType")
 		assert.Nil(t, rec.Details, "Details should remain nil on error")
@@ -520,7 +520,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 
 	t.Run("non-default instance type populates Details", func(t *testing.T) {
 		rec := &common.Recommendation{ResourceType: "db.r6g.large"}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.NoError(t, err)
 		cacheDetails, ok := rec.Details.(*common.CacheDetails)
 		require.True(t, ok, "Details should be *common.CacheDetails")
@@ -530,7 +530,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 
 	t.Run("xlarge instance type populates Details", func(t *testing.T) {
 		rec := &common.Recommendation{ResourceType: "db.r6gd.xlarge"}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.NoError(t, err)
 		cacheDetails, ok := rec.Details.(*common.CacheDetails)
 		require.True(t, ok, "Details should be *common.CacheDetails")

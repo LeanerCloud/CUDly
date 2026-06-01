@@ -6,10 +6,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
