@@ -453,7 +453,7 @@ func generateReferenceToken() (string, error) {
 // for a new-registration notification email.
 //
 // Rules:
-//   - Every CUDly user with role == "admin" is an authorised reviewer.
+//   - Every member of the Administrators group is an authorised reviewer.
 //   - The first admin email is the To; remaining admins + the global
 //     Settings → General notification email go on Cc.
 //   - When no admin users are configured, falls through to the legacy
@@ -492,9 +492,10 @@ func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string,
 }
 
 // gatherAdminEmails returns the deduped, insertion-ordered list of emails
-// for every user with role == "admin". Transport errors are logged and
-// result in an empty return so registration notifications don't block on
-// auth-store hiccups.
+// for every authorised reviewer, i.e. every member of the Administrators group
+// (the group-membership replacement for the former role == "admin" check;
+// issue #907). Transport errors are logged and result in an empty return so
+// registration notifications don't block on auth-store hiccups.
 func (h *Handler) gatherAdminEmails(ctx context.Context) []string {
 	if h.auth == nil {
 		return nil
@@ -512,7 +513,7 @@ func (h *Handler) gatherAdminEmails(ctx context.Context) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, u := range users {
-		if u == nil || u.Role != "admin" {
+		if u == nil || !isAdminGroupMember(u.Groups) {
 			continue
 		}
 		addr := strings.TrimSpace(u.Email)
@@ -527,6 +528,17 @@ func (h *Handler) gatherAdminEmails(ctx context.Context) []string {
 		out = append(out, addr)
 	}
 	return out
+}
+
+// isAdminGroupMember reports whether the given group IDs include the
+// Administrators group, i.e. the user has full-access ({admin, *}) capability.
+func isAdminGroupMember(groupIDs []string) bool {
+	for _, g := range groupIDs {
+		if g == auth.DefaultAdminGroupID {
+			return true
+		}
+	}
+	return false
 }
 
 // globalNotificationEmail loads the Settings → General notification email

@@ -64,7 +64,6 @@ func scopedAuthMock(ctx context.Context) *MockAuthService {
 	m.On("ValidateSession", ctx, permsScopedToken).Return(&Session{
 		UserID: permsScopedUserID,
 		Email:  "scoped@example.com",
-		Role:   "user",
 	}, nil)
 	// Grant every permission so role-gating doesn't interfere with what we
 	// actually want to test (account-level scoping).

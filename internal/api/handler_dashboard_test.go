@@ -32,8 +32,8 @@ func adminDashboardReq(ctx context.Context) (*MockAuthService, *events.LambdaFun
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	return mockAuth, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
@@ -468,7 +468,6 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",
-		Role:   "user",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
@@ -514,7 +513,6 @@ func TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed(t *testing.T)
 
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",
-		Role:   "user",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)

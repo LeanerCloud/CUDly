@@ -31,7 +31,7 @@ func TestAuthServiceAdapter_Login(t *testing.T) {
 		ID:           "user-1",
 		Email:        "test@example.com",
 		PasswordHash: "$2a$10$invalidhash",
-		Role:         "admin",
+		GroupIDs:     []string{auth.DefaultAdminGroupID},
 	}, nil)
 
 	_, err := adapter.Login(ctx, api.LoginRequest{
@@ -62,7 +62,6 @@ func TestAuthServiceAdapter_ValidateSession(t *testing.T) {
 		Token:     "hashed-token",
 		UserID:    "user-1",
 		Email:     "test@example.com",
-		Role:      "admin",
 		ExpiresAt: time.Now().Add(time.Hour),
 	}, nil)
 
@@ -70,7 +69,6 @@ func TestAuthServiceAdapter_ValidateSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", sess.UserID)
 	assert.Equal(t, "test@example.com", sess.Email)
-	assert.Equal(t, "admin", sess.Role)
 }
 
 func TestAuthServiceAdapter_ValidateSession_Error(t *testing.T) {
@@ -126,7 +124,7 @@ func TestAuthServiceAdapter_GetUser(t *testing.T) {
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
 		ID:         "user-1",
 		Email:      "test@example.com",
-		Role:       "admin",
+		GroupIDs:   []string{auth.DefaultAdminGroupID},
 		MFAEnabled: false,
 	}, nil)
 
@@ -134,7 +132,7 @@ func TestAuthServiceAdapter_GetUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", user.ID)
 	assert.Equal(t, "test@example.com", user.Email)
-	assert.Equal(t, "admin", user.Role)
+	assert.Equal(t, []string{auth.DefaultAdminGroupID}, user.Groups)
 }
 
 func TestAuthServiceAdapter_GetUser_Error(t *testing.T) {
@@ -151,6 +149,10 @@ func TestAuthServiceAdapter_DeleteUser(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
+	// Non-admin user: the last-admin guard is skipped after the GetUserByID
+	// lookup (issue #907), so deletion proceeds.
+	mockStore.On("GetUserByID", ctx, "user-1").
+		Return(&auth.User{ID: "user-1", GroupIDs: []string{"group-1"}}, nil)
 	mockStore.On("DeleteUser", ctx, "user-1").Return(nil)
 	mockStore.On("DeleteUserSessions", ctx, "user-1").Return(nil)
 
@@ -163,8 +165,8 @@ func TestAuthServiceAdapter_ListUsersAPI(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore.On("ListUsers", ctx).Return([]auth.User{
-		{ID: "user-1", Email: "user1@example.com", Role: "admin"},
-		{ID: "user-2", Email: "user2@example.com", Role: "viewer"},
+		{ID: "user-1", Email: "user1@example.com", GroupIDs: []string{auth.DefaultAdminGroupID}},
+		{ID: "user-2", Email: "user2@example.com", GroupIDs: []string{"group-viewer"}},
 	}, nil)
 
 	result, err := adapter.ListUsersAPI(ctx)
@@ -244,10 +246,17 @@ func TestAuthServiceAdapter_HasPermissionAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
+	// Administrators-group member: the group's {admin, *} permission grants
+	// every action (issue #907 group-only authz).
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
-		ID:    "user-1",
-		Email: "test@example.com",
-		Role:  "admin",
+		ID:       "user-1",
+		Email:    "test@example.com",
+		GroupIDs: []string{auth.DefaultAdminGroupID},
+	}, nil)
+	mockStore.On("GetGroup", ctx, auth.DefaultAdminGroupID).Return(&auth.Group{
+		ID:          auth.DefaultAdminGroupID,
+		Name:        "Administrators",
+		Permissions: []auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
 	}, nil)
 
 	has, err := adapter.HasPermissionAPI(ctx, "user-1", "read", "config")
@@ -277,7 +286,7 @@ func TestAuthServiceAdapter_CreateUserAPI(t *testing.T) {
 	_, err := adapter.CreateUserAPI(ctx, map[string]interface{}{
 		"email":    "new@example.com",
 		"password": "StrongPassword123!",
-		"role":     "viewer",
+		"groups":   []string{"group-viewer"},
 	})
 	// May fail depending on validation but exercises the code
 	_ = err
@@ -288,14 +297,16 @@ func TestAuthServiceAdapter_UpdateUserAPI(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
-		ID:    "user-1",
-		Email: "old@example.com",
-		Role:  "viewer",
+		ID:       "user-1",
+		Email:    "old@example.com",
+		GroupIDs: []string{"group-viewer"},
 	}, nil)
 	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil)
 
-	_, err := adapter.UpdateUserAPI(ctx, "user-1", map[string]interface{}{
-		"role": "admin",
+	// New signature carries the actor user ID (issue #907 self-escalation
+	// guard). The update only flips a non-group field, so no guard fires.
+	_, err := adapter.UpdateUserAPI(ctx, "actor-1", "user-1", map[string]interface{}{
+		"active": true,
 	})
 	_ = err
 }

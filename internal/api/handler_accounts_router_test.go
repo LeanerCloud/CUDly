@@ -23,6 +23,7 @@ func routerReq(method, path, body string) (*events.LambdaFunctionURLRequest, str
 func setupRouterForDispatch(ctx context.Context) *Router {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
+	mockAuth.grantAdmin()
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
 	return NewRouter(h)

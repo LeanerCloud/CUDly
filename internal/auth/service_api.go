@@ -19,7 +19,6 @@ import (
 type APIUser struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Role       string   `json:"role"`
 	Groups     []string `json:"groups"`
 	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
@@ -57,11 +56,11 @@ type APIPermissionConstraint struct {
 	MaxAmount float64  `json:"max_amount,omitempty"`
 }
 
-// APICreateUserRequest is the request type for creating users via API
+// APICreateUserRequest is the request type for creating users via API.
+// Groups must be non-empty: authorization is group-membership-only (issue #907).
 type APICreateUserRequest struct {
 	Email    string   `json:"email"`
 	Password string   `json:"password"`
-	Role     string   `json:"role"`
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -81,10 +80,14 @@ type APICreateUserResponse struct {
 	InviteEmailError string `json:"invite_email_error,omitempty"`
 }
 
-// APIUpdateUserRequest is the request type for updating users via API
+// APIUpdateUserRequest is the request type for updating users via API.
+//
+// Groups is decoded from JSON, so the handler cannot use a nil slice to mean
+// "not sent". A non-empty Groups replaces the user's membership; an empty/nil
+// Groups means "leave membership unchanged" (callers that intend to change
+// groups always send at least one, since zero-group users are forbidden).
 type APIUpdateUserRequest struct {
 	Email  string   `json:"email,omitempty"`
-	Role   string   `json:"role,omitempty"`
 	Groups []string `json:"groups,omitempty"`
 }
 
@@ -126,7 +129,6 @@ func userToAPIUser(u *User) *APIUser {
 	return &APIUser{
 		ID:         u.ID,
 		Email:      u.Email,
-		Role:       u.Role,
 		Groups:     groups,
 		MFAEnabled: u.MFAEnabled,
 		CreatedAt:  u.CreatedAt.Format(time.RFC3339),
@@ -205,7 +207,6 @@ func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, err
 	authReq := CreateUserRequest{
 		Email:    req.Email,
 		Password: req.Password,
-		Role:     req.Role,
 		GroupIDs: req.Groups,
 	}
 	result, err := s.CreateUser(ctx, authReq)
@@ -219,17 +220,16 @@ func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, err
 	}, nil
 }
 
-// UpdateUserAPI updates a user via the API
-func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface any) (any, error) {
+// UpdateUserAPI updates a user via the API. actorUserID is the authenticated
+// caller performing the change (from the session, never the request body); it
+// is used by the service layer to enforce the self-escalation guard (#907).
+func (s *Service) UpdateUserAPI(ctx context.Context, actorUserID, userID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APIUpdateUserRequest)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
 	}
 	authReq := UpdateUserRequest{
 		GroupIDs: req.Groups,
-	}
-	if req.Role != "" {
-		authReq.Role = &req.Role
 	}
 	// Wire email through so admins can edit other users' email addresses.
 	// Before #892 this field was silently dropped: the API accepted email
@@ -239,7 +239,7 @@ func (s *Service) UpdateUserAPI(ctx context.Context, userID string, reqInterface
 	if req.Email != "" {
 		authReq.Email = &req.Email
 	}
-	user, err := s.UpdateUser(ctx, userID, authReq)
+	user, err := s.UpdateUser(ctx, actorUserID, userID, authReq)
 	if err != nil {
 		return nil, err
 	}

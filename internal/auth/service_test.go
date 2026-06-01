@@ -138,7 +138,6 @@ func TestService_ValidateSession(t *testing.T) {
 			Token:     hashedToken,
 			UserID:    "user-123",
 			Email:     "test@example.com",
-			Role:      RoleUser,
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 
@@ -357,7 +356,6 @@ func TestLogin_WithMFA(t *testing.T) {
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    mfaSecret,
-		Role:         RoleUser,
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
@@ -393,7 +391,6 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
-		Role:         RoleUser,
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
@@ -429,7 +426,6 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
-		Role:         RoleUser,
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
@@ -463,7 +459,6 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "", // No secret configured
-		Role:         RoleUser,
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
@@ -512,6 +507,10 @@ func TestService_ErrorPaths(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
+		// Non-admin user: the last-admin guard is skipped (no Administrators
+		// group membership), so deletion proceeds past the GetUserByID lookup.
+		mockStore.On("GetUserByID", ctx, "user-123").
+			Return(&User{ID: "user-123", GroupIDs: []string{"group-1"}}, nil).Once()
 		mockStore.On("DeleteUserSessions", ctx, "user-123").Return(fmt.Errorf("session cleanup error")).Once()
 		mockStore.On("DeleteUser", ctx, "user-123").Return(nil).Once()
 
@@ -651,7 +650,6 @@ func TestService_ErrorPaths(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -660,12 +658,11 @@ func TestService_ErrorPaths(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// Should still return user permissions even if group fetch fails.
-		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
-		// + update:purchases (PR-A #660)
-		// + cancel-own:purchases (issue #46)
-		// + retry-own:purchases (issue #47) + approve-own:purchases (issue #286).
-		assert.Len(t, permissions, 11)
+		// A failing group fetch is logged and skipped rather than aborting the
+		// whole resolution (so a partially broken group set still yields the
+		// other groups' permissions). Here the sole group errored and there is
+		// no role fallback, so the effective permission set is empty.
+		assert.Empty(t, permissions)
 
 		mockStore.AssertExpectations(t)
 	})

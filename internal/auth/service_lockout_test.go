@@ -245,7 +245,6 @@ func TestLogin_AccountLockout_MFAFailure(t *testing.T) {
 		Active:              true,
 		MFAEnabled:          true,
 		MFASecret:           "JBSWY3DPEHPK3PXP",
-		Role:                RoleUser,
 		FailedLoginAttempts: MaxFailedLoginAttempts - 1,
 	}
 

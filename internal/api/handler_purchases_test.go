@@ -298,7 +298,8 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 	// CRITICAL ASSERTION: session-authed approve goes through
@@ -341,7 +342,8 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(errors.New("AWS RI purchase failed"))
@@ -381,7 +383,8 @@ func TestHandler_approvePurchase_AzureOrphanRejects409(t *testing.T) {
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com", Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -417,7 +420,8 @@ func TestHandler_approvePurchase_GCPOrphanRejects409(t *testing.T) {
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com", Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -456,7 +460,8 @@ func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 	// Guard does not fire; ApproveAndExecute is called normally.
@@ -493,7 +498,8 @@ func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail, Role: "admin"}, nil)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
+	mockAuth.grantAdmin()
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
@@ -716,7 +722,6 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	scheduledDate := time.Now().AddDate(0, 0, 7)
@@ -751,6 +756,7 @@ func TestHandler_getPlannedPurchases(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	// The planned list must request paused executions alongside pending/notified
 	// so a paused row stays VISIBLE. Assert the status set
 	// explicitly rather than mock.Anything to lock the invariant.
@@ -793,10 +799,10 @@ func TestHandler_getPlannedPurchases_ErrorGettingExecutions(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).
 		Return(nil, errors.New("database error"))
 
@@ -824,7 +830,6 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	soon := time.Now().AddDate(0, 0, 3)
@@ -857,6 +862,7 @@ func TestHandler_getPlannedPurchases_PausedStaysVisible(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPlannedExecutions", ctx,
 		[]string{"pending", "notified", "paused"}, config.MaxListLimit).
 		Return(executions, nil)
@@ -903,7 +909,6 @@ func TestHandler_getPlannedPurchases_SoonestRowsNotTruncated(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	now := time.Now()
@@ -929,6 +934,7 @@ func TestHandler_getPlannedPurchases_SoonestRowsNotTruncated(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	// Strict args lock the contract: planned statuses + MaxListLimit (so the
 	// DB receives the same cap the handler intends, no off-by-one budget).
 	mockStore.On("GetPlannedExecutions", ctx,
@@ -969,11 +975,11 @@ func TestHandler_pausePlannedPurchase(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused").Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -997,10 +1003,10 @@ func TestHandler_pausePlannedPurchase_NotFound(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "running"}, "paused").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1023,11 +1029,11 @@ func TestHandler_resumePlannedPurchase(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending").Return(resumed, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1051,7 +1057,6 @@ func TestHandler_runPlannedPurchase(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	transitioned := &config.PurchaseExecution{
@@ -1060,6 +1065,7 @@ func TestHandler_runPlannedPurchase(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "running").Return(transitioned, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1085,11 +1091,11 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1117,7 +1123,6 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	planID := "22222222-2222-2222-2222-222222222222"
@@ -1135,6 +1140,7 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	// Assert that UpdatePurchasePlan is called with enabled=false.
@@ -1168,7 +1174,6 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	planID := "33333333-3333-3333-3333-333333333333"
@@ -1187,6 +1192,7 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(cancelled, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 
@@ -1215,7 +1221,6 @@ func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	planID := "55555555-5555-5555-5555-555555555555"
@@ -1238,6 +1243,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(nil, conflictErr)
 	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
@@ -1268,7 +1274,6 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	planID := "77777777-7777-7777-7777-777777777777"
@@ -1289,6 +1294,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(nil, conflictErr)
 	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
@@ -1313,10 +1319,10 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "running"}, "paused").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1348,10 +1354,10 @@ func TestHandler_pausePlannedPurchase_IneligibleStatus(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	// Store returns ErrExecutionNotInExpectedStatus when the row is 'completed'
 	// and cannot be transitioned to 'paused'.
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "running"}, "paused").
@@ -1382,10 +1388,10 @@ func TestHandler_resumePlannedPurchase_NilExecution(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"paused"}, "pending").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1408,10 +1414,10 @@ func TestHandler_runPlannedPurchase_NilExecution(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "paused"}, "running").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1434,10 +1440,10 @@ func TestHandler_deletePlannedPurchase_NilExecution(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "paused"}, "cancelled").Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1460,12 +1466,12 @@ func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	executions := []config.PurchaseExecution{{ExecutionID: "11111111-1111-1111-1111-111111111111", PlanID: "11111111-1111-1111-1111-111111111111"}}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPlannedExecutions", ctx, mock.Anything, mock.Anything).Return(executions, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("database error"))
 
@@ -1492,7 +1498,6 @@ func TestHandler_getPurchaseDetails_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	scheduledDate := time.Now().AddDate(0, 0, 7)
@@ -1512,6 +1517,7 @@ func TestHandler_getPurchaseDetails_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
 	mockStore.On("GetPurchasePlan", ctx, "22222222-2222-2222-2222-222222222222").Return(plan, nil)
 
@@ -1560,10 +1566,10 @@ func TestHandler_getPurchaseDetails_NotFound(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, errors.New("not found"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1587,10 +1593,10 @@ func TestHandler_getPurchaseDetails_NilExecution(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1614,7 +1620,6 @@ func TestHandler_getPurchaseDetails_WithTimestamps(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	scheduledDate := time.Now().AddDate(0, 0, 7)
@@ -1632,6 +1637,7 @@ func TestHandler_getPurchaseDetails_WithTimestamps(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(execution, nil)
 	mockStore.On("GetPurchasePlan", ctx, "22222222-2222-2222-2222-222222222222").Return(nil, errors.New("not found"))
 
@@ -1662,10 +1668,10 @@ func TestHandler_executePurchase_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// executePurchase reads GlobalConfig to look up the per-provider
 	// grace period. Return an empty-but-valid config so the grace
@@ -1709,10 +1715,10 @@ func TestHandler_executePurchase_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1735,10 +1741,10 @@ func TestHandler_executePurchase_EmptyRecommendations(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1761,10 +1767,10 @@ func TestHandler_executePurchase_NegativeUpfrontCost(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1787,10 +1793,10 @@ func TestHandler_executePurchase_NegativeSavings(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1813,10 +1819,10 @@ func TestHandler_executePurchase_TooManyRecommendations(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1850,10 +1856,10 @@ func TestHandler_executePurchase_ExceedsMaxAmount(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -1877,10 +1883,10 @@ func TestHandler_executePurchase_SaveError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("database error"))
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
@@ -1912,7 +1918,7 @@ func TestHandler_pausePlannedPurchase_OutOfScope(t *testing.T) {
 	planID := "88888888-8888-8888-8888-888888888888"
 
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
-		UserID: "viewer-1", Role: "user",
+		UserID: "viewer-1",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "update", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
@@ -1970,7 +1976,10 @@ func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session,
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
-	if session != nil && session.Role != "admin" {
+	// Authorization is permission-based for every caller now (issue #907): even
+	// an Administrators-group member resolves cancel-any/cancel-own through
+	// HasPermissionAPI, so register the permission mocks unconditionally.
+	if session != nil {
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "cancel-any", "purchases").Return(hasAny, nil).Maybe()
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "cancel-own", "purchases").Return(hasOwn, nil).Maybe()
 	}
@@ -2038,8 +2047,11 @@ func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
-	runSessionCancelAllowed(t, exec, session, false, false)
+	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
+	// Admin == Administrators-group member, modelled as a cancel-any holder
+	// (issue #907 removed the role short-circuit); the row belongs to another
+	// user, so cancel-any is what authorises the action.
+	runSessionCancelAllowed(t, exec, session, true, false)
 }
 
 func TestHandler_cancelPurchase_Session_CancelAny_AllowsAny(t *testing.T) {
@@ -2051,7 +2063,7 @@ func TestHandler_cancelPurchase_Session_CancelAny_AllowsAny(t *testing.T) {
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "ops@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "ops@example.com"}
 	runSessionCancelAllowed(t, exec, session, true, false)
 }
 
@@ -2062,7 +2074,7 @@ func TestHandler_cancelPurchase_Session_CancelOwn_AllowsCreator(t *testing.T) {
 		Status:          "notified",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 	runSessionCancelAllowed(t, exec, session, false, true)
 }
 
@@ -2073,7 +2085,7 @@ func TestHandler_cancelPurchase_Session_CancelOwn_RejectsNonCreator(t *testing.T
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
@@ -2092,7 +2104,7 @@ func TestHandler_cancelPurchase_Session_NoVerb_Rejects(t *testing.T) {
 		Status:          "pending",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
 
@@ -2111,7 +2123,7 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 		Status:          "completed", // already done — cannot transition
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "admin"}
+	session := &Session{UserID: cancelCallerID}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
 
@@ -2140,7 +2152,7 @@ func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testin
 				Status:          status,
 				CreatedByUserID: &creator,
 			}
-			session := &Session{UserID: cancelCallerID, Role: "admin"}
+			session := &Session{UserID: cancelCallerID}
 
 			handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
 
@@ -2169,8 +2181,10 @@ func TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus(t *testing.T)
 				Status:          status,
 				CreatedByUserID: &creator,
 			}
-			session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
-			runSessionCancelAllowed(t, exec, session, false, false)
+			session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
+			// Caller owns the row (creator == cancelCallerID); cancel-own
+			// authorises it (issue #907 group-only authz).
+			runSessionCancelAllowed(t, exec, session, false, true)
 		})
 	}
 }
@@ -2188,9 +2202,10 @@ func TestHandler_cancelPurchase_Session_RaceWithApprove(t *testing.T) {
 		Status:          "pending", // status at fetch time
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
 
-	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+	// Caller owns the row; cancel-own authorises it (issue #907).
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 	// Simulate concurrent approve winning between IsCancelable check and
 	// the conditional UPDATE inside the tx.
 	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
@@ -2219,7 +2234,7 @@ func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *te
 		Status:          "pending",
 		CreatedByUserID: nil,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
@@ -2278,9 +2293,12 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 			{ID: "r-ambient", CloudAccountID: nil},
 		},
 	}
-	session := &Session{UserID: cancelCallerID, Role: "admin", Email: "admin@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
 
-	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+	// "Admin" is now an Administrators-group member, i.e. a holder of the
+	// cancel-any permission (issue #907). The contact-email-gate bypass under
+	// test is independent of how that authority is derived.
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, true, false)
 
 	// Capture cancelledBy to verify the audit-stamp is passed to the
 	// atomic UPDATE.
@@ -2328,7 +2346,7 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 			{ID: "r-ambient", CloudAccountID: nil},
 		},
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, true /*hasOwn*/)
 	// CancelExecutionAtomic is called by the session-authed branch.
@@ -2385,7 +2403,7 @@ func TestHandler_cancelPurchase_DeepLink_TransientAuthErrorPropagates(t *testing
 		Status:          "notified",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	mockConfig := new(MockConfigStore)
 	mockConfig.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil)
@@ -2430,7 +2448,7 @@ func TestHandler_cancelPurchase_DeepLink_NonPrivilegedSessionStillHitsContactGat
 			{ID: "r-ambient", CloudAccountID: nil},
 		},
 	}
-	session := &Session{UserID: cancelCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: cancelCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, false /*hasOwn*/)
 	// Token branch fetches the global config to populate the Cc list.
@@ -2477,7 +2495,8 @@ func buildSessionRetryHandler(failed *config.PurchaseExecution, session *Session
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
-	if session != nil && session.Role != "admin" {
+	// Permission-based for every caller (issue #907): register unconditionally.
+	if session != nil {
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-any", "purchases").Return(hasAny, nil).Maybe()
 		mockAuth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-own", "purchases").Return(hasOwn, nil).Maybe()
 	}
@@ -2544,8 +2563,10 @@ func TestHandler_retryPurchase_Admin_AllowsAny(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
-	newExec, updated := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
+	// Admin (Administrators-group member) modelled as a retry-any holder; the
+	// row belongs to another user (issue #907 group-only authz).
+	newExec, updated := runSessionRetryAllowed(t, failed, session, true, false, sessionRetryReq())
 	assert.Equal(t, "pending", newExec.Status)
 	assert.Equal(t, 1, newExec.RetryAttemptN, "fresh first retry → n=1")
 	require.NotNil(t, updated.RetryExecutionID, "original must carry pointer to successor")
@@ -2562,7 +2583,7 @@ func TestHandler_retryPurchase_RetryAny_AllowsAny(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "user", Email: "ops@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "ops@example.com"}
 	runSessionRetryAllowed(t, failed, session, true, false, sessionRetryReq())
 }
 
@@ -2576,7 +2597,7 @@ func TestHandler_retryPurchase_RetryOwn_AllowsCreator(t *testing.T) {
 		RetryAttemptN:   2, // already retried twice
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "u1@example.com"}
 	newExec, updated := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	assert.Equal(t, 3, newExec.RetryAttemptN, "n=2 predecessor → n=3 successor")
 	require.NotNil(t, updated.RetryExecutionID)
@@ -2590,7 +2611,7 @@ func TestHandler_retryPurchase_RetryOwn_RejectsNonCreator(t *testing.T) {
 		Status:          "failed",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
@@ -2608,7 +2629,7 @@ func TestHandler_retryPurchase_NoVerb_Rejects(t *testing.T) {
 		Status:          "failed",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "u1@example.com"}
 
 	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, false)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
@@ -2626,7 +2647,7 @@ func TestHandler_retryPurchase_RejectsNonFailedStatus(t *testing.T) {
 		Status:          "completed", // already done — no retry from here
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
+	session := &Session{UserID: retryCallerID}
 	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -2641,7 +2662,7 @@ func TestHandler_retryPurchase_LegacyNullCreator_NonAdminRejected(t *testing.T) 
 		Status:          "failed",
 		CreatedByUserID: nil, // pre-migration row
 	}
-	session := &Session{UserID: retryCallerID, Role: "user", Email: "u1@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "u1@example.com"}
 	handler, mockConfig, mockAuth := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -2658,8 +2679,9 @@ func TestHandler_retryPurchase_PersistentFailure_BlocksWithOpsHint(t *testing.T)
 		Error:           "FROM_EMAIL not configured for this deployment",
 		CreatedByUserID: &creator,
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "operator-fixable")
@@ -2685,8 +2707,9 @@ func TestHandler_retryPurchase_PersistentFailure_NoMatch_AllowsRetry(t *testing.
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 }
 
 func TestHandler_retryPurchase_Threshold_BlocksAtFive_NoForce(t *testing.T) {
@@ -2698,8 +2721,9 @@ func TestHandler_retryPurchase_Threshold_BlocksAtFive_NoForce(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "force=true")
@@ -2720,8 +2744,9 @@ func TestHandler_retryPurchase_Threshold_AllowsWithForce(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReqWithForce())
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReqWithForce())
 	assert.Equal(t, 6, newExec.RetryAttemptN, "force=true past threshold still increments the chain count")
 }
 
@@ -2734,8 +2759,9 @@ func TestHandler_retryPurchase_JustUnderThreshold_AllowsNoForce(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	assert.Equal(t, 5, newExec.RetryAttemptN)
 }
 
@@ -2752,8 +2778,9 @@ func TestHandler_retryPurchase_AlreadyRetried_Rejects(t *testing.T) {
 		RetryExecutionID: &successor,
 		Recommendations:  []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, false)
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already retried")
@@ -2789,8 +2816,9 @@ func TestHandler_retryPurchase_PreservesPlanMetadata(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin"}
-	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	session := &Session{UserID: retryCallerID}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	assert.Equal(t, "plan-abc", newExec.PlanID, "successor must inherit predecessor PlanID")
 	assert.Equal(t, 3, newExec.StepNumber, "successor must inherit predecessor StepNumber")
 }
@@ -2813,7 +2841,7 @@ func TestHandler_retryPurchase_AlreadyRetried_RBACBeforeLeak(t *testing.T) {
 	// Caller is a non-admin holding NEITHER retry-any nor retry-own —
 	// must hit the 403 from authorizeSessionRetry, NOT the 409 with
 	// successor exposure.
-	session := &Session{UserID: retryCallerID, Role: "user"}
+	session := &Session{UserID: retryCallerID}
 	handler, _, _ := buildSessionRetryHandler(failed, session, false, false)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -2845,8 +2873,9 @@ func TestPersistRetryExecution_ApprovalTokenNotUUID(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
-	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
+	// Caller owns the row; retry-own authorises it (issue #907).
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 
 	// 64 hex characters = 32 bytes = 256 bits. UUID format is 36 chars
 	// (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx). This length check is the
@@ -2873,10 +2902,11 @@ func TestPersistRetryExecution_ApprovalTokenExpiresAtSet(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
-	session := &Session{UserID: retryCallerID, Role: "admin", Email: "admin@example.com"}
+	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
 
 	before := time.Now()
-	newExec, _ := runSessionRetryAllowed(t, failed, session, false, false, sessionRetryReq())
+	// Caller owns the row; retry-own authorises it (issue #907).
+	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	after := time.Now()
 
 	require.NotNil(t, newExec.ApprovalTokenExpiresAt,

@@ -29,8 +29,9 @@ func TestRouter_patchPlanHandler(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	plan := &config.PurchasePlan{
 		ID:   "11111111-1111-1111-1111-111111111111",
@@ -67,8 +68,9 @@ func TestRouter_executePurchaseHandler_NoAuth(t *testing.T) {
 func TestRouter_getPurchaseDetailsHandler_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	h := &Handler{auth: mockAuth}
 	r := newTestRouter(h)
@@ -120,8 +122,9 @@ func TestRouter_getRIExchangeConfigHandler(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	h := &Handler{auth: mockAuth, config: mockStore}
@@ -139,8 +142,9 @@ func TestRouter_updateRIExchangeConfigHandler(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.Anything).Return(nil)
 
@@ -160,8 +164,9 @@ func TestRouter_getRIExchangeHistoryHandler(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetRIExchangeHistory", ctx, mock.Anything, 500).Return([]config.RIExchangeRecord{}, nil)
 
 	h := &Handler{auth: mockAuth, config: mockStore}
@@ -220,8 +225,9 @@ func TestRouter_rejectRIExchangeHandler_InvalidToken(t *testing.T) {
 func TestRouter_listAccountsHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
@@ -238,8 +244,9 @@ func TestRouter_listAccountsHandler(t *testing.T) {
 func TestRouter_createAccountHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
@@ -262,8 +269,9 @@ func TestRouter_discoverOrgAccountsHandler(t *testing.T) {
 	// behaviour is exercised in handler_accounts_test.go.
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	h := &Handler{auth: mockAuth}
 	r := newTestRouter(h)
@@ -281,8 +289,9 @@ func TestRouter_discoverOrgAccountsHandler(t *testing.T) {
 func TestRouter_getAccountHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
@@ -299,8 +308,9 @@ func TestRouter_getAccountHandler(t *testing.T) {
 func TestRouter_saveAccountCredentialsHandler_NoCredStore(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store, credStore: nil}
@@ -320,8 +330,9 @@ func TestRouter_saveAccountCredentialsHandler_NoCredStore(t *testing.T) {
 func TestRouter_testAccountCredentialsHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	// GetCloudAccount returns an access_keys account (not ambient) → fall through to checkCredentialPresence
@@ -339,8 +350,9 @@ func TestRouter_testAccountCredentialsHandler(t *testing.T) {
 func TestRouter_listAccountServiceOverridesHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
@@ -357,8 +369,9 @@ func TestRouter_listAccountServiceOverridesHandler(t *testing.T) {
 func TestRouter_setPlanAccountsHandler(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	h := &Handler{auth: mockAuth, config: store}
@@ -384,8 +397,9 @@ func TestHandler_getRIExchangeConfig_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		RIExchangeEnabled: true,
 		RIExchangeMode:    "manual",
@@ -412,8 +426,9 @@ func TestHandler_getRIExchangeConfig_StoreError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, errors.New("db error"))
 
 	h := &Handler{auth: mockAuth, config: mockStore}
@@ -428,8 +443,9 @@ func TestHandler_updateRIExchangeConfig_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.Anything).Return(nil)
 
@@ -446,8 +462,9 @@ func TestHandler_updateRIExchangeConfig_Success(t *testing.T) {
 func TestHandler_updateRIExchangeConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -462,8 +479,9 @@ func TestHandler_updateRIExchangeConfig_InvalidBody(t *testing.T) {
 func TestHandler_updateRIExchangeConfig_ValidationError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -555,8 +573,9 @@ func TestHandler_getRIExchangeHistory_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	records := []config.RIExchangeRecord{
 		{ID: "aaaa", ApprovalToken: "should-be-redacted"},
@@ -579,8 +598,9 @@ func TestHandler_getRIExchangeHistory_StoreError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetRIExchangeHistory", ctx, mock.Anything, 500).Return(nil, errors.New("db error"))
 
 	h := &Handler{auth: mockAuth, config: mockStore}
@@ -672,8 +692,9 @@ func TestHandler_testAccountCredentials_NoAuth(t *testing.T) {
 func TestHandler_testAccountCredentials_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
@@ -693,8 +714,9 @@ func TestHandler_testAccountCredentials_NotFound(t *testing.T) {
 func TestHandler_testAccountCredentials_AmbientCredResult(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
@@ -719,8 +741,9 @@ func TestHandler_testAccountCredentials_AmbientCredResult(t *testing.T) {
 func TestHandler_testAccountCredentials_CheckPresence(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	// access_keys account — falls through to checkCredentialPresence
 	store := new(MockConfigStore)
@@ -891,8 +914,9 @@ func TestHandler_getRIExchangeHistory_SinceTime(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	// Use Any matcher for time.Time since it's computed at call time
 	mockStore.On("GetRIExchangeHistory", ctx, mock.MatchedBy(func(t time.Time) bool {

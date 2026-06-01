@@ -262,8 +262,9 @@ func TestHandler_updateRIExchangeConfig_GetGlobalConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, errors.New("db error"))
 
 	h := &Handler{auth: mockAuth, config: mockStore}
@@ -280,8 +281,9 @@ func TestHandler_updateRIExchangeConfig_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "uid", Role: "admin"}
+	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SaveGlobalConfig", ctx, mock.Anything).Return(errors.New("save failed"))
 

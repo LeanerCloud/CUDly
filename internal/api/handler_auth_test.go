@@ -22,7 +22,6 @@ func TestHandler_login_Success(t *testing.T) {
 		User: &UserInfo{
 			ID:    "12345678-1234-1234-1234-123456789abc",
 			Email: "test@example.com",
-			Role:  "admin",
 		},
 	}
 
@@ -184,12 +183,11 @@ func TestHandler_getCurrentUser_Success(t *testing.T) {
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
 		Email:  "test@example.com",
-		Role:   "admin",
 	}
 	user := &User{
 		ID:         "12345678-1234-1234-1234-123456789abc",
 		Email:      "test@example.com",
-		Role:       "admin",
+		Groups:     []string{"00000000-0000-5000-8000-000000000001"},
 		MFAEnabled: true,
 	}
 
@@ -209,7 +207,7 @@ func TestHandler_getCurrentUser_Success(t *testing.T) {
 
 	assert.Equal(t, "12345678-1234-1234-1234-123456789abc", result.ID)
 	assert.Equal(t, "test@example.com", result.Email)
-	assert.Equal(t, "admin", result.Role)
+	assert.Equal(t, []string{"00000000-0000-5000-8000-000000000001"}, result.Groups)
 	assert.True(t, result.MFAEnabled)
 }
 
@@ -271,7 +269,6 @@ func TestHandler_getCurrentUser_UserNotFound(t *testing.T) {
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
 		Email:  "test@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -385,7 +382,6 @@ func TestHandler_setupAdmin_Success(t *testing.T) {
 		User: &UserInfo{
 			ID:    "admin-123",
 			Email: "admin@example.com",
-			Role:  "admin",
 		},
 	}
 
@@ -720,7 +716,6 @@ func TestHandler_updateProfile_Success(t *testing.T) {
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
 		Email:  "old@example.com",
-		Role:   "user",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -809,7 +804,6 @@ func TestHandler_changePassword_Success(t *testing.T) {
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
 		Email:  "user@example.com",
-		Role:   "user",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -859,7 +853,6 @@ func TestHandler_changePassword_InvalidBody(t *testing.T) {
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
 		Email:  "user@example.com",
-		Role:   "user",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -1105,7 +1098,7 @@ func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
 func TestHandler_mfaSetup_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFASetupAPI", ctx, "user-1", "pw").
 		Return("SECRET123", "otpauth://totp/CUDly:u@x.com?secret=SECRET123", nil)
@@ -1120,7 +1113,7 @@ func TestHandler_mfaSetup_HappyPath(t *testing.T) {
 func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFASetupAPI", ctx, "user-1", "wrong").
 		Return("", "", errors.New("invalid password"))
@@ -1137,7 +1130,7 @@ func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 func TestHandler_mfaEnable_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFAEnableAPI", ctx, "user-1", "123456").
 		Return([]string{"AAAA-BBBB", "CCCC-DDDD"}, nil)
@@ -1164,7 +1157,7 @@ func TestHandler_mfaEnable_NoSession(t *testing.T) {
 func TestHandler_mfaDisable_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFADisableAPI", ctx, "user-1", "pw", "123456").Return(nil)
 
@@ -1176,7 +1169,7 @@ func TestHandler_mfaDisable_HappyPath(t *testing.T) {
 func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	session := &Session{UserID: "user-1", Email: "u@x.com", Role: "user"}
+	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFARegenerateRecoveryCodesAPI", ctx, "user-1", "123456").
 		Return([]string{"AAAA-BBBB"}, nil)

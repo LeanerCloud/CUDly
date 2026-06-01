@@ -370,6 +370,12 @@ func (m *MockAuthStore) ListGroups(ctx context.Context) ([]auth.Group, error) {
 	return args.Get(0).([]auth.Group), args.Error(1)
 }
 
+// CountGroupMembers mocks the CountGroupMembers operation
+func (m *MockAuthStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
+	args := m.Called(ctx, groupID)
+	return args.Int(0), args.Error(1)
+}
+
 // CreateSession mocks the CreateSession operation
 func (m *MockAuthStore) CreateSession(ctx context.Context, session *auth.Session) error {
 	args := m.Called(ctx, session)

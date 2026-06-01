@@ -68,7 +68,7 @@ func TestRouterAuthUser_InvalidBearerToken_Rejects(t *testing.T) {
 func TestRouterAuthUser_ValidUserSession_Accepts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	userSession := &Session{UserID: "11111111-1111-1111-1111-111111111111", Role: "user"}
+	userSession := &Session{UserID: "11111111-1111-1111-1111-111111111111"}
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
 	mockAuth.On("Logout", ctx, "user-token").Return(nil)
 	h := &Handler{auth: mockAuth}
@@ -115,7 +115,7 @@ func TestRequireAuth_AdminAPIKey(t *testing.T) {
 func TestRequireAuth_UserSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	userSession := &Session{UserID: "uid", Role: "user"}
+	userSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{

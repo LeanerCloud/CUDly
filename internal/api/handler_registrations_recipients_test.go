@@ -15,11 +15,12 @@ func TestHandler_resolveRegistrationRecipients_AdminsBecomeApprovers(t *testing.
 	globalNotify := "global@cudly.example"
 
 	mockAuth := new(MockAuthService)
+	adminGroup := []string{"00000000-0000-5000-8000-000000000001"}
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
-		{Email: "admin-a@example.com", Role: "admin"},
-		{Email: "user@example.com", Role: "user"}, // non-admin → filtered out
-		{Email: "admin-b@example.com", Role: "admin"},
-		{Email: "ADMIN-A@example.com", Role: "admin"}, // case dupe → dropped
+		{Email: "admin-a@example.com", Groups: adminGroup},
+		{Email: "user@example.com", Groups: []string{"00000000-0000-5000-8000-000000000005"}}, // non-admin → filtered out
+		{Email: "admin-b@example.com", Groups: adminGroup},
+		{Email: "ADMIN-A@example.com", Groups: adminGroup}, // case dupe → dropped
 	}, nil)
 
 	mockConfig := new(MockConfigStore)
@@ -43,7 +44,7 @@ func TestHandler_resolveRegistrationRecipients_NoAdminsTriggersBroadcastFallback
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
-		{Email: "user@example.com", Role: "user"},
+		{Email: "user@example.com"},
 	}, nil)
 
 	mockConfig := new(MockConfigStore)
@@ -70,7 +71,7 @@ func TestHandler_resolveRegistrationRecipients_OmitsGlobalWhenAlreadyAdmin(t *te
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
-		{Email: "admin-a@example.com", Role: "admin"},
+		{Email: "admin-a@example.com", Groups: []string{"00000000-0000-5000-8000-000000000001"}},
 	}, nil)
 
 	mockConfig := new(MockConfigStore)

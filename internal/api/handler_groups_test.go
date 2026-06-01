@@ -17,7 +17,6 @@ func TestHandler_listGroups_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	groups := []interface{}{
@@ -26,6 +25,7 @@ func TestHandler_listGroups_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ListGroupsAPI", ctx).Return(groups, nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -50,7 +50,6 @@ func TestHandler_createGroup_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	createdGroup := map[string]interface{}{
@@ -59,6 +58,7 @@ func TestHandler_createGroup_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("CreateGroupAPI", ctx, mock.Anything).Return(createdGroup, nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -82,7 +82,6 @@ func TestHandler_getGroup_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	group := map[string]interface{}{
@@ -91,6 +90,7 @@ func TestHandler_getGroup_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("GetGroupAPI", ctx, "11111111-1111-1111-1111-111111111111").Return(group, nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -113,7 +113,6 @@ func TestHandler_updateGroup_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	updatedGroup := map[string]interface{}{
@@ -122,6 +121,7 @@ func TestHandler_updateGroup_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("UpdateGroupAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(updatedGroup, nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -145,10 +145,10 @@ func TestHandler_deleteGroup_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteGroup", ctx, "11111111-1111-1111-1111-111111111111").Return(nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -169,8 +169,9 @@ func TestHandler_createGroup_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -189,8 +190,9 @@ func TestHandler_updateGroup_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -209,8 +211,9 @@ func TestHandler_deleteGroup_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteGroup", ctx, "11111111-1111-1111-1111-111111111111").Return(assert.AnError)
 
 	handler := &Handler{auth: mockAuth}

@@ -45,10 +45,10 @@ func TestHandler_updateConfig(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	// Mock ListServiceConfigs for propagation of global defaults
 	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
@@ -83,10 +83,10 @@ func TestHandler_updateConfig_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{corsAllowedOrigin: "*", auth: mockAuth}
 
@@ -161,10 +161,10 @@ func TestHandler_updateServiceConfig(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
 
@@ -190,10 +190,10 @@ func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{corsAllowedOrigin: "*", auth: mockAuth}
 
@@ -218,9 +218,9 @@ func TestHandler_updateServiceConfig_CommitmentOptsReject(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 
 	// Probe data says RDS 3yr no-upfront doesn't exist. Save must 400.
@@ -263,9 +263,9 @@ func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
 
@@ -298,10 +298,10 @@ func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -371,10 +371,10 @@ func TestHandler_updateConfig_ValidationError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	// updateConfig calls GetGlobalConfig before validation to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2). The
 	// validation error fires after the merge, so the mock is still required.
@@ -407,10 +407,10 @@ func TestHandler_updateConfig_SaveError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(assert.AnError)
 	// updateConfig calls GetGlobalConfig before save to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2).
@@ -441,10 +441,10 @@ func TestHandler_updateServiceConfig_SaveError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(assert.AnError)
 
@@ -480,7 +480,6 @@ func TestHandler_updateConfig_WithPropagation(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	serviceConfigs := []config.ServiceConfig{
@@ -489,6 +488,7 @@ func TestHandler_updateConfig_WithPropagation(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	// updateConfig calls GetGlobalConfig before save to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2).
@@ -524,7 +524,6 @@ func TestHandler_updateConfig_PropagationServiceSaveError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	serviceConfigs := []config.ServiceConfig{
@@ -532,6 +531,7 @@ func TestHandler_updateConfig_PropagationServiceSaveError(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	// updateConfig calls GetGlobalConfig before save to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2).
@@ -566,10 +566,10 @@ func TestHandler_updateConfig_PropagationListError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	// updateConfig calls GetGlobalConfig before save to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2).

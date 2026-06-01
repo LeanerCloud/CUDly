@@ -23,7 +23,6 @@ func TestConversionHelpers(t *testing.T) {
 		user := &User{
 			ID:         "user-123",
 			Email:      "test@example.com",
-			Role:       RoleUser,
 			GroupIDs:   []string{"group-1", "group-2"},
 			MFAEnabled: true,
 			CreatedAt:  now,
@@ -33,7 +32,6 @@ func TestConversionHelpers(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.Equal(t, "user-123", result.ID)
 		assert.Equal(t, "test@example.com", result.Email)
-		assert.Equal(t, RoleUser, result.Role)
 		assert.Equal(t, []string{"group-1", "group-2"}, result.Groups)
 		assert.True(t, result.MFAEnabled)
 		assert.NotEmpty(t, result.CreatedAt)
@@ -144,7 +142,6 @@ func TestService_CreateUserAPI(t *testing.T) {
 		req := APICreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
 			Groups:   []string{"group-1"},
 		}
 
@@ -156,7 +153,6 @@ func TestService_CreateUserAPI(t *testing.T) {
 		require.True(t, ok, "CreateUserAPI should wrap the response in APICreateUserResponse")
 		require.NotNil(t, resp.APIUser)
 		assert.Equal(t, "newuser@example.com", resp.Email)
-		assert.Equal(t, RoleUser, resp.Role)
 		assert.Equal(t, []string{"group-1"}, resp.Groups)
 		// Non-invite path: no invite-email status fields.
 		assert.Nil(t, resp.InviteEmailSent)
@@ -186,26 +182,26 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		existingUser := &User{
-			ID:    "user-123",
-			Email: "test@example.com",
-			Role:  RoleUser,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			GroupIDs: []string{"group-1"},
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
 		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
+		// An admin actor ("") changes another user's group membership.
 		req := APIUpdateUserRequest{
-			Role:   RoleAdmin,
 			Groups: []string{"group-2"},
 		}
 
-		result, err := service.UpdateUserAPI(ctx, "user-123", req)
+		result, err := service.UpdateUserAPI(ctx, "", "user-123", req)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
 		apiUser, ok := result.(*APIUser)
 		assert.True(t, ok)
-		assert.Equal(t, RoleAdmin, apiUser.Role)
+		assert.Equal(t, []string{"group-2"}, apiUser.Groups)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -223,9 +219,9 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		existingUser := &User{
-			ID:    "user-123",
-			Email: "old@example.com",
-			Role:  RoleAdmin,
+			ID:       "user-123",
+			Email:    "old@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
@@ -242,7 +238,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 			Email: "new@example.com",
 		}
 
-		result, err := service.UpdateUserAPI(ctx, "user-123", req)
+		result, err := service.UpdateUserAPI(ctx, "", "user-123", req)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
@@ -260,9 +256,9 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		existingUser := &User{
-			ID:    "user-123",
-			Email: "old@example.com",
-			Role:  RoleAdmin,
+			ID:       "user-123",
+			Email:    "old@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 		conflictingUser := &User{
 			ID:    "user-456",
@@ -276,7 +272,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 			Email: "taken@example.com",
 		}
 
-		result, err := service.UpdateUserAPI(ctx, "user-123", req)
+		result, err := service.UpdateUserAPI(ctx, "", "user-123", req)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "email already in use")
@@ -289,7 +285,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		result, err := service.UpdateUserAPI(ctx, "user-123", "invalid")
+		result, err := service.UpdateUserAPI(ctx, "", "user-123", "invalid")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid request type")
@@ -305,8 +301,8 @@ func TestService_ListUsersAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		users := []User{
-			{ID: "user-1", Email: "user1@example.com", Role: RoleUser, CreatedAt: time.Now(), UpdatedAt: time.Now()},
-			{ID: "user-2", Email: "user2@example.com", Role: RoleAdmin, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+			{ID: "user-1", Email: "user1@example.com", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+			{ID: "user-2", Email: "user2@example.com", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 		}
 
 		mockStore.On("ListUsers", ctx).Return(users, nil).Once()
@@ -591,11 +587,15 @@ func TestService_HasPermissionAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		adminUser := &User{
-			ID:   "admin-123",
-			Role: RoleAdmin,
+			ID:       "admin-123",
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil).Once()
 
 		has, err := service.HasPermissionAPI(ctx, "admin-123", ActionExecute, ResourcePlans)
 		require.NoError(t, err)
@@ -610,11 +610,15 @@ func TestService_HasPermissionAPI(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		readonlyUser := &User{
-			ID:   "readonly-123",
-			Role: RoleReadOnly,
+			ID:       "readonly-123",
+			GroupIDs: []string{"readonly-group"},
 		}
 
 		mockStore.On("GetUserByID", ctx, "readonly-123").Return(readonlyUser, nil).Once()
+		mockStore.On("GetGroup", ctx, "readonly-group").Return(&Group{
+			ID:          "readonly-group",
+			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+		}, nil).Once()
 
 		has, err := service.HasPermissionAPI(ctx, "readonly-123", ActionExecute, ResourcePlans)
 		require.NoError(t, err)
@@ -640,7 +644,6 @@ func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 		user := &User{
 			ID:        "user-1",
 			Email:     "user@example.com",
-			Role:      RoleUser,
 			GroupIDs:  nil,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -662,7 +665,6 @@ func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 		user := &User{
 			ID:        "user-2",
 			Email:     "user2@example.com",
-			Role:      RoleUser,
 			GroupIDs:  []string{},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -679,7 +681,6 @@ func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 		user := &User{
 			ID:        "user-3",
 			Email:     "admin@example.com",
-			Role:      RoleAdmin,
 			GroupIDs:  []string{"admin-group-id"},
 			CreatedAt: now,
 			UpdatedAt: now,

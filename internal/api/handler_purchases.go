@@ -461,7 +461,11 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 // rules added in issue #286. Returns a 403 ClientError otherwise.
 // Mirror of authorizeSessionCancel.
 func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
-	if session.Role == "admin" {
+	// The stateless admin API key has full access and no user row to resolve
+	// permissions from. Administrators-group users fall through and pass via
+	// the approve-any HasPermissionAPI check below, since {admin, *} matches
+	// any requested permission.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {
@@ -628,7 +632,9 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 // the given execution under the cancel-any / cancel-own RBAC rules added in
 // issue #46. Returns a 403 ClientError otherwise.
 func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
-	if session.Role == "admin" {
+	// Stateless admin API key: full access, no user row. Administrators-group
+	// users pass via the cancel-any HasPermissionAPI check below.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {
@@ -978,7 +984,9 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // the session UserID — legacy NULL-creator rows are out of reach for
 // non-admins, same as the cancel path).
 func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
-	if session.Role == "admin" {
+	// Stateless admin API key: full access, no user row. Administrators-group
+	// users pass via the retry-any HasPermissionAPI check below.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {

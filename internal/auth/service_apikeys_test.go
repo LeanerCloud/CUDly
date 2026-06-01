@@ -20,10 +20,10 @@ func TestService_CreateAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-			Role:   RoleAdmin,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			Active:   true,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		permissions := []Permission{
@@ -31,6 +31,10 @@ func TestService_CreateAPIKey(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
 
 		apiKey, keyInfo, err := service.CreateAPIKey(ctx, "user-123", "Test Key", permissions, nil)
@@ -107,10 +111,10 @@ func TestService_CreateAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-			Role:   RoleAdmin,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			Active:   true,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		expiresAt := time.Now().Add(30 * 24 * time.Hour)
@@ -119,6 +123,10 @@ func TestService_CreateAPIKey(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
 
 		apiKey, keyInfo, err := service.CreateAPIKey(ctx, "user-123", "Test Key", permissions, &expiresAt)
@@ -272,7 +280,7 @@ func TestService_RevokeAPIKey(t *testing.T) {
 			UserID:   "user-123",
 			IsActive: true,
 		}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -307,7 +315,7 @@ func TestService_RevokeAPIKey(t *testing.T) {
 			UserID:   "user-123",
 			IsActive: true,
 		}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -328,7 +336,7 @@ func TestService_RevokeAPIKey(t *testing.T) {
 			UserID:   "user-456",
 			IsActive: true,
 		}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -349,10 +357,15 @@ func TestService_RevokeAPIKey(t *testing.T) {
 			UserID:   "user-456",
 			IsActive: true,
 		}
-		user := &User{ID: "user-123", Role: RoleAdmin}
+		// Admin == member of the Administrators group ({admin, *}).
+		user := &User{ID: "user-123", GroupIDs: []string{DefaultAdminGroupID}}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("UpdateAPIKey", ctx, mock.MatchedBy(func(key *UserAPIKey) bool {
 			return key.ID == "key-1" && !key.IsActive
 		})).Return(nil)
@@ -372,7 +385,7 @@ func TestService_DeleteAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		existingKey := &UserAPIKey{ID: "key-1", UserID: "user-123"}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -401,7 +414,7 @@ func TestService_DeleteAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		existingKey := &UserAPIKey{ID: "key-1", UserID: "user-456"}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -418,10 +431,15 @@ func TestService_DeleteAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		existingKey := &UserAPIKey{ID: "key-1", UserID: "user-456"}
-		user := &User{ID: "user-123", Role: RoleAdmin}
+		// Admin == member of the Administrators group ({admin, *}).
+		user := &User{ID: "user-123", GroupIDs: []string{DefaultAdminGroupID}}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("DeleteAPIKey", ctx, "key-1").Return(nil)
 
 		err := service.DeleteAPIKey(ctx, "user-123", "key-1")
@@ -450,7 +468,7 @@ func TestService_DeleteAPIKey(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		existingKey := &UserAPIKey{ID: "key-1", UserID: "user-123"}
-		user := &User{ID: "user-123", Role: RoleUser}
+		user := &User{ID: "user-123"}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
@@ -666,112 +684,73 @@ func TestService_UpdateLastUsed(t *testing.T) {
 func TestService_ComputeEffectivePermissions(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("return API key permissions when defined", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		apiKeyPermissions := []Permission{
+	// adminGrp / userGrp are reused across sub-cases. Permissions derive
+	// purely from group membership now (issue #907).
+	adminGrp := func() *Group {
+		return &Group{ID: DefaultAdminGroupID, Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}}}
+	}
+	userGrpID := "00000000-0000-5000-8000-000000000005"
+	userGrp := func() *Group {
+		return &Group{ID: userGrpID, Permissions: []Permission{
 			{Action: ActionView, Resource: ResourceRecommendations},
-		}
+			{Action: ActionCreate, Resource: ResourcePlans},
+		}}
+	}
 
-		apiKey := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Permissions: apiKeyPermissions,
-		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleAdmin,
-		}
-
-		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
-		require.NoError(t, err)
-		assert.Equal(t, apiKeyPermissions, permissions)
-	})
-
-	t.Run("return user permissions when API key has no permissions", func(t *testing.T) {
+	t.Run("admin with scoped API key returns key permissions (intersection passes)", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		apiKey := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Permissions: []Permission{},
-		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
-		}
+		scoped := []Permission{{Action: ActionView, Resource: ResourceRecommendations}}
+		apiKey := &UserAPIKey{ID: "key-1", UserID: "user-123", Permissions: scoped}
+		user := &User{ID: "user-123", GroupIDs: []string{DefaultAdminGroupID}}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
-		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-			{Action: ActionExecute, Resource: ResourcePlans},
-		}, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp(), nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
 		require.NoError(t, err)
-		assert.Greater(t, len(permissions), 0) // Returns role-based permissions when API key has none
+		// Admin holds {admin, *} so the scoped key permission passes the
+		// intersection and is returned.
+		assert.Equal(t, scoped, permissions)
 	})
 
-	t.Run("return empty when both have no permissions", func(t *testing.T) {
+	t.Run("admin with unscoped key returns full group permissions", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		apiKey := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Permissions: []Permission{},
-		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleReadOnly,
-		}
+		apiKey := &UserAPIKey{ID: "key-1", UserID: "user-123", Permissions: []Permission{}}
+		user := &User{ID: "user-123", GroupIDs: []string{DefaultAdminGroupID}}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
-		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{}, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp(), nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
 		require.NoError(t, err)
-		assert.Greater(t, len(permissions), 0) // ReadOnly role has default permissions
+		assert.Equal(t, []Permission{{Action: ActionAdmin, Resource: ResourceAll}}, permissions)
 	})
 
-	t.Run("admin with scoped API key returns key permissions", func(t *testing.T) {
+	t.Run("zero-group user with unscoped key returns no permissions (fail closed)", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		scopedPermissions := []Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-		}
+		apiKey := &UserAPIKey{ID: "key-1", UserID: "user-123", Permissions: []Permission{}}
+		user := &User{ID: "user-123", GroupIDs: nil}
 
-		apiKey := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Permissions: scopedPermissions,
-		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleAdmin,
-		}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
 		require.NoError(t, err)
-		assert.Equal(t, scopedPermissions, permissions)
+		assert.Empty(t, permissions)
 	})
 
-	t.Run("return intersection of API key and user permissions", func(t *testing.T) {
+	t.Run("return intersection of API key and group permissions", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		apiKey := &UserAPIKey{
 			ID:     "key-1",
@@ -779,33 +758,25 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 			Permissions: []Permission{
 				{Action: ActionView, Resource: ResourceRecommendations},
 				{Action: ActionCreate, Resource: ResourcePlans},
-				{Action: ActionAdmin, Resource: ResourceUsers}, // User doesn't have this
+				{Action: ActionAdmin, Resource: ResourceUsers}, // group lacks this
 			},
 		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
-		}
+		user := &User{ID: "user-123", GroupIDs: []string{userGrpID}}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
-		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-			{Action: ActionCreate, Resource: ResourcePlans},
-		}, nil)
+		mockStore.On("GetGroup", ctx, userGrpID).Return(userGrp(), nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
 		require.NoError(t, err)
 		assert.Len(t, permissions, 2)
 		assert.Contains(t, permissions, Permission{Action: ActionView, Resource: ResourceRecommendations})
 		assert.Contains(t, permissions, Permission{Action: ActionCreate, Resource: ResourcePlans})
 	})
 
-	t.Run("return empty when API key permissions not in user permissions", func(t *testing.T) {
+	t.Run("return empty when API key permissions not in group permissions", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		apiKey := &UserAPIKey{
 			ID:     "key-1",
@@ -815,22 +786,13 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 				{Action: ActionUpdate, Resource: ResourceConfig},
 			},
 		}
-
-		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
-		}
+		user := &User{ID: "user-123", GroupIDs: []string{userGrpID}}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		mockStore.On("GetUserGroups", ctx, "user-123").Return([]string{}, nil)
-		mockStore.On("GetUserPermissions", ctx, "user-123").Return([]Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-		}, nil)
+		mockStore.On("GetGroup", ctx, userGrpID).Return(userGrp(), nil)
 
 		permissions, err := service.ComputeEffectivePermissions(ctx, apiKey, user)
-
 		require.NoError(t, err)
-		// Should return empty since user doesn't have any of the API key's permissions
 		assert.Empty(t, permissions)
 	})
 }
@@ -841,84 +803,77 @@ func TestService_validateAPIKeyPermissions(t *testing.T) {
 	t.Run("admin user can create keys with any permissions", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		user := &User{
-			ID:   "user-123",
-			Role: RoleAdmin,
-		}
-
+		user := &User{ID: "user-123", GroupIDs: []string{DefaultAdminGroupID}}
 		permissions := []Permission{
 			{Action: ActionAdmin, Resource: ResourceUsers},
 			{Action: ActionUpdate, Resource: ResourceConfig},
 		}
 
+		// validateAPIKeyPermissions resolves the user's group permissions; the
+		// admin group's {admin, *} satisfies any requested permission.
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
+
 		err := service.validateAPIKeyPermissions(ctx, user, permissions)
 		require.NoError(t, err)
 	})
 
-	t.Run("non-admin user can create keys with their permissions", func(t *testing.T) {
+	t.Run("non-admin user can create keys with their group permissions", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		user := &User{
-			ID:       "user-123",
-			Role:     RoleUser,
-			GroupIDs: []string{},
-		}
+		grpID := "viewer-group"
+		user := &User{ID: "user-123", GroupIDs: []string{grpID}}
+		permissions := []Permission{{Action: ActionView, Resource: ResourceRecommendations}}
 
-		permissions := []Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-		}
-
-		// BuildAuthContext will call GetUserByID
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, grpID).Return(&Group{
+			ID:          grpID,
+			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+		}, nil)
 
 		err := service.validateAPIKeyPermissions(ctx, user, permissions)
 		require.NoError(t, err)
-		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("fail when non-admin user requests permissions they don't have", func(t *testing.T) {
+	t.Run("fail when user requests permissions their groups don't grant", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		user := &User{
-			ID:       "user-123",
-			Role:     RoleUser,
-			GroupIDs: []string{},
-		}
+		grpID := "viewer-group"
+		user := &User{ID: "user-123", GroupIDs: []string{grpID}}
+		permissions := []Permission{{Action: ActionAdmin, Resource: ResourceUsers}}
 
-		permissions := []Permission{
-			{Action: ActionAdmin, Resource: ResourceUsers},
-		}
-
-		// BuildAuthContext will call GetUserByID
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, grpID).Return(&Group{
+			ID:          grpID,
+			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+		}, nil)
 
 		err := service.validateAPIKeyPermissions(ctx, user, permissions)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "user does not have permission")
-		mockStore.AssertExpectations(t)
 	})
 
 	t.Run("fail when GetAuthContext fails", func(t *testing.T) {
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
-		}
-
-		permissions := []Permission{
-			{Action: ActionView, Resource: ResourceRecommendations},
-		}
+		user := &User{ID: "user-123", GroupIDs: []string{"g"}}
+		permissions := []Permission{{Action: ActionView, Resource: ResourceRecommendations}}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(nil, assert.AnError)
 
 		err := service.validateAPIKeyPermissions(ctx, user, permissions)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get user permissions")
-		mockStore.AssertExpectations(t)
 	})
 }

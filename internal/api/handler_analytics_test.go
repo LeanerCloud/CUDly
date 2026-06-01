@@ -55,8 +55,8 @@ func adminAnalyticsReq(ctx context.Context) (*MockAuthService, *events.LambdaFun
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	return mockAuth, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
@@ -161,7 +161,6 @@ func TestHandler_getHistoryAnalytics_ScopedUser_RequiresAccountID(t *testing.T) 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",
-		Role:   "user",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
@@ -316,8 +315,10 @@ func TestHandler_triggerAnalyticsCollection_NonAdmin(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(&Session{
 		UserID: "user-1",
-		Role:   "user",
 	}, nil)
+	// Not an Administrators-group member: HasPermissionAPI(admin,*) is false,
+	// so requireAdmin rejects with 403 (issue #907 group-only authz).
+	mockAuth.On("HasPermissionAPI", ctx, "user-1", "admin", "*").Return(false, nil)
 
 	handler := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
 	req := &events.LambdaFunctionURLRequest{

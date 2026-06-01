@@ -85,13 +85,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 	return apiKey, userAPIKey, nil
 }
 
-// validateAPIKeyPermissions ensures the key's permissions don't exceed the user's permissions
+// validateAPIKeyPermissions ensures the key's permissions don't exceed the
+// user's permissions. Administrators-group members hold {admin, *}, so the
+// per-permission HasPermission check below already passes for every requested
+// permission; no role-based short-circuit is needed.
 func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, permissions []Permission) error {
-	// Admin users can create keys with any permissions
-	if user.Role == RoleAdmin {
-		return nil
-	}
-
 	// Get user's auth context to check their permissions
 	authCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {
@@ -169,8 +167,14 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 		return fmt.Errorf("user not found")
 	}
 
-	if key.UserID != userID && user.Role != RoleAdmin {
-		return fmt.Errorf("unauthorized: cannot revoke another user's API key")
+	if key.UserID != userID {
+		isAdmin, err := s.UserHasAdminCapability(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to check admin capability: %w", err)
+		}
+		if !isAdmin {
+			return fmt.Errorf("unauthorized: cannot revoke another user's API key")
+		}
 	}
 
 	// Revoke the key
@@ -210,8 +214,14 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error 
 		return fmt.Errorf("user not found")
 	}
 
-	if key.UserID != userID && user.Role != RoleAdmin {
-		return fmt.Errorf("unauthorized: cannot delete another user's API key")
+	if key.UserID != userID {
+		isAdmin, err := s.UserHasAdminCapability(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to check admin capability: %w", err)
+		}
+		if !isAdmin {
+			return fmt.Errorf("unauthorized: cannot delete another user's API key")
+		}
 	}
 
 	// Delete the key
@@ -293,18 +303,14 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 }
 
 // ComputeEffectivePermissions computes the intersection of API key permissions and user permissions
-// This ensures an API key cannot grant more permissions than the user has
+// This ensures an API key cannot grant more permissions than the user has.
+//
+// Administrators-group members carry {admin, *}: with no key-specific
+// permissions their full {admin, *} context is returned, and a scoped admin
+// key's permissions all pass the HasPermission intersection below, so the
+// group-derived path preserves the previous role == admin behaviour without a
+// special case.
 func (s *Service) ComputeEffectivePermissions(ctx context.Context, apiKey *UserAPIKey, user *User) ([]Permission, error) {
-	// Admin users always have full permissions
-	if user.Role == RoleAdmin {
-		// If API key has specific permissions, use those (scoped admin key)
-		if len(apiKey.Permissions) > 0 {
-			return apiKey.Permissions, nil
-		}
-		// Otherwise return full admin permissions
-		return DefaultAdminPermissions(), nil
-	}
-
 	// Get user's auth context
 	authCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {

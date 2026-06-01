@@ -39,7 +39,6 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		Token:     hashedToken, // Store the hash, not the raw token
 		UserID:    user.ID,
 		Email:     user.Email,
-		Role:      user.Role,
 		ExpiresAt: time.Now().Add(s.sessionDuration),
 		CreatedAt: time.Now(),
 		UserAgent: userAgent,
@@ -56,7 +55,6 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		Token:     rawToken, // Client gets the raw token
 		UserID:    user.ID,
 		Email:     user.Email,
-		Role:      user.Role,
 		ExpiresAt: storedSession.ExpiresAt,
 		CreatedAt: storedSession.CreatedAt,
 		UserAgent: userAgent,

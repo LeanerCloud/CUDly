@@ -15,8 +15,9 @@ func TestHandler_getGroup_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("GetGroupAPI", ctx, "11111111-1111-1111-1111-111111111111").Return(nil, assert.AnError)
 
 	handler := &Handler{auth: mockAuth}
@@ -34,8 +35,9 @@ func TestHandler_updateGroup_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("UpdateGroupAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(nil, assert.AnError)
 
 	handler := &Handler{auth: mockAuth}
@@ -54,8 +56,9 @@ func TestHandler_listGroups_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ListGroupsAPI", ctx).Return(nil, assert.AnError)
 
 	handler := &Handler{auth: mockAuth}
@@ -73,8 +76,9 @@ func TestHandler_createGroup_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Role: "admin"}
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("CreateGroupAPI", ctx, mock.Anything).Return(nil, assert.AnError)
 
 	handler := &Handler{auth: mockAuth}
