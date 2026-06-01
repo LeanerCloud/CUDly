@@ -210,18 +210,19 @@ export async function loadHistory(): Promise<void> {
   // Issue #344 T3: skeleton rows for the purchase-history table. 8
   // rows matches the typical first-page row count so the skeleton
   // doesn't shrink dramatically when real data arrives. Column count
-  // (11) mirrors the rendered table headers in renderHistoryList:
+  // (12) mirrors the rendered table headers in renderHistoryList:
   // Status / Date / Provider / Service / Type / Region / Count /
-  // Term / Upfront Cost / Monthly Savings / Plan.
+  // Term / Upfront Cost / Monthly Cost / Monthly Savings / Plan.
   const listEl = document.getElementById('history-list');
-  if (listEl) showSkeletonRows(listEl, 8, 11);
-  // Pending-approval queue card (issue #340 sub-task): 3 rows x 8
-  // cols matches the queue table shape (Date / Provider / Service /
-  // Count / Upfront / Monthly Savings / Created by / Actions). The
-  // queue is typically much shorter than the full history list, so
-  // 3 rows is a sensible skeleton size.
+  if (listEl) showSkeletonRows(listEl, 8, 12);
+  // Pending-approval queue card (issue #340 sub-task): 3 rows x 12
+  // cols matches the queue table shape (Date / Account / Provider /
+  // Service / Count / Term / Payment / Monthly Cost / Upfront Cost /
+  // Monthly Savings / Created by / Actions). The queue is typically
+  // much shorter than the full history list, so 3 rows is a sensible
+  // skeleton size.
   const queueEl = document.getElementById('purchases-approval-queue');
-  if (queueEl) showSkeletonRows(queueEl, 3, 8);
+  if (queueEl) showSkeletonRows(queueEl, 3, 12);
 
   try {
     // Provider/account filters live in state.ts now (mutated by topbar chips).
