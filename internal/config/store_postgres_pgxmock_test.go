@@ -1553,6 +1553,95 @@ func TestPGXMock_ListPendingExecutionIDsForAccount_Empty(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// ─── GetPlannedExecutions ────────────────────────────────────────────────────
+
+// TestPGXMock_GetPlannedExecutions_UsesASCOrdering is the regression guard for
+// the planned-purchases list truncation bug. GetExecutionsByStatuses uses
+// ORDER BY scheduled_date DESC + LIMIT, which drops the SOONEST rows when the
+// pending/notified/paused set exceeds MaxListLimit, exactly the rows the UI
+// must surface. GetPlannedExecutions must order ASC at the DB level so LIMIT
+// keeps the soonest rows. pgxmock's regexp matcher fails the test if the SQL
+// uses DESC, regresses to the GetExecutionsByStatuses query, or drops the
+// stable secondary sort.
+func TestPGXMock_GetPlannedExecutions_UsesASCOrdering(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	soon := now.Add(2 * time.Hour)
+	later := now.Add(48 * time.Hour)
+	rows := pgxmock.NewRows(stuckExecCols()).
+		AddRow(stuckExecRow("exec-soon", "pending", soon)...).
+		AddRow(stuckExecRow("exec-later", "paused", later)...)
+	// Strict regex anchors:
+	//   1. ASC ordering on scheduled_date (NOT DESC),
+	//   2. NULLS LAST guard so a future-relaxed schema can't hide rows,
+	//   3. id ASC secondary sort for stable ordering at equal scheduled_date,
+	//   4. LIMIT $2 so callers can bound result size.
+	// If a future refactor regresses to DESC or drops the secondary sort, the
+	// expectation goes unmet and the test fails.
+	mock.ExpectQuery(`(?s)SELECT.*FROM purchase_executions.*status = ANY\(\$1\).*ORDER BY scheduled_date ASC NULLS LAST, id ASC.*LIMIT \$2`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	execs, err := store.GetPlannedExecutions(ctx, []string{"pending", "notified", "paused"}, 100)
+	require.NoError(t, err)
+	require.Len(t, execs, 2)
+	assert.Equal(t, "exec-soon", execs[0].ExecutionID)
+	assert.Equal(t, "exec-later", execs[1].ExecutionID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPlannedExecutions_EmptyStatuses guards the short-circuit:
+// nil/empty status list returns nil with no SQL roundtrip (pgxmock fails on
+// any unexpected query since none is registered here).
+func TestPGXMock_GetPlannedExecutions_EmptyStatuses(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	execs, err := store.GetPlannedExecutions(ctx, nil, 100)
+	require.NoError(t, err)
+	assert.Nil(t, execs)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPlannedExecutions_LimitClamping asserts limit <= 0 falls
+// back to DefaultListLimit and limit > MaxListLimit is clamped to MaxListLimit.
+// Mirrors GetExecutionsByStatuses' clamping so callers can pass user-supplied
+// values without sanitizing upstream.
+func TestPGXMock_GetPlannedExecutions_LimitClamping(t *testing.T) {
+	t.Run("negative falls back to DefaultListLimit", func(t *testing.T) {
+		mock := newMock(t)
+		store := storeWith(mock)
+		ctx := context.Background()
+
+		rows := pgxmock.NewRows(stuckExecCols())
+		mock.ExpectQuery(`ORDER BY scheduled_date ASC`).
+			WithArgs(pgxmock.AnyArg(), DefaultListLimit).
+			WillReturnRows(rows)
+
+		_, err := store.GetPlannedExecutions(ctx, []string{"pending"}, -1)
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("over-max clamped to MaxListLimit", func(t *testing.T) {
+		mock := newMock(t)
+		store := storeWith(mock)
+		ctx := context.Background()
+
+		rows := pgxmock.NewRows(stuckExecCols())
+		mock.ExpectQuery(`ORDER BY scheduled_date ASC`).
+			WithArgs(pgxmock.AnyArg(), MaxListLimit).
+			WillReturnRows(rows)
+
+		_, err := store.GetPlannedExecutions(ctx, []string{"pending"}, MaxListLimit+5000)
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 // ─── ListStuckExecutions ─────────────────────────────────────────────────────
 
 // stuckExecRow builds a pgxmock row that matches the queryExecutions scan

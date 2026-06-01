@@ -41,6 +41,15 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// GetPlannedExecutions returns executions in any of the given states
+	// ordered by scheduled_date ASC (soonest first), the order the Planned
+	// Purchases UI lists rows so the user acts on imminent purchases first.
+	// Distinct from GetExecutionsByStatuses (which is DESC for History's
+	// "newest first" semantics): when the result set exceeds `limit`, an
+	// ORDER-BY-DESC + LIMIT in SQL truncates away the soonest rows, exactly
+	// the rows this list must surface. Secondary sort by id ASC stabilises
+	// ordering when multiple rows share a scheduled_date.
+	GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	// GetStaleApprovedExecutions returns executions stuck in the "approved"
 	// status with updated_at older than olderThan — strands left behind when a
 	// synchronous purchase run was interrupted before finalizing (issue #632).
