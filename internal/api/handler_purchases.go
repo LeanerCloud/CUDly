@@ -1599,6 +1599,20 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
+	return buildApprovalPendingResponse(executionID, status, len(execReq.Recommendations), totalUpfront, totalSavings, emailSent, emailReason, recipient), nil
+}
+
+// buildApprovalPendingResponse assembles the JSON-serialisable response body
+// for the approval-pending path of executePurchase. Extracted to keep
+// executePurchase cyclomatic complexity within the project limit.
+func buildApprovalPendingResponse(
+	executionID string,
+	status string,
+	recCount int,
+	totalUpfront, totalSavings float64,
+	emailSent bool,
+	emailReason, recipient string,
+) map[string]any {
 	message := "Purchase execution created and pending approval"
 	if !emailSent {
 		message = "Purchase execution created but approval email could not be sent - see email_reason"
@@ -1606,7 +1620,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	resp := map[string]any{
 		"execution_id":         executionID,
 		"status":               status,
-		"recommendation_count": len(execReq.Recommendations),
+		"recommendation_count": recCount,
 		"total_upfront_cost":   totalUpfront,
 		"estimated_savings":    totalSavings,
 		"email_sent":           emailSent,
@@ -1618,7 +1632,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	if recipient != "" {
 		resp["approval_recipient"] = recipient
 	}
-	return resp, nil
+	return resp
 }
 
 // directExecutePurchase is the direct-execute branch of executePurchase
