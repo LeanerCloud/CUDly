@@ -20,6 +20,10 @@ jest.mock('../navigation', () => ({
 
 jest.mock('../state', () => ({
   getCurrentUser: jest.fn(),
+  // loadRIExchange reads the provider/account chips to scope the request
+  // (issue #871); default to the AWS, all-accounts path used by these tests.
+  getCurrentProvider: jest.fn(() => 'aws'),
+  getCurrentAccountIDs: jest.fn(() => []),
 }));
 
 import * as api from '../api';

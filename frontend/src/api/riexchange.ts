@@ -5,6 +5,7 @@
 import { apiRequest } from './client';
 import type {
   ConvertibleRI,
+  ExchangeableAzureRI,
   RIUtilization,
   ReshapeRecommendation,
   ExchangeQuoteRequest,
@@ -17,11 +18,29 @@ import type {
 } from './types';
 
 /**
- * List active convertible Reserved Instances
+ * List active convertible Reserved Instances for the running AWS account.
+ *
+ * The optional accountID scopes the listing to a single AWS account so the
+ * page honours the Main Header global account filter (issue #871). The
+ * backend returns an empty list when the selected account is not the running
+ * AWS account.
  */
-export async function listConvertibleRIs(): Promise<ConvertibleRI[]> {
-  const resp = await apiRequest<{ instances: ConvertibleRI[] }>('/ri-exchange/instances');
+export async function listConvertibleRIs(accountID?: string): Promise<ConvertibleRI[]> {
+  const qs = accountID ? `?account_id=${encodeURIComponent(accountID)}` : '';
+  const resp = await apiRequest<{ instances: ConvertibleRI[] }>(`/ri-exchange/instances${qs}`);
   return resp.instances ?? [];
+}
+
+/**
+ * List active Azure VM reservations eligible for the cross-SKU/cross-region
+ * exchange flow (issue #871). The optional subscriptionID scopes the
+ * capacity-provider registration check to one subscription; the listing
+ * itself is tenant-wide on the backend.
+ */
+export async function listExchangeableAzureRIs(subscriptionID?: string): Promise<ExchangeableAzureRI[]> {
+  const qs = subscriptionID ? `?subscription_id=${encodeURIComponent(subscriptionID)}` : '';
+  const resp = await apiRequest<{ reservations: ExchangeableAzureRI[] }>(`/ri-exchange/azure-instances${qs}`);
+  return resp.reservations ?? [];
 }
 
 /**

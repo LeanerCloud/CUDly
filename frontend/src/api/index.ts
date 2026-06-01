@@ -43,6 +43,7 @@ export type {
   SavingsBreakdownValue,
   SavingsAnalyticsFilters,
   ConvertibleRI,
+  ExchangeableAzureRI,
   RIUtilization,
   ReshapeRecommendation,
   OfferingOption,
@@ -181,6 +182,7 @@ export {
 export type { ReshapeRecommendationsResponse } from './riexchange';
 export {
   listConvertibleRIs,
+  listExchangeableAzureRIs,
   getRIUtilization,
   getReshapeRecommendations,
   getExchangeQuote,

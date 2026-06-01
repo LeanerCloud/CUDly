@@ -89,6 +89,13 @@ type Handler struct {
 	// the integration suite runs hermetically.
 	reshapeAccountResolver func(context.Context) (string, error)
 
+	// Optional resolver for the running AWS account number, injected by
+	// the listConvertibleRIs tests so the account-scoping branch can run
+	// without live STS credentials. When nil (production default), the
+	// handler calls h.resolveAWSAccountID. Returns the raw AWS account
+	// number (e.g. "123456789012"), matching the account_id chip value.
+	riInstancesAccountResolver func(context.Context) (string, error)
+
 	// Optional org-discovery factory used by tests to avoid live AWS
 	// Organizations API calls. When nil (production default), the handler
 	// falls back to accounts.DiscoverOrgAccounts which dials Organizations

@@ -5,6 +5,7 @@
 // Mock the api module defensively (riexchange.ts imports it)
 jest.mock('../api', () => ({
   listConvertibleRIs: jest.fn(),
+  listExchangeableAzureRIs: jest.fn(),
   getRIUtilization: jest.fn(),
   getReshapeRecommendations: jest.fn(),
   getExchangeQuote: jest.fn(),
@@ -543,6 +544,15 @@ describe('reshape recommendations empty state', () => {
     (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
     (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([]);
     (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
+    // resetAllMocks() in afterEach wipes the state mock implementations;
+    // loadRIExchange reads the chips to scope the request (issue #871), so
+    // restore the AWS/all-accounts default here.
+    const stateMod = jest.requireMock('../state') as {
+      getCurrentProvider: jest.Mock;
+      getCurrentAccountIDs: jest.Mock;
+    };
+    stateMod.getCurrentProvider.mockReturnValue('aws');
+    stateMod.getCurrentAccountIDs.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -677,6 +687,8 @@ describe('RI Exchange filter subscriptions (issue #186)', () => {
     const stateMod = jest.requireMock('../state') as {
       subscribeProvider: jest.Mock;
       subscribeAccount: jest.Mock;
+      getCurrentProvider: jest.Mock;
+      getCurrentAccountIDs: jest.Mock;
     };
     stateMod.subscribeProvider.mockImplementation((cb: () => void) => {
       _providerListeners.push(cb);
@@ -686,6 +698,10 @@ describe('RI Exchange filter subscriptions (issue #186)', () => {
       _accountListeners.push(cb);
       return () => undefined;
     });
+    // loadRIExchange now reads the provider/account chips to scope the
+    // request (issue #871); restore their implementations too.
+    stateMod.getCurrentProvider.mockImplementation(() => 'aws');
+    stateMod.getCurrentAccountIDs.mockImplementation(() => []);
   });
 
   afterEach(() => {
@@ -736,5 +752,129 @@ describe('RI Exchange filter subscriptions (issue #186)', () => {
     await new Promise(r => setTimeout(r, 0));
     // Should be called once, not twice
     expect(api.listConvertibleRIs).toHaveBeenCalledTimes(1);
+  });
+});
+
+// issue #871: RI Exchange must honour the Main Header global Provider/Account
+// filter, matching the Active Commitments + Coverage sub-tabs (#866/#881).
+describe('RI Exchange global filter scoping (issue #871)', () => {
+  let instancesEl: HTMLDivElement;
+  let recsEl: HTMLDivElement;
+  let historyEl: HTMLDivElement;
+  let riExchangePanel: HTMLDivElement;
+
+  const stateMod = (): {
+    getCurrentProvider: jest.Mock;
+    getCurrentAccountIDs: jest.Mock;
+    subscribeProvider: jest.Mock;
+    subscribeAccount: jest.Mock;
+  } => jest.requireMock('../state');
+
+  beforeEach(() => {
+    instancesEl = document.createElement('div');
+    instancesEl.id = 'ri-exchange-instances-list';
+    recsEl = document.createElement('div');
+    recsEl.id = 'ri-exchange-recommendations-list';
+    historyEl = document.createElement('div');
+    historyEl.id = 'ri-exchange-history-list';
+    riExchangePanel = document.createElement('div');
+    riExchangePanel.id = 'inventory-ri-exchange';
+    document.body.append(instancesEl, recsEl, historyEl, riExchangePanel);
+
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([]);
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([]);
+    (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([]);
+
+    _providerListeners.length = 0;
+    _accountListeners.length = 0;
+    const s = stateMod();
+    s.subscribeProvider.mockImplementation((cb: () => void) => { _providerListeners.push(cb); return () => undefined; });
+    s.subscribeAccount.mockImplementation((cb: () => void) => { _accountListeners.push(cb); return () => undefined; });
+    s.getCurrentProvider.mockReturnValue('aws');
+    s.getCurrentAccountIDs.mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    jest.clearAllMocks();
+  });
+
+  it('forwards the single selected account to the AWS list endpoint', async () => {
+    stateMod().getCurrentAccountIDs.mockReturnValue(['123456789012']);
+    await loadRIExchange();
+    expect(api.listConvertibleRIs).toHaveBeenCalledWith('123456789012');
+  });
+
+  it('does not forward an account id when more than one account is selected', async () => {
+    stateMod().getCurrentAccountIDs.mockReturnValue(['111111111111', '222222222222']);
+    await loadRIExchange();
+    expect(api.listConvertibleRIs).toHaveBeenCalledWith(undefined);
+  });
+
+  it('renders a scoped empty-state naming the AWS account', async () => {
+    stateMod().getCurrentAccountIDs.mockReturnValue(['123456789012']);
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([]);
+    await loadRIExchange();
+    expect(instancesEl.textContent).toContain('123456789012');
+  });
+
+  it('loads Azure reservations (not AWS RIs) when provider is azure', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('azure');
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([
+      { reservation_order_id: 'o1', reservation_id: 'r1', sku: 'Standard_D2s_v3', quantity: 2, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', display_name: 'web-rsv' },
+    ]);
+    await loadRIExchange();
+    expect(api.listExchangeableAzureRIs).toHaveBeenCalled();
+    expect(api.listConvertibleRIs).not.toHaveBeenCalled();
+    expect(instancesEl.textContent).toContain('Standard_D2s_v3');
+    expect(instancesEl.textContent).toContain('web-rsv');
+    // Reshape recommendations are AWS-only -> provider-aware not-applicable copy.
+    expect(recsEl.textContent).toContain('not available for Azure');
+  });
+
+  it('shows a provider-aware empty state for Azure with no reservations', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('azure');
+    stateMod().getCurrentAccountIDs.mockReturnValue(['sub-abc']);
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([]);
+    await loadRIExchange();
+    expect(api.listExchangeableAzureRIs).toHaveBeenCalledWith('sub-abc');
+    expect(instancesEl.textContent).toContain('No exchangeable reservations for Azure subscription sub-abc');
+  });
+
+  it('shows the not-available empty state for GCP and calls no list endpoint', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('gcp');
+    await loadRIExchange();
+    expect(api.listConvertibleRIs).not.toHaveBeenCalled();
+    expect(api.listExchangeableAzureRIs).not.toHaveBeenCalled();
+    expect(instancesEl.textContent).toContain("isn't available for GCP");
+    expect(recsEl.textContent).toContain("isn't available for GCP");
+    expect(historyEl.textContent).toContain("isn't available for GCP");
+  });
+
+  it('does not leave stale AWS rows when switching to GCP', async () => {
+    // First load AWS with a row present.
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([{
+      reserved_instance_id: 'ri-1', instance_type: 'm5.large', availability_zone: 'us-east-1a',
+      instance_count: 1, start: '2026-01-01T00:00:00Z', end: '2027-01-01T00:00:00Z',
+      offering_type: 'Convertible', fixed_price: 0, usage_price: 0, state: 'active', normalization_factor: 4,
+    }]);
+    await loadRIExchange();
+    expect(instancesEl.textContent).toContain('m5.large');
+    // Switch to GCP -> table must be replaced by the empty state.
+    stateMod().getCurrentProvider.mockReturnValue('gcp');
+    await loadRIExchange();
+    expect(instancesEl.textContent).not.toContain('m5.large');
+    expect(instancesEl.textContent).toContain("isn't available for GCP");
+  });
+
+  it('closes an in-progress exchange modal when the filter changes', async () => {
+    const modal = createModal();
+    modal.classList.remove('hidden'); // simulate an open exchange modal
+    setupRIExchangeHandlers();
+    _providerListeners.forEach(cb => cb());
+    // Modal is closed synchronously on the chip event.
+    expect(modal.classList.contains('hidden')).toBe(true);
   });
 });

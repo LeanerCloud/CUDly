@@ -10,6 +10,7 @@ import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import type {
   ConvertibleRI,
+  ExchangeableAzureRI,
   RIUtilization,
   ReshapeRecommendation,
   ExchangeQuoteSummary,
@@ -18,6 +19,7 @@ import type {
   OfferingOption,
   TargetOffering,
   ReshapeRecommendationsResponse,
+  Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -33,6 +35,32 @@ let currentRecommendations: ReshapeRecommendation[] = [];
 // Generation counter to prevent stale utilization data from overwriting fresh data
 let utilizationGeneration = 0;
 
+// The AWS account the convertible-RI list is currently scoped to (the
+// single-select account chip value, or undefined for all-accounts). Tracked
+// at module scope so the asynchronous utilization re-render preserves the
+// scoped empty-state copy instead of falling back to the unscoped message
+// (issue #871).
+let currentRIAccountID: string | undefined;
+
+// Human-readable provider labels for empty-state copy and the not-available
+// message. Mirrors the map in inventory.ts.
+const PROVIDER_LABELS: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
+
+function providerLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider.toUpperCase();
+}
+
+// resolveScope reads the Main Header global Provider/Account chips so every
+// RI Exchange load is scoped consistently with the other Inventory sub-tabs
+// (issue #871). The account chip is single-select; an account_id is forwarded
+// only when exactly one account is active.
+function resolveScope(): { provider: Provider | ''; accountID?: string } {
+  const provider = state.getCurrentProvider();
+  const accountIDs = state.getCurrentAccountIDs();
+  const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
+  return { provider, accountID };
+}
+
 // Mode label mapping — single source of truth
 const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", auto: "Fully Automated" };
 const MODE_VALUES: Record<string, string> = Object.fromEntries(
@@ -43,14 +71,90 @@ const MODE_VALUES: Record<string, string> = Object.fromEntries(
 void MODE_VALUES;
 
 /**
- * Load the RI Exchange tab — called when tab is activated
+ * Load the RI Exchange tab — called when tab is activated and whenever the
+ * Main Header global Provider/Account filter changes (issue #871).
+ *
+ * RI Exchange is multi-provider:
+ *   - AWS:   convertible RIs + reshape recommendations + exchange history.
+ *   - Azure: exchangeable VM reservations + exchange history. Reshape
+ *            recommendations are a Cost-Explorer/AWS concept, so that
+ *            section shows a provider-aware "not applicable" empty state.
+ *   - GCP:   no RI-exchange concept; every section shows a "not available
+ *            for GCP" empty state and no list endpoint is called.
  */
 export async function loadRIExchange(): Promise<void> {
+  const { provider, accountID } = resolveScope();
+
+  if (provider === 'gcp') {
+    renderGCPEmptyStates();
+    return;
+  }
+
+  if (provider === 'azure') {
+    await Promise.all([
+      loadExchangeableAzureRIs(accountID),
+      loadExchangeHistory(),
+    ]);
+    renderReshapeNotApplicable('azure');
+    return;
+  }
+
+  // AWS (default / empty provider): full convertible-RI flow.
   await Promise.all([
-    loadConvertibleRIs(),
+    loadConvertibleRIs(accountID),
     loadReshapeRecommendations(),
     loadExchangeHistory(),
   ]);
+}
+
+/**
+ * Render the "not available for GCP" empty state across all three RI Exchange
+ * sections. GCP has no Reserved-Instance exchange concept, so we never call a
+ * list endpoint and never leave stale AWS/Azure rows behind.
+ */
+function renderGCPEmptyStates(): void {
+  currentRIs = [];
+  currentUtilization = new Map();
+  currentRecommendations = [];
+  currentRIAccountID = undefined;
+
+  const instances = document.getElementById('ri-exchange-instances-list');
+  if (instances) renderEmptyState(instances, "RI Exchange isn't available for GCP.");
+
+  const recs = document.getElementById('ri-exchange-recommendations-list');
+  if (recs) renderEmptyState(recs, "RI Exchange isn't available for GCP.");
+
+  const history = document.getElementById('ri-exchange-history-list');
+  if (history) renderEmptyState(history, "RI Exchange isn't available for GCP.");
+
+  renderReshapeStalenessBanner('', null);
+}
+
+/**
+ * Render a provider-aware "reshape recommendations not applicable" message.
+ * Reshape recommendations are derived from AWS Cost Explorer, so they do not
+ * apply to Azure (or any non-AWS) provider.
+ */
+function renderReshapeNotApplicable(provider: string): void {
+  currentRecommendations = [];
+  const container = document.getElementById('ri-exchange-recommendations-list');
+  if (container) {
+    renderEmptyState(container, `Reshape recommendations are not available for ${providerLabel(provider)}.`);
+  }
+  renderReshapeStalenessBanner('', null);
+}
+
+/**
+ * Render a plain `.empty` paragraph via textContent (no innerHTML) so backend
+ * or provider-derived strings can never inject markup. Wipes any prior
+ * children (skeleton, stale table) for a clean handoff.
+ */
+function renderEmptyState(container: HTMLElement, message: string): void {
+  container.textContent = '';
+  const p = document.createElement('p');
+  p.className = 'empty';
+  p.textContent = message;
+  container.appendChild(p);
 }
 
 /**
@@ -96,12 +200,22 @@ export function setupRIExchangeHandlers(): void {
     });
   }
 
-  // issue #186: reload when the global provider/account filter changes
-  // so the RI Exchange tables stay consistent with the rest of the UI.
-  // Coalesce the two events into a single reload (provider change also
-  // fires an account change via the topbar-filters.ts clearing logic).
+  // issue #186 / #871: reload (scoped to the new provider/account) when the
+  // global Main Header filter changes so the RI Exchange tables stay
+  // consistent with the rest of the Inventory sub-tabs. Coalesce the two
+  // events into a single reload (provider change also fires an account change
+  // via the topbar-filters.ts clearing logic).
+  //
+  // RI Exchange is a mutating workflow, so we ALSO close any in-progress
+  // exchange modal the moment the filter changes — the source RI it targets
+  // may no longer be visible (e.g. provider switched AWS -> Azure), and acting
+  // on a now-hidden RI would be confusing and potentially wrong. We close
+  // synchronously on the chip event (not inside the coalescing microtask) so
+  // the stale selection is torn down even if the reload is skipped because the
+  // sub-tab is off-screen.
   let reloadQueued = false;
   const scheduleReload = (): void => {
+    closeExchangeModalIfOpen();
     if (!isRIExchangeSubtabActive() || reloadQueued) return;
     reloadQueued = true;
     queueMicrotask(() => {
@@ -113,11 +227,24 @@ export function setupRIExchangeHandlers(): void {
   state.subscribeAccount(scheduleReload);
 }
 
+/**
+ * Close the RI Exchange quote/execute modal if it is currently open. Called
+ * on a global filter change so the user can't act on an exchange selection
+ * whose source RI may no longer be in scope (issue #871). No-op when the
+ * modal is absent or already hidden.
+ */
+function closeExchangeModalIfOpen(): void {
+  const modal = document.getElementById('ri-exchange-modal');
+  if (modal && !modal.classList.contains('hidden')) {
+    closeModal(modal);
+  }
+}
+
 // ──────────────────────────────────────────────
 // Convertible RIs table
 // ──────────────────────────────────────────────
 
-async function loadConvertibleRIs(): Promise<void> {
+async function loadConvertibleRIs(accountID?: string): Promise<void> {
   const container = document.getElementById('ri-exchange-instances-list');
   if (!container) return;
 
@@ -128,9 +255,13 @@ async function loadConvertibleRIs(): Promise<void> {
   // the children on success for a clean handoff.
   showSkeletonRows(container, 3, 8);
 
+  currentRIAccountID = accountID;
+
   try {
-    currentRIs = await api.listConvertibleRIs();
-    renderRIsTable(container);
+    // issue #871: scope to the selected account so the page honours the
+    // Main Header global filter.
+    currentRIs = await api.listConvertibleRIs(accountID);
+    renderRIsTable(container, accountID);
     // Load utilization asynchronously (Cost Explorer is slow)
     utilizationGeneration++;
     void loadUtilization(utilizationGeneration);
@@ -141,23 +272,61 @@ async function loadConvertibleRIs(): Promise<void> {
   }
 }
 
+/**
+ * Load and render the Azure exchangeable VM reservations (issue #871).
+ * Azure reservations have no utilization/reshape pipeline, so this renders a
+ * standalone table into the same Active-list container the AWS path uses.
+ * The optional accountID is the selected subscription chip; it scopes the
+ * capacity-provider registration check on the backend.
+ */
+async function loadExchangeableAzureRIs(accountID?: string): Promise<void> {
+  const container = document.getElementById('ri-exchange-instances-list');
+  if (!container) return;
+
+  // Azure table has 6 columns: Reservation / SKU / Quantity / Region /
+  // Term / Expiry (see renderAzureRIsTable).
+  showSkeletonRows(container, 3, 6);
+
+  // AWS-only module state is irrelevant on the Azure path; reset it so a
+  // later provider switch back to AWS starts clean and reshape copy that
+  // reads currentRIs.length isn't skewed by stale AWS rows.
+  currentRIs = [];
+  currentUtilization = new Map();
+  currentRIAccountID = undefined;
+
+  try {
+    const reservations = await api.listExchangeableAzureRIs(accountID);
+    renderAzureRIsTable(container, reservations, accountID);
+  } catch (error) {
+    teardownSkeleton(container);
+    const err = error as Error;
+    container.innerHTML = `<p class="error">Failed to load Azure reservations: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 async function loadUtilization(generation: number): Promise<void> {
   try {
     const utilization = await api.getRIUtilization();
     // Discard if a newer load was started while we were waiting
     if (generation !== utilizationGeneration) return;
     currentUtilization = new Map(utilization.map(u => [u.reserved_instance_id, u]));
-    // Re-render table with utilization data
+    // Re-render table with utilization data, preserving the active account
+    // scope so a scoped empty-state message isn't lost (issue #871).
     const container = document.getElementById('ri-exchange-instances-list');
-    if (container) renderRIsTable(container);
+    if (container) renderRIsTable(container, currentRIAccountID);
   } catch (error) {
     console.error('Failed to load RI utilization:', error);
   }
 }
 
-function renderRIsTable(container: HTMLElement): void {
+function renderRIsTable(container: HTMLElement, accountID?: string): void {
   if (!currentRIs || currentRIs.length === 0) {
-    container.innerHTML = '<p class="empty">No active convertible Reserved Instances found.</p>';
+    // issue #871: name the active scope so the user knows the result is
+    // filtered (by the account chip) rather than globally empty.
+    const msg = accountID
+      ? `No active convertible Reserved Instances for AWS account ${accountID}.`
+      : 'No active convertible Reserved Instances found for AWS.';
+    renderEmptyState(container, msg);
     return;
   }
 
@@ -210,6 +379,67 @@ function renderRIsTable(container: HTMLElement): void {
       openExchangeModal(btn.dataset['riId'] || '', isNaN(count) ? 1 : count);
     });
   });
+}
+
+/**
+ * Render the Azure exchangeable-reservations table (issue #871). Built
+ * entirely via DOM construction / textContent — never innerHTML — so any
+ * Azure-derived field (SKU, display name, region) cannot inject markup.
+ *
+ * Azure reservations are listed read-only here; the quote/execute modal is
+ * AWS-specific (offering-UUID flow), so no per-row Exchange button is shown.
+ */
+function renderAzureRIsTable(
+  container: HTMLElement,
+  reservations: ExchangeableAzureRI[],
+  accountID?: string,
+): void {
+  if (!reservations || reservations.length === 0) {
+    const msg = accountID
+      ? `No exchangeable reservations for Azure subscription ${accountID}.`
+      : 'No exchangeable reservations found for Azure.';
+    renderEmptyState(container, msg);
+    return;
+  }
+
+  container.textContent = '';
+  const table = document.createElement('table');
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  for (const label of ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const r of reservations) {
+    tbody.appendChild(buildAzureRIRow(r));
+  }
+  table.appendChild(tbody);
+  container.appendChild(table);
+}
+
+function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
+  const tr = document.createElement('tr');
+
+  appendAzureCell(tr, r.display_name || r.reservation_id);
+  appendAzureCell(tr, r.sku);
+  appendAzureCell(tr, String(r.quantity));
+  appendAzureCell(tr, r.region || '—');
+  appendAzureCell(tr, r.term || '—');
+  appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
+
+  return tr;
+}
+
+function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
+  const td = document.createElement('td');
+  td.textContent = text;
+  tr.appendChild(td);
 }
 
 // ──────────────────────────────────────────────

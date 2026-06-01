@@ -26,6 +26,49 @@ func TestListConvertibleRIs_RequiresAdmin(t *testing.T) {
 	assert.Contains(t, err.Error(), "authentication")
 }
 
+// issue #871: the AWS convertible-RI list must honour the Main Header global
+// account filter. When the ?account_id= chip selects an account other than the
+// running (ambient) AWS account, none of these RIs belong to it, so the
+// handler returns an empty list without touching AWS config.
+func TestListConvertibleRIs_AccountScopeMismatchReturnsEmpty(t *testing.T) {
+	mockAuth := &mockAuthForExchange{}
+	h := &Handler{
+		auth: mockAuth,
+		// Running account differs from the requested account_id.
+		riInstancesAccountResolver: func(_ context.Context) (string, error) {
+			return "999999999999", nil
+		},
+	}
+
+	resp, err := h.listConvertibleRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"account_id": "123456789012"},
+	})
+	require.NoError(t, err)
+	typed, ok := resp.(*ConvertibleRIsResponse)
+	require.True(t, ok, "expected *ConvertibleRIsResponse, got %T", resp)
+	assert.Empty(t, typed.Instances, "RIs from a different account must not leak under an account_id filter")
+}
+
+// issue #871: a real STS resolution failure must fail closed (propagate the
+// error) rather than silently falling through to the unscoped fleet.
+func TestListConvertibleRIs_AccountResolveErrorFailsClosed(t *testing.T) {
+	mockAuth := &mockAuthForExchange{}
+	h := &Handler{
+		auth: mockAuth,
+		riInstancesAccountResolver: func(_ context.Context) (string, error) {
+			return "", fmt.Errorf("sts get-caller-identity denied")
+		},
+	}
+
+	_, err := h.listConvertibleRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"account_id": "123456789012"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve running AWS account")
+}
+
 func TestGetRIUtilization_RequiresAdmin(t *testing.T) {
 	h := &Handler{}
 	_, err := h.getRIUtilization(context.Background(), &events.LambdaFunctionURLRequest{})

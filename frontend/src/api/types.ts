@@ -512,6 +512,22 @@ export interface ConvertibleRI {
   normalization_factor: number;
 }
 
+// ExchangeableAzureRI is one Azure VM reservation eligible for the
+// cross-SKU/cross-region exchange flow, returned by
+// GET /api/ri-exchange/azure-instances. Mirrors the Go
+// azurecompute.ExchangeableReservation struct (issue #871).
+export interface ExchangeableAzureRI {
+  reservation_order_id: string;
+  reservation_id: string;
+  sku: string;
+  quantity: number;
+  region?: string;
+  term?: string;
+  expiry_date?: string;
+  instance_flexibility: string;
+  display_name?: string;
+}
+
 export interface RIUtilization {
   reserved_instance_id: string;
   utilization_percent: number;
