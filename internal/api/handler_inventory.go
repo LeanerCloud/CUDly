@@ -177,7 +177,11 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	// --- on-demand gap: recommendations -------------------------------------
 	// Recommendations represent uncommitted demand that could be purchased.
 	// Their Savings field is the monthly on-demand cost of the uncovered gap.
-	recs, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	// Scope recs to the account chip the same way fetchCommitmentRecords scopes
+	// commitments above — otherwise the covered side honours the chip but the
+	// on-demand side bleeds in other accounts' gaps, producing misleading
+	// per-service coverage (issue #866 follow-up: CR pass on PR #881).
+	recs, err := h.scheduler.ListRecommendations(ctx, buildCoverageRecFilter(params))
 	if err != nil {
 		// Non-fatal: recommendations are best-effort for coverage display.
 		// An empty rec list is treated as "no uncovered gap" — coverage
@@ -195,6 +199,23 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	onDemandByKey := aggregateOnDemandByKey(recs, params["provider"])
 
 	return buildCoverageBreakdown(coveredByKey, onDemandByKey), nil
+}
+
+// buildCoverageRecFilter translates the query-string chip params into a
+// RecommendationFilter for ListRecommendations. Currently scopes by
+// account_id only — provider filtering is applied in aggregateOnDemandByKey
+// because the response envelope always includes the full known-providers
+// list (a per-provider filter at fetch time would still need an in-memory
+// pass to enumerate the other providers as "no usage detected").
+//
+// Extracted from getCoverageBreakdown to keep that function under the
+// gocyclo budget after PR #881's extraction.
+func buildCoverageRecFilter(params map[string]string) config.RecommendationFilter {
+	filter := config.RecommendationFilter{}
+	if accountID := params["account_id"]; accountID != "" {
+		filter.AccountIDs = []string{accountID}
+	}
+	return filter
 }
 
 // aggregateOnDemandByKey builds the "provider:service" → monthly-savings map
