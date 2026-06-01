@@ -1,7 +1,7 @@
 /**
  * Navigation module tests
  */
-import { switchTab, switchSettingsSubTab, getSettingsSubTabFromPath } from '../navigation';
+import { switchTab, switchSettingsSubTab, switchInventorySubTab, getSettingsSubTabFromPath, getInventorySubTabFromPath } from '../navigation';
 
 // Mock the dependent modules
 jest.mock('../dashboard', () => ({
@@ -33,6 +33,21 @@ jest.mock('../riexchange', () => ({
 jest.mock('../auth', () => ({
   isAdmin: jest.fn().mockReturnValue(true),
 }));
+// Mock inventory so navigation tests stay focused on routing/history and
+// don't pull in the real fetch/render machinery. switchInventorySubSection
+// must still resolve+return the sub-section (default-first) because
+// navigation.switchInventorySubTab uses the return value to build the URL.
+jest.mock('../inventory', () => {
+  const VALID = ['active-commitments', 'coverage', 'ri-exchange'];
+  const DEFAULT = 'active-commitments';
+  const isValid = (n: string): boolean => VALID.includes(n);
+  return {
+    DEFAULT_INVENTORY_SUB_SECTION: DEFAULT,
+    isValidInventorySubSection: isValid,
+    switchInventorySubSection: jest.fn((n: string) => (isValid(n) ? n : DEFAULT)),
+    loadInventory: jest.fn(),
+  };
+});
 
 import { loadDashboard } from '../dashboard';
 import { loadRecommendations } from '../recommendations';
@@ -162,6 +177,28 @@ describe('Navigation Module', () => {
       // Other tabs must be deactivated
       const homeBtn = document.querySelector('[data-tab="home"]');
       expect(homeBtn?.classList.contains('active')).toBe(false);
+    });
+
+    // QA A.4: a bare inventory switch lands on the default sub-tab and the
+    // canonical URL carries the sub-tab segment (/inventory/active-commitments),
+    // mirroring how the admin switch pushes /admin/<subtab>.
+    test('switching to inventory pushes /inventory/<default-subtab>', () => {
+      // currentTab is module state that may already be 'inventory' from a
+      // prior test; switch away first so the inventory switch is genuine
+      // (a self-switch would correctly skip the push).
+      switchTab('home');
+      window.history.replaceState(null, '', '/');
+      switchTab('inventory');
+      expect(window.location.pathname).toBe('/inventory/active-commitments');
+    });
+
+    // A deep link to a specific inventory sub-tab is honoured: switchTab
+    // reads the path and the canonical URL keeps that sub-tab.
+    test('switching to inventory honours a /inventory/<subtab> deep link', () => {
+      switchTab('home');
+      window.history.replaceState(null, '', '/inventory/coverage');
+      switchTab('inventory');
+      expect(window.location.pathname).toBe('/inventory/coverage');
     });
 
     test('deactivates previously active tab', () => {
@@ -300,6 +337,50 @@ describe('Navigation Module', () => {
     });
   });
 
+  // QA A.4: switchInventorySubTab owns the /inventory/<subtab> history push,
+  // mirroring switchSettingsSubTab. The DOM switch is delegated to the
+  // (mocked) inventory module. Placed BEFORE the *FromPath describes, which
+  // destructively replace window.location with a plain object and would
+  // otherwise break the real history.pushState these tests rely on.
+  describe('switchInventorySubTab', () => {
+    beforeEach(() => {
+      window.history.replaceState(null, '', '/inventory/active-commitments');
+    });
+
+    test('(c) pushes /inventory/<subtab> on a real switch', () => {
+      switchInventorySubTab('coverage');
+      expect(window.location.pathname).toBe('/inventory/coverage');
+    });
+
+    test('(c) preserves existing query params and hash', () => {
+      window.history.replaceState(null, '', '/inventory/active-commitments?provider=aws#frag');
+      switchInventorySubTab('ri-exchange');
+      expect(window.location.pathname).toBe('/inventory/ri-exchange');
+      expect(window.location.search).toBe('?provider=aws');
+      expect(window.location.hash).toBe('#frag');
+    });
+
+    test('(d) an unknown sub-tab resolves to the default in the URL', () => {
+      window.history.replaceState(null, '', '/inventory/coverage');
+      switchInventorySubTab('bogus');
+      expect(window.location.pathname).toBe('/inventory/active-commitments');
+    });
+
+    test('does NOT push a duplicate entry when already on the target sub-tab', () => {
+      window.history.replaceState(null, '', '/inventory/coverage');
+      const before = window.history.length;
+      switchInventorySubTab('coverage');
+      expect(window.location.pathname).toBe('/inventory/coverage');
+      expect(window.history.length).toBe(before);
+    });
+
+    test('push: false switches the view without touching history', () => {
+      switchInventorySubTab('coverage', { push: false });
+      // URL unchanged: the caller (initial load / popstate) owns the URL.
+      expect(window.location.pathname).toBe('/inventory/active-commitments');
+    });
+  });
+
   describe('getSettingsSubTabFromPath', () => {
     // Canonical /admin/* paths (issue #340 IA rename)
     test('returns general for root admin path', () => {
@@ -349,6 +430,34 @@ describe('Navigation Module', () => {
       delete (window as unknown as Record<string, unknown>).location;
       (window as unknown as Record<string, unknown>).location = { pathname: '/settings/foobar' } as Location;
       expect(getSettingsSubTabFromPath()).toBe('general');
+    });
+  });
+
+  // QA A.4: Inventory sub-tabs become URL-addressable (/inventory/<subtab>),
+  // matching the Admin /admin/<subtab> convention.
+  describe('getInventorySubTabFromPath', () => {
+    test('returns the default (active-commitments) for a bare /inventory path', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/inventory' } as Location;
+      expect(getInventorySubTabFromPath()).toBe('active-commitments');
+    });
+
+    test('returns coverage for /inventory/coverage', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/inventory/coverage' } as Location;
+      expect(getInventorySubTabFromPath()).toBe('coverage');
+    });
+
+    test('returns ri-exchange for /inventory/ri-exchange', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/inventory/ri-exchange' } as Location;
+      expect(getInventorySubTabFromPath()).toBe('ri-exchange');
+    });
+
+    test('falls back to the default for an unknown sub-tab', () => {
+      delete (window as unknown as Record<string, unknown>).location;
+      (window as unknown as Record<string, unknown>).location = { pathname: '/inventory/bogus' } as Location;
+      expect(getInventorySubTabFromPath()).toBe('active-commitments');
     });
   });
 });

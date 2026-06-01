@@ -16,6 +16,7 @@ import { loadRIExchange } from './riexchange';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { formatCurrency, formatDate } from './utils';
 import * as state from './state';
+import { switchInventorySubTab } from './navigation';
 
 type InventorySubSection = 'active-commitments' | 'coverage' | 'ri-exchange';
 
@@ -25,12 +26,17 @@ const SUB_SECTION_IDS: Record<InventorySubSection, string> = {
   'ri-exchange': 'inventory-ri-exchange',
 };
 
-const DEFAULT_SUB_SECTION: InventorySubSection = 'active-commitments';
+export const DEFAULT_INVENTORY_SUB_SECTION: InventorySubSection = 'active-commitments';
 
 let currentSubSection: InventorySubSection | undefined;
 let listenersWired = false;
 
-function isValidSubSection(name: string): name is InventorySubSection {
+/**
+ * Type guard for the Inventory sub-section identifiers. Exported so the
+ * router (navigation.ts) can validate the `/inventory/<subtab>` path
+ * segment without duplicating the closed set.
+ */
+export function isValidInventorySubSection(name: string): name is InventorySubSection {
   return name === 'active-commitments' || name === 'coverage' || name === 'ri-exchange';
 }
 
@@ -38,9 +44,20 @@ function isValidSubSection(name: string): name is InventorySubSection {
  * Show one sub-section, hide the others. Activates the matching sub-nav
  * button and (for ri-exchange) triggers the RI exchange data load so the
  * existing flow stays identical to its pre-#340 behaviour.
+ *
+ * This is the pure view switcher: it does NOT touch the URL. URL history
+ * (the `/inventory/<subtab>` addressing from QA A.4) is owned by
+ * navigation.ts' switchInventorySubTab, mirroring how switchSettingsSubTab
+ * owns the `/admin/<subtab>` history so a single counter (historyId) stays
+ * authoritative for the back/forward dirty-guard.
+ *
+ * Returns the resolved (validated, default-substituted) sub-section so the
+ * caller can reflect the same value in the URL.
  */
-export function switchInventorySubSection(name: string): void {
-  const target: InventorySubSection = isValidSubSection(name) ? name : DEFAULT_SUB_SECTION;
+export function switchInventorySubSection(name: string): InventorySubSection {
+  const target: InventorySubSection = isValidInventorySubSection(name)
+    ? name
+    : DEFAULT_INVENTORY_SUB_SECTION;
 
   document.querySelectorAll<HTMLButtonElement>('#inventory-tab .sub-tab-btn').forEach((btn) => {
     const isActive = btn.dataset['invSubtab'] === target;
@@ -62,6 +79,7 @@ export function switchInventorySubSection(name: string): void {
   }
 
   currentSubSection = target;
+  return target;
 }
 
 // ──────────────────────────────────────────────
@@ -417,8 +435,11 @@ function wireSubNavListeners(): void {
   if (buttons.length === 0) return;
   buttons.forEach((btn) => {
     btn.addEventListener('click', () => {
-      const name = btn.dataset['invSubtab'] ?? DEFAULT_SUB_SECTION;
-      switchInventorySubSection(name);
+      const name = btn.dataset['invSubtab'] ?? DEFAULT_INVENTORY_SUB_SECTION;
+      // Route through the router so the click both switches the view AND
+      // pushes /inventory/<subtab> (QA A.4), keeping history consistent
+      // with the Admin sub-tab flow.
+      switchInventorySubTab(name);
     });
   });
   listenersWired = true;
@@ -485,11 +506,22 @@ function wireChipSubscriptions(): void {
 
 /**
  * Initialize the Inventory & Coverage section. Called by navigation.ts'
- * switchTab when 'inventory' is selected. Defaults to active-commitments
- * if the user hasn't selected a sub-section this session.
+ * switchTab when 'inventory' is selected, passing the sub-section parsed
+ * from the `/inventory/<subtab>` URL path (QA A.4).
+ *
+ * The sub-section comes from the URL, not hidden session state: a fresh
+ * `/inventory` with no sub-segment lands on the default (active-commitments)
+ * and a `/inventory/<subtab>` deep link lands on that sub-section. The
+ * switch is URL-driven (push: false) so re-entering the tab doesn't stack
+ * a redundant history entry on top of the one switchTab already pushed.
  */
-export function loadInventory(): void {
+export function loadInventory(subSection?: string): void {
   wireSubNavListeners();
   wireChipSubscriptions();
-  switchInventorySubSection(currentSubSection ?? DEFAULT_SUB_SECTION);
+  const target = subSection !== undefined && isValidInventorySubSection(subSection)
+    ? subSection
+    : DEFAULT_INVENTORY_SUB_SECTION;
+  // Pure view switch (no history push): switchTab already pushed the
+  // canonical /inventory/<subtab> URL when this tab was entered.
+  switchInventorySubSection(target);
 }

@@ -34,7 +34,21 @@ jest.mock('../state', () => ({
   getCurrentAccountIDs: jest.fn(() => []),
 }));
 
+// inventory.ts routes sub-nav clicks through navigation.switchInventorySubTab
+// so the click both switches the view AND pushes /inventory/<subtab>
+// (QA A.4). Mock it to delegate to the real (pure) view switcher: that
+// keeps the click->DOM behaviour these tests assert, while letting us spy
+// on the router call. The URL-push half of switchInventorySubTab is tested
+// in navigation.test.ts where the router owns history.
+jest.mock('../navigation', () => {
+  const actual = jest.requireActual('../inventory');
+  return {
+    switchInventorySubTab: jest.fn((name: string) => actual.switchInventorySubSection(name)),
+  };
+});
+
 import { loadInventory, switchInventorySubSection, loadActiveCommitments, loadCoverageBreakdown } from '../inventory';
+import { switchInventorySubTab } from '../navigation';
 import { loadRIExchange } from '../riexchange';
 import * as api from '../api';
 import * as state from '../state';
@@ -202,13 +216,67 @@ describe('Inventory & Coverage sub-section switching', () => {
     expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(false);
     expect(document.getElementById('inventory-ri-exchange')?.classList.contains('hidden')).toBe(true);
 
-    // Clicking a sub-tab button switches the section.
+    // Clicking a sub-tab button routes through the router (QA A.4) so the
+    // click both switches the view AND pushes /inventory/<subtab>. The
+    // mocked router delegates to the real view switcher, so the DOM flips.
     const coverageBtn = document.querySelector<HTMLButtonElement>('[data-inv-subtab="coverage"]')!;
     coverageBtn.click();
+    expect(switchInventorySubTab).toHaveBeenCalledWith('coverage');
     expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(false);
     expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
   });
 
+});
+
+// QA A.4: Inventory sub-tabs are URL-addressable (/inventory/<subtab>),
+// default-first, and shareable. inventory.ts owns the view switch + the
+// click->router wiring; the URL push itself lives in navigation.ts and is
+// covered in navigation.test.ts. Here we assert:
+//   - the pure switcher returns the resolved (validated) sub-section,
+//   - loadInventory honours an explicit sub-section, defaults when absent,
+//     and falls back when unknown (default-first),
+//   - a sub-nav click routes through navigation.switchInventorySubTab so
+//     the URL gets updated (no hidden session state).
+describe('Inventory & Coverage sub-tab addressing (QA A.4)', () => {
+  beforeEach(() => {
+    buildInventoryDOM();
+    (loadRIExchange as jest.Mock).mockClear();
+    (switchInventorySubTab as jest.Mock).mockClear();
+    (api.listActiveCommitments as jest.Mock).mockReset().mockResolvedValue([]);
+    (api.getCoverageBreakdown as jest.Mock).mockReset().mockResolvedValue({ providers: [] });
+    (state.subscribeProvider as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReset().mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    clearDOM();
+  });
+
+  test('switchInventorySubSection returns the resolved sub-section', () => {
+    expect(switchInventorySubSection('coverage')).toBe('coverage');
+    // Unknown input resolves to the default (default-first).
+    expect(switchInventorySubSection('bogus')).toBe('active-commitments');
+  });
+
+  test('(a) loadInventory(undefined) -> default sub-section (active-commitments)', () => {
+    loadInventory(undefined);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(false);
+    expect(api.listActiveCommitments).toHaveBeenCalled();
+  });
+
+  test('(b) loadInventory(<subtab>) -> that sub-section', () => {
+    loadInventory('coverage');
+    expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
+    expect(api.getCoverageBreakdown).toHaveBeenCalled();
+  });
+
+  test('(d) loadInventory(<unknown>) -> falls back to default', () => {
+    loadInventory('bogus-subtab');
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(false);
+  });
 });
 
 describe('loadActiveCommitments — fetch + render flow', () => {
