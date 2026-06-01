@@ -836,8 +836,15 @@ async function setupPlanAccountsSection(planId?: string): Promise<void> {
 
 /**
  * Prefill the Purchase Configuration section (provider / service / term /
- * payment) from a single selected commitment. Called after form.reset() so
- * the defaults are already in place; each field is still editable. (#770)
+ * payment) from a representative selected commitment. Called after
+ * form.reset() so the defaults are already in place; each field is still
+ * editable. (#770)
+ *
+ * For a multi-commitment selection the caller passes the first commitment as
+ * the representative: the "Plan from N selected" button is only enabled when
+ * the selection is homogeneous (same provider/service/term/payment — see
+ * isHomogeneousSelection in recommendations.ts), so any element shares those
+ * four values. (#898)
  */
 function prefillPurchaseConfigFromCommitment(rec: api.Recommendation): void {
   const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
@@ -921,10 +928,13 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   (document.getElementById('plan-id') as HTMLInputElement).value = '';
   (document.getElementById('plan-form') as HTMLFormElement | null)?.reset();
 
-  // When exactly one commitment is selected, prefill the Purchase
-  // Configuration fields so the user does not have to re-enter them.
-  // Fields are still fully editable after prefill. (#770)
-  if (pendingPlanRecommendations.length === 1) {
+  // When one or more commitments are selected, prefill the Purchase
+  // Configuration fields so the user does not have to re-enter them. The
+  // first commitment is the representative: for a multi-selection the
+  // "Plan from N selected" button only enables on a homogeneous selection,
+  // so every element shares provider/service/term/payment. Fields are still
+  // fully editable after prefill. (#770, #898)
+  if (pendingPlanRecommendations.length >= 1) {
     prefillPurchaseConfigFromCommitment(pendingPlanRecommendations[0]!);
   }
 
@@ -943,13 +953,21 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
   planModalSession += 1;
 
   // setupPlanAccountsSection clears planSelectedAccounts and re-renders.
-  // When a single commitment carries a cloud_account_id, we look up that
-  // account after the section has reset and add it as a pre-selected chip.
+  // When every selected commitment carries the SAME cloud_account_id, we look
+  // up that account after the section has reset and add it as a pre-selected
+  // chip. Homogeneity of provider/service/term/payment (enforced by the
+  // "Plan from N selected" gate) does not imply a single account, so a
+  // multi-account selection leaves the chip empty for the user to fill. (#898)
   void setupPlanAccountsSection();
-  if (pendingPlanRecommendations.length === 1) {
-    const accountId = pendingPlanRecommendations[0]!.cloud_account_id;
-    if (accountId) {
-      void prefillAccountChipFromId(accountId, planModalSession);
+  if (pendingPlanRecommendations.length >= 1) {
+    const firstAccountId = pendingPlanRecommendations[0]!.cloud_account_id;
+    const sharedAccountId =
+      firstAccountId &&
+      pendingPlanRecommendations.every((r) => r.cloud_account_id === firstAccountId)
+        ? firstAccountId
+        : undefined;
+    if (sharedAccountId) {
+      void prefillAccountChipFromId(sharedAccountId, planModalSession);
     }
   }
 

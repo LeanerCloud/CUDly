@@ -1441,16 +1441,51 @@ describe('Plans Module', () => {
         expect(chips?.textContent).not.toContain('Prod AWS');
       });
 
-      test('does not prefill when snapshot has more than one commitment', () => {
-        const second: api.Recommendation = { ...fixture, id: 'rec-771', service: 'rds' };
-        openCreatePlanModal([fixture, second]);
+      // #898: extend prefill to a homogeneous multi-commitment selection. The
+      // "Plan from N selected" button only enables when provider/service/term/
+      // payment match across the selection, so the first commitment is a valid
+      // representative for the Purchase Configuration fields.
+      describe('prefill from multiple homogeneous commitments (#898)', () => {
+        test('prefills provider/service/term/payment from the shared values', () => {
+          const second: api.Recommendation = { ...fixture, id: 'rec-771', region: 'us-west-2' };
+          openCreatePlanModal([fixture, second]);
 
-        // populateTermSelect is called by setupRampScheduleHandlers / updateCommitmentOptions
-        // but NOT by prefillPurchaseConfigFromCommitment (which only runs for length===1)
-        // The provider/service select should NOT be forced to either rec's values
-        // We assert that the service select was not forced to 'ec2' alone
-        // (a multi-commitment plan requires manual selection)
-        expect(api.getAccount).not.toHaveBeenCalled();
+          expect((document.getElementById('plan-provider') as HTMLSelectElement).value).toBe('aws');
+          expect((document.getElementById('plan-service') as HTMLSelectElement).value).toBe('ec2');
+          expect((document.getElementById('plan-term') as HTMLSelectElement).value).toBe('1');
+          expect((document.getElementById('plan-payment') as HTMLSelectElement).value).toBe('partial-upfront');
+        });
+
+        test('prefills the account chip when all commitments share one account', async () => {
+          (api.getAccount as jest.Mock).mockResolvedValueOnce({
+            id: 'acct-uuid-123',
+            name: 'Prod AWS',
+            external_id: '123456789012',
+          });
+          const second: api.Recommendation = { ...fixture, id: 'rec-771', region: 'us-west-2' };
+          openCreatePlanModal([fixture, second]);
+
+          await Promise.resolve();
+          await Promise.resolve();
+
+          expect(api.getAccount).toHaveBeenCalledWith('acct-uuid-123');
+          const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
+          expect(hiddenIds).toContain('acct-uuid-123');
+        });
+
+        test('leaves the account chip empty when commitments span accounts', async () => {
+          const second: api.Recommendation = { ...fixture, id: 'rec-771', cloud_account_id: 'acct-uuid-999' };
+          openCreatePlanModal([fixture, second]);
+
+          await Promise.resolve();
+
+          // Config still prefills from the homogeneous fields, but the account
+          // is ambiguous so no chip is fetched.
+          expect((document.getElementById('plan-service') as HTMLSelectElement).value).toBe('ec2');
+          expect(api.getAccount).not.toHaveBeenCalled();
+          const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
+          expect(hiddenIds).toBe('');
+        });
       });
     });
   });
