@@ -1017,28 +1017,13 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 
 	// Only completed/partially_completed purchases have anything to revoke.
 	// A pending/notified purchase should be cancelled instead.
-	switch execution.Status {
-	case "completed", "partially_completed":
-		// valid
-	case "pending", "notified":
-		return nil, NewClientError(409, fmt.Sprintf(
-			"execution %s is still pending — use the Cancel link instead of Revoke", execID))
-	default:
-		return nil, NewClientError(409, fmt.Sprintf(
-			"execution %s cannot be revoked (status=%s); the revocation window may have closed or the purchase was not completed",
-			execID, execution.Status))
+	if err := checkRevokableStatus(execution); err != nil {
+		return nil, err
 	}
 
 	// Three-mode dispatch — same shape as cancelPurchase.
-	if session := h.tryGetSession(ctx, req); session != nil {
-		switch sessErr := h.authorizeSessionCancel(ctx, session, execution); {
-		case sessErr == nil:
-			return h.revokeViaSession(ctx, execution, session.Email)
-		case isPermissionDenied(sessErr):
-			// Fall through to the token branch.
-		default:
-			return nil, sessErr
-		}
+	if result, handled, err := h.tryRevokeViaSession(ctx, req, execution); handled {
+		return result, err
 	}
 
 	if token == "" {
@@ -1051,16 +1036,66 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 	if err != nil {
 		return nil, err
 	}
-	// Validate token against the execution's ApprovalToken using constant-time
-	// comparison to prevent timing attacks (same guard as ApproveExecution in
-	// internal/purchase/approvals.go).
-	if execution.ApprovalToken == "" {
-		return nil, NewClientError(403, "invalid revocation token")
-	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
-		return nil, NewClientError(403, "invalid revocation token")
+	if err := validateRevokeToken(execution, token); err != nil {
+		return nil, err
 	}
 	return h.revokeViaSession(ctx, execution, actor)
+}
+
+// tryRevokeViaSession attempts the session-authenticated branch of the
+// revokePurchase three-mode dispatch (same shape as the session branch of
+// cancelPurchase). Returns (result, true, err) when the session was present
+// and either completed the revocation or encountered a hard error; returns
+// (nil, false, nil) when the session was absent or returned a permission-denied
+// error so the caller can fall through to the token branch. Extracted from
+// revokePurchase to keep that function under the cyclomatic limit.
+func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, bool, error) {
+	session := h.tryGetSession(ctx, req)
+	if session == nil {
+		return nil, false, nil
+	}
+	switch sessErr := h.authorizeSessionCancel(ctx, session, execution); {
+	case sessErr == nil:
+		result, err := h.revokeViaSession(ctx, execution, session.Email)
+		return result, true, err
+	case isPermissionDenied(sessErr):
+		// Fall through to the token branch.
+		return nil, false, nil
+	default:
+		return nil, true, sessErr
+	}
+}
+
+// checkRevokableStatus returns nil when the execution is in a state that allows
+// revocation (completed or partially_completed), or a 409 ClientError when the
+// status makes revocation impossible. Extracted from revokePurchase to keep
+// that function under the cyclomatic limit.
+func checkRevokableStatus(execution *config.PurchaseExecution) error {
+	switch execution.Status {
+	case "completed", "partially_completed":
+		return nil
+	case "pending", "notified":
+		return NewClientError(409, fmt.Sprintf(
+			"execution %s is still pending — use the Cancel link instead of Revoke", execution.ExecutionID))
+	default:
+		return NewClientError(409, fmt.Sprintf(
+			"execution %s cannot be revoked (status=%s); the revocation window may have closed or the purchase was not completed",
+			execution.ExecutionID, execution.Status))
+	}
+}
+
+// validateRevokeToken checks that the execution carries a non-empty
+// ApprovalToken and that it matches the supplied token using constant-time
+// comparison (same guard as ApproveExecution in internal/purchase/approvals.go).
+// Extracted from revokePurchase to keep that function under the cyclomatic limit.
+func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
+	if execution.ApprovalToken == "" {
+		return NewClientError(403, "invalid revocation token")
+	}
+	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+		return NewClientError(403, "invalid revocation token")
+	}
+	return nil
 }
 
 // revokeViaSession performs the post-execution revocation action by recording
@@ -2308,10 +2343,7 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 		logging.Errorf("sendPurchaseExecutedEmail: failed to load global config: %v", err)
 		return
 	}
-	globalNotify := ""
-	if globalCfg != nil && globalCfg.NotificationEmail != nil {
-		globalNotify = strings.TrimSpace(*globalCfg.NotificationEmail)
-	}
+	globalNotify := globalNotifyEmail(globalCfg)
 
 	// Gather per-account contact emails for the recommendations.
 	contactEmails, err := h.gatherAccountContactEmails(ctx, execution.Recommendations)
@@ -2321,14 +2353,7 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	}
 
 	// Look up the requester's email via their user ID (if available).
-	requesterEmail := ""
-	requesterName := ""
-	if h.auth != nil && execution.CreatedByUserID != nil && *execution.CreatedByUserID != "" {
-		if u, lookupErr := h.auth.GetUser(ctx, *execution.CreatedByUserID); lookupErr == nil && u != nil {
-			requesterEmail = u.Email
-		}
-		// Error is non-fatal — we just omit the field from the email body.
-	}
+	requesterEmail, requesterName := h.lookupRequesterInfo(ctx, execution)
 
 	// Build the deduplicated To / Cc list.
 	// Priority: contact emails are To (first one) + Cc (rest); global notify
@@ -2382,6 +2407,32 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	if sendErr := h.emailNotifier.SendPurchaseExecutedNotification(ctx, data); sendErr != nil {
 		logging.Errorf("sendPurchaseExecutedEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
+}
+
+// globalNotifyEmail returns the trimmed notification email from a GlobalConfig,
+// or "" when the config is nil or the field is unset. Extracted from
+// sendPurchaseExecutedEmail to keep that function under the cyclomatic limit.
+func globalNotifyEmail(globalCfg *config.GlobalConfig) string {
+	if globalCfg != nil && globalCfg.NotificationEmail != nil {
+		return strings.TrimSpace(*globalCfg.NotificationEmail)
+	}
+	return ""
+}
+
+// lookupRequesterInfo resolves the email (and name, currently always "") for
+// the user who originally submitted the execution. The lookup is non-fatal:
+// when auth is unavailable or the user cannot be found, both fields are
+// returned empty and the notification is sent without them. Extracted from
+// sendPurchaseExecutedEmail to keep that function under the cyclomatic limit.
+func (h *Handler) lookupRequesterInfo(ctx context.Context, execution *config.PurchaseExecution) (email, name string) {
+	if h.auth == nil || execution.CreatedByUserID == nil || *execution.CreatedByUserID == "" {
+		return "", ""
+	}
+	u, err := h.auth.GetUser(ctx, *execution.CreatedByUserID)
+	if err == nil && u != nil {
+		return u.Email, ""
+	}
+	return "", ""
 }
 
 // resolveExecutedNotificationRecipients builds the To / Cc pair for the
