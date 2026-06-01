@@ -2412,23 +2412,28 @@ function formatPayment(payment: string | undefined): string {
 // so XSS is structurally impossible here.
 export function renderUsageSparkline(pcts: number[] | null | undefined): string {
   if (!pcts || pcts.length === 0) return '—';
+  const clamped = pcts.map((v) => {
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(100, v));
+  });
   const w = 56;
   const h = 20;
   const pad = 1;
   const innerH = h - 2 * pad;
-  const n = pcts.length;
+  const n = clamped.length;
+  const aria = `RI coverage last ${n} days: ${clamped.map((v) => `${v.toFixed(1)}%`).join(', ')}`;
   if (n === 1) {
-    const cy = pad + innerH * (1 - pcts[0]! / 100);
-    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" class="usage-sparkline"><circle cx="${(w / 2).toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="currentColor"/></svg>`;
+    const cy = pad + innerH * (1 - clamped[0]! / 100);
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${aria}" class="usage-sparkline"><circle cx="${(w / 2).toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="currentColor"/></svg>`;
   }
-  const points = pcts
+  const points = clamped
     .map((p, i) => {
       const x = (i / (n - 1)) * w;
       const y = pad + innerH * (1 - p / 100);
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" class="usage-sparkline"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${aria}" class="usage-sparkline"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
 // renderColumnCell renders a single <td> for the given column key.

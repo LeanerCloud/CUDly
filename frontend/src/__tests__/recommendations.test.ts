@@ -6578,6 +6578,10 @@ describe('renderUsageSparkline (issue #239)', () => {
     // Single-point path uses a circle.
     expect(html).toContain('<circle');
     expect(html).not.toContain('<polyline');
+    // Accessible label is present; aria-hidden is not.
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label=');
+    expect(html).not.toContain('aria-hidden');
   });
 
   test('returns a polyline SVG for 7 points', () => {
@@ -6593,6 +6597,23 @@ describe('renderUsageSparkline (issue #239)', () => {
     expect(pairs).toHaveLength(7);
     // No raw user input is interpolated; values are numbers only, no XSS vector.
     expect(html).not.toContain('<script');
+    // Accessible label is present; aria-hidden is not.
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label=');
+    expect(html).not.toContain('aria-hidden');
+  });
+
+  test('aria-label conveys coverage values for screen readers', () => {
+    const html = renderUsageSparkline([80, 90]);
+    expect(html).toContain('aria-label="RI coverage last 2 days: 80.0%, 90.0%"');
+  });
+
+  test('non-finite values are clamped to 0 in geometry and label', () => {
+    const html = renderUsageSparkline([NaN, Infinity, -Infinity]);
+    // All three are treated as 0; label reflects clamped values.
+    expect(html).toContain('aria-label="RI coverage last 3 days: 0.0%, 0.0%, 0.0%"');
+    // Geometry stays valid (cy must be 19.0 for 0%).
+    expect(html).toContain('<polyline');
   });
 
   test('100% coverage maps point to top of SVG (y near pad)', () => {
