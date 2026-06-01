@@ -974,8 +974,8 @@ describe('Public Info API', () => {
       expect(info.version).toBe('1.0.0');
       expect(info.admin_exists).toBe(true);
       // Sensitive fields must not be present on the public endpoint response.
-      expect((info as Record<string, unknown>)['api_key_secret_url']).toBeUndefined();
-      expect((info as Record<string, unknown>)['deployment_aws_account_id']).toBeUndefined();
+      expect((info as unknown as Record<string, unknown>)['api_key_secret_url']).toBeUndefined();
+      expect((info as unknown as Record<string, unknown>)['deployment_aws_account_id']).toBeUndefined();
       expect(fetchMock).toHaveBeenCalledWith('/api/info');
     });
 
