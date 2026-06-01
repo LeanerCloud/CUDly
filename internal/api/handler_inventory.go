@@ -192,16 +192,24 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 			return nil, err
 		}
 	}
-	onDemandByKey := make(map[string]float64)
-	providerFilter := params["provider"]
+	onDemandByKey := aggregateOnDemandByKey(recs, params["provider"])
+
+	return buildCoverageBreakdown(coveredByKey, onDemandByKey), nil
+}
+
+// aggregateOnDemandByKey builds the "provider:service" → monthly-savings map
+// from a recommendation slice, applying an optional provider filter.
+// Pulled out of getCoverageBreakdown to keep that function under the
+// cyclomatic limit.
+func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter string) map[string]float64 {
+	out := make(map[string]float64)
 	for _, rec := range recs {
 		if providerFilter != "" && rec.Provider != providerFilter {
 			continue
 		}
-		onDemandByKey[rec.Provider+":"+rec.Service] += rec.Savings
+		out[rec.Provider+":"+rec.Service] += rec.Savings
 	}
-
-	return buildCoverageBreakdown(coveredByKey, onDemandByKey), nil
+	return out
 }
 
 // buildCoverageBreakdown constructs the CoverageBreakdownResponse from
