@@ -303,7 +303,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 	}
 
 	if err := validateEmailFormat(req.ContactEmail); err != nil {
-		return err
+		return NewClientError(400, "invalid contact_email format")
 	}
 
 	return validateAuthMode(req)

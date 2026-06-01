@@ -205,6 +205,44 @@ func TestCreateAccount_EmptyContactEmail(t *testing.T) {
 	assert.Empty(t, got.ContactEmail)
 }
 
+// TestCreateAccount_RejectsTLDlessContactEmail is a regression guard for
+// issue #868: account-create must reject a TLD-less contact_email such as
+// "user@host" with 400, applying the same constraint as sign-up.
+func TestCreateAccount_RejectsTLDlessContactEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"admin@intranet"}`
+	result, err := handler.createAccount(ctx, adminRequest(body))
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.message, "contact_email")
+}
+
+// TestCreateAccount_AcceptsValidContactEmail verifies that a well-formed
+// contact_email passes validation and the account is stored correctly.
+func TestCreateAccount_AcceptsValidContactEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"admin@example.com"}`
+	result, err := handler.createAccount(ctx, adminRequest(body))
+	require.NoError(t, err)
+	got := result.(*config.CloudAccount)
+	assert.Equal(t, "admin@example.com", got.ContactEmail)
+}
+
 // --- getAccount ---
 
 func TestGetAccount_Success(t *testing.T) {

@@ -414,6 +414,55 @@ func TestValidateAWSRoleARN(t *testing.T) {
 	}
 }
 
+// TestValidateEmailFormat covers issue #868: validateEmailFormat must reject TLD-less
+// addresses like "user@host" that RFC 5322 accepts but that sign-up also rejects.
+// The profile-update and account-create paths now call the same validator, so this
+// table locks in parity across all three entry points.
+func TestValidateEmailFormat(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		email     string
+		wantError bool
+	}{
+		// Happy paths
+		{"empty is allowed (optional field)", "", false},
+		{"typical address", "user@example.com", false},
+		{"dotted local part", "user.name@example.com", false},
+		{"plus tag", "user+tag@sub.example.com", false},
+		{"minimum valid (short TLD)", "u@a.b", false},
+		{"subdomain", "admin@mail.corp.example.com", false},
+
+		// Issue #868 cases — TLD-less addresses that were previously accepted
+		{"no TLD (bare host)", "user@host", true},
+		{"trailing dot on domain", "user@host.", true},
+		{"dot before host (no host part)", "user@.com", true},
+
+		// Other invalid shapes
+		{"empty string is OK (see first row), but just @", "@", true},
+		{"no local part", "@host.com", true},
+		{"space in local part", "user @host.com", true},
+		{"space in domain", "user@host .com", true},
+		{"no at-sign", "notanemail", true},
+		{"double at-sign", "a@@b.com", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEmailFormat(tt.email)
+			if tt.wantError {
+				assert.Error(t, err)
+				ce, ok := IsClientError(err)
+				if assert.True(t, ok, "expected ClientError") {
+					assert.Equal(t, 400, ce.code)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestValidateAWSWebIdentityTokenFile covers issue #403: aws_web_identity_token_file
 // must be restricted to known-safe mount prefixes to prevent arbitrary host file reads.
 func TestValidateAWSWebIdentityTokenFile(t *testing.T) {

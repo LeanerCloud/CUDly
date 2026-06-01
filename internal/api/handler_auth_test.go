@@ -899,6 +899,60 @@ func TestHandler_updateProfile_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid request body")
 }
 
+// TestHandler_updateProfile_RejectsInvalidEmail is a regression guard for
+// issue #868: the profile-update handler must reject TLD-less addresses such
+// as "user@host" with a 400 before reaching the auth service, mirroring the
+// constraint that sign-up already enforces.
+func TestHandler_updateProfile_RejectsInvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	// UpdateUserProfile must NOT be called — validation should short-circuit first.
+
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+		Body:    `{"email": "user@host"}`,
+	}
+
+	result, err := handler.updateProfile(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.message, "email")
+	// Confirm UpdateUserProfile was never reached.
+	mockAuth.AssertNotCalled(t, "UpdateUserProfile")
+}
+
+// TestHandler_updateProfile_AcceptsValidEmail verifies that a well-formed
+// address passes validation and reaches the auth service unchanged.
+func TestHandler_updateProfile_AcceptsValidEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.On("UpdateUserProfile", ctx, "12345678-1234-1234-1234-123456789abc", "new@example.com", "", "").Return(nil)
+
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+		Body:    `{"email": "new@example.com"}`,
+	}
+
+	result, err := handler.updateProfile(ctx, req)
+	require.NoError(t, err)
+	resp := result.(map[string]string)
+	assert.Equal(t, "profile updated", resp["status"])
+	mockAuth.AssertCalled(t, "UpdateUserProfile", ctx, "12345678-1234-1234-1234-123456789abc", "new@example.com", "", "")
+}
+
 // TestHandler_resetPassword_DecodesBase64 verifies issue #356: the
 // resetPassword handler must base64-decode new_password before forwarding to
 // the service, matching the pattern used by login / change-password /
