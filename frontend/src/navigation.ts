@@ -11,7 +11,12 @@ import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
 import { loadAutomationSettings } from './riexchange';
-import { loadInventory } from './inventory';
+import {
+  loadInventory,
+  switchInventorySubSection,
+  isValidInventorySubSection,
+  DEFAULT_INVENTORY_SUB_SECTION,
+} from './inventory';
 import { isAdmin } from './auth';
 
 interface TabMeta {
@@ -116,7 +121,7 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
     case 'inventory':
-      loadInventory();
+      loadInventory(getInventorySubTabFromPath());
       break;
   }
 
@@ -129,9 +134,18 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
 
   if (opts.push !== false) {
     historyId += 1;
-    const url = tabName === 'admin'
-      ? '/admin/' + (currentSettingsSubTab ?? 'general')
-      : '/' + tabName;
+    let url: string;
+    if (tabName === 'admin') {
+      url = '/admin/' + (currentSettingsSubTab ?? 'general');
+    } else if (tabName === 'inventory') {
+      // Inventory carries a sub-tab segment in the URL (QA A.4), mirroring
+      // Admin. loadInventory() above already applied the sub-section from
+      // the path (or the default); reflect that same segment here so the
+      // canonical URL is /inventory/<subtab>, never a bare /inventory.
+      url = '/inventory/' + getInventorySubTabFromPath();
+    } else {
+      url = '/' + tabName;
+    }
     window.history.pushState(
       { tab: tabName, id: historyId },
       '',
@@ -151,6 +165,51 @@ export function getSettingsSubTabFromPath(): string {
     .split('/');
   const sub = (segments[1] ?? '').toLowerCase();
   return sub in SETTINGS_SUBTABS ? sub : 'general';
+}
+
+/**
+ * Switch between Inventory & Coverage sub-tabs (Active commitments /
+ * Coverage / RI Exchange) and reflect the selection in the URL as
+ * `/inventory/<subtab>` (QA A.4). Mirrors switchSettingsSubTab: the DOM
+ * switch is delegated to inventory.ts; the history push lives here so the
+ * single historyId counter stays authoritative for back/forward.
+ *
+ * A user-initiated switch (sub-nav click) pushes a new history entry so it
+ * is shareable/bookmarkable and browser back/forward works. A no-op switch
+ * (already on the target sub-tab) does not push.
+ */
+export function switchInventorySubTab(subTab: string, opts: SwitchTabOptions = {}): void {
+  const before = window.location.pathname;
+  const target = switchInventorySubSection(subTab);
+  const canonical = '/inventory/' + target;
+
+  if (opts.push === false) return;
+  // Skip the push when the canonical URL already points at this sub-tab,
+  // so a redundant click doesn't stack duplicate history entries.
+  if (before === canonical) return;
+
+  historyId += 1;
+  window.history.pushState(
+    { tab: 'inventory', subTab: target, id: historyId },
+    '',
+    canonical + window.location.search + window.location.hash,
+  );
+}
+
+/**
+ * Parse the Inventory sub-tab from segment[1] of the current URL (QA A.4).
+ * Mirrors getSettingsSubTabFromPath: a `/inventory/<subtab>` deep link
+ * resolves to that sub-section; a bare `/inventory` (or any unknown
+ * segment) falls back to the default (active-commitments) so fresh
+ * navigation always lands on the first sub-tab.
+ */
+export function getInventorySubTabFromPath(): string {
+  const segments = window.location.pathname
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .split('/');
+  const sub = (segments[1] ?? '').toLowerCase();
+  return isValidInventorySubSection(sub) ? sub : DEFAULT_INVENTORY_SUB_SECTION;
 }
 
 /**
