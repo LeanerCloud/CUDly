@@ -143,18 +143,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Install golang-migrate
-        env:
-          MIGRATE_VERSION: v4.17.0
-          MIGRATE_SHA256: 26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/migrate.tar.gz \
-            "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
-          echo "${MIGRATE_SHA256}  /tmp/migrate.tar.gz" | sha256sum --check --strict
-          tar -xz -C /tmp -f /tmp/migrate.tar.gz migrate
-          sudo install -m 0755 /tmp/migrate /usr/local/bin/migrate
-          rm /tmp/migrate.tar.gz /tmp/migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -222,18 +217,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Install golang-migrate
-        env:
-          MIGRATE_VERSION: v4.17.0
-          MIGRATE_SHA256: 26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/migrate.tar.gz \
-            "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
-          echo "${MIGRATE_SHA256}  /tmp/migrate.tar.gz" | sha256sum --check --strict
-          tar -xz -C /tmp -f /tmp/migrate.tar.gz migrate
-          sudo install -m 0755 /tmp/migrate /usr/local/bin/migrate
-          rm /tmp/migrate.tar.gz /tmp/migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -291,18 +281,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Install golang-migrate
-        env:
-          MIGRATE_VERSION: v4.17.0
-          MIGRATE_SHA256: 26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/migrate.tar.gz \
-            "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
-          echo "${MIGRATE_SHA256}  /tmp/migrate.tar.gz" | sha256sum --check --strict
-          tar -xz -C /tmp -f /tmp/migrate.tar.gz migrate
-          sudo install -m 0755 /tmp/migrate /usr/local/bin/migrate
-          rm /tmp/migrate.tar.gz /tmp/migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
       - name: Azure Login
         uses: azure/login@v3
