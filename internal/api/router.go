@@ -314,6 +314,12 @@ func (r *Router) registerRoutes() {
 		// Public info endpoint
 		{ExactPath: "/api/info", Method: "GET", Handler: r.getPublicInfoHandler, Auth: AuthPublic},
 
+		// Build-version endpoint — public, returns only version / git SHA /
+		// build time (no account IDs, ARNs, or secrets) so an operator can
+		// curl a running environment and compare the SHA to the branch HEAD
+		// to detect deploy-lag.
+		{ExactPath: "/version", Method: "GET", Handler: r.getVersionHandler, Auth: AuthPublic},
+
 		// API documentation (Swagger UI + raw spec)
 		{PathPrefix: "/api/docs", Method: "GET", Handler: r.docsHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/docs", Method: "HEAD", Handler: r.docsHandler, Auth: AuthPublic},
@@ -677,6 +683,10 @@ func (r *Router) healthCheckHandler(ctx context.Context, req *events.LambdaFunct
 
 func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getPublicInfo(ctx, req)
+}
+
+func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getVersion(ctx, req)
 }
 
 func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

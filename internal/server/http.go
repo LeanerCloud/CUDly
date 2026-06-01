@@ -25,6 +25,13 @@ func CreateHTTPServer(app *Application, port int) *http.Server {
 	// SCHEDULED_TASK_AUTH_MODE: oidc on GCP, bearer on Azure, disabled
 	// for local dev.
 	mux.HandleFunc("/health", app.handleHealthCheck)
+	// /version is a root-path (no /api prefix) public endpoint. Like /health
+	// it must be registered explicitly: when STATIC_DIR is set the catch-all
+	// "/" route serves the SPA, so an unregistered /version would return the
+	// frontend index instead of the build metadata. It dispatches through the
+	// API router (single source of truth) but skips ensureDB so the deployed
+	// commit can still be read when the database is unreachable.
+	mux.HandleFunc("/version", app.handleVersion)
 	mux.Handle("/api/scheduled/", app.scheduledAuthMiddleware(http.HandlerFunc(app.handleScheduledHTTP)))
 
 	// When STATIC_DIR is set, serve static files for non-API paths
@@ -105,6 +112,25 @@ func (app *Application) handleHTTPRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	// Convert Lambda response back to HTTP response
+	lambdaResponseToHTTP(w, lambdaResp)
+}
+
+// handleVersion serves the public /version endpoint. It dispatches through the
+// API router (the api package owns the response shape and the AuthPublic route)
+// but, unlike handleHTTPRequest, deliberately skips ensureDB: the build-version
+// metadata is read from process environment variables stamped at build time, so
+// it must remain answerable even when the database is unreachable. That is
+// precisely the scenario where confirming the deployed commit matters most.
+func (app *Application) handleVersion(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	lambdaResp, err := app.API.HandleRequest(ctx, httpToLambdaRequest(r))
+	if err != nil {
+		log.Printf("Version handler error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	lambdaResponseToHTTP(w, lambdaResp)
 }
 
