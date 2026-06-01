@@ -72,6 +72,12 @@ func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalCo
 		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
 	}, nil
 }
+func (m *mockOverrideStore) UpsertNotificationMute(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (m *mockOverrideStore) IsNotificationMuted(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
 
 func boolPtr(b bool) *bool { return &b }
 

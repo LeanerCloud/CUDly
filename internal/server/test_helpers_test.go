@@ -319,3 +319,11 @@ func (m *mockConfigStoreForHealth) GetPurchaseHistoryInFlight(_ context.Context)
 func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
+
+func (m *mockConfigStoreForHealth) UpsertNotificationMute(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) IsNotificationMuted(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
