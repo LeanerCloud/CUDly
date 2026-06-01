@@ -2574,18 +2574,22 @@ function buildListMarkup(
       rangeParts.push(`term: ${termDisplay}`);
     }
 
+    const chevronButton = `<button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
+        ${chevron}
+      </button>`;
+    const chevronCell = showCheckboxes
+      ? `<td class="checkbox-col">${chevronButton}</td>`
+      : '';
+    const inlineChevron = showCheckboxes ? '' : `${chevronButton} `;
+
     rows.push(`
   <tr class="rec-cell-summary-row" data-cell-key="${escapeHtml(key)}">
-    <td class="checkbox-col">
-      <button type="button" class="rec-cell-chevron" data-cell-key="${escapeHtml(key)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} cell variants">
-        ${chevron}
-      </button>
-    </td>
+    ${chevronCell}
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
+      <span class="rec-cell-identity">${inlineChevron}${identityParts.join(' &mdash; ')}</span>
       ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
     </td>
   </tr>`);

@@ -100,6 +100,11 @@ const sampleRec = {
   on_demand_cost: null,
 };
 
+// Two variants sharing a cell key -- same resource_type/region/service/account but
+// different term -- so buildListMarkup groups them into a summary row.
+const sampleRecVariantA = { ...sampleRec, id: 'r1', term: 1, payment: 'all-upfront', savings: 200 };
+const sampleRecVariantB = { ...sampleRec, id: 'r2', term: 3, payment: 'no-upfront', savings: 350 };
+
 describe('Recommendations action-box permission gating (issue #365)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -221,5 +226,70 @@ describe('Recommendations checkbox + row-click gating for viewer role (issue #86
     const list = document.getElementById('recommendations-list');
     const rowCheckboxes = list?.querySelectorAll('input[data-rec-id]') ?? [];
     expect(rowCheckboxes.length).toBeGreaterThan(0);
+  });
+
+  test('readonly role: grouped-row summary has no checkbox-col and column span is aligned', async () => {
+    // Two variants share the same cell key -- buildListMarkup renders a summary row.
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [sampleRecVariantA, sampleRecVariantB],
+      regions: [],
+    });
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([sampleRecVariantA, sampleRecVariantB]);
+    mockUser('readonly');
+    await loadRecommendations();
+
+    const list = document.getElementById('recommendations-list');
+    const table = list?.querySelector('table');
+    expect(table).not.toBeNull();
+
+    const summaryRow = table!.querySelector('tr.rec-cell-summary-row');
+    expect(summaryRow).not.toBeNull();
+
+    // Header must not contain a checkbox-col th.
+    const headerCheckboxCols = table!.querySelectorAll('thead tr th.checkbox-col');
+    expect(headerCheckboxCols.length).toBe(0);
+
+    // Summary row must not contain a checkbox-col td (the bug this PR fixes).
+    const summaryCheckboxCols = summaryRow!.querySelectorAll('td.checkbox-col');
+    expect(summaryCheckboxCols.length).toBe(0);
+
+    // Effective column count: sum of colspan values in each row must match header th count.
+    const headerColCount = table!.querySelectorAll('thead tr th').length;
+    const summaryEffectiveCols = Array.from(summaryRow!.querySelectorAll('td'))
+      .reduce((sum, td) => sum + (td.colSpan || 1), 0);
+    expect(summaryEffectiveCols).toBe(headerColCount);
+  });
+
+  test('admin role: grouped-row summary retains checkbox-col and column span is aligned', async () => {
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [sampleRecVariantA, sampleRecVariantB],
+      regions: [],
+    });
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([sampleRecVariantA, sampleRecVariantB]);
+    mockUser('admin');
+    await loadRecommendations();
+
+    const list = document.getElementById('recommendations-list');
+    const table = list?.querySelector('table');
+    expect(table).not.toBeNull();
+
+    const summaryRow = table!.querySelector('tr.rec-cell-summary-row');
+    expect(summaryRow).not.toBeNull();
+
+    // Header must have a checkbox-col th for admin.
+    const headerCheckboxCols = table!.querySelectorAll('thead tr th.checkbox-col');
+    expect(headerCheckboxCols.length).toBe(1);
+
+    // Summary row must have a checkbox-col td for admin.
+    const summaryCheckboxCols = summaryRow!.querySelectorAll('td.checkbox-col');
+    expect(summaryCheckboxCols.length).toBe(1);
+
+    // Effective column count must match.
+    const headerColCount = table!.querySelectorAll('thead tr th').length;
+    const summaryEffectiveCols = Array.from(summaryRow!.querySelectorAll('td'))
+      .reduce((sum, td) => sum + (td.colSpan || 1), 0);
+    expect(summaryEffectiveCols).toBe(headerColCount);
   });
 });
