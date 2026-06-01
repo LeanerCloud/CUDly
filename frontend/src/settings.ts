@@ -2700,21 +2700,34 @@ async function confirmAndPropagatePayment(select: HTMLSelectElement): Promise<vo
  * even start editing, and hide Save / Reset / Delete-override CTAs.
  * Backend remains authoritative; this is a UX gate.
  *
+ * Issue #870: also covers the Purchasing Policies panel (#purchasing-panel),
+ * which is a sibling <section> outside #global-settings-form. Called from
+ * riexchange.ts after the RI Exchange Automation form is rendered so
+ * dynamically-injected inputs are covered too.
+ *
  * The form stays VISIBLE so non-admin sessions can still inspect the
  * configured providers, default term/payment, and grace windows.
  */
-function applyReadOnlySettings(formEl: HTMLElement | null): void {
+export function applyReadOnlySettings(formEl: HTMLElement | null): void {
+  const purchasingPanel = document.getElementById('purchasing-panel');
+  const controlSelector = 'input, select, textarea, button';
+
   if (canAccess('admin', '*')) {
     // Admin: ensure controls are enabled in case a prior session
     // (e.g. role downgraded mid-session) left them disabled.
     if (formEl) {
       formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
-        'input, select, textarea, button',
+        controlSelector,
       ).forEach((el) => { el.disabled = false; });
     }
-    document.querySelectorAll<HTMLButtonElement>('#save-settings-btn, #reset-settings-btn').forEach((el) => {
-      el.hidden = false;
-    });
+    if (purchasingPanel) {
+      purchasingPanel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+        controlSelector,
+      ).forEach((el) => { el.disabled = false; });
+    }
+    document.querySelectorAll<HTMLButtonElement>(
+      '#save-settings-btn, #reset-settings-btn, #save-purchasing-btn, #reset-purchasing-btn',
+    ).forEach((el) => { el.hidden = false; });
     return;
   }
 
@@ -2724,12 +2737,17 @@ function applyReadOnlySettings(formEl: HTMLElement | null): void {
   // fires even if a control sneaks past the disable.
   if (formEl) {
     formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
-      'input, select, textarea, button',
+      controlSelector,
     ).forEach((el) => { el.disabled = true; });
   }
-  document.querySelectorAll<HTMLButtonElement>('#save-settings-btn, #reset-settings-btn').forEach((el) => {
-    el.hidden = true;
-  });
+  if (purchasingPanel) {
+    purchasingPanel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+      controlSelector,
+    ).forEach((el) => { el.disabled = true; });
+  }
+  document.querySelectorAll<HTMLButtonElement>(
+    '#save-settings-btn, #reset-settings-btn, #save-purchasing-btn, #reset-purchasing-btn',
+  ).forEach((el) => { el.hidden = true; });
 }
 
 /**
