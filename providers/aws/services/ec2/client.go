@@ -1027,9 +1027,9 @@ func (c *Client) DescribeMarketplaceListing(ctx context.Context, listingID strin
 	}
 	listing := out.ReservedInstancesListings[0]
 	state := string(listing.Status)
-	resolvedID := ""
-	if listing.ReservedInstancesListingId != nil {
-		resolvedID = aws.ToString(listing.ReservedInstancesListingId)
+	resolvedID := aws.ToString(listing.ReservedInstancesListingId)
+	if resolvedID == "" {
+		resolvedID = listingID
 	}
 	return MarketplaceListingResult{ListingID: resolvedID, State: state}, nil
 }
@@ -1048,9 +1048,9 @@ func (c *Client) CancelMarketplaceListing(ctx context.Context, listingID string)
 	}
 	listing := out.ReservedInstancesListings[0]
 	state := string(listing.Status)
-	resolvedID := ""
-	if listing.ReservedInstancesListingId != nil {
-		resolvedID = aws.ToString(listing.ReservedInstancesListingId)
+	resolvedID := aws.ToString(listing.ReservedInstancesListingId)
+	if resolvedID == "" {
+		resolvedID = listingID
 	}
 	return MarketplaceListingResult{ListingID: resolvedID, State: state}, nil
 }

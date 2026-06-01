@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
 	ec2svc "github.com/LeanerCloud/CUDly/providers/aws/services/ec2"
@@ -66,55 +67,70 @@ type MarketplaceListRequest struct {
 
 // MarketplaceListResponse is the JSON response body for a successful listing.
 type MarketplaceListResponse struct {
-	ListingID     string                  `json:"listing_id"`
-	ListingState  string                  `json:"listing_state"`
-	PriceSchedule []MarketplacePriceTier  `json:"price_schedule"`
-	AWSFeePercent float64                 `json:"aws_fee_percent"`
-	Note          string                  `json:"note,omitempty"`
+	ListingID     string                 `json:"listing_id"`
+	ListingState  string                 `json:"listing_state"`
+	PriceSchedule []MarketplacePriceTier `json:"price_schedule"`
+	AWSFeePercent float64                `json:"aws_fee_percent"`
+	Note          string                 `json:"note,omitempty"`
 }
 
-// marketplaceList handles POST /api/purchases/{id}/marketplace-list.
-// The {id} must be the purchase_history.purchase_id (AWS ReservedInstancesId).
-func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
+// validateMarketplaceListRequest performs the pre-flight checks shared by the
+// listing flow: session auth, UUID validation, row lookup, offering_class /
+// RBAC / duplicate-listing gates, and optional body decode. It returns the
+// validated history row and the decoded request body. Extracted from
+// marketplaceList to keep that handler's cyclomatic complexity in check.
+func (h *Handler) validateMarketplaceListRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (*config.PurchaseHistoryRecord, MarketplaceListRequest, error) {
+	var body MarketplaceListRequest
+
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, body, err
 	}
 
 	if err := validateUUID(purchaseID); err != nil {
-		return nil, err
+		return nil, body, err
 	}
 
 	// Look up the purchase_history row to validate offering_class + get metadata.
 	row, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up purchase: %w", err)
+		return nil, body, fmt.Errorf("failed to look up purchase: %w", err)
 	}
 	if row == nil {
-		return nil, NewClientError(404, "purchase not found")
+		return nil, body, NewClientError(404, "purchase not found")
 	}
 
 	// Only Standard RIs can be listed on the Marketplace.
 	if !strings.EqualFold(row.OfferingClass, "standard") {
-		return nil, NewClientError(400, "only Standard Reserved Instances can be listed on the AWS Marketplace; this purchase has offering_class="+row.OfferingClass)
+		return nil, body, NewClientError(400, "only Standard Reserved Instances can be listed on the AWS Marketplace; this purchase has offering_class="+row.OfferingClass)
 	}
 
 	// Enforce sell-any / sell-own RBAC.
 	if err := h.authorizeSessionSell(ctx, session, row.CloudAccountID); err != nil {
-		return nil, err
+		return nil, body, err
 	}
 
 	// Reject if a listing is already active to avoid duplicate listings.
 	if strings.EqualFold(row.ListingState, "active") {
-		return nil, NewClientError(409, fmt.Sprintf("an active marketplace listing %s already exists for this RI; cancel it first", row.ListingID))
+		return nil, body, NewClientError(409, fmt.Sprintf("an active marketplace listing %s already exists for this RI; cancel it first", row.ListingID))
 	}
 
 	// Decode optional body.
-	var body MarketplaceListRequest
 	if len(req.Body) > 0 {
 		if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
-			return nil, NewClientError(400, "invalid request body: "+err.Error())
+			return nil, body, NewClientError(400, "invalid request body: "+err.Error())
 		}
+	}
+
+	return row, body, nil
+}
+
+// marketplaceList handles POST /api/purchases/{id}/marketplace-list.
+// The {id} must be the purchase_history.purchase_id (AWS ReservedInstancesId).
+func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
+	row, body, err := h.validateMarketplaceListRequest(ctx, req, purchaseID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Compute actual remaining months from the purchase timestamp and total
