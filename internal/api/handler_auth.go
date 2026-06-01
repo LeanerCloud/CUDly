@@ -288,18 +288,9 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	// Decode base64-encoded passwords if provided
-	var currentPassword, newPassword string
-	if profileReq.CurrentPassword != "" {
-		currentPassword, err = decodeBase64Password(profileReq.CurrentPassword)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if profileReq.NewPassword != "" {
-		newPassword, err = decodeBase64Password(profileReq.NewPassword)
-		if err != nil {
-			return nil, err
-		}
+	currentPassword, newPassword, err := decodeProfilePasswords(profileReq)
+	if err != nil {
+		return nil, err
 	}
 
 	// Update profile through auth service
@@ -308,6 +299,25 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	return map[string]string{"status": "profile updated"}, nil
+}
+
+// decodeProfilePasswords decodes the optional base64-encoded current and new
+// passwords from a ProfileUpdateRequest. Pulled out of updateProfile to keep
+// that function under the cyclomatic limit.
+func decodeProfilePasswords(req ProfileUpdateRequest) (current, next string, err error) {
+	if req.CurrentPassword != "" {
+		current, err = decodeBase64Password(req.CurrentPassword)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if req.NewPassword != "" {
+		next, err = decodeBase64Password(req.NewPassword)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return current, next, nil
 }
 
 // decodeChangePasswordRequest validates and decodes both passwords from a ChangePasswordRequest.
