@@ -315,6 +315,13 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
+		// The deferred DB trigger (migration 000058) fires at commit time and
+		// can reject writes that the application-level soft check missed due to
+		// concurrent requests. Surface the trigger violation as ErrLastAdmin so
+		// callers receive the same sentinel regardless of which guard caught it.
+		if isLastAdminConstraintViolation(err) {
+			return nil, ErrLastAdmin
+		}
 		return nil, fmt.Errorf("failed to update user: %w", err)
 	}
 
@@ -430,7 +437,17 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 		logging.Warnf("Failed to delete user sessions: %v", err)
 	}
 
-	return s.store.DeleteUser(ctx, userID)
+	if err := s.store.DeleteUser(ctx, userID); err != nil {
+		// The deferred DB trigger (migration 000058) fires at commit time and
+		// can reject deletes that the application-level soft check missed due
+		// to concurrent requests. Surface as ErrLastAdmin so the handler maps
+		// it to the same 409 regardless of which guard caught it.
+		if isLastAdminConstraintViolation(err) {
+			return ErrLastAdmin
+		}
+		return err
+	}
+	return nil
 }
 
 // GetUser returns user info. Returns (nil, pgx.ErrNoRows) if the user does not exist.

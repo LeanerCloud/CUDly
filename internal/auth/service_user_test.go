@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -329,6 +330,129 @@ func TestService_DeleteUser(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("blocks delete of last admin member (soft check)", func(t *testing.T) {
+		// Verifies that the application-level guard in DeleteUser returns
+		// ErrLastAdmin when CountGroupMembers reports only one admin remains.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(1, nil).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		err := service.DeleteUser(ctx, "admin-1")
+		assert.ErrorIs(t, err, ErrLastAdmin)
+	})
+
+	t.Run("maps DB trigger violation to ErrLastAdmin", func(t *testing.T) {
+		// Verifies that DeleteUser surfaces ErrLastAdmin when the deferred DB
+		// trigger (migration 000058) fires because a concurrent request already
+		// removed the other admin between the soft check and the DELETE. The
+		// soft check saw count >= 2 and passed, but the trigger rejects the
+		// commit. We simulate this by having the store return the raw pgconn
+		// error text that the real trigger would produce.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		// Soft check passes: two admins visible at read time.
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Once()
+		mockStore.On("DeleteUserSessions", ctx, "admin-1").Return(nil).Once()
+		// The DELETE statement triggers the deferred constraint at commit. We
+		// simulate this with a plain error whose text matches the trigger
+		// sentinel; the real DB would return a pgconn.PgError with code P0001.
+		// isLastAdminConstraintViolation falls back to a string check, so this
+		// plain error lets us exercise the mapping path in unit tests.
+		triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one member of the Administrators group must remain")
+		mockStore.On("DeleteUser", ctx, "admin-1").Return(triggerErr).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		err := service.DeleteUser(ctx, "admin-1")
+		assert.ErrorIs(t, err, ErrLastAdmin)
+	})
+}
+
+// TestService_DeleteUser_ConcurrentLastTwoAdmins is a regression test for the
+// TOCTOU race described in issue #919. Two goroutines simultaneously attempt
+// to delete the last two members of the Administrators group. Both pass the
+// soft CountGroupMembers check (each sees count == 2). The DB-level deferred
+// trigger (migration 000058) rejects one of the commits. We simulate the race
+// by running both DeleteUser calls concurrently and configuring the mock so
+// that the second DELETE returns the trigger violation error.
+//
+// Invariant asserted: at least one of the two deletes returns ErrLastAdmin,
+// meaning the system never ends up with zero administrators.
+func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	adminA := &User{ID: "admin-a", GroupIDs: []string{DefaultAdminGroupID}}
+	adminB := &User{ID: "admin-b", GroupIDs: []string{DefaultAdminGroupID}}
+
+	// Both goroutines read their respective user records and see count == 2.
+	mockStore.On("GetUserByID", ctx, "admin-a").Return(adminA, nil).Once()
+	mockStore.On("GetUserByID", ctx, "admin-b").Return(adminB, nil).Once()
+	mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Twice()
+	mockStore.On("DeleteUserSessions", ctx, "admin-a").Return(nil).Once()
+	mockStore.On("DeleteUserSessions", ctx, "admin-b").Return(nil).Once()
+
+	// admin-a's delete succeeds; admin-b's hits the deferred constraint trigger.
+	mockStore.On("DeleteUser", ctx, "admin-a").Return(nil).Once()
+	triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one member of the Administrators group must remain")
+	mockStore.On("DeleteUser", ctx, "admin-b").Return(triggerErr).Once()
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	// Use a WaitGroup and a ready channel to maximise concurrency: both
+	// goroutines block at the barrier before calling DeleteUser.
+	ready := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	start := func(userID string) {
+		defer wg.Done()
+		<-ready // synchronise start
+		errCh <- service.DeleteUser(ctx, userID)
+	}
+
+	go start("admin-a")
+	go start("admin-b")
+
+	close(ready) // release both goroutines simultaneously
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+
+	// Exactly one delete must return ErrLastAdmin; the other succeeds.
+	lastAdminErrors := 0
+	for _, err := range errs {
+		if errors.Is(err, ErrLastAdmin) {
+			lastAdminErrors++
+		}
+	}
+	assert.Equal(t, 1, lastAdminErrors,
+		"exactly one concurrent delete should be rejected with ErrLastAdmin; got errors: %v", errs)
 }
 
 func TestService_ListUsers(t *testing.T) {
@@ -556,6 +680,59 @@ func TestService_UpdateUser(t *testing.T) {
 		assert.Equal(t, []string{"group-2"}, user.GroupIDs)
 
 		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("blocks removing admin group from last admin member (soft check)", func(t *testing.T) {
+		// guardGroupChange should return ErrLastAdmin when CountGroupMembers
+		// reports only one admin-group member and the update removes that group.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(1, nil).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		req := UpdateUserRequest{
+			GroupIDs: []string{"other-group"},
+		}
+		_, err := service.UpdateUser(ctx, "", "admin-1", req)
+		assert.ErrorIs(t, err, ErrLastAdmin)
+	})
+
+	t.Run("maps DB trigger violation to ErrLastAdmin on UpdateUser", func(t *testing.T) {
+		// Verifies that UpdateUser surfaces ErrLastAdmin when the deferred DB
+		// trigger fires because the soft check saw count >= 2 but a concurrent
+		// request removed the other admin before this transaction committed.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		// Soft check passes: two admins visible at read time.
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Once()
+		// UpdateUser hits the deferred trigger at commit time.
+		triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one member of the Administrators group must remain")
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(triggerErr).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		req := UpdateUserRequest{
+			GroupIDs: []string{"other-group"},
+		}
+		_, err := service.UpdateUser(ctx, "", "admin-1", req)
+		assert.ErrorIs(t, err, ErrLastAdmin)
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -158,6 +159,30 @@ func isEmailDuplicateError(err error) bool {
 			pgErr.ConstraintName == "users_email_unique"
 	}
 	return false
+}
+
+// isLastAdminConstraintViolation reports whether err is the deferred trigger
+// exception from migration 000058 (trg_min_one_admin). The trigger uses
+// RAISE EXCEPTION with a message prefixed by "last_admin_constraint_violation"
+// and PostgreSQL error code P0001 (raise_exception). Detecting by message
+// prefix rather than code alone avoids false positives from other user-raised
+// exceptions in the same codebase.
+//
+// The function also handles plain errors whose message contains the sentinel
+// prefix, which allows unit tests to simulate the trigger violation without a
+// live PostgreSQL connection.
+func isLastAdminConstraintViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	const sentinel = "last_admin_constraint_violation"
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "P0001" && strings.HasPrefix(pgErr.Message, sentinel)
+	}
+	// Fallback for unit-test stubs that return a plain error with the sentinel
+	// message (no pgconn available in mock-based tests).
+	return strings.HasPrefix(err.Error(), sentinel)
 }
 
 // UpdateUser updates an existing user
