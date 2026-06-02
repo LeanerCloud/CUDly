@@ -208,4 +208,30 @@ describe('Opportunities lookback selector (issue #909)', () => {
     );
     expect(errToast).toBeTruthy();
   });
+
+  test.each(['999', '0', '-1', '0x3c', '7e0', '', ' 7', 'abc'])(
+    'tampered/out-of-range value "%s" is rejected client-side without persisting',
+    async (badValue) => {
+      mockUser('admin');
+      await loadRecommendations();
+      const select = getSelect()!;
+
+      // Directly invoke the change handler with an injected bad value to
+      // simulate a tampered DOM (the real <select> only exposes the three
+      // enum options, so dispatchEvent would fire the legitimate value).
+      select.value = badValue;
+      select.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 0));
+
+      // No persist should have been attempted.
+      expect(api.updateConfig).not.toHaveBeenCalled();
+      // Selector reverted to last-known value.
+      expect(select.value).toBe('30');
+      // Error toast surfaced.
+      const errToast = (showToast as jest.Mock).mock.calls.find(
+        (c) => c[0].kind === 'error',
+      );
+      expect(errToast).toBeTruthy();
+    },
+  );
 });

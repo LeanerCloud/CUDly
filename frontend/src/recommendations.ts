@@ -615,28 +615,36 @@ function renderLookbackToolbar(): void {
  * the error so the user never silently keeps a stale view.
  */
 async function onLookbackChange(rawValue: string): Promise<void> {
-  // feedback_strict_int_parse: reject anything that isn't a clean integer,
-  // then constrain to the accepted enum so a tampered DOM can't push an
-  // out-of-range value the backend would 400 on.
-  const parsed = Number(rawValue);
+  // feedback_strict_int_parse: reject non-decimal-integer strings (e.g.
+  // "0x3c", "7e0", " 7", "") before converting, then constrain to the
+  // accepted enum so a tampered DOM can't push an out-of-range value.
   const previous = currentLookbackDays();
   const select = document.getElementById('recs-lookback-days') as HTMLSelectElement | null;
 
-  if (!Number.isInteger(parsed) || !(LOOKBACK_OPTIONS as readonly number[]).includes(parsed)) {
+  if (!/^\d+$/.test(rawValue) || !Number.isInteger(Number(rawValue)) || !(LOOKBACK_OPTIONS as readonly number[]).includes(Number(rawValue))) {
     // toast renders via textContent, so no escaping is needed (escaping here
     // would double-encode and show literal entities).
     showToast({ message: `Invalid lookback window: ${rawValue}`, kind: 'error' });
     if (select) select.value = String(previous);
     return;
   }
+  const parsed = Number(rawValue);
   if (parsed === previous) return;
 
   // The backend config PUT preserves the two recommendation cycle-params
   // when omitted but writes every other absent field as its zero value, so
   // we must round-trip the full cached config and override only the
-  // lookback. cachedGlobalConfig is populated on load; if it is somehow
-  // absent, send a minimal valid payload that still carries the field.
-  const base = cachedGlobalConfig ?? {};
+  // lookback. Block the save if the config cache is not yet populated —
+  // falling back to {} would wipe every other global setting on the PUT.
+  if (!cachedGlobalConfig) {
+    showToast({
+      message: 'Settings are still loading. Please retry once configuration has loaded.',
+      kind: 'error',
+    });
+    if (select) select.value = String(previous);
+    return;
+  }
+  const base = cachedGlobalConfig;
   const payload: api.Config = {
     ...(base as api.Config),
     recommendations_lookback_days: parsed,
