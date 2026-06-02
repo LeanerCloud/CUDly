@@ -99,18 +99,3 @@ output "database_vpc_config" {
   }
 }
 
-# VPC Endpoints
-output "vpc_endpoints_security_group_id" {
-  description = "Security group ID for VPC endpoints"
-  value       = aws_security_group.vpc_endpoints.id
-}
-
-output "secretsmanager_endpoint_id" {
-  description = "Secrets Manager VPC endpoint ID"
-  value       = aws_vpc_endpoint.secretsmanager.id
-}
-
-output "secretsmanager_endpoint_dns" {
-  description = "Secrets Manager VPC endpoint DNS names"
-  value       = aws_vpc_endpoint.secretsmanager.dns_entry
-}
