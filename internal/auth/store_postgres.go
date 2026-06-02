@@ -42,7 +42,7 @@ var _ StoreInterface = (*PostgresStore)(nil)
 // GetUserByID retrieves a user by ID
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, role, group_ids, active,
+		SELECT id, email, password_hash, salt, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -57,7 +57,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, 
 // GetUserByEmail retrieves a user by email
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, role, group_ids, active,
+		SELECT id, email, password_hash, salt, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -87,12 +87,12 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 
 	query := `
 		INSERT INTO users (
-			id, email, password_hash, salt, role, group_ids, active,
+			id, email, password_hash, salt, group_ids, active,
 			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
 	// Substitute an empty slice for nil so the Postgres TEXT[] column
@@ -109,7 +109,6 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 		user.Email,
 		user.PasswordHash,
 		user.Salt,
-		user.Role,
 		user.GroupIDs,
 		user.Active,
 		user.MFAEnabled,
@@ -170,21 +169,20 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 			email = $2,
 			password_hash = $3,
 			salt = $4,
-			role = $5,
-			group_ids = $6,
-			active = $7,
-			mfa_enabled = $8,
-			mfa_secret = $9,
-			mfa_pending_secret = $10,
-			mfa_pending_secret_expires_at = $11,
-			mfa_recovery_codes = $12,
-			password_reset_token = $13,
-			password_reset_expiry = $14,
-			failed_login_attempts = $15,
-			locked_until = $16,
-			password_history = $17,
-			updated_at = $18,
-			last_login_at = $19
+			group_ids = $5,
+			active = $6,
+			mfa_enabled = $7,
+			mfa_secret = $8,
+			mfa_pending_secret = $9,
+			mfa_pending_secret_expires_at = $10,
+			mfa_recovery_codes = $11,
+			password_reset_token = $12,
+			password_reset_expiry = $13,
+			failed_login_attempts = $14,
+			locked_until = $15,
+			password_history = $16,
+			updated_at = $17,
+			last_login_at = $18
 		WHERE id = $1
 	`
 
@@ -199,7 +197,6 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 		user.Email,
 		user.PasswordHash,
 		user.Salt,
-		user.Role,
 		user.GroupIDs,
 		user.Active,
 		user.MFAEnabled,
@@ -248,7 +245,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	// LIMIT provides a safety cap against unbounded memory allocation on large installations.
 	// Pagination support should be added if this limit proves insufficient.
 	query := `
-		SELECT id, email, password_hash, salt, role, group_ids, active,
+		SELECT id, email, password_hash, salt, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -287,7 +284,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 // as "used" instead of "expired" (QA bug 11.2).
 func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, role, group_ids, active,
+		SELECT id, email, password_hash, salt, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -299,17 +296,36 @@ func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (
 	return s.scanUser(s.db.QueryRow(ctx, query, token))
 }
 
-// AdminExists checks if any admin user exists
+// adminGroupContainsClause is the SQL predicate matching users who are members
+// of the Administrators group. Authorization is group-membership-only after
+// issue #907, so "is an admin" == "group_ids contains the Administrators group
+// UUID". $1 must be bound to DefaultAdminGroupID.
+const adminGroupContainsClause = `group_ids @> ARRAY[$1::uuid]`
+
+// AdminExists checks if any active Administrators-group member exists. This is
+// the group-membership replacement for the former role = 'admin' check.
 func (s *PostgresStore) AdminExists(ctx context.Context) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin' AND active = true)`
+	query := `SELECT EXISTS(SELECT 1 FROM users WHERE ` + adminGroupContainsClause + ` AND active = true)`
 
 	var exists bool
-	err := s.db.QueryRow(ctx, query).Scan(&exists)
+	err := s.db.QueryRow(ctx, query, DefaultAdminGroupID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check admin existence: %w", err)
 	}
 
 	return exists, nil
+}
+
+// CountGroupMembers returns the number of users whose group_ids contains
+// groupID. Used to enforce last-administrator protection (issue #907).
+func (s *PostgresStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
+	query := `SELECT COUNT(*) FROM users WHERE group_ids @> ARRAY[$1::uuid]`
+
+	var count int
+	if err := s.db.QueryRow(ctx, query, groupID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to count group members: %w", err)
+	}
+	return count, nil
 }
 
 // CreateAdminIfNone atomically inserts user as the first admin in the
@@ -333,43 +349,51 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	user.UpdatedAt = now
 
 	// The NOT EXISTS guard matches AdminExists's semantics exactly
-	// (role='admin' AND active=true) so the fast-path check and the
-	// atomic insert agree: a deployment with only inactive admins is
+	// (Administrators-group member AND active=true) so the fast-path check
+	// and the atomic insert agree: a deployment with only inactive admins is
 	// treated as "no admin" by both, and the insert proceeds. If they
 	// disagreed, AdminExists could report false while this insert
 	// failed silently on the WHERE clause, leaving the operator with
 	// a recoverable-looking error and no admin.
 	//
-	// The role column is also hard-coded to 'admin' regardless of
-	// user.Role — the method's contract is "create admin if none",
-	// and accepting a non-admin role here would silently break that
-	// contract (the WHERE clause would still let the insert through
-	// because a non-admin row doesn't trip the "admin exists" check).
+	// The bootstrap admin's group_ids is forced to include the Administrators
+	// group regardless of the caller-supplied slice — the method's contract is
+	// "create admin if none", and an admin row that did NOT carry the
+	// Administrators group would not satisfy the membership predicate, silently
+	// breaking that contract.
 	query := `
 		INSERT INTO users (
-			id, email, password_hash, salt, role, group_ids, active,
+			id, email, password_hash, salt, group_ids, active,
 			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
 		)
-		SELECT $1, $2, $3, $4, 'admin', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-		WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND active = true)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+		WHERE NOT EXISTS (SELECT 1 FROM users WHERE group_ids @> ARRAY[$20::uuid] AND active = true)
 	`
 
-	// See CreateUser for the nil-slice substitution rationale.
+	// See CreateUser for the nil-slice substitution rationale. Force the
+	// Administrators group onto the bootstrap admin so it satisfies the
+	// membership predicate above (deduped to avoid a doubled entry if the
+	// caller already supplied it).
 	recoveryCodes := user.MFARecoveryCodes
 	if recoveryCodes == nil {
 		recoveryCodes = []string{}
 	}
+	groupIDs := user.GroupIDs
+	if !containsGroup(groupIDs, DefaultAdminGroupID) {
+		groupIDs = append(append([]string(nil), groupIDs...), DefaultAdminGroupID)
+	}
 
 	tag, err := s.db.Exec(ctx, query,
 		user.ID, user.Email, user.PasswordHash, user.Salt,
-		user.GroupIDs, user.Active, user.MFAEnabled, user.MFASecret,
+		groupIDs, user.Active, user.MFAEnabled, user.MFASecret,
 		user.MFAPendingSecret, user.MFAPendingSecretExpiresAt, recoveryCodes,
 		user.PasswordResetToken, user.PasswordResetExpiry,
 		user.FailedLoginAttempts, user.LockedUntil, user.PasswordHistory,
 		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
+		DefaultAdminGroupID,
 	)
 	if err != nil {
 		// Email uniqueness can still fire if the bootstrap caller reuses
@@ -549,16 +573,15 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) error {
 	query := `
 		INSERT INTO sessions (
-			token, user_id, email, role, expires_at, created_at,
+			token, user_id, email, expires_at, created_at,
 			user_agent, ip_address, csrf_token
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
 	_, err := s.db.Exec(ctx, query,
 		session.Token,
 		session.UserID,
 		session.Email,
-		session.Role,
 		session.ExpiresAt,
 		session.CreatedAt,
 		session.UserAgent,
@@ -576,7 +599,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 // GetSession retrieves a session by token
 func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session, error) {
 	query := `
-		SELECT token, user_id, email, role, expires_at, created_at,
+		SELECT token, user_id, email, expires_at, created_at,
 		       user_agent, ip_address, csrf_token
 		FROM sessions
 		WHERE token = $1 AND expires_at > NOW()
@@ -587,7 +610,6 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session,
 		&session.Token,
 		&session.UserID,
 		&session.Email,
-		&session.Role,
 		&session.ExpiresAt,
 		&session.CreatedAt,
 		&session.UserAgent,
@@ -835,7 +857,6 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 		&user.Email,
 		&user.PasswordHash,
 		&user.Salt,
-		&user.Role,
 		&groupIDs,
 		&user.Active,
 		&user.MFAEnabled,

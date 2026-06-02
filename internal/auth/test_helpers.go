@@ -103,6 +103,11 @@ func (m *MockStore) ListGroups(ctx context.Context) ([]Group, error) {
 	return args.Get(0).([]Group), args.Error(1)
 }
 
+func (m *MockStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
+	args := m.Called(ctx, groupID)
+	return args.Int(0), args.Error(1)
+}
+
 func (m *MockStore) CreateSession(ctx context.Context, session *Session) error {
 	args := m.Called(ctx, session)
 	return args.Error(0)
@@ -237,7 +242,7 @@ func createTestUser(t *testing.T, password string) *User {
 		Email:        "test@example.com",
 		PasswordHash: hash,
 		Salt:         "", // Not used anymore, bcrypt handles salting
-		Role:         RoleUser,
+		GroupIDs:     []string{DefaultAdminGroupID},
 		Active:       true,
 		CreatedAt:    time.Now(),
 	}

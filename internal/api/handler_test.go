@@ -367,7 +367,7 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 
 	mockStore.On("SaveGlobalConfig", mock.Anything, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 	mockStore.On("ListServiceConfigs", mock.Anything).Return([]config.ServiceConfig{}, nil)
@@ -378,6 +378,7 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
 	}, nil)
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
@@ -434,8 +435,9 @@ func TestHandler_HandleRequest_PutServiceConfig(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("GetServiceConfig", mock.Anything, "aws", "rds").Return(nil, nil)
@@ -502,8 +504,9 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockStore := new(MockConfigStore)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockScheduler.On("CollectRecommendations", mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
@@ -540,8 +543,9 @@ func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	plans := []config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111"}}
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(plans, nil)
@@ -571,8 +575,9 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("CreatePurchasePlan", mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
@@ -615,8 +620,9 @@ func TestHandler_HandleRequest_GetPlan(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	plan := &config.PurchasePlan{ID: "12345678-1234-1234-1234-123456789abc"}
 	mockStore.On("GetPurchasePlan", mock.Anything, "12345678-1234-1234-1234-123456789abc").Return(plan, nil)
@@ -646,8 +652,9 @@ func TestHandler_HandleRequest_UpdatePlan(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	existingPlan := &config.PurchasePlan{
@@ -687,8 +694,9 @@ func TestHandler_HandleRequest_DeletePlan(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("DeletePurchasePlan", mock.Anything, "12345678-1234-1234-1234-123456789abc").Return(nil)
@@ -1010,8 +1018,9 @@ func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	scheduledDate := time.Now().AddDate(0, 0, 7)
 	executions := []config.PurchaseExecution{
@@ -1049,8 +1058,9 @@ func TestHandler_HandleRequest_PausePlannedPurchase(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
@@ -1083,8 +1093,9 @@ func TestHandler_HandleRequest_ResumePlannedPurchase(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
@@ -1117,8 +1128,9 @@ func TestHandler_HandleRequest_RunPlannedPurchase(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	transitioned := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "running"}
@@ -1151,8 +1163,9 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
@@ -1184,8 +1197,9 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	plan := &config.PurchasePlan{
@@ -1227,8 +1241,9 @@ func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	mockStore.On("GetPurchasePlan", mock.Anything, "12345678-1234-1234-1234-123456789abc").Return(nil, assert.AnError)
 
@@ -1259,8 +1274,9 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 
 	// Use valid UUID format for the admin user ID
 	adminUserID := "12345678-1234-1234-1234-123456789abc"
-	adminSession := &Session{UserID: adminUserID, Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: adminUserID, Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{auth: mockAuth, apiKey: "test-key"}
@@ -1296,8 +1312,9 @@ func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
@@ -1326,8 +1343,9 @@ func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{auth: mockAuth, apiKey: "test-key"}

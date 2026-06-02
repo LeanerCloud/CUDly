@@ -30,6 +30,10 @@ type StoreInterface interface {
 	UpdateGroup(ctx context.Context, group *Group) error
 	DeleteGroup(ctx context.Context, groupID string) error
 	ListGroups(ctx context.Context) ([]Group, error)
+	// CountGroupMembers returns the number of users whose group_ids array
+	// contains groupID. Used to enforce the last-administrator protection
+	// (issue #907) and any future per-group membership invariants.
+	CountGroupMembers(ctx context.Context, groupID string) (int, error)
 
 	// Session operations
 	CreateSession(ctx context.Context, session *Session) error

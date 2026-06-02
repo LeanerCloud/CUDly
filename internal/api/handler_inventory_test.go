@@ -20,8 +20,8 @@ func adminInventoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFun
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}

@@ -33,9 +33,12 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Up to head (includes 000056), then roll back 000056 -> version 55.
+	// Up to head, then roll back to version 55 so the next RunMigrations
+	// re-applies 000056. Two steps because 000057 (drop role -> groups) now
+	// sits above 000056 at head; rolling back 000057 first also restores the
+	// `role` column this test seeds below.
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 2))
 
 	// Simulate a restored/manually-seeded admin whose group_ids drifted to
 	// empty (the bug pattern from issue #351).
@@ -57,10 +60,12 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 	assert.Equal(t, []string{defaultAdminGroupIDTest}, got,
 		"migration 000056 must backfill the Administrators group onto a drifted admin row even without an admin email")
 
-	// Idempotent: re-running the migration path again must not duplicate.
+	// Idempotent: rolling back the head migration (000057) and re-applying it
+	// must not duplicate or drop the Administrators group on the already
+	// backfilled admin row.
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 	got = queryAdminGroupIDs(t, ctx, pool, adminEmail)
 	assert.Equal(t, []string{defaultAdminGroupIDTest}, got,
-		"re-applying migration 000056 must not duplicate the Administrators group entry")
+		"re-applying the head migration must not duplicate the Administrators group entry")
 }

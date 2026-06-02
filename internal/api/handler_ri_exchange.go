@@ -988,7 +988,9 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 // Used by the three-mode dispatch in approveRIExchange to decide whether to route
 // to approveRIExchangeViaSession before fetching the record.
 func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) error {
-	if session.Role == "admin" {
+	// Stateless admin API key: full access, no user row. Administrators-group
+	// users pass via the approve-any HasPermissionAPI check below.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {
@@ -1019,7 +1021,9 @@ func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) 
 // "approving a purchase action on a different resource type" per the issue spec,
 // which prefers reusing the existing verbs to keep the matrix small.
 func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
-	if session.Role == "admin" {
+	// Stateless admin API key: full access, no user row. Administrators-group
+	// users pass via the approve-any HasPermissionAPI check below.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {

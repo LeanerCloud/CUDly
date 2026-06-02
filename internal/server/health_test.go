@@ -56,6 +56,10 @@ func (m *mockAuthStoreForHealth) GetGroup(ctx context.Context, groupID string) (
 	return nil, nil
 }
 
+func (m *mockAuthStoreForHealth) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockAuthStoreForHealth) CreateGroup(ctx context.Context, group *auth.Group) error {
 	return nil
 }

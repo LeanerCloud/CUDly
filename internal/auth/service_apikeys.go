@@ -85,13 +85,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 	return apiKey, userAPIKey, nil
 }
 
-// validateAPIKeyPermissions ensures the key's permissions don't exceed the user's permissions
+// validateAPIKeyPermissions ensures the key's permissions don't exceed the
+// user's permissions. Administrators-group members hold {admin, *}, so the
+// per-permission HasPermission check below already passes for every requested
+// permission; no role-based short-circuit is needed.
 func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, permissions []Permission) error {
-	// Admin users can create keys with any permissions
-	if user.Role == RoleAdmin {
-		return nil
-	}
-
 	// Get user's auth context to check their permissions
 	authCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {
@@ -143,34 +141,53 @@ func (s *Service) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPI
 	return key, nil
 }
 
-// RevokeAPIKey deactivates an API key (soft delete)
-func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
-	// Get the key to verify ownership
+// authorizeAPIKeyAccess looks up the key and the caller, then returns the key
+// together with a permission error if the caller is neither the key owner nor
+// an admin. The action string ("revoke" / "delete") is used only in the error
+// message so callers get a context-specific message. Pulled out of
+// RevokeAPIKey and DeleteAPIKey to deduplicate the identical ownership check
+// and keep both functions under the cyclomatic limit.
+func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, action string) (*UserAPIKey, error) {
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("API key not found")
+			return nil, fmt.Errorf("API key not found")
 		}
-		return fmt.Errorf("failed to get API key: %w", err)
+		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
-		return fmt.Errorf("API key not found")
+		return nil, fmt.Errorf("API key not found")
 	}
 
-	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
+			return nil, fmt.Errorf("user not found")
 		}
-		return fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
-		return fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user not found")
 	}
 
-	if key.UserID != userID && user.Role != RoleAdmin {
-		return fmt.Errorf("unauthorized: cannot revoke another user's API key")
+	if key.UserID != userID {
+		isAdmin, err := s.UserHasAdminCapability(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check admin capability: %w", err)
+		}
+		if !isAdmin {
+			return nil, fmt.Errorf("unauthorized: cannot %s another user's API key", action)
+		}
+	}
+
+	return key, nil
+}
+
+// RevokeAPIKey deactivates an API key (soft delete)
+func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
+	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "revoke")
+	if err != nil {
+		return err
 	}
 
 	// Revoke the key
@@ -186,32 +203,9 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 
 // DeleteAPIKey permanently deletes an API key
 func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error {
-	// Get the key to verify ownership
-	key, err := s.store.GetAPIKeyByID(ctx, keyID)
+	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "delete")
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("API key not found")
-		}
-		return fmt.Errorf("failed to get API key: %w", err)
-	}
-	if key == nil {
-		return fmt.Errorf("API key not found")
-	}
-
-	// Verify ownership (unless admin)
-	user, err := s.store.GetUserByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
-		return fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
-	}
-
-	if key.UserID != userID && user.Role != RoleAdmin {
-		return fmt.Errorf("unauthorized: cannot delete another user's API key")
+		return err
 	}
 
 	// Delete the key
@@ -293,18 +287,14 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 }
 
 // ComputeEffectivePermissions computes the intersection of API key permissions and user permissions
-// This ensures an API key cannot grant more permissions than the user has
+// This ensures an API key cannot grant more permissions than the user has.
+//
+// Administrators-group members carry {admin, *}: with no key-specific
+// permissions their full {admin, *} context is returned, and a scoped admin
+// key's permissions all pass the HasPermission intersection below, so the
+// group-derived path preserves the previous role == admin behaviour without a
+// special case.
 func (s *Service) ComputeEffectivePermissions(ctx context.Context, apiKey *UserAPIKey, user *User) ([]Permission, error) {
-	// Admin users always have full permissions
-	if user.Role == RoleAdmin {
-		// If API key has specific permissions, use those (scoped admin key)
-		if len(apiKey.Permissions) > 0 {
-			return apiKey.Permissions, nil
-		}
-		// Otherwise return full admin permissions
-		return DefaultAdminPermissions(), nil
-	}
-
 	// Get user's auth context
 	authCtx, err := s.GetAuthContext(ctx, user.ID)
 	if err != nil {

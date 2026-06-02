@@ -247,7 +247,6 @@ func (s *Service) completeSuccessfulLogin(ctx context.Context, user *User) (*Log
 		User: &UserInfo{
 			ID:         user.ID,
 			Email:      user.Email,
-			Role:       user.Role,
 			Groups:     user.GroupIDs,
 			MFAEnabled: user.MFAEnabled,
 		},

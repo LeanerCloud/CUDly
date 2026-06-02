@@ -48,12 +48,11 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Validate role against allowlist
-	switch createReq.Role {
-	case auth.RoleAdmin, auth.RoleUser, auth.RoleReadOnly:
-		// valid
-	default:
-		return nil, NewClientError(400, "role must be one of: admin, user, readonly")
+	// Authorization is group-membership-only: a user must belong to at least
+	// one group (issue #907). The service layer re-validates as defence in
+	// depth and the DB enforces it via a CHECK constraint.
+	if len(createReq.Groups) == 0 {
+		return nil, NewClientError(400, "at least one group is required")
 	}
 
 	// Decode base64-encoded password
@@ -80,11 +79,14 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 func mapAuthError(err error) error {
 	switch {
 	case errors.Is(err, auth.ErrInvalidEmail),
-		errors.Is(err, auth.ErrInvalidRole),
+		errors.Is(err, auth.ErrNoGroups),
 		errors.Is(err, auth.ErrPasswordPolicy):
 		return NewClientError(400, err.Error())
+	case errors.Is(err, auth.ErrSelfEscalation):
+		return NewClientError(403, err.Error())
 	case errors.Is(err, auth.ErrEmailInUse),
-		errors.Is(err, auth.ErrAdminExists):
+		errors.Is(err, auth.ErrAdminExists),
+		errors.Is(err, auth.ErrLastAdmin):
 		return NewClientError(409, err.Error())
 	}
 	return err
@@ -116,7 +118,8 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
-	if _, err := h.requirePermission(ctx, req, "update", "users"); err != nil {
+	session, err := h.requirePermission(ctx, req, "update", "users")
+	if err != nil {
 		return nil, err
 	}
 
@@ -125,9 +128,12 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	user, err := h.auth.UpdateUserAPI(ctx, userID, updateReq)
+	// session.UserID is the trusted actor identity (from the validated
+	// session, never the request body); the service layer uses it to enforce
+	// the self-escalation guard (issue #907).
+	user, err := h.auth.UpdateUserAPI(ctx, session.UserID, userID, updateReq)
 	if err != nil {
-		return nil, err
+		return nil, mapAuthError(err)
 	}
 
 	return user, nil
@@ -151,7 +157,7 @@ func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	if err := h.auth.DeleteUser(ctx, userID); err != nil {
-		return nil, err
+		return nil, mapAuthError(err)
 	}
 
 	return map[string]string{"status": "user deleted"}, nil

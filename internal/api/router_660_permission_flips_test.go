@@ -31,11 +31,11 @@ import (
 // --- helpers ---------------------------------------------------------------
 
 func userSessionFixture(userID string) *Session {
-	return &Session{UserID: userID, Role: "user"}
+	return &Session{UserID: userID}
 }
 
 func adminSessionFixture() *Session {
-	return &Session{UserID: "admin-uid", Role: "admin"}
+	return &Session{UserID: "admin-uid"}
 }
 
 // authForUserWith returns a MockAuthService that:
@@ -60,6 +60,7 @@ func authForAdmin(ctx context.Context, t *testing.T) *MockAuthService {
 	t.Helper()
 	m := new(MockAuthService)
 	m.On("ValidateSession", ctx, "admin-token").Return(adminSessionFixture(), nil)
+	m.grantAdmin()
 	t.Cleanup(func() { m.AssertExpectations(t) })
 	return m
 }

@@ -48,7 +48,6 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		Salt:         "", // Not used anymore, but kept for backward compatibility
-		Role:         RoleAdmin,
 		GroupIDs:     []string{DefaultAdminGroupID},
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -84,9 +83,9 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		Token:     session.Token,
 		ExpiresAt: session.ExpiresAt,
 		User: &UserInfo{
-			ID:    user.ID,
-			Email: user.Email,
-			Role:  user.Role,
+			ID:     user.ID,
+			Email:  user.Email,
+			Groups: user.GroupIDs,
 		},
 		CSRFToken: session.CSRFToken,
 	}, nil
@@ -130,10 +129,10 @@ func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserR
 	if existing != nil {
 		return ErrEmailInUse
 	}
-	if req.Role != RoleAdmin && req.Role != RoleUser && req.Role != RoleReadOnly {
-		// %w lets the API handler detect the category via errors.Is(ErrInvalidRole)
-		// while preserving the specific role name in the user-facing message.
-		return fmt.Errorf("%w: %s", ErrInvalidRole, req.Role)
+	// Authorization derives entirely from group membership, so a user with no
+	// groups can do nothing. Reject zero-group creation as a 400 (issue #907).
+	if len(req.GroupIDs) == 0 {
+		return ErrNoGroups
 	}
 	if req.Password == "" {
 		return nil
@@ -205,7 +204,6 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		Salt:         "", // Not used anymore, but kept for backward compatibility
-		Role:         req.Role,
 		GroupIDs:     req.GroupIDs,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -233,7 +231,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) (*Creat
 	if invite {
 		s.sendInviteEmail(ctx, user, inviteToken, result)
 	} else {
-		logging.Infof("User created: id=%s, role=%s", user.ID, user.Role)
+		logging.Infof("User created: id=%s, groups=%d", user.ID, len(user.GroupIDs))
 	}
 
 	return result, nil
@@ -270,11 +268,17 @@ func (s *Service) sendInviteEmail(ctx context.Context, user *User, inviteToken s
 		result.InviteEmailError = err.Error()
 		logging.Errorf("Failed to send user invite email: %v", err)
 	}
-	logging.Infof("User invited: id=%s, role=%s, email_sent=%t", user.ID, user.Role, sent)
+	logging.Infof("User invited: id=%s, groups=%d, email_sent=%t", user.ID, len(user.GroupIDs), sent)
 }
 
-// UpdateUser updates user details (admin only)
-func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) (*User, error) {
+// UpdateUser updates user details (requires manage-users permission).
+//
+// actorUserID is the authenticated user performing the change (from the
+// session, never client-supplied). It is used to enforce the self-escalation
+// guard: a user may not add a group they are not already a member of unless
+// they hold the manage-users permission. Pass "" for trusted internal callers
+// (e.g. the stateless admin API key) that have already been authorised.
+func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, req UpdateUserRequest) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -286,8 +290,18 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserR
 		return nil, fmt.Errorf("user not found")
 	}
 
+	// Snapshot the prior membership before mutating so the guards below can
+	// reason about what is being added/removed.
+	priorGroups := append([]string(nil), user.GroupIDs...)
+
 	if err := applyUpdateUserRequest(user, req); err != nil {
 		return nil, err
+	}
+
+	if req.GroupIDs != nil {
+		if err := s.guardGroupChange(ctx, actorUserID, userID, priorGroups, req.GroupIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	// Email is mutated through updateUserEmail rather than applyUpdateUserRequest
@@ -307,14 +321,76 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req UpdateUserR
 	return user, nil
 }
 
+// guardGroupChange enforces the issue #907 invariants for a group-membership
+// change: at least one group remains, the last Administrators-group member is
+// not removed, and a non-privileged actor cannot escalate their own access.
+func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserID string, prior, next []string) error {
+	if len(next) == 0 {
+		return ErrNoGroups
+	}
+
+	// Last-admin protection: if this change removes the Administrators group
+	// from a user who currently has it, ensure at least one other member
+	// keeps it.
+	if containsGroup(prior, DefaultAdminGroupID) && !containsGroup(next, DefaultAdminGroupID) {
+		if err := s.checkLastAdminConstraint(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Self-escalation guard: when the actor is editing their own membership,
+	// any group being ADDED that they did not already have requires the actor
+	// to hold the manage-users permission. A non-privileged user therefore
+	// cannot grant themselves a more powerful group. Internal callers
+	// (actorUserID == "") are already trusted and skip this check.
+	if actorUserID != "" && actorUserID == targetUserID && addsNewGroup(prior, next) {
+		canManage, err := s.HasPermission(ctx, actorUserID, ActionUpdate, ResourceUsers, nil)
+		if err != nil {
+			return fmt.Errorf("failed to verify manage-users permission: %w", err)
+		}
+		if !canManage {
+			return ErrSelfEscalation
+		}
+	}
+	return nil
+}
+
+// checkLastAdminConstraint returns ErrLastAdmin if removing the
+// Administrators group from its current holder would leave the group with
+// zero members. Pulled out of guardGroupChange to keep that function under
+// the cyclomatic limit.
+func (s *Service) checkLastAdminConstraint(ctx context.Context) error {
+	count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
+	if err != nil {
+		return fmt.Errorf("failed to count administrators: %w", err)
+	}
+	if count <= 1 {
+		return ErrLastAdmin
+	}
+	return nil
+}
+
+func containsGroup(groups []string, target string) bool {
+	for _, g := range groups {
+		if g == target {
+			return true
+		}
+	}
+	return false
+}
+
+// addsNewGroup reports whether next contains any group not present in prior.
+func addsNewGroup(prior, next []string) bool {
+	for _, g := range next {
+		if !containsGroup(prior, g) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyUpdateUserRequest applies the non-nil fields of req to user, validating as needed.
 func applyUpdateUserRequest(user *User, req UpdateUserRequest) error {
-	if req.Role != nil {
-		if *req.Role != RoleAdmin && *req.Role != RoleUser && *req.Role != RoleReadOnly {
-			return fmt.Errorf("invalid role: %s", *req.Role)
-		}
-		user.Role = *req.Role
-	}
 	if req.GroupIDs != nil {
 		user.GroupIDs = req.GroupIDs
 	}
@@ -324,8 +400,31 @@ func applyUpdateUserRequest(user *User, req UpdateUserRequest) error {
 	return nil
 }
 
-// DeleteUser removes a user (admin only)
+// DeleteUser removes a user (requires manage-users permission). Refuses to
+// delete the last remaining Administrators-group member so the deployment can
+// never be locked out of admin functionality (issue #907).
 func (s *Service) DeleteUser(ctx context.Context, userID string) error {
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
+		return err
+	}
+	if user == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if containsGroup(user.GroupIDs, DefaultAdminGroupID) {
+		count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
+		if err != nil {
+			return fmt.Errorf("failed to count administrators: %w", err)
+		}
+		if count <= 1 {
+			return ErrLastAdmin
+		}
+	}
+
 	// Delete all user sessions
 	if err := s.store.DeleteUserSessions(ctx, userID); err != nil {
 		logging.Warnf("Failed to delete user sessions: %v", err)

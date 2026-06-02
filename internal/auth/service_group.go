@@ -46,7 +46,10 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 	return s.store.ListGroups(ctx)
 }
 
-// GetUserPermissions returns all permissions for a user (from role + groups)
+// GetUserPermissions returns all permissions for a user. Authorization is
+// derived purely from the union of the user's groups' permissions: there is
+// no role-based fallback. A user with no groups therefore has no permissions
+// and is denied everything (fail closed).
 func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Permission, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
@@ -61,17 +64,7 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 
 	var permissions []Permission
 
-	// Add role-based permissions
-	switch user.Role {
-	case RoleAdmin:
-		permissions = append(permissions, DefaultAdminPermissions()...)
-	case RoleUser:
-		permissions = append(permissions, DefaultUserPermissions()...)
-	case RoleReadOnly:
-		permissions = append(permissions, DefaultReadOnlyPermissions()...)
-	}
-
-	// Add group permissions
+	// Permissions come exclusively from group memberships.
 	for _, groupID := range user.GroupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
@@ -87,8 +80,10 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 	return permissions, nil
 }
 
-// BuildAuthContext builds a complete authorization context for a user
-// This includes permissions and allowed accounts from the user's role and groups
+// BuildAuthContext builds a complete authorization context for a user.
+// Permissions and allowed accounts are derived purely from the union of the
+// user's group memberships; a user with no groups gets an empty context and
+// is denied everything (fail closed).
 func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
@@ -108,21 +103,9 @@ func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthCon
 		Permissions:     make([]Permission, 0),
 	}
 
-	addRolePermissions(authCtx, user.Role)
 	s.collectGroupsAndAccounts(ctx, authCtx, user.GroupIDs)
 
 	return authCtx, nil
-}
-
-func addRolePermissions(authCtx *AuthContext, role string) {
-	switch role {
-	case RoleAdmin:
-		authCtx.Permissions = append(authCtx.Permissions, DefaultAdminPermissions()...)
-	case RoleUser:
-		authCtx.Permissions = append(authCtx.Permissions, DefaultUserPermissions()...)
-	case RoleReadOnly:
-		authCtx.Permissions = append(authCtx.Permissions, DefaultReadOnlyPermissions()...)
-	}
 }
 
 func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthContext, groupIDs []string) {
@@ -184,6 +167,25 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 
 func checkAdminPermission(perm Permission) bool {
 	return perm.Action == ActionAdmin && perm.Resource == ResourceAll
+}
+
+// UserHasAdminCapability reports whether the user's effective (group-derived)
+// permissions include the full-access {admin, *} capability, i.e. the user is
+// a member of the Administrators group (or any group granted equivalent
+// permission). This is the group-membership replacement for the old
+// role == "admin" short-circuit. Fail closed: any lookup error returns
+// (false, err) and callers must deny.
+func (s *Service) UserHasAdminCapability(ctx context.Context, userID string) (bool, error) {
+	perms, err := s.GetUserPermissions(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	for _, perm := range perms {
+		if checkAdminPermission(perm) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func checkPermissionMatch(perm Permission, action, resource string) bool {

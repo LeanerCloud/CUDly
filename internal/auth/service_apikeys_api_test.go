@@ -20,10 +20,10 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-			Role:   RoleAdmin,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			Active:   true,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		permissions := []Permission{
@@ -37,6 +37,10 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
 
 		result, err := service.CreateAPIKeyAPI(ctx, "user-123", req)
@@ -56,10 +60,10 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		service := &Service{store: mockStore}
 
 		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-			Role:   RoleAdmin,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			Active:   true,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		expiresAt := time.Now().Add(30 * 24 * time.Hour)
@@ -70,6 +74,10 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+			ID:          DefaultAdminGroupID,
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+		}, nil)
 		mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil)
 
 		result, err := service.CreateAPIKeyAPI(ctx, "user-123", req)
@@ -196,8 +204,7 @@ func TestService_DeleteAPIKeyAPI(t *testing.T) {
 			UserID: "user-123",
 		}
 		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
+			ID: "user-123",
 		}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)
@@ -236,8 +243,7 @@ func TestService_RevokeAPIKeyAPI(t *testing.T) {
 			IsActive: true,
 		}
 		user := &User{
-			ID:   "user-123",
-			Role: RoleUser,
+			ID: "user-123",
 		}
 
 		mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(existingKey, nil)

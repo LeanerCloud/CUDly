@@ -21,8 +21,8 @@ func adminHistoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFunct
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
@@ -336,7 +336,6 @@ func TestHandler_getHistory_PermissionDenied(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",
-		Role:   "user",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(false, nil)
 

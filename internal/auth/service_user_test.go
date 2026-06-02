@@ -40,7 +40,7 @@ func TestService_SetupAdmin(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.NotEmpty(t, resp.Token)
 		assert.Equal(t, "admin@example.com", resp.User.Email)
-		assert.Equal(t, RoleAdmin, resp.User.Role)
+		assert.Equal(t, []string{DefaultAdminGroupID}, resp.User.Groups)
 
 		// Verify the admin user was auto-assigned to the Administrators group.
 		require.NotNil(t, capturedUser)
@@ -123,7 +123,7 @@ func TestService_CreateUser(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -131,7 +131,7 @@ func TestService_CreateUser(t *testing.T) {
 		require.NotNil(t, result)
 		require.NotNil(t, result.User)
 		assert.Equal(t, "newuser@example.com", result.User.Email)
-		assert.Equal(t, RoleUser, result.User.Role)
+		assert.Equal(t, []string{DefaultAdminGroupID}, result.User.GroupIDs)
 		assert.True(t, result.User.Active)
 		// Non-invite path: no invite-email status.
 		assert.Nil(t, result.InviteEmailSent)
@@ -154,7 +154,7 @@ func TestService_CreateUser(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "existing@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -165,23 +165,25 @@ func TestService_CreateUser(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("invalid role", func(t *testing.T) {
+	t.Run("zero groups rejected", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("GetUserByEmail", ctx, "newuser@example.com").Return(nil, nil).Once()
 
+		// Authorization is group-membership-only (issue #907): a user with no
+		// groups can do nothing, so creation must be rejected.
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     "invalid-role",
+			GroupIDs: nil,
 		}
 
 		result, err := service.CreateUser(ctx, req)
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid role")
+		assert.ErrorIs(t, err, ErrNoGroups)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -196,7 +198,7 @@ func TestService_CreateUser(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -217,7 +219,7 @@ func TestService_CreateUser(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -242,8 +244,8 @@ func TestService_CreateUser(t *testing.T) {
 			Return(nil).Once()
 
 		req := CreateUserRequest{
-			Email: "invitee@example.com",
-			Role:  RoleUser,
+			Email:    "invitee@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
 			// Password intentionally empty — admin is inviting the user.
 		}
 
@@ -285,8 +287,8 @@ func TestService_CreateUser(t *testing.T) {
 			Return(assert.AnError).Once()
 
 		req := CreateUserRequest{
-			Email: "invitee@example.com",
-			Role:  RoleUser,
+			Email:    "invitee@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -315,6 +317,9 @@ func TestService_DeleteUser(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
+		// Non-admin user: last-admin guard is skipped, so deletion proceeds.
+		mockStore.On("GetUserByID", ctx, "user-123").
+			Return(&User{ID: "user-123", GroupIDs: []string{"group-1"}}, nil).Once()
 		mockStore.On("DeleteUserSessions", ctx, "user-123").Return(nil).Once()
 		mockStore.On("DeleteUser", ctx, "user-123").Return(nil).Once()
 
@@ -357,9 +362,9 @@ func TestService_GetUser(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		testUser := &User{
-			ID:    "user-123",
-			Email: "test@example.com",
-			Role:  RoleUser,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(testUser, nil).Once()
@@ -422,32 +427,6 @@ func TestService_CheckAdminExists(t *testing.T) {
 func TestService_UpdateUser(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("update role successfully", func(t *testing.T) {
-		mockStore := new(MockStore)
-		mockEmail := new(MockEmailSender)
-		service := createTestService(mockStore, mockEmail)
-
-		existingUser := &User{
-			ID:    "user-123",
-			Email: "test@example.com",
-			Role:  RoleUser,
-		}
-
-		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
-		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
-
-		newRole := RoleAdmin
-		req := UpdateUserRequest{
-			Role: &newRole,
-		}
-
-		user, err := service.UpdateUser(ctx, "user-123", req)
-		require.NoError(t, err)
-		assert.Equal(t, RoleAdmin, user.Role)
-
-		mockStore.AssertExpectations(t)
-	})
-
 	t.Run("update groupIDs successfully", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
@@ -456,7 +435,6 @@ func TestService_UpdateUser(t *testing.T) {
 		existingUser := &User{
 			ID:       "user-123",
 			Email:    "test@example.com",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -467,7 +445,10 @@ func TestService_UpdateUser(t *testing.T) {
 			GroupIDs: []string{"group-2", "group-3"},
 		}
 
-		user, err := service.UpdateUser(ctx, "user-123", req)
+		// Internal/admin caller (actorUserID == "") skips the self-escalation
+		// guard; the group change is neither emptying nor removing the last
+		// admin, so it succeeds.
+		user, err := service.UpdateUser(ctx, "", "user-123", req)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"group-2", "group-3"}, user.GroupIDs)
 
@@ -480,10 +461,10 @@ func TestService_UpdateUser(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		existingUser := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Role:   RoleUser,
-			Active: true,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			GroupIDs: []string{"group-1"},
+			Active:   true,
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
@@ -494,35 +475,36 @@ func TestService_UpdateUser(t *testing.T) {
 			Active: &inactive,
 		}
 
-		user, err := service.UpdateUser(ctx, "user-123", req)
+		user, err := service.UpdateUser(ctx, "", "user-123", req)
 		require.NoError(t, err)
 		assert.False(t, user.Active)
 
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("update with invalid role", func(t *testing.T) {
+	t.Run("empty groups rejected", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
 		existingUser := &User{
-			ID:    "user-123",
-			Email: "test@example.com",
-			Role:  RoleUser,
+			ID:       "user-123",
+			Email:    "test@example.com",
+			GroupIDs: []string{"group-1"},
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
 
-		invalidRole := "superadmin"
+		// A non-nil but empty GroupIDs would leave a zero-group user, which
+		// authorization-as-group-membership (issue #907) forbids.
 		req := UpdateUserRequest{
-			Role: &invalidRole,
+			GroupIDs: []string{},
 		}
 
-		user, err := service.UpdateUser(ctx, "user-123", req)
+		user, err := service.UpdateUser(ctx, "", "user-123", req)
 		assert.Error(t, err)
 		assert.Nil(t, user)
-		assert.Contains(t, err.Error(), "invalid role")
+		assert.ErrorIs(t, err, ErrNoGroups)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -534,12 +516,11 @@ func TestService_UpdateUser(t *testing.T) {
 
 		mockStore.On("GetUserByID", ctx, "nonexistent").Return(nil, nil).Once()
 
-		newRole := RoleAdmin
 		req := UpdateUserRequest{
-			Role: &newRole,
+			GroupIDs: []string{"group-1"},
 		}
 
-		user, err := service.UpdateUser(ctx, "nonexistent", req)
+		user, err := service.UpdateUser(ctx, "", "nonexistent", req)
 		assert.Error(t, err)
 		assert.Nil(t, user)
 		assert.Contains(t, err.Error(), "user not found")
@@ -555,7 +536,6 @@ func TestService_UpdateUser(t *testing.T) {
 		existingUser := &User{
 			ID:       "user-123",
 			Email:    "test@example.com",
-			Role:     RoleUser,
 			Active:   true,
 			GroupIDs: []string{"group-1"},
 		}
@@ -563,17 +543,14 @@ func TestService_UpdateUser(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
 		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
-		newRole := RoleReadOnly
 		active := false
 		req := UpdateUserRequest{
-			Role:     &newRole,
 			Active:   &active,
 			GroupIDs: []string{"group-2"},
 		}
 
-		user, err := service.UpdateUser(ctx, "user-123", req)
+		user, err := service.UpdateUser(ctx, "", "user-123", req)
 		require.NoError(t, err)
-		assert.Equal(t, RoleReadOnly, user.Role)
 		assert.False(t, user.Active)
 		assert.Equal(t, []string{"group-2"}, user.GroupIDs)
 
@@ -592,7 +569,7 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "not-an-email",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -611,7 +588,7 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "weak",
-			Role:     RoleUser,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
@@ -632,7 +609,6 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "newuser@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1", "group-2"},
 		}
 
@@ -656,14 +632,14 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "admin@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleAdmin,
+			GroupIDs: []string{DefaultAdminGroupID},
 		}
 
 		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.NotNil(t, result.User)
-		assert.Equal(t, RoleAdmin, result.User.Role)
+		assert.Equal(t, []string{DefaultAdminGroupID}, result.User.GroupIDs)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -679,14 +655,14 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		req := CreateUserRequest{
 			Email:    "readonly@example.com",
 			Password: "SecurePass@123",
-			Role:     RoleReadOnly,
+			GroupIDs: []string{"00000000-0000-5000-8000-000000000006"},
 		}
 
 		result, err := service.CreateUser(ctx, req)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.NotNil(t, result.User)
-		assert.Equal(t, RoleReadOnly, result.User.Role)
+		assert.Equal(t, []string{"00000000-0000-5000-8000-000000000006"}, result.User.GroupIDs)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -786,7 +762,6 @@ func TestService_UpdateUserProfile(t *testing.T) {
 			ID:           "user-123",
 			Email:        "old@example.com",
 			PasswordHash: string(hash),
-			Role:         RoleUser,
 			Active:       true,
 			CreatedAt:    time.Now(),
 		}
@@ -812,7 +787,6 @@ func TestService_UpdateUserProfile(t *testing.T) {
 			ID:           "user-123",
 			Email:        "old@example.com",
 			PasswordHash: string(hash),
-			Role:         RoleUser,
 			Active:       true,
 		}
 
@@ -835,7 +809,6 @@ func TestService_UpdateUserProfile(t *testing.T) {
 			ID:           "user-123",
 			Email:        "old@example.com",
 			PasswordHash: string(hash),
-			Role:         RoleUser,
 			Active:       true,
 		}
 
@@ -858,7 +831,6 @@ func TestService_UpdateUserProfile(t *testing.T) {
 			ID:           "user-123",
 			Email:        "old@example.com",
 			PasswordHash: string(hash),
-			Role:         RoleUser,
 			Active:       true,
 		}
 
@@ -894,7 +866,6 @@ func TestService_UpdateUserProfile(t *testing.T) {
 			ID:           "user-123",
 			Email:        "old@example.com",
 			PasswordHash: string(hash),
-			Role:         RoleUser,
 			Active:       true,
 		}
 

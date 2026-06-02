@@ -22,7 +22,6 @@ func TestHandler_listPlans(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	plans := []config.PurchasePlan{
@@ -31,6 +30,7 @@ func TestHandler_listPlans(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -54,7 +54,6 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	plans := []config.PurchasePlan{
@@ -65,6 +64,7 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	expectedFilter := config.PurchasePlanFilter{AccountIDs: []string{accountID}}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", ctx, expectedFilter).Return(plans, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -90,12 +90,12 @@ func TestHandler_createPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 	mockStore.On("SetPlanAccounts", ctx, mock.AnythingOfType("string"), []string{targetAccountID}).Return(nil)
 
@@ -131,10 +131,10 @@ func TestHandler_createPlan_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{corsAllowedOrigin: "*", auth: mockAuth}
 
@@ -161,9 +161,9 @@ func TestHandler_createPlan_RejectsEmptyTargetAccounts(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	cases := []struct {
 		name string
@@ -210,11 +210,11 @@ func TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError(t *testin
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 	setAccountsErr := errors.New("setplanaccounts boom")
 	mockStore.On("SetPlanAccounts", ctx, mock.AnythingOfType("string"), []string{targetAccountID}).Return(setAccountsErr)
@@ -258,9 +258,9 @@ func TestHandler_createPlan_RejectsInvalidTargetAccountUUID(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	body := `{"name": "P", "provider": "aws", "service": "rds", "target_accounts": ["not-a-uuid"]}`
@@ -285,7 +285,6 @@ func TestHandler_getPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	plan := &config.PurchasePlan{
@@ -295,6 +294,7 @@ func TestHandler_getPlan(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "12345678-1234-1234-1234-123456789abc").Return(plan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -319,7 +319,6 @@ func TestHandler_updatePlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -329,6 +328,7 @@ func TestHandler_updatePlan(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "12345678-1234-1234-1234-123456789abc").Return(existingPlan, nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
@@ -357,10 +357,10 @@ func TestHandler_deletePlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("DeletePurchasePlan", ctx, "12345678-1234-1234-1234-123456789abc").Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -384,10 +384,10 @@ func TestHandler_updatePlan_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{corsAllowedOrigin: "*", auth: mockAuth}
 
@@ -414,7 +414,6 @@ func TestHandler_createPlannedPurchases(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	plan := &config.PurchasePlan{
@@ -427,6 +426,7 @@ func TestHandler_createPlannedPurchases(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil).Times(3)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
@@ -462,7 +462,6 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	plan := &config.PurchasePlan{
@@ -475,6 +474,7 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 
 	// Explicit WithTx expectation: this is the regression CR flagged. The
@@ -554,10 +554,10 @@ func TestHandler_createPlannedPurchases_InvalidCount(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -581,10 +581,10 @@ func TestHandler_createPlannedPurchases_InvalidDate(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -610,10 +610,10 @@ func TestHandler_createPlannedPurchases_InvalidJSON(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -638,10 +638,10 @@ func TestHandler_createPlannedPurchases_PlanNotFound(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, errors.New("plan not found"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -717,7 +717,6 @@ func TestHandler_patchPlan_Success(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -733,6 +732,7 @@ func TestHandler_patchPlan_Success(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
 		return p.Enabled == true && p.Name == "Original Name"
@@ -762,7 +762,6 @@ func TestHandler_patchPlan_UpdateMultipleFields(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -777,6 +776,7 @@ func TestHandler_patchPlan_UpdateMultipleFields(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
 		return p.Enabled == true && p.Name == "New Name" && p.AutoPurchase == true && p.NotificationDaysBefore == 5
@@ -825,10 +825,10 @@ func TestHandler_patchPlan_InvalidBody(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -852,10 +852,10 @@ func TestHandler_patchPlan_NotFound(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, errors.New("not found"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -880,10 +880,10 @@ func TestHandler_patchPlan_NilPlan(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -908,7 +908,6 @@ func TestHandler_patchPlan_EmptyName(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -918,6 +917,7 @@ func TestHandler_patchPlan_EmptyName(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -942,7 +942,6 @@ func TestHandler_patchPlan_InvalidNotificationDays(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -952,6 +951,7 @@ func TestHandler_patchPlan_InvalidNotificationDays(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -976,7 +976,6 @@ func TestHandler_patchPlan_NegativeNotificationDays(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -986,6 +985,7 @@ func TestHandler_patchPlan_NegativeNotificationDays(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1010,7 +1010,6 @@ func TestHandler_patchPlan_UpdateError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	existingPlan := &config.PurchasePlan{
@@ -1020,6 +1019,7 @@ func TestHandler_patchPlan_UpdateError(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(existingPlan, nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(errors.New("database error"))
 

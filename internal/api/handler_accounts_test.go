@@ -22,7 +22,6 @@ func adminAccountSession() *Session {
 	return &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 }
 
@@ -54,6 +53,7 @@ func setupAdminMock(ctx context.Context) *MockConfigStore {
 
 func setupAdminAuth(ctx context.Context, mockAuth *MockAuthService) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
+	mockAuth.grantAdmin()
 }
 
 // --- listAccounts ---
@@ -1219,13 +1219,15 @@ func TestDiscoverOrgAccounts_NotFound(t *testing.T) {
 func TestDiscoverOrgAccounts_RejectsNonAdmin(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	// Non-admin session: ValidateSession returns Role="user", which
-	// requireAdmin (middleware.go:227-256) explicitly rejects with 403.
+	// Non-admin session: the user is not an Administrators-group member, so
+	// HasPermissionAPI(admin,*) returns false and requireAdmin
+	// (middleware.go) rejects with 403 (issue #907 group-only authz).
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "regular-user",
 		Email:  "user@example.com",
-		Role:   "user",
 	}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "regular-user", "admin", "*").
+		Return(false, nil)
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
 
@@ -1548,7 +1550,6 @@ func scopedUserSession() *Session {
 	return &Session{
 		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 		Email:  "viewer@example.com",
-		Role:   "user",
 	}
 }
 

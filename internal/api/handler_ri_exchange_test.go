@@ -364,8 +364,9 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	id := "550e8400-e29b-41d4-a716-446655440010"
 	creatorID := "creator-uuid"
 
-	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com", Role: "admin"}
+	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	// authorizeSessionApproveRIExchange: admin role short-circuits (no HasPermissionAPI call)
 
@@ -419,7 +420,7 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		h := &Handler{config: mockStore, auth: mockAuth}
 
-		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com", Role: "user"}
+		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com"}
 		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
@@ -457,7 +458,7 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		h := &Handler{config: mockStore, auth: mockAuth}
 
-		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com", Role: "user"}
+		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com"}
 		mockAuth.On("ValidateSession", ctx, "owner-bearer").Return(ownerSession, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveAny, auth.ResourcePurchases).Return(false, nil)
 		mockAuth.On("HasPermissionAPI", ctx, ownerID, auth.ActionApproveOwn, auth.ResourcePurchases).Return(true, nil)
@@ -815,7 +816,7 @@ func (m *mockAuthForExchange) Login(_ context.Context, _ LoginRequest) (*LoginRe
 }
 func (m *mockAuthForExchange) Logout(_ context.Context, _ string) error { return nil }
 func (m *mockAuthForExchange) ValidateSession(_ context.Context, _ string) (*Session, error) {
-	return &Session{UserID: "admin", Email: "admin@test.com", Role: "admin"}, nil
+	return &Session{UserID: "admin", Email: "admin@test.com"}, nil
 }
 func (m *mockAuthForExchange) ValidateCSRFToken(_ context.Context, _, _ string) error { return nil }
 func (m *mockAuthForExchange) SetupAdmin(_ context.Context, _ SetupAdminRequest) (*LoginResponse, error) {
@@ -834,7 +835,7 @@ func (m *mockAuthForExchange) UpdateUserProfile(_ context.Context, _, _, _, _ st
 	return nil
 }
 func (m *mockAuthForExchange) CreateUserAPI(_ context.Context, _ any) (any, error) { return nil, nil }
-func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ any) (any, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteUser(_ context.Context, _ string) error              { return nil }

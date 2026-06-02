@@ -864,7 +864,6 @@ func (a *authServiceAdapter) Login(ctx context.Context, req api.LoginRequest) (*
 		User: &api.UserInfo{
 			ID:         resp.User.ID,
 			Email:      resp.User.Email,
-			Role:       resp.User.Role,
 			Groups:     resp.User.Groups,
 			MFAEnabled: resp.User.MFAEnabled,
 		},
@@ -884,7 +883,6 @@ func (a *authServiceAdapter) ValidateSession(ctx context.Context, token string) 
 	return &api.Session{
 		UserID: sess.UserID,
 		Email:  sess.Email,
-		Role:   sess.Role,
 	}, nil
 }
 
@@ -903,7 +901,6 @@ func (a *authServiceAdapter) SetupAdmin(ctx context.Context, req api.SetupAdminR
 		User: &api.UserInfo{
 			ID:         resp.User.ID,
 			Email:      resp.User.Email,
-			Role:       resp.User.Role,
 			Groups:     resp.User.Groups,
 			MFAEnabled: resp.User.MFAEnabled,
 		},
@@ -943,7 +940,7 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 	return &api.User{
 		ID:         user.ID,
 		Email:      user.Email,
-		Role:       user.Role,
+		Groups:     user.GroupIDs,
 		MFAEnabled: user.MFAEnabled,
 	}, nil
 }
@@ -957,8 +954,8 @@ func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req any) (any, e
 	return a.service.CreateUserAPI(ctx, req)
 }
 
-func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, userID string, req any) (any, error) {
-	return a.service.UpdateUserAPI(ctx, userID, req)
+func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error) {
+	return a.service.UpdateUserAPI(ctx, actorUserID, userID, req)
 }
 
 func (a *authServiceAdapter) DeleteUser(ctx context.Context, userID string) error {

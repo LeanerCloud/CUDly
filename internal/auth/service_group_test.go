@@ -18,11 +18,17 @@ func TestService_HasPermission(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		adminUser := &User{
-			ID:   "admin-123",
-			Role: RoleAdmin,
+			ID:       "admin-123",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		adminGrp := &Group{
+			ID:          DefaultAdminGroupID,
+			Name:        "Administrators",
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
 		}
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp, nil).Once()
 
 		has, err := service.HasPermission(ctx, "admin-123", ActionExecute, "aws/ec2", nil)
 		require.NoError(t, err)
@@ -38,7 +44,6 @@ func TestService_HasPermission(t *testing.T) {
 
 		regularUser := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -77,11 +82,17 @@ func TestService_HasPermission(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		readonlyUser := &User{
-			ID:   "readonly-123",
-			Role: RoleReadOnly,
+			ID:       "readonly-123",
+			GroupIDs: []string{"readonly-group"},
+		}
+		readonlyGrp := &Group{
+			ID:          "readonly-group",
+			Name:        "Read-Only Users",
+			Permissions: DefaultReadOnlyPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "readonly-123").Return(readonlyUser, nil).Once()
+		mockStore.On("GetGroup", ctx, "readonly-group").Return(readonlyGrp, nil).Once()
 
 		has, err := service.HasPermission(ctx, "readonly-123", ActionExecute, "aws/ec2", nil)
 		require.NoError(t, err)
@@ -226,11 +237,17 @@ func TestService_GetUserPermissions(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		adminUser := &User{
-			ID:   "admin-123",
-			Role: RoleAdmin,
+			ID:       "admin-123",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		adminGrp := &Group{
+			ID:          DefaultAdminGroupID,
+			Name:        "Administrators",
+			Permissions: DefaultAdminPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp, nil).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "admin-123")
 		require.NoError(t, err)
@@ -247,11 +264,17 @@ func TestService_GetUserPermissions(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		regularUser := &User{
-			ID:   "user-123",
-			Role: RoleUser,
+			ID:       "user-123",
+			GroupIDs: []string{"standard-group"},
+		}
+		standardGrp := &Group{
+			ID:          "standard-group",
+			Name:        "Standard Users",
+			Permissions: DefaultUserPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(regularUser, nil).Once()
+		mockStore.On("GetGroup", ctx, "standard-group").Return(standardGrp, nil).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
@@ -270,11 +293,17 @@ func TestService_GetUserPermissions(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		readonlyUser := &User{
-			ID:   "readonly-123",
-			Role: RoleReadOnly,
+			ID:       "readonly-123",
+			GroupIDs: []string{"readonly-group"},
+		}
+		readonlyGrp := &Group{
+			ID:          "readonly-group",
+			Name:        "Read-Only Users",
+			Permissions: DefaultReadOnlyPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "readonly-123").Return(readonlyUser, nil).Once()
+		mockStore.On("GetGroup", ctx, "readonly-group").Return(readonlyGrp, nil).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "readonly-123")
 		require.NoError(t, err)
@@ -290,8 +319,13 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		userWithGroups := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
-			GroupIDs: []string{"group-1", "group-2"},
+			GroupIDs: []string{"standard-group", "group-1", "group-2"},
+		}
+
+		standardGrp := &Group{
+			ID:          "standard-group",
+			Name:        "Standard Users",
+			Permissions: DefaultUserPermissions(),
 		}
 
 		group1 := &Group{
@@ -311,12 +345,13 @@ func TestService_GetUserPermissions(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(userWithGroups, nil).Once()
+		mockStore.On("GetGroup", ctx, "standard-group").Return(standardGrp, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-1").Return(group1, nil).Once()
 		mockStore.On("GetGroup", ctx, "group-2").Return(group2, nil).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 11 user (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
+		// 11 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
 		// + cancel-own (#46) + retry-own (#47) + approve-own (#286):purchases)
 		// + 1 group1 + 1 group2 = 13
 		assert.Len(t, permissions, 13)
@@ -346,16 +381,22 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		userWithMissingGroup := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
-			GroupIDs: []string{"missing-group"},
+			GroupIDs: []string{"standard-group", "missing-group"},
+		}
+		standardGrp := &Group{
+			ID:          "standard-group",
+			Name:        "Standard Users",
+			Permissions: DefaultUserPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(userWithMissingGroup, nil).Once()
+		mockStore.On("GetGroup", ctx, "standard-group").Return(standardGrp, nil).Once()
 		mockStore.On("GetGroup", ctx, "missing-group").Return(nil, nil).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// Should have only user permissions, missing group is skipped.
+		// Should have only the resolvable group's permissions; the missing
+		// group is skipped.
 		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
@@ -375,12 +416,18 @@ func TestService_BuildAuthContext(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		adminUser := &User{
-			ID:    "admin-123",
-			Email: "admin@example.com",
-			Role:  RoleAdmin,
+			ID:       "admin-123",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+		}
+		adminGrp := &Group{
+			ID:          DefaultAdminGroupID,
+			Name:        "Administrators",
+			Permissions: DefaultAdminPermissions(),
 		}
 
 		mockStore.On("GetUserByID", ctx, "admin-123").Return(adminUser, nil).Once()
+		mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGrp, nil).Once()
 
 		authCtx, err := service.BuildAuthContext(ctx, "admin-123")
 		require.NoError(t, err)
@@ -388,7 +435,7 @@ func TestService_BuildAuthContext(t *testing.T) {
 		assert.Equal(t, adminUser, authCtx.User)
 		assert.Len(t, authCtx.Permissions, 1)
 		assert.Equal(t, ActionAdmin, authCtx.Permissions[0].Action)
-		assert.Empty(t, authCtx.AllowedAccounts) // No group restrictions
+		assert.Empty(t, authCtx.AllowedAccounts) // No group account restrictions
 
 		mockStore.AssertExpectations(t)
 	})
@@ -401,7 +448,6 @@ func TestService_BuildAuthContext(t *testing.T) {
 		user := &User{
 			ID:       "user-123",
 			Email:    "user@example.com",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1", "group-2"},
 		}
 
@@ -437,10 +483,8 @@ func TestService_BuildAuthContext(t *testing.T) {
 		assert.Contains(t, authCtx.AllowedAccounts, "111111111111")
 		assert.Contains(t, authCtx.AllowedAccounts, "222222222222")
 		assert.Contains(t, authCtx.AllowedAccounts, "333333333333")
-		// 11 user perms (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
-		// + cancel-own (#46) + retry-own (#47) + approve-own (#286):purchases)
-		// + 1 group1 + 1 group2 = 13
-		assert.Len(t, authCtx.Permissions, 13)
+		// Permissions derive purely from group membership: 1 group1 + 1 group2 = 2.
+		assert.Len(t, authCtx.Permissions, 2)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -453,7 +497,6 @@ func TestService_BuildAuthContext(t *testing.T) {
 		user := &User{
 			ID:    "user-123",
 			Email: "user@example.com",
-			Role:  RoleUser,
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
@@ -462,11 +505,9 @@ func TestService_BuildAuthContext(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, authCtx)
 		assert.Empty(t, authCtx.AllowedAccounts)
-		// 6 read/plan-author + delete:plans (PR-A #660) + update:purchases (PR-A #660)
-		// + cancel-own:purchases (issue #46)
-		// + retry-own:purchases (issue #47) + approve-own:purchases
-		// (issue #286) = 11. Only role-based permissions.
-		assert.Len(t, authCtx.Permissions, 11)
+		// A user with no groups holds no permissions (fail closed): authz is
+		// group-membership-only (issue #907).
+		assert.Empty(t, authCtx.Permissions)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -493,7 +534,6 @@ func TestService_BuildAuthContext(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"valid-group", "missing-group"},
 		}
 
@@ -520,8 +560,11 @@ func TestService_BuildAuthContext(t *testing.T) {
 
 func TestAuthContext_HasPermission(t *testing.T) {
 	t.Run("admin has all permissions", func(t *testing.T) {
+		// Admin capability now derives from holding the {admin, *} permission
+		// (via Administrators-group membership), not a role.
 		authCtx := &AuthContext{
-			User: &User{Role: RoleAdmin},
+			User:        &User{GroupIDs: []string{DefaultAdminGroupID}},
+			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
 		}
 		assert.True(t, authCtx.HasPermission(ActionExecute, ResourcePlans))
 		assert.True(t, authCtx.HasPermission(ActionView, ResourceRecommendations))
@@ -530,7 +573,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 
 	t.Run("user with specific permission", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User: &User{Role: RoleUser},
+			User: &User{},
 			Permissions: []Permission{
 				{Action: ActionView, Resource: ResourceRecommendations},
 				{Action: ActionExecute, Resource: ResourcePlans},
@@ -543,7 +586,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 
 	t.Run("wildcard resource permission", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User: &User{Role: RoleUser},
+			User: &User{},
 			Permissions: []Permission{
 				{Action: ActionView, Resource: ResourceAll},
 			},
@@ -556,7 +599,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 
 	t.Run("admin permission grants all", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User: &User{Role: RoleUser},
+			User: &User{},
 			Permissions: []Permission{
 				{Action: ActionAdmin, Resource: ResourceAll},
 			},
@@ -570,7 +613,7 @@ func TestAuthContext_HasPermission(t *testing.T) {
 func TestAuthContext_CanAccessAccount(t *testing.T) {
 	t.Run("admin can access any account", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleAdmin},
+			User:            &User{},
 			AllowedAccounts: []string{},
 		}
 		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
@@ -579,7 +622,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("empty allowed accounts means all access", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{},
 		}
 		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
@@ -588,7 +631,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("wildcard in allowed accounts", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{"*"},
 		}
 		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
@@ -597,7 +640,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("specific accounts only", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{"111111111111", "222222222222"},
 		}
 		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
@@ -608,7 +651,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("readonly user with account restrictions", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleReadOnly},
+			User:            &User{},
 			AllowedAccounts: []string{"111111111111"},
 		}
 		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
@@ -617,7 +660,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("match by account name", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{"Production", "Staging"},
 		}
 		// UUID doesn't match, name does
@@ -631,7 +674,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("mixed UUID and name entries", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{"uuid-prod", "Staging"},
 		}
 		assert.True(t, authCtx.CanAccessAccount("uuid-prod", "Production"))
@@ -641,7 +684,7 @@ func TestAuthContext_CanAccessAccount(t *testing.T) {
 
 	t.Run("wildcard combined with specific names", func(t *testing.T) {
 		authCtx := &AuthContext{
-			User:            &User{Role: RoleUser},
+			User:            &User{},
 			AllowedAccounts: []string{"*", "Production"},
 		}
 		// Wildcard wins — everything matches
@@ -697,7 +740,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -735,7 +777,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -773,7 +814,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -810,7 +850,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -847,7 +886,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -884,7 +922,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -921,7 +958,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -959,7 +995,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -997,7 +1032,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 
@@ -1032,8 +1066,7 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		user := &User{
-			ID:   "user-123",
-			Role: RoleReadOnly,
+			ID: "user-123",
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
@@ -1053,7 +1086,6 @@ func TestService_HasPermission_Constraints(t *testing.T) {
 
 		user := &User{
 			ID:       "user-123",
-			Role:     RoleUser,
 			GroupIDs: []string{"group-1"},
 		}
 

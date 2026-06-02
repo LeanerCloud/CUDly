@@ -57,8 +57,9 @@ func (m *MockRow) Scan(dest ...interface{}) error {
 }
 
 // Helper function to create a mock row that returns a user
-// The scan order matches scanUser() in store_postgres.go:
-// id, email, password_hash, salt, role, group_ids, active,
+// The scan order matches scanUser() in store_postgres.go (issue #907 removed
+// the role column, so there are now 19 destinations, not 20):
+// id, email, password_hash, salt, group_ids, active,
 // mfa_enabled, mfa_secret (NullString), mfa_pending_secret (NullString),
 // mfa_pending_secret_expires_at (NullTime), mfa_recovery_codes ([]string),
 // reset_token (NullString), reset_expiry (NullTime),
@@ -68,62 +69,61 @@ func createMockRowWithUser(user *User) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
 			// Populate destination pointers with user data
-			if len(dest) >= 20 {
+			if len(dest) >= 19 {
 				*dest[0].(*string) = user.ID
 				*dest[1].(*string) = user.Email
 				*dest[2].(*string) = user.PasswordHash
 				*dest[3].(*string) = user.Salt
-				*dest[4].(*string) = user.Role
-				*dest[5].(*[]string) = user.GroupIDs
-				*dest[6].(*bool) = user.Active
-				*dest[7].(*bool) = user.MFAEnabled
-				// dest[8] is sql.NullString for MFASecret
+				*dest[4].(*[]string) = user.GroupIDs
+				*dest[5].(*bool) = user.Active
+				*dest[6].(*bool) = user.MFAEnabled
+				// dest[7] is sql.NullString for MFASecret
 				if user.MFASecret != "" {
-					*dest[8].(*sql.NullString) = sql.NullString{String: user.MFASecret, Valid: true}
+					*dest[7].(*sql.NullString) = sql.NullString{String: user.MFASecret, Valid: true}
+				} else {
+					*dest[7].(*sql.NullString) = sql.NullString{Valid: false}
+				}
+				// dest[8] is sql.NullString for MFAPendingSecret
+				if user.MFAPendingSecret != "" {
+					*dest[8].(*sql.NullString) = sql.NullString{String: user.MFAPendingSecret, Valid: true}
 				} else {
 					*dest[8].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[9] is sql.NullString for MFAPendingSecret
-				if user.MFAPendingSecret != "" {
-					*dest[9].(*sql.NullString) = sql.NullString{String: user.MFAPendingSecret, Valid: true}
-				} else {
-					*dest[9].(*sql.NullString) = sql.NullString{Valid: false}
-				}
-				// dest[10] is sql.NullTime for MFAPendingSecretExpiresAt
+				// dest[9] is sql.NullTime for MFAPendingSecretExpiresAt
 				if user.MFAPendingSecretExpiresAt != nil {
-					*dest[10].(*sql.NullTime) = sql.NullTime{Time: *user.MFAPendingSecretExpiresAt, Valid: true}
+					*dest[9].(*sql.NullTime) = sql.NullTime{Time: *user.MFAPendingSecretExpiresAt, Valid: true}
 				} else {
-					*dest[10].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[9].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				// dest[11] is []string for MFARecoveryCodes
-				*dest[11].(*[]string) = user.MFARecoveryCodes
-				// dest[12] is sql.NullString for PasswordResetToken
+				// dest[10] is []string for MFARecoveryCodes
+				*dest[10].(*[]string) = user.MFARecoveryCodes
+				// dest[11] is sql.NullString for PasswordResetToken
 				if user.PasswordResetToken != "" {
-					*dest[12].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
+					*dest[11].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
 				} else {
-					*dest[12].(*sql.NullString) = sql.NullString{Valid: false}
+					*dest[11].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[13] is sql.NullTime for PasswordResetExpiry
+				// dest[12] is sql.NullTime for PasswordResetExpiry
 				if user.PasswordResetExpiry != nil {
-					*dest[13].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
+					*dest[12].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
 				} else {
-					*dest[13].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[12].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				*dest[14].(*int) = user.FailedLoginAttempts
-				// dest[15] is sql.NullTime for LockedUntil
+				*dest[13].(*int) = user.FailedLoginAttempts
+				// dest[14] is sql.NullTime for LockedUntil
 				if user.LockedUntil != nil {
-					*dest[15].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
+					*dest[14].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
 				} else {
-					*dest[15].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[14].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				*dest[16].(*[]string) = user.PasswordHistory
-				*dest[17].(*time.Time) = user.CreatedAt
-				*dest[18].(*time.Time) = user.UpdatedAt
-				// dest[19] is sql.NullTime for LastLoginAt
+				*dest[15].(*[]string) = user.PasswordHistory
+				*dest[16].(*time.Time) = user.CreatedAt
+				*dest[17].(*time.Time) = user.UpdatedAt
+				// dest[18] is sql.NullTime for LastLoginAt
 				if user.LastLoginAt != nil {
-					*dest[19].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
+					*dest[18].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
 				} else {
-					*dest[19].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[18].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
 			}
 			return nil
@@ -150,7 +150,6 @@ func TestPostgresStore_GetUserByID(t *testing.T) {
 		expectedUser := &User{
 			ID:       "user-123",
 			Email:    "test@example.com",
-			Role:     RoleUser,
 			Active:   true,
 			GroupIDs: []string{},
 		}
@@ -191,7 +190,6 @@ func TestPostgresStore_GetUserByEmail(t *testing.T) {
 		expectedUser := &User{
 			ID:       "user-123",
 			Email:    "test@example.com",
-			Role:     RoleUser,
 			Active:   true,
 			GroupIDs: []string{},
 		}
@@ -231,7 +229,6 @@ func TestPostgresStore_CreateUser(t *testing.T) {
 		user := &User{
 			Email:        "new@example.com",
 			PasswordHash: "hash123",
-			Role:         RoleUser,
 			Active:       true,
 			GroupIDs:     []string{},
 		}
@@ -252,7 +249,6 @@ func TestPostgresStore_CreateUser(t *testing.T) {
 
 		user := &User{
 			Email:    "new@example.com",
-			Role:     RoleUser,
 			GroupIDs: []string{},
 		}
 
@@ -275,7 +271,6 @@ func TestPostgresStore_UpdateUser(t *testing.T) {
 		user := &User{
 			ID:       "user-123",
 			Email:    "updated@example.com",
-			Role:     RoleAdmin,
 			GroupIDs: []string{},
 		}
 
@@ -372,7 +367,6 @@ func TestPostgresStore_GetUserByResetToken(t *testing.T) {
 		expectedUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			Role:                RoleUser,
 			Active:              true,
 			GroupIDs:            []string{},
 			PasswordResetToken:  "reset-token-123",
@@ -418,8 +412,8 @@ func TestPostgresStore_AdminExists(t *testing.T) {
 				return nil
 			},
 		}
-		// AdminExists calls QueryRow without extra args, so args slice is empty
-		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}(nil)).Return(mockRow)
+		// AdminExists binds the Administrators-group UUID as $1 (issue #907).
+		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}{DefaultAdminGroupID}).Return(mockRow)
 
 		exists, err := store.AdminExists(ctx)
 		require.NoError(t, err)
@@ -438,7 +432,7 @@ func TestPostgresStore_AdminExists(t *testing.T) {
 				return nil
 			},
 		}
-		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}(nil)).Return(mockRow)
+		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}{DefaultAdminGroupID}).Return(mockRow)
 
 		exists, err := store.AdminExists(ctx)
 		require.NoError(t, err)
@@ -452,7 +446,7 @@ func TestPostgresStore_AdminExists(t *testing.T) {
 		store := &PostgresStore{db: mockDB}
 
 		mockRow := createMockRowWithError(fmt.Errorf("database error"))
-		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}(nil)).Return(mockRow)
+		mockDB.On("QueryRow", ctx, mock.AnythingOfType("string"), []interface{}{DefaultAdminGroupID}).Return(mockRow)
 
 		exists, err := store.AdminExists(ctx)
 		assert.Error(t, err)
@@ -500,7 +494,6 @@ func TestPostgresStore_CreateSession(t *testing.T) {
 			Token:     "session-token-123",
 			UserID:    "user-123",
 			Email:     "test@example.com",
-			Role:      RoleUser,
 			ExpiresAt: time.Now().Add(24 * time.Hour),
 			CreatedAt: time.Now(),
 			UserAgent: "Mozilla/5.0",
@@ -545,7 +538,6 @@ func TestPostgresStore_GetSession(t *testing.T) {
 			Token:     "session-token-123",
 			UserID:    "user-123",
 			Email:     "test@example.com",
-			Role:      RoleUser,
 			ExpiresAt: time.Now().Add(24 * time.Hour),
 			CreatedAt: time.Now(),
 			UserAgent: "Mozilla/5.0",
@@ -553,17 +545,19 @@ func TestPostgresStore_GetSession(t *testing.T) {
 			CSRFToken: "csrf-token-123",
 		}
 
+		// Session scan order matches store_postgres.go after issue #907 removed
+		// the role column: token, user_id, email, expires_at, created_at,
+		// user_agent, ip_address, csrf_token (8 destinations).
 		mockRow := &MockRow{
 			scanFunc: func(dest ...interface{}) error {
 				*dest[0].(*string) = expectedSession.Token
 				*dest[1].(*string) = expectedSession.UserID
 				*dest[2].(*string) = expectedSession.Email
-				*dest[3].(*string) = expectedSession.Role
-				*dest[4].(*time.Time) = expectedSession.ExpiresAt
-				*dest[5].(*time.Time) = expectedSession.CreatedAt
-				*dest[6].(*string) = expectedSession.UserAgent
-				*dest[7].(*string) = expectedSession.IPAddress
-				*dest[8].(*string) = expectedSession.CSRFToken
+				*dest[3].(*time.Time) = expectedSession.ExpiresAt
+				*dest[4].(*time.Time) = expectedSession.CreatedAt
+				*dest[5].(*string) = expectedSession.UserAgent
+				*dest[6].(*string) = expectedSession.IPAddress
+				*dest[7].(*string) = expectedSession.CSRFToken
 				return nil
 			},
 		}

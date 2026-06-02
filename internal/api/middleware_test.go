@@ -182,7 +182,6 @@ func TestHandler_authenticate_BearerToken(t *testing.T) {
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
 		Email:  "user@example.com",
-		Role:   "user",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "valid-token").Return(session, nil)
@@ -215,7 +214,6 @@ func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
 		Email:  "user@example.com",
-		Role:   "user",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "valid-token").Return(session, nil)

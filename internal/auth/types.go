@@ -11,7 +11,6 @@ type User struct {
 	Email               string     `json:"email" dynamodbav:"Email"`
 	PasswordHash        string     `json:"-" dynamodbav:"PasswordHash"`
 	Salt                string     `json:"-" dynamodbav:"Salt"`
-	Role                string     `json:"role" dynamodbav:"Role"` // admin, user, readonly
 	GroupIDs            []string   `json:"group_ids,omitempty" dynamodbav:"GroupIDs"`
 	CreatedAt           time.Time  `json:"created_at" dynamodbav:"CreatedAt"`
 	UpdatedAt           time.Time  `json:"updated_at" dynamodbav:"UpdatedAt"`
@@ -99,21 +98,20 @@ type UserAPIKey struct {
 }
 
 // AuthContext represents the complete authorization context for a user
-// It combines user role, group memberships, and computed permissions
+// It combines group memberships and the permissions computed from them.
 type AuthContext struct {
 	User            *User
 	Groups          []*Group
 	AllowedAccounts []string     // Computed from all groups (union)
-	Permissions     []Permission // Computed from role + groups
+	Permissions     []Permission // Computed from group memberships
 }
 
-// HasPermission checks if the auth context has a specific permission
+// HasPermission checks if the auth context has a specific permission.
+// Authorization is derived purely from group-granted permissions: a user
+// who is a member of the Administrators group holds {ActionAdmin, ResourceAll}
+// and therefore passes any check; a user with no groups holds no permissions
+// and is denied everything (fail closed).
 func (ctx *AuthContext) HasPermission(action, resource string) bool {
-	// Admin has all permissions
-	if ctx.User.Role == RoleAdmin {
-		return true
-	}
-
 	for _, perm := range ctx.Permissions {
 		// Admin permission grants all access
 		if perm.Action == ActionAdmin && perm.Resource == ResourceAll {
@@ -170,12 +168,12 @@ func MatchesAccount(allowed []string, accountID, accountName string) bool {
 }
 
 // CanAccessAccount checks if the user can access a specific account by its
-// ID or display name. Admins always have full access. Non-admins are checked
-// against AllowedAccounts via MatchesAccount.
+// ID or display name. Access is derived from the union of the user's groups'
+// AllowedAccounts via MatchesAccount. Administrators-group members carry the
+// "*" wildcard (seeded with allowed_accounts=['*']) and so match any account;
+// a user with no groups has an empty AllowedAccounts and, combined with the
+// permission check at the call site, is denied (fail closed).
 func (ctx *AuthContext) CanAccessAccount(accountID, accountName string) bool {
-	if ctx.User.Role == RoleAdmin {
-		return true
-	}
 	return MatchesAccount(ctx.AllowedAccounts, accountID, accountName)
 }
 
@@ -184,7 +182,6 @@ type Session struct {
 	Token     string    `json:"token" dynamodbav:"PK"`
 	UserID    string    `json:"user_id" dynamodbav:"UserID"`
 	Email     string    `json:"email" dynamodbav:"Email"`
-	Role      string    `json:"role" dynamodbav:"Role"`
 	ExpiresAt time.Time `json:"expires_at" dynamodbav:"ExpiresAt"`
 	CreatedAt time.Time `json:"created_at" dynamodbav:"CreatedAt"`
 	UserAgent string    `json:"user_agent,omitempty" dynamodbav:"UserAgent"`
@@ -211,7 +208,6 @@ type LoginResponse struct {
 type UserInfo struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Role       string   `json:"role"`
 	Groups     []string `json:"groups,omitempty"`
 	MFAEnabled bool     `json:"mfa_enabled"`
 }
@@ -227,11 +223,11 @@ type PasswordResetConfirm struct {
 	NewPassword string `json:"new_password"`
 }
 
-// CreateUserRequest for admin creating users
+// CreateUserRequest for admin creating users. GroupIDs must contain at least
+// one group: authorization derives entirely from group membership (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
 	Password string   `json:"password"`
-	Role     string   `json:"role"`
 	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
@@ -241,10 +237,12 @@ type CreateUserRequest struct {
 // from "explicitly setting email to a new value". This matters because the
 // service layer applies email changes via updateUserEmail, which performs
 // format validation and uniqueness checks that must NOT run on no-op
-// updates that only touch role/groups/active.
+// updates that only touch groups/active.
+//
+// GroupIDs is nil when the caller is not changing group membership; a non-nil
+// (including empty) slice replaces the membership and must be non-empty.
 type UpdateUserRequest struct {
 	Email    *string  `json:"email,omitempty"`
-	Role     *string  `json:"role,omitempty"`
 	GroupIDs []string `json:"group_ids,omitempty"`
 	Active   *bool    `json:"active,omitempty"`
 }

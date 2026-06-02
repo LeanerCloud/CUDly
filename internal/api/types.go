@@ -166,7 +166,7 @@ type AuthServiceInterface interface {
 	UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error
 	// User management - uses auth.API* types
 	CreateUserAPI(ctx context.Context, req any) (any, error)
-	UpdateUserAPI(ctx context.Context, userID string, req any) (any, error)
+	UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error)
 	DeleteUser(ctx context.Context, userID string) error
 	ListUsersAPI(ctx context.Context) (any, error)
 	ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error
@@ -212,7 +212,6 @@ type LoginResponse struct {
 type UserInfo struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Role       string   `json:"role"`
 	Groups     []string `json:"groups,omitempty"`
 	MFAEnabled bool     `json:"mfa_enabled"`
 }
@@ -234,31 +233,28 @@ type PasswordResetConfirm struct {
 type Session struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
-	Role   string `json:"role"`
 }
 
 type User struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Role       string   `json:"role"`
 	Groups     []string `json:"groups,omitempty"`
 	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
 	UpdatedAt  string   `json:"updated_at,omitempty"`
 }
 
-// CreateUserRequest represents a request to create a new user
+// CreateUserRequest represents a request to create a new user. Groups must be
+// non-empty: authorization is group-membership-only (issue #907).
 type CreateUserRequest struct {
 	Email    string   `json:"email"`
 	Password string   `json:"password"`
-	Role     string   `json:"role"`
 	Groups   []string `json:"groups,omitempty"`
 }
 
 // UpdateUserRequest represents a request to update a user
 type UpdateUserRequest struct {
 	Email  string   `json:"email,omitempty"`
-	Role   string   `json:"role,omitempty"`
 	Groups []string `json:"groups,omitempty"`
 }
 
@@ -388,10 +384,10 @@ type PlansResponse struct {
 
 // CurrentUserResponse holds the current user response
 type CurrentUserResponse struct {
-	ID         string `json:"id"`
-	Email      string `json:"email"`
-	Role       string `json:"role"`
-	MFAEnabled bool   `json:"mfa_enabled"`
+	ID         string   `json:"id"`
+	Email      string   `json:"email"`
+	Groups     []string `json:"groups,omitempty"`
+	MFAEnabled bool     `json:"mfa_enabled"`
 }
 
 // AdminExistsResponse holds the admin exists check response

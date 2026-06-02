@@ -98,7 +98,7 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 	return &CurrentUserResponse{
 		ID:         user.ID,
 		Email:      user.Email,
-		Role:       user.Role,
+		Groups:     user.Groups,
 		MFAEnabled: user.MFAEnabled,
 	}, nil
 }

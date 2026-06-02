@@ -782,8 +782,8 @@ func (m *MockAuthService) CreateUserAPI(ctx context.Context, req interface{}) (i
 	return args.Get(0), args.Error(1)
 }
 
-func (m *MockAuthService) UpdateUserAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
-	args := m.Called(ctx, userID, req)
+func (m *MockAuthService) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req interface{}) (interface{}, error) {
+	args := m.Called(ctx, actorUserID, userID, req)
 	return args.Get(0), args.Error(1)
 }
 
@@ -858,6 +858,24 @@ func (m *MockAuthService) ListGroupsAPI(ctx context.Context) (interface{}, error
 func (m *MockAuthService) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	args := m.Called(ctx, userID, action, resource)
 	return args.Bool(0), args.Error(1)
+}
+
+// grantAdmin makes every HasPermissionAPI check succeed, modelling an
+// Administrators-group member. Authorization is group-membership-only after
+// issue #907, so admin-gated handlers resolve "is admin" / specific permissions
+// through HasPermissionAPI rather than a Session.Role short-circuit; tests that
+// previously set Role:"admin" register this instead. Uses .Maybe() so handlers
+// that don't reach a permission check don't fail the expectation, and matches
+// any userID so a single call covers the test's admin session regardless of its
+// UUID.
+func (m *MockAuthService) grantAdmin() {
+	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Maybe()
+	// Administrators-group members carry the "*" wildcard, surfaced as
+	// unrestricted access (nil/empty). Handlers that scope by account call
+	// GetAllowedAccountsAPI after the permission check, so stub it too.
+	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
+		Return([]string(nil), nil).Maybe()
 }
 
 func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {

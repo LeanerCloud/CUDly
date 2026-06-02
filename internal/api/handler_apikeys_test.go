@@ -41,8 +41,9 @@ func TestHandler_listAPIKeys_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	expectedKeys := []map[string]interface{}{
 		{"key_id": "key-1", "name": "Test Key 1"},
@@ -114,8 +115,9 @@ func TestHandler_listAPIKeys_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("ListUserAPIKeysAPI", ctx, "user-123").Return(nil, errors.New("database error"))
 
 	handler := &Handler{auth: mockAuth}
@@ -136,8 +138,9 @@ func TestHandler_createAPIKey_Success(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockRateLimiter := new(MockRateLimiter)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockRateLimiter.On("AllowWithUser", ctx, "user-123", "admin").Return(true, nil)
 
 	expectedResult := map[string]string{"api_key": "new-key-value", "key_id": "key-123"}
@@ -204,8 +207,9 @@ func TestHandler_createAPIKey_RateLimited(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockRateLimiter := new(MockRateLimiter)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockRateLimiter.On("AllowWithUser", ctx, "user-123", "admin").Return(false, nil)
 
 	handler := &Handler{auth: mockAuth, rateLimiter: mockRateLimiter}
@@ -226,8 +230,9 @@ func TestHandler_createAPIKey_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -247,8 +252,9 @@ func TestHandler_createAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("CreateAPIKeyAPI", ctx, "user-123", mock.Anything).Return(nil, errors.New("creation failed"))
 
 	handler := &Handler{auth: mockAuth}
@@ -269,8 +275,9 @@ func TestHandler_deleteAPIKey_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteAPIKeyAPI", ctx, "user-123", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -321,8 +328,9 @@ func TestHandler_deleteAPIKey_InvalidPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -346,8 +354,9 @@ func TestHandler_deleteAPIKey_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -371,8 +380,9 @@ func TestHandler_deleteAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteAPIKeyAPI", ctx, "user-123", "11111111-1111-1111-1111-111111111111").Return(errors.New("delete failed"))
 
 	handler := &Handler{auth: mockAuth}
@@ -397,8 +407,9 @@ func TestHandler_revokeAPIKey_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("RevokeAPIKeyAPI", ctx, "user-123", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 	handler := &Handler{auth: mockAuth}
@@ -449,8 +460,9 @@ func TestHandler_revokeAPIKey_InvalidPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -474,8 +486,9 @@ func TestHandler_revokeAPIKey_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -499,8 +512,9 @@ func TestHandler_revokeAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "user-123", Email: "user@example.com", Role: "admin"}
+	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("RevokeAPIKeyAPI", ctx, "user-123", "11111111-1111-1111-1111-111111111111").Return(errors.New("revoke failed"))
 
 	handler := &Handler{auth: mockAuth}
@@ -528,7 +542,7 @@ func TestHandler_listAPIKeys_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "viewer-1", Email: "viewer@example.com", Role: "user"}
+	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "api-keys").Return(false, nil)
 
@@ -548,7 +562,7 @@ func TestHandler_createAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "viewer-1", Email: "viewer@example.com", Role: "user"}
+	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "create", "api-keys").Return(false, nil)
 
@@ -569,7 +583,7 @@ func TestHandler_deleteAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "viewer-1", Email: "viewer@example.com", Role: "user"}
+	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "delete", "api-keys").Return(false, nil)
 
@@ -594,7 +608,7 @@ func TestHandler_revokeAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	session := &Session{UserID: "viewer-1", Email: "viewer@example.com", Role: "user"}
+	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
 	// Revoke reuses the "delete" verb in the permission model.
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "delete", "api-keys").Return(false, nil)

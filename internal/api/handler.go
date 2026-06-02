@@ -181,14 +181,24 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	return h
 }
 
-// requirePermission validates authentication and checks if the user has the
-// specified permission. Admin API keys and admin-role users bypass the check.
-// Returns the session on success so callers can read session.UserID for
-// account filtering.
+// apiKeyAdminUserID is the sentinel UserID assigned to the stateless admin
+// API-key session. It has no backing user row in the auth store, so any code
+// that would otherwise resolve group-derived permissions for it must treat it
+// as full-access up front (the API key is an infrastructure credential, not a
+// user). See requirePermission / requireAdmin / getAllowedAccounts.
+const apiKeyAdminUserID = "admin-api-key"
+
+// requirePermission validates authentication and checks if the user holds the
+// specified permission. The stateless admin API key bypasses the per-user
+// permission lookup (it is a full-access infrastructure credential). Every
+// other caller is checked against their group-derived permissions: a member of
+// the Administrators group holds {admin, *} and passes any check, while a user
+// with no groups holds no permissions and is denied (fail closed). Returns the
+// session on success so callers can read session.UserID for account filtering.
 func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource string) (*Session, error) {
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
-		return &Session{Role: "admin", UserID: "admin-api-key"}, nil
+		return &Session{UserID: apiKeyAdminUserID}, nil
 	}
 
 	if h.auth == nil {
@@ -205,10 +215,6 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 		return nil, NewClientError(401, "invalid session")
 	}
 
-	if session.Role == "admin" {
-		return session, nil
-	}
-
 	has, err := h.auth.HasPermissionAPI(ctx, session.UserID, action, resource)
 	if err != nil {
 		return nil, fmt.Errorf("permission check failed: %w", err)
@@ -221,10 +227,12 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 }
 
 // getAllowedAccounts returns the list of account IDs the user is allowed to
-// access. Empty slice means all access. Admin users always get all access.
+// access. Empty slice means all access (Administrators-group members carry the
+// "*" wildcard, which GetAllowedAccountsAPI surfaces as unrestricted). The
+// stateless admin API key has no user row, so it short-circuits to all access.
 func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]string, error) {
-	if session.Role == "admin" {
-		return nil, nil // admin = all access
+	if session.UserID == apiKeyAdminUserID {
+		return nil, nil // stateless admin API key = all access
 	}
 	if h.auth == nil {
 		return nil, nil

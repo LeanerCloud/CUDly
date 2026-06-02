@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/aws/aws-lambda-go/events"
@@ -304,7 +305,7 @@ func TestHandler_requireAdmin_AdminAPIKey(t *testing.T) {
 	}
 	session, err := h.requireAdmin(context.Background(), req)
 	require.NoError(t, err)
-	assert.Equal(t, "admin", session.Role)
+	assert.Equal(t, apiKeyAdminUserID, session.UserID)
 }
 
 func TestHandler_requireAdmin_NoAuthService(t *testing.T) {
@@ -343,8 +344,11 @@ func TestHandler_requireAdmin_InvalidSession(t *testing.T) {
 func TestHandler_requireAdmin_NonAdmin(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	userSession := &Session{UserID: "uid", Role: "user"}
+	userSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	// A non-admin holds no {admin, *} capability, so HasPermissionAPI(admin, *)
+	// returns false and requireAdmin must deny.
+	mockAuth.On("HasPermissionAPI", ctx, "uid", auth.ActionAdmin, auth.ResourceAll).Return(false, nil)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer user-token"},
@@ -352,20 +356,26 @@ func TestHandler_requireAdmin_NonAdmin(t *testing.T) {
 	_, err := h.requireAdmin(ctx, req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "admin access required")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_requireAdmin_AdminRole(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	adminSession := &Session{UserID: "admin-uid", Role: "admin"}
+	adminSession := &Session{UserID: "admin-uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	// An Administrators-group member holds {admin, *}; HasPermissionAPI(admin, *)
+	// returns true and requireAdmin grants access.
+	mockAuth.On("HasPermissionAPI", ctx, "admin-uid", auth.ActionAdmin, auth.ResourceAll).Return(true, nil)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
 	session, err := h.requireAdmin(ctx, req)
 	require.NoError(t, err)
-	assert.Equal(t, "admin", session.Role)
+	assert.Equal(t, "admin-uid", session.UserID)
+	mockAuth.AssertExpectations(t)
 }
 
 // ---------------------------------------------------------------------------

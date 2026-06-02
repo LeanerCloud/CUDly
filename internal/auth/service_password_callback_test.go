@@ -120,7 +120,6 @@ func TestService_OnPasswordChange_ConfirmPasswordReset(t *testing.T) {
 			ID:                  "user-456",
 			Email:               "admin@example.com",
 			PasswordHash:        "", // First password set
-			Role:                RoleAdmin,
 			Active:              false,
 			PasswordResetToken:  hashSessionToken("valid-token"),
 			PasswordResetExpiry: &expiry,

@@ -38,8 +38,8 @@ func federationHandler() *Handler {
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
 	mockSourceIdentity(h, defaultTestSourceIdentity())
 	return h
@@ -681,8 +681,8 @@ func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 		Email:  "user+tag@example.com",
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
 	// Pre-warm the source identity to satisfy validateSourceIdentity (#41).
 	mockSourceIdentity(h, defaultTestSourceIdentity())
@@ -708,8 +708,8 @@ func TestGetFederationIaC_NoSessionEmail_ShipsBundleWithEmptyContact(t *testing.
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
 		Email:  "", // empty — admin API key path
-		Role:   "admin",
 	}, nil)
+	mockAuth.grantAdmin()
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
 	// Pre-warm the source identity to satisfy validateSourceIdentity (#41).
 	mockSourceIdentity(h, defaultTestSourceIdentity())

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -225,13 +226,17 @@ func (h *Handler) requireAuth(ctx context.Context, req *events.LambdaFunctionURL
 	return NewClientError(401, "authentication required")
 }
 
-// requireAdmin checks if the current user has admin role.
-// Accepts both admin API-key auth and Bearer token auth.
+// requireAdmin gates the coarse admin-only routes (AuthAdmin). "Admin" is now
+// defined as holding the full-access {admin, *} capability, i.e. membership in
+// the Administrators group. Accepts both the stateless admin API key (which
+// bypasses the per-user lookup) and a Bearer-token session whose group-derived
+// permissions include {admin, *}. Fail closed: a missing auth service, an
+// invalid session, or a permission-lookup error denies access.
 func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
 	// Check admin API key first (stateless auth)
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
-		return &Session{Role: "admin", UserID: "admin-api-key"}, nil
+		return &Session{UserID: apiKeyAdminUserID}, nil
 	}
 
 	if h.auth == nil {
@@ -248,7 +253,14 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, NewClientError(401, "invalid session")
 	}
 
-	if session.Role != "admin" {
+	// HasPermissionAPI(admin, *) returns true only for users who hold the
+	// full-access capability, i.e. Administrators-group members. Any other
+	// user (including zero-group users) is denied.
+	isAdmin, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionAdmin, auth.ResourceAll)
+	if err != nil {
+		return nil, fmt.Errorf("admin permission check failed: %w", err)
+	}
+	if !isAdmin {
 		return nil, NewClientError(403, "admin access required")
 	}
 

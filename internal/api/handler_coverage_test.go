@@ -206,6 +206,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	t.Run("getCurrentUserHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("GetUser", ctx, "user-1").Return(&User{ID: "user-1", Email: "test@example.com"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -283,6 +284,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	t.Run("updateProfileHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("UpdateUserProfile", ctx, "user-1", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -301,6 +303,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	t.Run("changePasswordHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		// Passwords need to be base64 encoded
 		// "oldpass" -> "b2xkcGFzcw==", "newpass" -> "bmV3cGFzcw=="
 		mockAuth.On("ChangePasswordAPI", ctx, "user-1", "oldpass", "newpass").Return(nil)
@@ -320,7 +323,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("listAPIKeysHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("ListUserAPIKeysAPI", ctx, "user-1").Return([]interface{}{}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -337,7 +341,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("createAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", mock.Anything).Return(map[string]string{"key_id": "key-1"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -355,7 +360,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("deleteAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("DeleteAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -377,7 +383,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("revokeAPIKeyHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("RevokeAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -399,7 +406,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("listUsersHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("ListUsersAPI", ctx).Return([]interface{}{}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -416,7 +424,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("createUserHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("CreateUserAPI", ctx, mock.Anything).Return(map[string]string{"id": "new-user"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -425,7 +434,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// Password needs to be base64 encoded: "pass123" -> "cGFzczEyMw=="
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
-			Body:    `{"email": "newuser@example.com", "password": "cGFzczEyMw==", "role": "user"}`,
+			Body:    `{"email": "newuser@example.com", "password": "cGFzczEyMw==", "groups": ["00000000-0000-5000-8000-000000000005"]}`,
 		}
 
 		result, err := router.createUserHandler(ctx, req, nil)
@@ -435,7 +444,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("getUserHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("GetUser", ctx, "11111111-1111-1111-1111-111111111111").Return(&User{ID: "11111111-1111-1111-1111-111111111111"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -453,8 +463,9 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("updateUserHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
-		mockAuth.On("UpdateUserAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
+		mockAuth.On("UpdateUserAPI", ctx, "admin", "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -472,7 +483,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("listGroupsHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("ListGroupsAPI", ctx).Return([]interface{}{}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -489,7 +501,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("createGroupHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("CreateGroupAPI", ctx, mock.Anything).Return(map[string]string{"id": "new-group"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -507,7 +520,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("getGroupHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("GetGroupAPI", ctx, "11111111-1111-1111-1111-111111111111").Return(map[string]interface{}{"id": "11111111-1111-1111-1111-111111111111"}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -525,7 +539,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("updateGroupHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("UpdateGroupAPI", ctx, "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -544,7 +559,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 	t.Run("deleteGroupHandler", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
-		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin", Role: "admin"}, nil)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
+		mockAuth.grantAdmin()
 		mockAuth.On("DeleteGroup", ctx, "11111111-1111-1111-1111-111111111111").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -626,8 +642,9 @@ func TestHandler_listPlans_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(nil, errors.New("db error"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -645,8 +662,9 @@ func TestHandler_getPlan_NotFound(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(nil, errors.New("not found"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -667,8 +685,9 @@ func TestHandler_deleteUser_CannotDeleteSelf(t *testing.T) {
 
 	// Use a valid UUID format
 	adminID := "11111111-1111-1111-1111-111111111111"
-	adminSession := &Session{UserID: adminID, Role: "admin"}
+	adminSession := &Session{UserID: adminID}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -685,8 +704,9 @@ func TestHandler_deleteUser_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteUser", ctx, "other-user-id").Return(errors.New("delete failed"))
 
 	handler := &Handler{auth: mockAuth}
@@ -705,8 +725,9 @@ func TestHandler_deleteGroup_DeleteFailed(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockAuth.On("DeleteGroup", ctx, "group-1").Return(errors.New("delete failed"))
 
 	handler := &Handler{auth: mockAuth}
@@ -834,8 +855,9 @@ func TestHandler_createGroup_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	handler := &Handler{auth: mockAuth}
 
@@ -871,8 +893,9 @@ func TestHandler_deletePlan_Success(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("DeletePurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -909,8 +932,9 @@ func TestHandler_deletePlan_Error(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{UserID: "admin-id", Role: "admin"}
+	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("DeletePurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(errors.New("not found"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
