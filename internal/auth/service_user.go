@@ -290,9 +290,10 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 		return nil, fmt.Errorf("user not found")
 	}
 
-	// Snapshot the prior membership before mutating so the guards below can
-	// reason about what is being added/removed.
+	// Snapshot the prior membership/active state before mutating so the guards
+	// below can reason about what is being added/removed/deactivated.
 	priorGroups := append([]string(nil), user.GroupIDs...)
+	priorActive := user.Active
 
 	if err := applyUpdateUserRequest(user, req); err != nil {
 		return nil, err
@@ -300,6 +301,19 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 
 	if req.GroupIDs != nil {
 		if err := s.guardGroupChange(ctx, actorUserID, userID, priorGroups, req.GroupIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Deactivation guard: deactivating the last active Administrators-group
+	// member would lock the deployment out of admin functionality, the same
+	// hazard as removing the group. AdminExists and the 000058 trigger both
+	// count only active members, so this soft check mirrors that invariant and
+	// rejects early with a friendly 409. The deferred trigger is the race-free
+	// backstop when concurrent requests slip past this read-then-write check.
+	if priorActive && req.Active != nil && !*req.Active &&
+		containsGroup(user.GroupIDs, DefaultAdminGroupID) {
+		if err := s.checkLastAdminConstraint(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -362,10 +376,12 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 	return nil
 }
 
-// checkLastAdminConstraint returns ErrLastAdmin if removing the
-// Administrators group from its current holder would leave the group with
-// zero members. Pulled out of guardGroupChange to keep that function under
-// the cyclomatic limit.
+// checkLastAdminConstraint returns ErrLastAdmin if removing or deactivating
+// the Administrators group's current sole holder would leave the group with
+// no other member to fall back on. Pulled out of guardGroupChange to keep that
+// function under the cyclomatic limit and reused by the deactivation guard.
+// This is a best-effort early reject; the 000058 deferred trigger is the
+// race-free backstop that also accounts for already-inactive members.
 func (s *Service) checkLastAdminConstraint(ctx context.Context) error {
 	count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
 	if err != nil {

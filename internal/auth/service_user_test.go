@@ -455,6 +455,69 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 		"exactly one concurrent delete should be rejected with ErrLastAdmin; got errors: %v", errs)
 }
 
+// TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins is the deactivation
+// analogue of the delete race in issue #919 / CR #921. Two goroutines
+// simultaneously deactivate the last two active admins. Both read count == 2
+// and pass the soft check. The 000058 deferred trigger now counts only *active*
+// members and serializes via an advisory xact lock, so exactly one commit is
+// rejected. We simulate the DB outcome by having the second UpdateUser return
+// the trigger violation, and assert the invariant: never zero active admins.
+func TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins(t *testing.T) {
+	ctx := context.Background()
+
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	service := createTestService(mockStore, mockEmail)
+
+	adminA := &User{ID: "admin-a", Email: "a@example.com", GroupIDs: []string{DefaultAdminGroupID}, Active: true}
+	adminB := &User{ID: "admin-b", Email: "b@example.com", GroupIDs: []string{DefaultAdminGroupID}, Active: true}
+
+	mockStore.On("GetUserByID", ctx, "admin-a").Return(adminA, nil).Once()
+	mockStore.On("GetUserByID", ctx, "admin-b").Return(adminB, nil).Once()
+	mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Twice()
+
+	// admin-a's deactivation commits; admin-b's hits the deferred trigger.
+	mockStore.On("UpdateUser", ctx, mock.MatchedBy(func(u *User) bool { return u.ID == "admin-a" })).Return(nil).Once()
+	triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one active member of the Administrators group must remain")
+	mockStore.On("UpdateUser", ctx, mock.MatchedBy(func(u *User) bool { return u.ID == "admin-b" })).Return(triggerErr).Once()
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	ready := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	start := func(userID string) {
+		defer wg.Done()
+		<-ready
+		inactive := false
+		_, err := service.UpdateUser(ctx, "", userID, UpdateUserRequest{Active: &inactive})
+		errCh <- err
+	}
+
+	go start("admin-a")
+	go start("admin-b")
+
+	close(ready)
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+
+	lastAdminErrors := 0
+	for _, err := range errs {
+		if errors.Is(err, ErrLastAdmin) {
+			lastAdminErrors++
+		}
+	}
+	assert.Equal(t, 1, lastAdminErrors,
+		"exactly one concurrent deactivation should be rejected with ErrLastAdmin; got errors: %v", errs)
+}
+
 func TestService_ListUsers(t *testing.T) {
 	ctx := context.Background()
 
@@ -731,6 +794,87 @@ func TestService_UpdateUser(t *testing.T) {
 		req := UpdateUserRequest{
 			GroupIDs: []string{"other-group"},
 		}
+		_, err := service.UpdateUser(ctx, "", "admin-1", req)
+		assert.ErrorIs(t, err, ErrLastAdmin)
+	})
+
+	t.Run("blocks deactivating last admin member (soft check)", func(t *testing.T) {
+		// Deactivating (active=false) the sole Administrators-group member must
+		// be rejected with ErrLastAdmin: it would leave zero active admins, the
+		// same lockout hazard as removing the group. The group is unchanged, so
+		// this exercises the deactivation guard, not guardGroupChange.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+			Active:   true,
+		}
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(1, nil).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		inactive := false
+		req := UpdateUserRequest{Active: &inactive}
+		_, err := service.UpdateUser(ctx, "", "admin-1", req)
+		assert.ErrorIs(t, err, ErrLastAdmin)
+	})
+
+	t.Run("allows deactivating an admin when others remain", func(t *testing.T) {
+		// With more than one admin-group member the deactivation guard passes
+		// and the update proceeds; the DB trigger would catch the concurrent
+		// edge case but the soft check sees count >= 2 and allows it.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+			Active:   true,
+		}
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Once()
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		inactive := false
+		req := UpdateUserRequest{Active: &inactive}
+		user, err := service.UpdateUser(ctx, "", "admin-1", req)
+		require.NoError(t, err)
+		assert.False(t, user.Active)
+	})
+
+	t.Run("maps DB trigger violation to ErrLastAdmin on deactivation", func(t *testing.T) {
+		// Concurrent deactivations: the soft check saw count >= 2 but a parallel
+		// request deactivated the other admin first. The deferred trigger (which
+		// counts only active members) rejects this commit; UpdateUser must map
+		// the violation to ErrLastAdmin so deactivation and delete behave alike.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		adminUser := &User{
+			ID:       "admin-1",
+			Email:    "admin@example.com",
+			GroupIDs: []string{DefaultAdminGroupID},
+			Active:   true,
+		}
+		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
+		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Once()
+		triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one active member of the Administrators group must remain")
+		mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(triggerErr).Once()
+
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		inactive := false
+		req := UpdateUserRequest{Active: &inactive}
 		_, err := service.UpdateUser(ctx, "", "admin-1", req)
 		assert.ErrorIs(t, err, ErrLastAdmin)
 	})
