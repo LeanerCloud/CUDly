@@ -11,7 +11,7 @@ import { confirmDialog } from './confirmDialog';
 import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
-import { isAdmin, canAccess } from './permissions';
+import { isAdmin, canAccess, isPurchaser } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { getAccountName } from './recommendations';
 
@@ -406,22 +406,20 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // false-positive here surfaces as a 403 toast on click rather than a
 // successful approve.
 //
-// Heuristic mirrors canCancelPendingRow:
+// Heuristic:
 //   * status must be "pending" or "notified";
-//   * admin → always yes;
-//   * non-admin matching the row's created_by_user_id → yes (approve-own);
+//   * Purchaser-group member → approve-any (issue #923: approve-any is
+//     carved out of admin:* and requires explicit Purchaser membership);
+//   * non-Purchaser matching the row's created_by_user_id → approve-own;
 //   * legacy rows with NULL created_by_user_id → no (the email-token path
 //     remains the escape hatch).
-//
-// As with canCancelPendingRow, we don't surface the approve-any verb
-// because no default role grants it; if/when an operator role lands
-// with approve-any, broaden this check accordingly.
 function canApprovePendingRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (isAdmin()) return true;
+  // Purchaser group membership grants approve-any (issue #923).
+  if (isPurchaser()) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
@@ -431,15 +429,16 @@ function canApprovePendingRow(p: HistoryPurchase): boolean {
 // (issue #47). UX gate only — the backend authorizeSessionRetry in
 // internal/api/handler_purchases.go remains the security boundary.
 //
-// Heuristic mirrors canCancelPendingRow:
+// Heuristic:
 //   * status must be "failed";
 //   * row must NOT carry an ops_hint (persistent failure → no retry,
 //     show the hint instead);
 //   * row must NOT already have a retry_execution_id (we don't allow
 //     retrying the same failure twice — the user should retry the
 //     latest descendant in the chain);
-//   * admin → always yes;
-//   * non-admin matching the row's created_by_user_id → yes (retry-own).
+//   * Purchaser-group member → retry-any (issue #923: retry-any is
+//     carved out of admin:* and requires explicit Purchaser membership);
+//   * non-Purchaser matching the row's created_by_user_id → retry-own.
 function canRetryFailedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'failed') return false;
@@ -447,7 +446,8 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
   if (p.retry_execution_id) return false; // already retried — user should act on the descendant
   const user = getCurrentUser();
   if (!user) return false;
-  if (isAdmin()) return true;
+  // Purchaser group membership grants retry-any (issue #923).
+  if (isPurchaser()) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
@@ -578,6 +578,24 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   if (!container) return;
 
   lastPurchases = purchases;
+
+  // Issue #923: inject a read-only notice for sessions that lack Purchaser
+  // group membership. The Approve / Retry buttons in the table are gated by
+  // canApprovePendingRow / canRetryFailedRow (which use isPurchaser), so this
+  // banner explains why those buttons are absent for admin-only sessions.
+  const existingBanner = document.getElementById('history-no-purchaser-banner');
+  if (!existingBanner && !isPurchaser()) {
+    const banner = document.createElement('div');
+    banner.id = 'history-no-purchaser-banner';
+    banner.className = 'info-banner';
+    banner.setAttribute('role', 'note');
+    banner.textContent =
+      'You can view but not execute purchases. ' +
+      'Ask an admin to add you to the Purchaser group, or add yourself in Settings → Users.';
+    container.parentElement?.insertBefore(banner, container);
+  } else if (existingBanner && isPurchaser()) {
+    existingBanner.remove();
+  }
 
   // Reset the filter when the dataset changes so the user isn't stuck on an
   // empty "Cancelled" slice after reloading with a fresh query.

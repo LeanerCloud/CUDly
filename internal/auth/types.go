@@ -48,9 +48,13 @@ type Group struct {
 	Description     string       `json:"description,omitempty" dynamodbav:"Description"`
 	Permissions     []Permission `json:"permissions" dynamodbav:"Permissions"`
 	AllowedAccounts []string     `json:"allowed_accounts,omitempty" dynamodbav:"AllowedAccounts"`
-	CreatedAt       time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
-	UpdatedAt       time.Time    `json:"updated_at" dynamodbav:"UpdatedAt"`
-	CreatedBy       string       `json:"created_by" dynamodbav:"CreatedBy"`
+	// SystemManaged marks groups that are seeded by migrations and
+	// should not be renamed or deleted via the API. Only membership
+	// can change for system-managed groups.
+	SystemManaged bool      `json:"system_managed,omitempty" dynamodbav:"SystemManaged"`
+	CreatedAt     time.Time `json:"created_at" dynamodbav:"CreatedAt"`
+	UpdatedAt     time.Time `json:"updated_at" dynamodbav:"UpdatedAt"`
+	CreatedBy     string    `json:"created_by" dynamodbav:"CreatedBy"`
 }
 
 // Permission defines what actions a group can perform
@@ -106,15 +110,36 @@ type AuthContext struct {
 	Permissions     []Permission // Computed from group memberships
 }
 
+// adminCarvedOuts is the set of (action, resource) pairs that the admin:*
+// wildcard does NOT cover. Each pair requires explicit membership in a group
+// that holds the matching permission (e.g. the Purchaser group). This
+// implements separation-of-duties for money-spending operations (issue #923):
+// a compromised admin account alone cannot drain commitments.
+var adminCarvedOuts = map[[2]string]bool{
+	{ActionExecute, ResourcePurchases}:    true,
+	{ActionApproveAny, ResourcePurchases}: true,
+	{ActionRetryAny, ResourcePurchases}:   true,
+}
+
 // HasPermission checks if the auth context has a specific permission.
 // Authorization is derived purely from group-granted permissions: a user
 // who is a member of the Administrators group holds {ActionAdmin, ResourceAll}
 // and therefore passes any check; a user with no groups holds no permissions
 // and is denied everything (fail closed).
+//
+// The admin:* wildcard is intentionally narrow for the three carved-out
+// money-spending verbs (execute:purchases, approve-any:purchases,
+// retry-any:purchases). Those require explicit membership in a group that
+// grants them directly (e.g. the Purchaser group seeded by migration 000054).
 func (ctx *AuthContext) HasPermission(action, resource string) bool {
 	for _, perm := range ctx.Permissions {
-		// Admin permission grants all access
+		// Admin permission grants all access EXCEPT the carved-out
+		// money-spending verbs (separation of duties, issue #923).
 		if perm.Action == ActionAdmin && perm.Resource == ResourceAll {
+			if adminCarvedOuts[[2]string{action, resource}] {
+				// Fall through to explicit-permission check below.
+				continue
+			}
 			return true
 		}
 
@@ -285,6 +310,14 @@ const (
 // group so the group card shows members on a fresh install.
 const DefaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 
+// DefaultPurchaserGroupID is the fixed UUID of the Purchaser group seeded
+// by migration 000054. It holds the three money-spending verbs carved out
+// of the admin:* wildcard (issue #923).
+const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000005"
+
+// GroupPurchaser is the canonical name of the system-managed Purchaser group.
+const GroupPurchaser = "purchaser"
+
 // Predefined actions
 const (
 	ActionView    = "view"
@@ -448,6 +481,24 @@ func DefaultReadOnlyPermissions() []Permission {
 	return []Permission{
 		{Action: ActionView, Resource: ResourceRecommendations},
 		{Action: ActionView, Resource: ResourcePlans},
+		{Action: ActionView, Resource: ResourceHistory},
+	}
+}
+
+// DefaultPurchaserPermissions returns the permissions for the system-managed
+// Purchaser group (issue #923). The three execute/approve-any/retry-any verbs
+// are carved out of the admin:* wildcard; a user must hold them explicitly
+// (via this group or a custom group that includes them) to spend money.
+func DefaultPurchaserPermissions() []Permission {
+	return []Permission{
+		// Money-spending verbs (carved out of admin:* wildcard).
+		{Action: ActionExecute, Resource: ResourcePurchases},
+		{Action: ActionApproveAny, Resource: ResourcePurchases},
+		{Action: ActionRetryAny, Resource: ResourcePurchases},
+		// Read access so Purchaser members can navigate to the relevant pages.
+		{Action: ActionView, Resource: ResourceRecommendations},
+		{Action: ActionView, Resource: ResourcePlans},
+		{Action: ActionView, Resource: ResourcePurchases},
 		{Action: ActionView, Resource: ResourceHistory},
 	}
 }

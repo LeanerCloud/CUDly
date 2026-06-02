@@ -417,7 +417,7 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 func (s *PostgresStore) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	query := `
 		SELECT id, name, description, permissions, allowed_accounts,
-		       created_at, updated_at, created_by
+		       system_managed, created_at, updated_at, created_by
 		FROM groups
 		WHERE id = $1
 	`
@@ -538,7 +538,7 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 	// Pagination support should be added if this limit proves insufficient.
 	query := `
 		SELECT id, name, description, permissions, allowed_accounts,
-		       created_at, updated_at, created_by
+		       system_managed, created_at, updated_at, created_by
 		FROM groups
 		ORDER BY created_at DESC
 		LIMIT 10000
@@ -926,6 +926,7 @@ func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 		&group.Description,
 		&permissionsJSON,
 		&allowedAccounts,
+		&group.SystemManaged,
 		&group.CreatedAt,
 		&group.UpdatedAt,
 		&createdBy,

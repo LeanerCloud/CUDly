@@ -877,6 +877,20 @@ tr.recommendation-row:hover {
     color: #444;
 }
 
+/* Informational notice banner used on pages where the current session can
+ * view but not execute purchases (issue #923: Purchaser group separation
+ * of duties). Reuses the accent border pattern from .self-account-banner
+ * in settings.css. */
+.info-banner {
+    border-left: 3px solid var(--accent, #4a9eff);
+    background: var(--cudly-info-bg, #eaf4ff);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.9em;
+    color: #333;
+}
+
 /* Cell summary row (collapsed state) */
 tr.rec-cell-summary-row {
     background: #f3f6fb;
