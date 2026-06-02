@@ -66,6 +66,14 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	seed("user@test.example", "user")
 	seed("readonly@test.example", "readonly")
 
+	// Drop the valid_role CHECK so we can seed a row whose role is outside
+	// the legacy {admin,user,readonly} set; this is the path the migration's
+	// fail-safe net (step 3 in 000057.up.sql) is designed to catch -- without
+	// it, that net is exercised by no test and could rot silently.
+	_, err = pool.Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_role`)
+	require.NoError(t, err)
+	seed("unknown@test.example", "legacy-custom")
+
 	// Re-apply 000057.
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
@@ -79,6 +87,11 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	assert.Equal(t, []string{readOnlyUsersGroupIDTest},
 		queryGroupIDs(t, ctx, pool, "readonly@test.example"),
 		"readonly must be mapped to the Read-Only Users group")
+	// Fail-safe net: a user whose role does not match any known mapping must
+	// land in the Read-Only Users group so the >= 1-group CHECK cannot fail.
+	assert.Equal(t, []string{readOnlyUsersGroupIDTest},
+		queryGroupIDs(t, ctx, pool, "unknown@test.example"),
+		"unknown legacy roles must fall back to the Read-Only Users group")
 
 	// The role column must be gone from both tables.
 	assertColumnAbsent(t, ctx, pool, "users", "role")
