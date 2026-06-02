@@ -1,6 +1,7 @@
 # AWS VPC Module with IPv6
-# Creates VPC with IPv6 support - no NAT Gateway or VPC Endpoints needed
-# Cost savings: ~$54/month (NAT Gateway + VPC Endpoints eliminated)
+# Creates VPC with IPv6 support. NAT (fck-nat) handles egress for ECR pulls
+# and any AWS APIs that lack IPv6, so we no longer need per-service VPC
+# interface endpoints.
 # Supports: new VPC, existing VPC, or default VPC
 
 terraform {
@@ -681,75 +682,6 @@ resource "aws_iam_role_policy" "flow_logs" {
         Resource = "*"
       }
     ]
-  })
-}
-
-# ==============================================
-# VPC Endpoints (for services without IPv6 support)
-# ==============================================
-
-# Security group for VPC endpoints
-resource "aws_security_group" "vpc_endpoints" {
-  name_prefix = "${var.stack_name}-vpc-endpoints-"
-  description = "Security group for VPC endpoints"
-  vpc_id      = local.vpc_id
-
-  # HTTPS from VPC (IPv4)
-  ingress {
-    description = "HTTPS from VPC (IPv4)"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [local.vpc_cidr]
-  }
-
-  # HTTPS from VPC (IPv6)
-  ingress {
-    description      = "HTTPS from VPC (IPv6)"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    ipv6_cidr_blocks = var.enable_ipv6 ? [local.vpc_ipv6_cidr] : []
-  }
-
-  # Allow all outbound (IPv4)
-  egress {
-    description = "Allow all outbound (IPv4)"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow all outbound (IPv6)
-  egress {
-    description      = "Allow all outbound (IPv6)"
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  tags = merge(var.tags, {
-    Name = "${var.stack_name}-vpc-endpoints-sg"
-  })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Secrets Manager VPC Endpoint (required - no IPv6 support)
-resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = local.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = local.private_subnet_ids
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
-  private_dns_enabled = true
-
-  tags = merge(var.tags, {
-    Name = "${var.stack_name}-secretsmanager-endpoint"
   })
 }
 
