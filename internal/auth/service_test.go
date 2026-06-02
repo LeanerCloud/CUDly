@@ -644,6 +644,9 @@ func TestService_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("GetUserPermissions with store error on group", func(t *testing.T) {
+		// Regression test for issue #918: a transient group-fetch error must
+		// propagate so callers fail closed with an error rather than silently
+		// receiving a partial (or empty) permission set.
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
@@ -657,12 +660,8 @@ func TestService_ErrorPaths(t *testing.T) {
 		mockStore.On("GetGroup", ctx, "group-1").Return(nil, fmt.Errorf("database error")).Once()
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
-		require.NoError(t, err)
-		// A failing group fetch is logged and skipped rather than aborting the
-		// whole resolution (so a partially broken group set still yields the
-		// other groups' permissions). Here the sole group errored and there is
-		// no role fallback, so the effective permission set is empty.
-		assert.Empty(t, permissions)
+		require.Error(t, err, "a per-group fetch error must propagate")
+		assert.Nil(t, permissions)
 
 		mockStore.AssertExpectations(t)
 	})

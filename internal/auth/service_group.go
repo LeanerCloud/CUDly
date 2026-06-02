@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -50,6 +49,11 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 // derived purely from the union of the user's groups' permissions: there is
 // no role-based fallback. A user with no groups therefore has no permissions
 // and is denied everything (fail closed).
+//
+// Any transient store error fetching a group is propagated immediately so
+// callers fail closed with an error rather than silently receiving a partial
+// permission set. A nil group (the store returns nil, nil for a deleted/
+// missing group) is skipped without error.
 func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Permission, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
@@ -68,10 +72,10 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 	for _, groupID := range user.GroupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
-			logging.Warnf("Failed to fetch group %s: %v", groupID, err)
-			continue
+			return nil, fmt.Errorf("fetching group %s: %w", groupID, err)
 		}
 		if group == nil {
+			// Group was deleted; skip it rather than failing the entire request.
 			continue
 		}
 		permissions = append(permissions, group.Permissions...)
@@ -103,21 +107,23 @@ func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthCon
 		Permissions:     make([]Permission, 0),
 	}
 
-	s.collectGroupsAndAccounts(ctx, authCtx, user.GroupIDs)
+	if err := s.collectGroupsAndAccounts(ctx, authCtx, user.GroupIDs); err != nil {
+		return nil, err
+	}
 
 	return authCtx, nil
 }
 
-func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthContext, groupIDs []string) {
+func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthContext, groupIDs []string) error {
 	accountSet := make(map[string]bool)
 
 	for _, groupID := range groupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
-			logging.Warnf("Failed to fetch group %s: %v", groupID, err)
-			continue
+			return fmt.Errorf("fetching group %s: %w", groupID, err)
 		}
 		if group == nil {
+			// Group was deleted; skip it rather than failing the entire request.
 			continue
 		}
 
@@ -132,6 +138,7 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 	for accountID := range accountSet {
 		authCtx.AllowedAccounts = append(authCtx.AllowedAccounts, accountID)
 	}
+	return nil
 }
 
 // GetAuthContext is an alias for BuildAuthContext for backward compatibility
