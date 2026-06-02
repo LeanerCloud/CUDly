@@ -98,4 +98,3 @@ output "database_vpc_config" {
     security_group_id     = aws_security_group.database.id
   }
 }
-
