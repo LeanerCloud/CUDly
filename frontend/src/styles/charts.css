@@ -13,6 +13,14 @@
     min-height: 280px;
 }
 
+/* Savings-by-service chart needs more vertical space to show multiple
+ * stacked bars legibly. Scoped to this canvas only so other charts are
+ * unaffected (issue #769 follow-up). */
+#savings-by-service-chart {
+    max-height: 600px;
+    min-height: 560px;
+}
+
 /* Empty state for chart sections stays centred and occupies roughly
  * the same vertical space as the canvas so the widget doesn't collapse
  * when Chart.js is destroyed during provider-filter transitions

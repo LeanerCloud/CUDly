@@ -1461,7 +1461,8 @@ describe('Dashboard Module', () => {
         const currentDs = datasets.find((d) => d.label === 'Current / Committed');
         expect(currentDs).toBeDefined();
         expect(currentDs?.data[0]).toBe(250);
-        // Current layer is in the unified savings stack.
+        // All three datasets share one stack so Current renders below the
+        // potential range (dataset order = bottom-to-top in Chart.js stacked bars).
         expect(currentDs?.stack).toBe('savings');
       });
 
@@ -1511,6 +1512,47 @@ describe('Dashboard Module', () => {
         }).data.datasets;
         const currentDs = datasets.find((d) => d.label === 'Current / Committed');
         expect(currentDs?.data[0]).toBe(0);
+      });
+
+      // Issue #769 follow-up (2x height + stacking): all three datasets must
+      // share one stack so Current renders visually BELOW the potential range.
+      test('all datasets share one stack so Current renders under Potential', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 100), rec('ec2', 400)],
+          { ec2: { potential_savings: 400, current_savings: 150 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const config = lastCall?.[1] as {
+          data: { datasets: { label: string; stack: string }[] };
+          options: { scales: { x: { stacked: boolean }; y: { stacked: boolean } } };
+        };
+        const datasets = config.data.datasets;
+        // Every dataset must share the same stack name.
+        const stacks = new Set(datasets.map((d) => d.stack));
+        expect(stacks.size).toBe(1);
+        // Both axes must have stacked: true.
+        expect(config.options.scales.x.stacked).toBe(true);
+        expect(config.options.scales.y.stacked).toBe(true);
+      });
+
+      test('dataset order: Current / Committed is first so it renders at the base', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 200)],
+          { ec2: { potential_savings: 200, current_savings: 80 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string }[] };
+        }).data.datasets;
+        // Use find to avoid direct index access (TS strict mode).
+        const labels = datasets.map((d) => d.label);
+        expect(labels[0]).toBe('Current / Committed');
+        expect(labels[1]).toBe('Lowest option');
+        expect(labels[2]).toBe('Upside');
       });
 
       test('service present in byService but absent from recs renders Current-only bar', () => {
