@@ -14,9 +14,12 @@ import (
 //
 // Used by ApplyFamilyNUSizingRDS to translate AWS-rec-API's family-NU-
 // bundled buy recommendations into the family target NU need under
-// --target-coverage. Sizes not in this map evaluate to 0 NU, which
-// causes the family-NU step to leave the rec unchanged (the per-pool
-// sizing path still handles it downstream).
+// --target-coverage. Sizes not in this map evaluate to 0 NU. Recs
+// with an empty family prefix (unknown size suffix) are routed to
+// nonRDS by partitionRDSRecsByFamily and handled by the per-pool path.
+// Recs with a known family prefix but an unrecognised size suffix reach
+// sizeRDSFamilyRecs with 0 NU; if the whole family sums to zero
+// (currentNU <= 0) they are recorded in drops.NoNUSignal and dropped.
 var rdsInstanceNU = map[string]float64{
 	"nano":     0.25,
 	"micro":    0.5,
@@ -53,8 +56,9 @@ func RDSFamilyFromType(instanceType string) string {
 
 // rdsInstanceNUFromType returns the NU value for an instance type like
 // "db.r7g.2xlarge", parsing out the size suffix ("2xlarge" → 16). Returns
-// 0 when the size isn't recognised — callers treat that as "no family-NU
-// signal" and fall back to per-pool sizing.
+// 0 when the size isn't recognised. When a whole family's rec-NU sums to
+// zero inside sizeRDSFamilyRecs (currentNU <= 0), those recs are recorded
+// in drops.NoNUSignal and dropped rather than falling back to per-pool sizing.
 func rdsInstanceNUFromType(instanceType string) float64 {
 	parts := strings.Split(instanceType, ".")
 	if len(parts) < 3 {
@@ -169,10 +173,13 @@ type FamilyDropCounts struct {
 //  4. Non-RDS recs are returned unchanged so callers can continue them
 //     through the per-pool sizing path.
 //
-// Returns (sizedRDS, nonRDS, drops). When targetPct is outside (0,100] or
-// coverage has no family-NU signal for an RDS rec's family, the rec is
-// passed through unchanged in sizedRDS (so per-pool sizing downstream
-// doesn't re-process it — caller treats sizedRDS as already sized).
+// Returns (sizedRDS, nonRDS, drops). When targetPct is outside (0,100]
+// all recs are returned as nonRDS unchanged. When the CE coverage for
+// a family has no NU signal (family.TotalNU <= 0), that family's recs
+// are returned sized (as-is) in sizedRDS. When the family's
+// AWS-recommended counts sum to zero NU (currentNU <= 0 — all recs at
+// unrecognised sizes), those recs are dropped and recorded in
+// drops.NoNUSignal; they are NOT passed through to the per-pool path.
 func ApplyFamilyNUSizingRDS(
 	recs []common.Recommendation,
 	coverage PoolCoverageMap,
@@ -220,9 +227,15 @@ func partitionRDSRecsByFamily(recs []common.Recommendation) (map[string][]int, [
 	return familyIdx, nonRDS
 }
 
-// sizeRDSFamilyRecs sizes the recs in one family-key group: returns the
-// sized recs, drops empty/over-target families, and returns the
-// unchanged AWS-recommended counts when there's no coverage signal.
+// sizeRDSFamilyRecs sizes the recs in one family-key group. It returns
+// the sized recs and a drop-count struct. Three distinct outcomes exist:
+//   - family.TotalNU <= 0: CE coverage has no NU signal for this family;
+//     recs are returned as-is (AWS-recommended counts unchanged).
+//   - gap <= 0: family already at or above target; all recs are dropped
+//     and recorded in drops.AlreadyAtTarget.
+//   - currentNU <= 0: rec counts sum to zero NU (all at unrecognised
+//     sizes); recs are dropped and recorded in drops.NoNUSignal — they
+//     are NOT passed through to the per-pool sizing path.
 // The second return value reports how many recs were dropped and why.
 //
 // First pass scales each rec's Count and cost-bearing fields by the
