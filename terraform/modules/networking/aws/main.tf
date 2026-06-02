@@ -406,6 +406,13 @@ resource "aws_subnet" "private" {
     Name = "${var.stack_name}-private-${data.aws_availability_zones.available.names[count.index]}"
     Type = "private"
   })
+
+  lifecycle {
+    precondition {
+      condition     = var.enable_nat_gateway
+      error_message = "enable_nat_gateway must be true when creating private subnets: without it, module-created private subnets have no IPv4 path to AWS services (Secrets Manager, ECR, etc.). Enable the fck-nat instance or use an existing VPC with its own egress."
+    }
+  }
 }
 
 # ==============================================
