@@ -94,6 +94,8 @@ func TestIsStaticPath(t *testing.T) {
 		{"/app/dashboard", true},
 		{"//health", false}, // double-slash normalised to /health
 		{"//api/test", false},
+		{"/version", false},  // public build-metadata endpoint must reach API, not SPA
+		{"//version", false}, // double-slash normalised to /version
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
