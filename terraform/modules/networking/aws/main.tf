@@ -83,18 +83,6 @@ resource "aws_vpc" "main" {
   tags = merge(var.tags, {
     Name = "${var.stack_name}-vpc"
   })
-
-  # In-VPC workloads (Lambda, Fargate) need egress to AWS APIs that lack
-  # IPv6 (Secrets Manager, ECR, etc). This module no longer provisions
-  # per-service interface endpoints, so NAT is the only egress path.
-  # Plan fails fast instead of producing a VPC where workloads can't
-  # reach AWS APIs.
-  lifecycle {
-    precondition {
-      condition     = var.enable_nat_gateway
-      error_message = "enable_nat_gateway must be true: this module no longer provisions per-service VPC interface endpoints, so in-VPC workloads need NAT for AWS API egress. Set enable_nat_gateway = true, or reintroduce the relevant aws_vpc_endpoint resources first."
-    }
-  }
 }
 
 # ==============================================
