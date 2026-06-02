@@ -105,7 +105,10 @@ describe('Dashboard Module', () => {
     // Reset DOM
     document.body.innerHTML = `
       <div id="summary"></div>
-      <canvas id="savings-chart"></canvas>
+      <section id="savings-by-service-section"><h3>Potential savings range per service</h3>
+        <canvas id="savings-by-service-chart"></canvas>
+        <p id="savings-by-service-empty" class="empty hidden"></p>
+      </section>
       <div id="upcoming-list"></div>
     `;
 
@@ -174,7 +177,7 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('YTD Savings');
     });
 
-    test('renders savings chart', async () => {
+    test('renders the merged per-service savings chart', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
         by_service: {
@@ -185,28 +188,37 @@ describe('Dashboard Module', () => {
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: []
       });
+      // Range chart is driven by recs; supply two ec2 options + one rds.
+      (api.getRecommendations as jest.Mock).mockResolvedValue([
+        { service: 'ec2', savings: 400, term: 1, payment: 'no-upfront' },
+        { service: 'ec2', savings: 600, term: 3, payment: 'all-upfront' },
+        { service: 'rds', savings: 300, term: 1, payment: 'no-upfront' },
+      ]);
 
       await loadDashboard();
 
       expect(Chart).toHaveBeenCalled();
-      expect(state.setSavingsChart).toHaveBeenCalled();
     });
 
-    test('destroys existing chart before creating new one', async () => {
-      const mockChart = { destroy: jest.fn() };
-      (state.getSavingsChart as jest.Mock).mockReturnValue(mockChart);
-
+    test('destroys existing merged chart before creating new one', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
-        by_service: {}
+        by_service: { ec2: { potential_savings: 500, current_savings: 200 } }
       });
       (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
         purchases: []
       });
+      (api.getRecommendations as jest.Mock).mockResolvedValue([
+        { service: 'ec2', savings: 500, term: 1, payment: 'no-upfront' },
+      ]);
 
+      // First render builds a chart; second render must destroy it.
+      await loadDashboard();
+      const results = (Chart as unknown as jest.Mock).mock.results;
+      const firstChart = results[results.length - 1]?.value as { destroy: jest.Mock };
       await loadDashboard();
 
-      expect(mockChart.destroy).toHaveBeenCalled();
+      expect(firstChart.destroy).toHaveBeenCalled();
     });
 
     test('renders upcoming purchases', async () => {
@@ -700,7 +712,7 @@ describe('Dashboard Module', () => {
     });
 
     // #304: summaryData.by_service missing entirely (null/undefined from
-    // backend). renderSavingsChart receives `undefined || {}` = {} which
+    // backend). renderSavingsByService receives `undefined || {}` = {} which
     // is safe; verify no throw and the error banner does not appear.
     test('#304: summaryData missing by_service field does not throw', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
@@ -1134,10 +1146,12 @@ describe('Dashboard Module', () => {
     // Import the public helpers from dashboard. The module is already
     // loaded above via the jest.mock chain, so we can import directly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs } = require('../dashboard') as {
-      renderSavingsByService: (recs: unknown[], filterDesc?: string) => void;
+    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs, darkenHexColor, parseHexColor } = require('../dashboard') as {
+      renderSavingsByService: (recs: unknown[], byService?: Record<string, { potential_savings: number; current_savings: number }>, filterDesc?: string) => void;
       computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
       computeServiceStatsFromRecs: (recs: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[]; minLabel?: string; maxLabel?: string }>;
+      darkenHexColor: (hex: string, factor?: number) => string;
+      parseHexColor: (hex: string) => { r: number; g: number; b: number };
     };
 
     function buildDOM(): void {
@@ -1393,6 +1407,57 @@ describe('Dashboard Module', () => {
         expect(rangeDs?.data[0]).toBe(300);   // max - min
       });
 
+      // Issue #908: merged chart draws a current-savings underlay per service.
+      test('renders a current (committed) dataset from byService.current_savings', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 100, 1, 'no_upfront'), rec('ec2', 400, 3, 'all_upfront')],
+          { ec2: { potential_savings: 400, current_savings: 250 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string; data: number[]; backgroundColor: string[]; stack: string }[] };
+        }).data.datasets;
+        const currentDs = datasets.find((d) => d.label === 'Current (committed)');
+        expect(currentDs).toBeDefined();
+        expect(currentDs?.data[0]).toBe(250);
+        // Current bar lives in its own stack so it sits beside the potential range.
+        expect(currentDs?.stack).toBe('current');
+      });
+
+      test('current underlay uses a DARKER variant of each service potential hue', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 500)],
+          { ec2: { potential_savings: 500, current_savings: 200 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string; backgroundColor: string[] }[] };
+        }).data.datasets;
+        const floorColor = datasets.find((d) => d.label === 'Min potential')?.backgroundColor[0] as string;
+        const currentColor = datasets.find((d) => d.label === 'Current (committed)')?.backgroundColor[0] as string;
+        // The current colour is the darkened form of the floor (potential) colour.
+        expect(currentColor).toBe(darkenHexColor(floorColor));
+        // And it is genuinely darker: each channel sum is lower.
+        const sum = (hex: string): number => { const c = parseHexColor(hex); return c.r + c.g + c.b; };
+        expect(sum(currentColor)).toBeLessThan(sum(floorColor));
+      });
+
+      test('current bar defaults to 0 for a service absent from byService', () => {
+        buildDOM();
+        renderSavingsByService([rec('rds', 300)], {}); // no rds entry
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string; data: number[] }[] };
+        }).data.datasets;
+        const currentDs = datasets.find((d) => d.label === 'Current (committed)');
+        expect(currentDs?.data[0]).toBe(0);
+      });
+
       test('services are sorted by max potential savings descending', () => {
         buildDOM();
         // ec2: max=200, rds: max=500, lambda: max=50 -- expected order: rds, ec2, lambda.
@@ -1429,7 +1494,7 @@ describe('Dashboard Module', () => {
       // Issue #867: filter-aware empty state.
       test('empty state shows generic text when no filter is active', () => {
         buildDOM();
-        renderSavingsByService([], '');
+        renderSavingsByService([], {}, '');
         const empty = document.getElementById('savings-by-service-empty');
         expect(empty?.classList.contains('hidden')).toBe(false);
         expect(empty?.textContent).toBe('No positive potential savings found for current recommendations.');
@@ -1437,7 +1502,7 @@ describe('Dashboard Module', () => {
 
       test('empty state mentions filter when provider chip is active and result is empty', () => {
         buildDOM();
-        renderSavingsByService([], 'AWS');
+        renderSavingsByService([], {}, 'AWS');
         const empty = document.getElementById('savings-by-service-empty');
         expect(empty?.classList.contains('hidden')).toBe(false);
         expect(empty?.textContent).toContain('AWS');
@@ -1446,7 +1511,7 @@ describe('Dashboard Module', () => {
 
       test('empty state mentions filter when account chip is active and result is empty', () => {
         buildDOM();
-        renderSavingsByService([], 'uuid-acct-1');
+        renderSavingsByService([], {}, 'uuid-acct-1');
         const empty = document.getElementById('savings-by-service-empty');
         expect(empty?.classList.contains('hidden')).toBe(false);
         expect(empty?.textContent).toContain('uuid-acct-1');
@@ -1457,7 +1522,7 @@ describe('Dashboard Module', () => {
         // First render with data -- chart shown, empty hidden.
         renderSavingsByService([rec('ec2', 100)]);
         // Second render with filter-narrowed empty result.
-        renderSavingsByService([], 'AWS, uuid-acct-2');
+        renderSavingsByService([], {}, 'AWS, uuid-acct-2');
         const empty = document.getElementById('savings-by-service-empty');
         expect(empty?.classList.contains('hidden')).toBe(false);
         expect(empty?.textContent).toContain('AWS, uuid-acct-2');
@@ -1471,13 +1536,7 @@ describe('Dashboard Module', () => {
         summaryEl.id = 'summary';
         const upcomingEl = document.createElement('div');
         upcomingEl.id = 'upcoming-list';
-        const savingsChartSection = document.createElement('section');
-        savingsChartSection.id = 'savings-chart-section';
-        const savingsCanvas = document.createElement('canvas');
-        savingsCanvas.id = 'savings-chart';
-        savingsChartSection.appendChild(savingsCanvas);
         document.body.appendChild(summaryEl);
-        document.body.appendChild(savingsChartSection);
         document.body.appendChild(upcomingEl);
 
         (api.getDashboardSummary as jest.Mock).mockResolvedValue({
@@ -1496,6 +1555,71 @@ describe('Dashboard Module', () => {
 
         expect(document.getElementById('savings-by-service-chart')?.classList.contains('hidden')).toBe(false);
         expect(document.getElementById('savings-by-service-empty')?.classList.contains('hidden')).toBe(true);
+      });
+
+      // Issue #908: the merged chart must keep honoring the topbar chips.
+      // loadDashboard re-runs on every chip change (via the state subscribers
+      // wired in setupDashboardHandlers), so a second load with new filter
+      // results must re-render the chart with the new data.
+      test('re-renders the merged chart when the filter changes between loads', async () => {
+        buildDOM();
+        const summaryEl = document.createElement('section');
+        summaryEl.id = 'summary';
+        const upcomingEl = document.createElement('div');
+        upcomingEl.id = 'upcoming-list';
+        document.body.appendChild(summaryEl);
+        document.body.appendChild(upcomingEl);
+
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+          potential_monthly_savings: 0, total_recommendations: 1,
+          active_commitments: 0, committed_monthly: 0, target_coverage: 80,
+          ytd_savings: 0, by_service: { ec2: { potential_savings: 150, current_savings: 90 } },
+        });
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+        // First load: AWS/ec2 result.
+        (api.getRecommendations as jest.Mock).mockResolvedValue([rec('ec2', 150)]);
+        await loadDashboard();
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastChartData = (): { labels: string[] } =>
+          (chartCtor.mock.calls[chartCtor.mock.calls.length - 1]?.[1] as { data: { labels: string[] } }).data;
+        expect(lastChartData().labels).toEqual(['ec2']);
+
+        // Filter changes -> new recs -> second load must re-render with rds.
+        (api.getRecommendations as jest.Mock).mockResolvedValue([rec('rds', 220)]);
+        await loadDashboard();
+        expect(lastChartData().labels).toEqual(['rds']);
+      });
+    });
+
+    // Issue #908: colour-derivation helpers for the current-savings underlay.
+    describe('colour helpers (issue #908)', () => {
+      test('parseHexColor parses #rrggbb', () => {
+        expect(parseHexColor('#1a73e8')).toEqual({ r: 26, g: 115, b: 232 });
+      });
+
+      test('parseHexColor tolerates a missing leading hash', () => {
+        expect(parseHexColor('34a853')).toEqual({ r: 52, g: 168, b: 83 });
+      });
+
+      test('parseHexColor falls back to the default blue for malformed input', () => {
+        expect(parseHexColor('not-a-color')).toEqual({ r: 26, g: 115, b: 232 });
+      });
+
+      test('darkenHexColor returns a strictly darker same-hue colour', () => {
+        const base = '#34a853';
+        const darker = darkenHexColor(base);
+        expect(darker).toMatch(/^#[0-9a-f]{6}$/);
+        const sum = (hex: string): number => { const c = parseHexColor(hex); return c.r + c.g + c.b; };
+        expect(sum(darker)).toBeLessThan(sum(base));
+        // 30% reduction by default (factor 0.7): green channel 168 -> ~118.
+        expect(parseHexColor(darker).g).toBe(Math.round(168 * 0.7));
+      });
+
+      test('darkenHexColor honours an explicit factor', () => {
+        // factor 0.5 halves each channel.
+        expect(darkenHexColor('#646464', 0.5)).toBe('#323232');
       });
     });
   });

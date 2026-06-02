@@ -135,15 +135,23 @@ describe('HTML Structure', () => {
       expect(summary).toBeTruthy();
     });
 
-    test('has savings chart section', () => {
-      const chartSection = document.getElementById('savings-chart-section');
+    // Issue #908 merged the two per-service charts into one; the standalone
+    // #savings-chart-section / #savings-chart "Potential Savings by Service"
+    // chart was removed in favour of the merged range chart below.
+    test('has the merged per-service savings range section', () => {
+      const chartSection = document.getElementById('savings-by-service-section');
       expect(chartSection).toBeTruthy();
     });
 
-    test('has savings chart canvas', () => {
-      const canvas = document.getElementById('savings-chart');
+    test('has the merged per-service savings range canvas', () => {
+      const canvas = document.getElementById('savings-by-service-chart');
       expect(canvas).toBeTruthy();
       expect(canvas?.tagName.toLowerCase()).toBe('canvas');
+    });
+
+    test('no longer renders the old standalone savings chart (issue #908)', () => {
+      expect(document.getElementById('savings-chart-section')).toBeNull();
+      expect(document.getElementById('savings-chart')).toBeNull();
     });
 
     test('has upcoming purchases section', () => {

@@ -16,8 +16,8 @@ import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/sk
 // Register Chart.js components
 Chart.register(...registerables);
 
-// Separate Chart instance for the trend widget so renderSavingsChart's
-// state.savingsChart doesn't conflict.
+// Separate Chart instance for the trend widget so it doesn't conflict with
+// the per-service savings chart instance below.
 let savingsTrendChart: Chart | null = null;
 let savingsTrendRange: '7' | '30' | '90' | 'all' = '90';
 
@@ -41,6 +41,38 @@ const SERVICE_BAR_COLORS = [
   '#795548', // brown
   '#4caf50', // light-green
 ];
+
+/**
+ * Parse a #rrggbb hex string into its r/g/b components. Falls back to the
+ * default service bar blue (#1a73e8) for malformed input so the chart never
+ * renders a NaN colour. Exported for unit testing.
+ */
+export function parseHexColor(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  const clean = m ? m[1]! : '1a73e8';
+  return {
+    r: parseInt(clean.substring(0, 2), 16),
+    g: parseInt(clean.substring(2, 4), 16),
+    b: parseInt(clean.substring(4, 6), 16),
+  };
+}
+
+/**
+ * Derive a darker shade of a base #rrggbb colour by reducing its perceived
+ * lightness. Used for the current-savings underlay so it reads as the
+ * "already-realized" portion beneath the lighter potential-range bar of the
+ * same hue (issue #908). The factor (default 0.7 → ~30% darker) is applied
+ * multiplicatively per channel so the hue is preserved; the result is
+ * programmatic, not hardcoded per service. Exported for unit testing.
+ */
+export function darkenHexColor(hex: string, factor = 0.7): string {
+  const { r, g, b } = parseHexColor(hex);
+  const scale = (c: number): string => {
+    const v = Math.max(0, Math.min(255, Math.round(c * factor)));
+    return v.toString(16).padStart(2, '0');
+  };
+  return `#${scale(r)}${scale(g)}${scale(b)}`;
+}
 
 // In-memory index of the currently-rendered upcoming purchases, keyed by
 // execution_id. The "View Details" affordance renders from this — the
@@ -168,12 +200,13 @@ export async function loadDashboard(): Promise<void> {
     }
 
     // Build a human-readable filter description for filter-aware empty states
-    // on both Home charts. Mirrors the pattern from loadSavingsTrendChart (#747).
+    // on the Home chart. Mirrors the pattern from loadSavingsTrendChart (#747).
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
     renderDashboardSummary(summaryData!, recs);
-    renderSavingsChart(summaryData!.by_service || {}, filterDesc);
-    renderSavingsByService(recs, filterDesc);
+    // Single merged per-service chart (#908): potential range from recs +
+    // current-savings underlay from the summary's by_service map.
+    renderSavingsByService(recs, summaryData!.by_service || {}, filterDesc);
     renderUpcomingPurchases(upcomingData?.purchases || []);
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
@@ -339,86 +372,6 @@ function attachSparkline(key: string, values: readonly number[]): void {
 }
 
 export const __test__ = { sparklinePoints, attachSparkline, computeServiceStats };
-
-function renderSavingsChart(byService: Record<string, ServiceSavings>, filterDesc = ''): void {
-  const ctx = document.getElementById('savings-chart') as HTMLCanvasElement | null;
-  if (!ctx) return;
-
-  const labels = Object.keys(byService);
-  const potentialSavings = labels.map(s => byService[s]?.potential_savings || 0);
-  const currentSavings = labels.map(s => byService[s]?.current_savings || 0);
-
-  const existingChart = state.getSavingsChart();
-  if (existingChart) {
-    existingChart.destroy();
-    state.setSavingsChart(null);
-  }
-
-  // No data → hide the canvas and render an empty-state message so the
-  // chart doesn't render with a synthetic $0–$1 y-axis.
-  // When a filter is active, mention it so the user understands why the
-  // chart is blank (mirrors the savings-trend empty-state pattern from #747).
-  const section = ctx.parentElement;
-  let emptyState = section?.querySelector<HTMLParagraphElement>('.chart-empty');
-  if (labels.length === 0) {
-    ctx.classList.add('hidden');
-    const emptyText = filterDesc
-      ? `No savings data for the selected filter (${filterDesc}).`
-      : 'No savings data yet. Add accounts and wait for recommendations.';
-    if (section && !emptyState) {
-      emptyState = document.createElement('p');
-      emptyState.className = 'chart-empty empty';
-      section.appendChild(emptyState);
-    }
-    if (emptyState) emptyState.textContent = emptyText;
-    return;
-  }
-  // Data is back — restore the canvas and remove any stale empty state.
-  ctx.classList.remove('hidden');
-  emptyState?.remove();
-
-  const chart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          label: 'Potential Savings',
-          data: potentialSavings,
-          backgroundColor: '#fbbc04',
-          borderRadius: 4
-        },
-        {
-          label: 'Current Savings',
-          data: currentSavings,
-          backgroundColor: '#34a853',
-          borderRadius: 4
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: (value) => '$' + value.toLocaleString()
-          }
-        }
-      },
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: (context) => `${context.dataset.label}: $${(context.raw as number).toLocaleString()}/mo`
-          }
-        }
-      }
-    }
-  });
-
-  state.setSavingsChart(chart);
-}
 
 function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
   const container = document.getElementById('upcoming-list');
@@ -755,20 +708,34 @@ export function computeServiceStatsFromRecs(
 
 
 /**
- * Render the per-service potential-savings range stacked bar chart (issue #769).
- * Accepts the recommendations array from loadDashboard.
+ * Render the single merged per-service savings chart (issues #769 + #908).
  *
- * Each bar is split into two stacked datasets:
- *   - "Min potential"  (solid): height = min potential savings across recommendation rows for that service.
- *   - "Upside"  (translucent 35% opacity): height = max - min (the additional potential).
+ * Each service category shows two grouped bars:
+ *   - Potential range (stacked): "Min potential" (solid hue) + "Upside"
+ *     (same hue at 35% opacity, = max - min), derived from the
+ *     recommendations list via computeServiceStatsFromRecs.
+ *   - Current (committed) savings (single bar) in a DARKER shade of the
+ *     same per-service hue, sourced from the dashboard summary's
+ *     by_service[svc].current_savings (now populated by the backend, #908).
+ *     This reads as the already-realized savings sitting beneath the
+ *     potential range of the same colour family.
  *
- * Services are sorted by max potential savings descending; the top SAVINGS_BY_SERVICE_MAX
- * are shown. When truncated, the section heading notes "+N more".
+ * This replaces the old standalone grouped "Potential Savings by Service"
+ * chart (renderSavingsChart) which has been removed; the current-vs-potential
+ * comparison now lives entirely in this one range chart.
  *
- * Empty state: when no recommendations are available, the canvas is hidden and
- * the empty-state paragraph is shown.
+ * Services are sorted by max potential savings descending; the top
+ * SAVINGS_BY_SERVICE_MAX are shown. When truncated, the section heading notes
+ * "+N more".
+ *
+ * Empty state: when no recommendations have positive savings, the canvas is
+ * hidden and the empty-state paragraph is shown.
  */
-export function renderSavingsByService(recs: readonly LocalRecommendation[], filterDesc = ''): void {
+export function renderSavingsByService(
+  recs: readonly LocalRecommendation[],
+  byService: Record<string, ServiceSavings> = {},
+  filterDesc = '',
+): void {
   const canvas = document.getElementById('savings-by-service-chart') as HTMLCanvasElement | null;
   const emptyEl = document.getElementById('savings-by-service-empty');
   const section = document.getElementById('savings-by-service-section');
@@ -816,18 +783,23 @@ export function renderSavingsByService(recs: readonly LocalRecommendation[], fil
   const labels = visible.map(([svc]) => svc);
   const floorData = visible.map(([, s]) => s.min);
   const rangeData = visible.map(([, s]) => s.max - s.min);
+  // Current (committed) savings per service from the summary's by_service map.
+  // Defaults to 0 for services the summary doesn't carry (the bar collapses,
+  // which is the correct "nothing committed yet" visual).
+  const currentData = visible.map(([svc]) => byService[svc]?.current_savings ?? 0);
   const totalSavings = Array.from(stats.values()).reduce((acc, s) => acc + s.max, 0);
 
   // Assign a colour per service (cycles if more than palette length).
   const bgColors = visible.map((_, i) => SERVICE_BAR_COLORS[i % SERVICE_BAR_COLORS.length] ?? '#1a73e8');
   const rangeColors = bgColors.map(c => {
     // Convert solid hex to rgba at 0.35 opacity for the range segment.
-    const hex = c.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
+    const { r, g, b } = parseHexColor(c);
     return `rgba(${r},${g},${b},0.35)`;
   });
+  // Current-savings bar uses a darker variant of the same hue, derived
+  // programmatically (not hardcoded per service) so the "already-realized"
+  // bar always matches its service's colour family (#908).
+  const currentColors = bgColors.map(c => darkenHexColor(c));
 
   savingsByServiceChart = new Chart(canvas, {
     type: 'bar',
@@ -839,14 +811,21 @@ export function renderSavingsByService(recs: readonly LocalRecommendation[], fil
           data: floorData,
           backgroundColor: bgColors,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
-          stack: 'savings',
+          stack: 'potential',
         },
         {
           label: 'Upside',
           data: rangeData,
           backgroundColor: rangeColors,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
-          stack: 'savings',
+          stack: 'potential',
+        },
+        {
+          label: 'Current (committed)',
+          data: currentData,
+          backgroundColor: currentColors,
+          borderRadius: 4,
+          stack: 'current',
         },
       ],
     },
@@ -865,6 +844,12 @@ export function renderSavingsByService(recs: readonly LocalRecommendation[], fil
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
               if (!s) return '';
+              // The current-savings dataset gets a focused, single-line
+              // tooltip; the range datasets share the full breakdown.
+              if (ctx.dataset.stack === 'current') {
+                const current = byService[svc]?.current_savings ?? 0;
+                return `Current (committed): $${current.toLocaleString()}`;
+              }
               const pct = totalSavings > 0 ? ((s.max / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
                 `Service: ${svc}`,
@@ -883,10 +868,12 @@ export function renderSavingsByService(recs: readonly LocalRecommendation[], fil
       scales: {
         x: {
           stacked: true,
+          title: { display: true, text: 'Service' },
         },
         y: {
           stacked: true,
           beginAtZero: true,
+          title: { display: true, text: 'Monthly savings ($)' },
           ticks: { callback: (v) => '$' + (v as number).toLocaleString() },
         },
       },
