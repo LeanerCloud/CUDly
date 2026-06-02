@@ -300,15 +300,21 @@ func TestAuthServiceAdapter_UpdateUserAPI(t *testing.T) {
 		ID:       "user-1",
 		Email:    "old@example.com",
 		GroupIDs: []string{"group-viewer"},
-	}, nil)
-	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil)
+	}, nil).Once()
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
-	// New signature carries the actor user ID (issue #907 self-escalation
-	// guard). The update only flips a non-group field, so no guard fires.
-	_, err := adapter.UpdateUserAPI(ctx, "actor-1", "user-1", map[string]interface{}{
-		"active": true,
+	// The new signature threads the actor user ID through to s.UpdateUser
+	// (issue #907 self-escalation guard). Actor != target, so the
+	// self-escalation guard skips; the group change does not remove the
+	// Administrators group, so the last-admin guard skips; the store
+	// UpdateUser call must therefore fire. Without that, the test silently
+	// passes even if the adapter stopped forwarding actorUserID, which is
+	// exactly the regression CR flagged.
+	_, err := adapter.UpdateUserAPI(ctx, "actor-1", "user-1", auth.APIUpdateUserRequest{
+		Groups: []string{"group-editor"},
 	})
-	_ = err
+	require.NoError(t, err)
+	mockStore.AssertExpectations(t)
 }
 
 func TestAuthServiceAdapter_CreateGroupAPI(t *testing.T) {
