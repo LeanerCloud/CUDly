@@ -6,6 +6,7 @@ import { apiRequest, getAuthHeaders, setAuthToken, setCsrfToken, clearAuth, addC
 import type {
   LoginResponse,
   User,
+  UserPermissionsResponse,
   PublicInfo,
   MFASetupResponse,
   MFARecoveryCodesResponse,
@@ -108,6 +109,18 @@ export async function logout(): Promise<void> {
  */
 export async function getCurrentUser(): Promise<User> {
   return apiRequest<User>('/auth/me');
+}
+
+/**
+ * Fetch the effective permission set for the current user from
+ * GET /api/auth/me/permissions (issue #917). Returns the full
+ * UserPermissionsResponse including is_admin.
+ *
+ * Called on login/bootstrap and the result is merged onto the
+ * current-user state so canAccess() can consult it.
+ */
+export async function getUserPermissions(): Promise<UserPermissionsResponse> {
+  return apiRequest<UserPermissionsResponse>('/auth/me/permissions');
 }
 
 /**

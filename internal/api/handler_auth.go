@@ -103,6 +103,49 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 	}, nil
 }
 
+// getCurrentUserPermissions handles GET /api/auth/me/permissions.
+// It returns the effective permission set for the authenticated user,
+// derived from the union of all their group permissions. The same path
+// the backend uses for enforcement (GetUserPermissionsAPI -> GetUserPermissions).
+func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UserPermissionsResponse, error) {
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return nil, NewClientError(401, "no authorization token provided")
+	}
+
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil {
+		return nil, NewClientError(401, "invalid session")
+	}
+
+	raw, err := h.auth.GetUserPermissionsAPI(ctx, session.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	// GetUserPermissionsAPI returns []auth.APIPermission via any to avoid
+	// an import cycle between the api and auth packages. Convert to the
+	// wire-format PermissionEntry slice here.
+	apiPerms, _ := raw.([]auth.APIPermission)
+	entries := make([]PermissionEntry, len(apiPerms))
+	isAdmin := false
+	for i, p := range apiPerms {
+		entries[i] = PermissionEntry{Action: p.Action, Resource: p.Resource}
+		if p.Action == auth.ActionAdmin && p.Resource == auth.ResourceAll {
+			isAdmin = true
+		}
+	}
+
+	return &UserPermissionsResponse{
+		Permissions: entries,
+		IsAdmin:     isAdmin,
+	}, nil
+}
+
 func (h *Handler) checkAdminExists(ctx context.Context, req *events.LambdaFunctionURLRequest) (*AdminExistsResponse, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")

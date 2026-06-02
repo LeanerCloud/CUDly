@@ -860,6 +860,11 @@ func (m *MockAuthService) HasPermissionAPI(ctx context.Context, userID, action, 
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0), args.Error(1)
+}
+
 // grantAdmin makes every HasPermissionAPI check succeed, modelling an
 // Administrators-group member. Authorization is group-membership-only after
 // issue #907, so admin-gated handlers resolve "is admin" / specific permissions

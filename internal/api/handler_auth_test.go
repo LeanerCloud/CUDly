@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1189,3 +1190,109 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 // returns the same value the real service would.
 func ErrMFARequired_test() error    { return mfaRequiredSentinel }
 func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }
+
+// Tests for GET /api/auth/me/permissions (issue #917).
+
+func TestHandler_getCurrentUserPermissions_NoAuthService(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{auth: nil}
+	req := &events.LambdaFunctionURLRequest{}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication service not configured")
+}
+
+func TestHandler_getCurrentUserPermissions_NoToken(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+func TestHandler_getCurrentUserPermissions_InvalidSession(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("ValidateSession", ctx, "bad-token").Return((*Session)(nil), errors.New("expired"))
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer bad-token"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+// TestHandler_getCurrentUserPermissions_RegularUser asserts that a non-admin user
+// with two groups gets the union of their groups' permissions and is_admin == false.
+func TestHandler_getCurrentUserPermissions_RegularUser(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "user-1"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+
+	// Two groups: one grants view:recommendations, the other view:plans.
+	perms := []auth.APIPermission{
+		{Action: "view", Resource: "recommendations"},
+		{Action: "view", Resource: "plans"},
+	}
+	mockAuth.On("GetUserPermissionsAPI", ctx, "user-1").Return(perms, nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	assert.False(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 2)
+	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
+	assert.Equal(t, PermissionEntry{Action: "view", Resource: "plans"}, result.Permissions[1])
+}
+
+// TestHandler_getCurrentUserPermissions_Admin asserts that an Administrators-group
+// member gets the {admin, *} wildcard and is_admin == true.
+func TestHandler_getCurrentUserPermissions_Admin(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "admin-1"}
+	mockAuth.On("ValidateSession", ctx, "admin-tok").Return(session, nil)
+
+	perms := []auth.APIPermission{
+		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
+	}
+	mockAuth.On("GetUserPermissionsAPI", ctx, "admin-1").Return(perms, nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-tok"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 1)
+	assert.Equal(t, PermissionEntry{Action: "admin", Resource: "*"}, result.Permissions[0])
+}
+
+// TestHandler_getCurrentUserPermissions_Unauth ensures unauthenticated requests get 401.
+func TestHandler_getCurrentUserPermissions_Unauth(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, mock.Anything).Return((*Session)(nil), errors.New("invalid"))
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer bogus"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}

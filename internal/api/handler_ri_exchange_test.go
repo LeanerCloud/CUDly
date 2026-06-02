@@ -851,6 +851,9 @@ func (m *mockAuthForExchange) ListGroupsAPI(_ context.Context) (any, error)     
 func (m *mockAuthForExchange) HasPermissionAPI(_ context.Context, _, _, _ string) (bool, error) {
 	return true, nil
 }
+func (m *mockAuthForExchange) GetUserPermissionsAPI(_ context.Context, _ string) (any, error) {
+	return nil, nil
+}
 func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ any) (any, error) {
 	return nil, nil
 }

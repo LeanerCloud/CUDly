@@ -359,6 +359,22 @@ func (s *Service) HasPermissionAPI(ctx context.Context, userID, action, resource
 	return s.HasPermission(ctx, userID, action, resource, nil)
 }
 
+// GetUserPermissionsAPI returns the effective permission set for a user via
+// the API. Calls GetUserPermissions (the same union path the server enforces
+// with) and converts each Permission to an APIPermission for the wire format.
+// The handler asserts the return value to []APIPermission.
+func (s *Service) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
+	perms, err := s.GetUserPermissions(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]APIPermission, len(perms))
+	for i, p := range perms {
+		result[i] = permissionToAPIPermission(p)
+	}
+	return result, nil
+}
+
 // MFASetupAPI starts an MFA enrollment via the API. Returns the
 // freshly-generated secret + provisioning URI (the otpauth:// URI
 // the frontend renders as a QR code). Wraps MFASetup; thin shim

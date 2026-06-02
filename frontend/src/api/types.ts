@@ -8,6 +8,25 @@ export type PaymentOption = 'no-upfront' | 'partial-upfront' | 'all-upfront';
 export type RampSchedule = 'immediate' | 'weekly-25pct' | 'monthly-10pct' | 'custom';
 
 // User types
+
+/**
+ * PermissionEntry matches the JSON shape returned by GET /api/auth/me/permissions.
+ * Both action and resource are string to stay forward-compatible with new
+ * constants added to internal/auth/types.go without a frontend change.
+ */
+export interface PermissionEntry {
+  action: string;
+  resource: string;
+}
+
+/**
+ * UserPermissionsResponse is the shape of GET /api/auth/me/permissions.
+ */
+export interface UserPermissionsResponse {
+  permissions: PermissionEntry[];
+  is_admin: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -21,6 +40,11 @@ export interface User {
   // responses may not include it. The profile/MFA section in
   // auth.ts treats `mfa_enabled === true` (strict) as "enabled".
   mfa_enabled?: boolean;
+  // Effective permissions fetched from GET /api/auth/me/permissions
+  // on login/bootstrap (issue #917). Undefined until the fetch
+  // completes; canAccess() falls back to group-membership-only
+  // gating (admins pass, others blocked) while this is loading.
+  effectivePermissions?: PermissionEntry[];
 }
 
 export interface LoginResponse {

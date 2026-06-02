@@ -1,21 +1,17 @@
 /**
  * Permission helper for CUDly frontend.
  *
- * PR #912 removed the `role` column from users and sessions.
- * Authorization is now purely group-membership based. The server
- * derives every permission from the union of the groups a user
- * belongs to via HasPermissionAPI; the frontend mirrors that by
- * checking group membership for the UI-gating predicates below.
+ * Issue #917: authorization is group-membership based. The server
+ * exposes the effective permission set (union of all user groups) via
+ * GET /api/auth/me/permissions. The frontend fetches this on
+ * login/bootstrap and caches it on the current-user state so
+ * canAccess() can consult the real set rather than blocking all
+ * non-admins.
  *
  * Admin status = member of the Administrators group
  * (UUID 00000000-0000-5000-8000-000000000001). That group carries
  * the `admin:*` capability on the backend, which grants every action
- * on every resource. The three built-in groups seeded by migration
- * 000057 are:
- *
- *   Administrators   00000000-0000-5000-8000-000000000001  (admin:*)
- *   Standard Users   00000000-0000-5000-8000-000000000005
- *   Read-Only Users  00000000-0000-5000-8000-000000000006
+ * on every resource.
  *
  * The closed-union Action and Resource types below are hand-written
  * and mirror the Action* / Resource* constants in
@@ -28,7 +24,6 @@
  * The ADMIN_PERMS / USER_PERMS / READONLY_PERMS sets from
  * permissions.generated.ts remain exported for the effective-
  * permissions display in the admin Users page expand panel.
- * They are not used for session gating anymore.
  */
 
 import * as state from './state';
@@ -88,25 +83,37 @@ export function isAdmin(): boolean {
 }
 
 /**
- * Returns true when the current session's group membership grants the
- * specified permission.
+ * Returns true when the current session's effective permissions grant
+ * the specified action on the specified resource.
  *
- * Administrators-group members pass every check (admin:* covers every
- * action/resource pair). For all other groups a full /me/permissions
- * round-trip is needed to resolve fine-grained permissions; that
- * endpoint is not yet available, so non-admins return false here and
- * the backend remains the authoritative gate.
+ * When effectivePermissions is populated (fetched from
+ * GET /api/auth/me/permissions on login/bootstrap) the set is
+ * consulted directly: admin:* grants everything; otherwise an exact
+ * action:resource match is required.
  *
- * UX-only gate. A wrong-positive surfaces as a 403 on click; a
- * wrong-negative just hides a button.
+ * While effectivePermissions is not yet loaded (e.g. during the first
+ * render before the async fetch completes) the function falls back to
+ * the group-membership admin check so Administrators-group members
+ * aren't locked out during bootstrap. Non-admins see buttons hidden
+ * briefly -- acceptable because the full set loads immediately after
+ * login.
+ *
+ * UX-only gate. The backend still enforces on every request.
  */
 export function canAccess(action: Action, resource: Resource): boolean {
-  // Suppress unused-variable warning -- action/resource are kept in
-  // the signature for forward-compatibility with the /me/permissions
-  // endpoint that will replace this stub.
-  void action; void resource;
   const user = state.getCurrentUser();
   if (!user) return false;
+
+  // Use the server-provided effective permission set when available.
+  if (user.effectivePermissions) {
+    for (const p of user.effectivePermissions) {
+      if (p.action === 'admin' && p.resource === '*') return true;
+      if (p.action === action && (p.resource === resource || p.resource === '*')) return true;
+    }
+    return false;
+  }
+
+  // Fallback while permissions are still loading: admins pass, others block.
   return isAdmin();
 }
 
