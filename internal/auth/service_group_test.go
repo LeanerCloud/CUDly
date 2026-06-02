@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -433,6 +434,35 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("skips deleted group (pgx.ErrNoRows) without error", func(t *testing.T) {
+		// pgx.ErrNoRows from the store means the group row was deleted between
+		// the user-load and the group-load; treat it as "missing" and skip.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		user := &User{
+			ID:       "user-123",
+			GroupIDs: []string{"standard-group", "deleted-group"},
+		}
+		standardGrp := &Group{
+			ID:          "standard-group",
+			Name:        "Standard Users",
+			Permissions: DefaultUserPermissions(),
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
+		mockStore.On("GetGroup", ctx, "standard-group").Return(standardGrp, nil).Once()
+		mockStore.On("GetGroup", ctx, "deleted-group").Return(nil, pgx.ErrNoRows).Once()
+
+		permissions, err := service.GetUserPermissions(ctx, "user-123")
+		require.NoError(t, err, "a pgx.ErrNoRows group must be skipped, not propagated")
+		// Only the resolvable group's permissions; deleted group excluded.
+		assert.Len(t, permissions, len(DefaultUserPermissions()))
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestService_BuildAuthContext(t *testing.T) {
@@ -609,6 +639,37 @@ func TestService_BuildAuthContext(t *testing.T) {
 		authCtx, err := service.BuildAuthContext(ctx, "user-123")
 		require.Error(t, err, "a per-group fetch error must propagate")
 		assert.Nil(t, authCtx, "no partial auth context must be returned")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("skips deleted group (pgx.ErrNoRows) without error", func(t *testing.T) {
+		// pgx.ErrNoRows from the store means the group row was deleted between
+		// the user-load and the group-load; treat it as "missing" and skip.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		user := &User{
+			ID:       "user-123",
+			GroupIDs: []string{"valid-group", "deleted-group"},
+		}
+		validGroup := &Group{
+			ID:              "valid-group",
+			Name:            "Valid Group",
+			AllowedAccounts: []string{"111111111111"},
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil).Once()
+		mockStore.On("GetGroup", ctx, "valid-group").Return(validGroup, nil).Once()
+		mockStore.On("GetGroup", ctx, "deleted-group").Return(nil, pgx.ErrNoRows).Once()
+
+		authCtx, err := service.BuildAuthContext(ctx, "user-123")
+		require.NoError(t, err, "a pgx.ErrNoRows group must be skipped, not propagated")
+		assert.NotNil(t, authCtx)
+		assert.Len(t, authCtx.Groups, 1, "only the present group appears")
+		assert.Len(t, authCtx.AllowedAccounts, 1)
+		assert.Contains(t, authCtx.AllowedAccounts, "111111111111")
 
 		mockStore.AssertExpectations(t)
 	})

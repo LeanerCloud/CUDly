@@ -72,6 +72,10 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 	for _, groupID := range user.GroupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Group was deleted; skip it rather than failing the entire request.
+				continue
+			}
 			return nil, fmt.Errorf("fetching group %s: %w", groupID, err)
 		}
 		if group == nil {
@@ -120,6 +124,10 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 	for _, groupID := range groupIDs {
 		group, err := s.store.GetGroup(ctx, groupID)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Group was deleted; skip it rather than failing the entire request.
+				continue
+			}
 			return fmt.Errorf("fetching group %s: %w", groupID, err)
 		}
 		if group == nil {
