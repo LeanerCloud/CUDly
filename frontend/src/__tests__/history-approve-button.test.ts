@@ -63,9 +63,12 @@ import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
-import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
+// Admin user includes Purchaser membership (mirrors the auto-migration for
+// existing admins on first deploy of issue #923). approve-any:purchases is
+// carved out of admin:* and requires Purchaser group membership.
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] };
 // REG_USER carries the default-user effective permission set (approve-own
 // + cancel-own + retry-own on purchases) so canAccess returns true for
 // own-row actions without needing the bootstrap fetch. The previous

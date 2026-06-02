@@ -80,11 +80,17 @@ jest.mock('../plans', () => ({
 }));
 
 import * as state from '../state';
-import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 
 const mockUser = (role: string | null) => {
+  // 'admin' represents a fully-capable admin: Administrators + Purchaser
+  // (mirrors the auto-migration that adds existing admins to Purchaser on
+  // first deploy of issue #923). Tests that want to assert admin-alone
+  // behaviour (no spending access) should call mockUserWithGroups directly.
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID] : [] },
+    role === null
+      ? null
+      : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] : [] },
   );
 };
 

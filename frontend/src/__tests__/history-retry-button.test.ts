@@ -69,9 +69,12 @@ import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
-import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
+// Admin user includes Purchaser membership (mirrors the auto-migration for
+// existing admins on first deploy of issue #923). retry-any:purchases is
+// carved out of admin:* and requires Purchaser group membership.
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] };
 const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
 const OTHER_UUID = 'other-uuid';
 
