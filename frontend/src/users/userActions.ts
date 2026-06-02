@@ -57,8 +57,7 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
   const synthetic: api.APIUser = {
     id: 'current',
     email: current.email,
-    role: current.role,
-    groups: [],
+    groups: Array.isArray(current.groups) ? current.groups : [],
     mfa_enabled: false,
   };
   return [synthetic, ...users];
@@ -156,33 +155,8 @@ export async function bulkDeleteUsers(): Promise<void> {
   }
 }
 
-/**
- * Bulk change role
- */
-export async function bulkChangeRole(newRole: string): Promise<void> {
-  if (selectedUserIds.size === 0) return;
-
-  const count = selectedUserIds.size;
-  if (!confirm(`Change role to "${newRole}" for ${count} user(s)?`)) {
-    return;
-  }
-
-  try {
-    // Update users in parallel
-    await Promise.all(
-      Array.from(selectedUserIds).map(userId =>
-        api.updateUser(userId, { role: newRole })
-      )
-    );
-
-    clearSelectedUserIds();
-    await loadUsers();
-    showSuccess(`Successfully updated ${count} user(s)`);
-  } catch (error) {
-    console.error('Failed to update users:', error);
-    showError('Failed to update some users');
-  }
-}
+// bulkChangeRole removed in PR #912 frontend: role no longer exists.
+// Use the group multi-select in the Edit User modal to manage access.
 
 /**
  * Bulk add to group

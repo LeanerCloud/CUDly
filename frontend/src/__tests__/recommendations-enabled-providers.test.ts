@@ -62,7 +62,11 @@ jest.mock('../state', () => ({
   setCostPeriod: jest.fn(),
   getHiddenColumns: jest.fn().mockReturnValue(new Set()),
   setHiddenColumns: jest.fn(),
-  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  // ADMINISTRATORS_GROUP_ID literal used here (not imported) because jest.mock
+  // factories are hoisted before imports; jest.requireActual also fails here
+  // because permissions.ts has a top-level import of ./state which is the very
+  // module being mocked (circular init). permissions.test.ts pins the value.
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
 }));
 
 jest.mock('../utils', () => ({

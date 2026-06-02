@@ -501,20 +501,20 @@ describe('HTML Structure', () => {
       expect(email?.hasAttribute('required')).toBe(true);
     });
 
-    test('has user role select', () => {
+    test('user role select is absent (PR #912: role concept dropped)', () => {
+      // PR #912 removed the role column. The role selector was replaced by
+      // a required group multi-select. Verify the old element is gone so a
+      // regression that re-adds it is caught.
       const role = document.getElementById('user-role') as HTMLSelectElement | null;
-      expect(role).toBeTruthy();
-      const options = Array.from(role?.querySelectorAll('option') ?? []).map(o => o.value);
-      // Exact-set equality (not toContain) so a regression that
-      // re-introduces the pre-fix viewer/editor values — or adds any
-      // other role the backend allowlist would reject — fails the test.
-      expect(new Set(options)).toEqual(new Set(['readonly', 'user', 'admin']));
+      expect(role).toBeNull();
     });
 
-    test('has user groups multi-select', () => {
+    test('has user groups multi-select (required, PR #912)', () => {
       const groups = document.getElementById('user-groups') as HTMLSelectElement | null;
       expect(groups).toBeTruthy();
       expect(groups?.hasAttribute('multiple')).toBe(true);
+      // PR #912: groups is now required (>= 1 group enforced by backend DB CHECK).
+      expect(groups?.hasAttribute('required')).toBe(true);
     });
   });
 

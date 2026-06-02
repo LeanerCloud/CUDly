@@ -45,7 +45,7 @@ jest.mock('../state', () => ({
   }),
   getCurrentProvider: jest.fn(() => 'aws'),
   getCurrentAccountIDs: jest.fn(() => []),
-  getCurrentUser: jest.fn(() => ({ id: 'u', email: 'u@example.com', role: 'admin' })),
+  getCurrentUser: jest.fn(() => ({ id: 'u', email: 'u@example.com', groups: ['00000000-0000-5000-8000-000000000001'] })),
 }));
 
 import {

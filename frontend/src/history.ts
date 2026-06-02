@@ -11,6 +11,7 @@ import { confirmDialog } from './confirmDialog';
 import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { isAdmin } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { getAccountName } from './recommendations';
 
@@ -397,7 +398,7 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
   if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdmin()) return true;
   // Non-admin: only the original creator. Legacy rows with no
   // created_by_user_id can't be cancelled via this UI; the email-token
   // path remains the escape hatch.
@@ -427,7 +428,7 @@ function canApprovePendingRow(p: HistoryPurchase): boolean {
   if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdmin()) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
@@ -453,7 +454,7 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
   if (p.retry_execution_id) return false; // already retried — user should act on the descendant
   const user = getCurrentUser();
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (isAdmin()) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }

@@ -42,7 +42,7 @@ import * as state from '../state';
 
 const mockUser = (role: string | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', role },
+    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? ['00000000-0000-5000-8000-000000000001'] : [] },
   );
 };
 

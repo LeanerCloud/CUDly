@@ -17,6 +17,7 @@ import {
   setSavingsChart
 } from '../state';
 import type { Recommendation } from '../api';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 describe('State Module', () => {
   // Reset state before each test
@@ -34,13 +35,13 @@ describe('State Module', () => {
     });
 
     test('setCurrentUser and getCurrentUser work correctly', () => {
-      const user = { id: '123', email: 'test@example.com', role: 'admin' };
+      const user = { id: '123', email: 'test@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
       setCurrentUser(user);
       expect(getCurrentUser()).toEqual(user);
     });
 
     test('setCurrentUser with null clears user', () => {
-      setCurrentUser({ id: '123', email: 'test@example.com', role: 'admin' });
+      setCurrentUser({ id: '123', email: 'test@example.com', groups: [ADMINISTRATORS_GROUP_ID] });
       setCurrentUser(null);
       expect(getCurrentUser()).toBeNull();
     });
@@ -194,7 +195,7 @@ describe('State Module', () => {
   describe('State Integration', () => {
     test('state changes are reflected across getters', () => {
       // Set various state
-      setCurrentUser({ id: '1', email: 'a@b.com', role: 'user' });
+      setCurrentUser({ id: '1', email: 'a@b.com', groups: [] });
       setCurrentProvider('aws');
       setRecommendations([{
         id: '1',

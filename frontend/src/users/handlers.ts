@@ -1,11 +1,16 @@
 /**
  * Event handlers setup for user management
+ *
+ * PR #912: bulkChangeRole removed (role concept dropped). The role
+ * filter UI element is kept wired for backward compatibility with
+ * any deployed HTML that may still have the element, but new builds
+ * will not render it.
  */
 
 import { availableGroups } from './state';
 import { handleUserSearch, handleFilterChange, clearFilters, updateGroupFilterDropdown } from './filters';
 import { openCreateUserModal, closeUserModal, saveUser } from './userModals';
-import { bulkDeleteUsers, bulkChangeRole, bulkAddToGroup } from './userActions';
+import { bulkDeleteUsers, bulkAddToGroup } from './userActions';
 
 /**
  * Setup event handlers for user management
@@ -63,15 +68,9 @@ export function setupUserHandlers(): void {
     bulkDeleteBtn.addEventListener('click', () => void bulkDeleteUsers());
   }
 
-  const bulkRoleBtn = document.getElementById('bulk-role-btn');
-  if (bulkRoleBtn) {
-    bulkRoleBtn.addEventListener('click', () => {
-      const role = prompt('Enter new role (admin or user):');
-      if (role && (role === 'admin' || role === 'user')) {
-        void bulkChangeRole(role);
-      }
-    });
-  }
+  // bulk-role-btn removed: bulkChangeRole no longer exists (PR #912).
+  // Any existing UI element for it is intentionally left unwired so
+  // it becomes a no-op rather than crashing.
 
   const bulkGroupBtn = document.getElementById('bulk-group-btn');
   if (bulkGroupBtn) {

@@ -523,7 +523,7 @@ describe('API Requests', () => {
     test('fetches current user', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ email: 'test@example.com', role: 'admin' })
+        json: () => Promise.resolve({ email: 'test@example.com', groups: ['00000000-0000-5000-8000-000000000001'] })
       });
 
       const user = await getCurrentUser();

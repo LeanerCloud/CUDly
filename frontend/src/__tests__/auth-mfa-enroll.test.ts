@@ -60,7 +60,7 @@ beforeEach(() => {
   `;
   jest.clearAllMocks();
   (state.getCurrentUser as jest.Mock).mockReturnValue({
-    id: 'u1', email: 'user@x.com', role: 'user', mfa_enabled: false,
+    id: 'u1', email: 'user@x.com', groups: [], mfa_enabled: false,
   });
   updateUserUI();
 });
@@ -84,7 +84,7 @@ describe('MFA enrollment flow', () => {
 
   test('enabled state shows Disable and Regenerate buttons', async () => {
     (state.getCurrentUser as jest.Mock).mockReturnValue({
-      id: 'u1', email: 'user@x.com', role: 'user', mfa_enabled: true,
+      id: 'u1', email: 'user@x.com', groups: [], mfa_enabled: true,
     });
     updateUserUI();
     await openProfile();
@@ -153,7 +153,7 @@ describe('MFA enrollment flow', () => {
 describe('MFA disable flow', () => {
   beforeEach(() => {
     (state.getCurrentUser as jest.Mock).mockReturnValue({
-      id: 'u1', email: 'user@x.com', role: 'user', mfa_enabled: true,
+      id: 'u1', email: 'user@x.com', groups: [], mfa_enabled: true,
     });
     updateUserUI();
   });
@@ -183,7 +183,7 @@ describe('MFA disable flow', () => {
 describe('MFA regenerate-recovery-codes flow', () => {
   beforeEach(() => {
     (state.getCurrentUser as jest.Mock).mockReturnValue({
-      id: 'u1', email: 'user@x.com', role: 'user', mfa_enabled: true,
+      id: 'u1', email: 'user@x.com', groups: [], mfa_enabled: true,
     });
     updateUserUI();
   });

@@ -65,11 +65,11 @@ const mockGroups: api.APIGroup[] = [
   },
 ];
 
-// Mock users that belong to groups
+// Mock users that belong to groups (PR #912: role field removed, groups is the source of truth)
 const mockUsers = [
-  { id: 'user-1', email: 'admin@test.com', role: 'admin', groups: ['group-1'], mfa_enabled: true },
-  { id: 'user-2', email: 'viewer@test.com', role: 'user', groups: ['group-2'], mfa_enabled: false },
-  { id: 'user-3', email: 'both@test.com', role: 'user', groups: ['group-1', 'group-2'], mfa_enabled: true },
+  { id: 'user-1', email: 'admin@test.com', groups: ['00000000-0000-5000-8000-000000000001', 'group-1'], mfa_enabled: true },
+  { id: 'user-2', email: 'viewer@test.com', groups: ['group-2'], mfa_enabled: false },
+  { id: 'user-3', email: 'both@test.com', groups: ['group-1', 'group-2'], mfa_enabled: true },
 ];
 
 describe('groups/state', () => {
@@ -164,7 +164,7 @@ describe('groups/groupList', () => {
     it('should use singular "member" when count is 1', () => {
       // Set up users so group-1 has exactly 1 member
       userState.setAllUsers([
-        { id: 'user-1', email: 'admin@test.com', role: 'admin', groups: ['group-1'], mfa_enabled: true },
+        { id: 'user-1', email: 'admin@test.com', groups: ['00000000-0000-5000-8000-000000000001', 'group-1'], mfa_enabled: true },
       ] as any);
 
       const group = mockGroups[0];

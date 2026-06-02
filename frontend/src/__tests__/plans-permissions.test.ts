@@ -41,6 +41,7 @@ jest.mock('../history', () => ({ viewPlanHistory: jest.fn() }));
 
 import * as api from '../api';
 import * as state from '../state';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 const samplePlan = {
   id: 'plan-1',
@@ -74,7 +75,7 @@ const samplePlannedPurchase = {
 
 const mockUser = (role: string | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', role },
+    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID] : [] },
   );
 };
 
@@ -131,33 +132,37 @@ describe('Plans page permission gating (issue #365)', () => {
     });
   });
 
-  describe('user role', () => {
+  describe('non-admin user (PR #912: canAccess returns false without /me/permissions)', () => {
     beforeEach(() => mockUser('user'));
 
-    test('shows the top-level New Plan button (user has create:plans)', async () => {
+    test('hides the top-level New Plan button (no /me/permissions endpoint yet)', async () => {
+      // PR #912: canAccess() is group-membership-only; non-Administrators-group
+      // members get false until the /me/permissions endpoint lands.
       await loadPlans();
       const btn = document.getElementById('new-plan-btn') as HTMLButtonElement;
-      expect(btn.hidden).toBe(false);
+      expect(btn.hidden).toBe(true);
     });
 
-    test('shows manage actions including Delete (user has delete:plans since PR #660)', async () => {
+    test('hides plan-card action buttons for non-admin (no /me/permissions endpoint yet)', async () => {
       await loadPlans();
       const list = document.getElementById('plans-list') as HTMLElement;
       const html = list.innerHTML;
-      expect(html).toContain('data-action="add-purchases"');
-      expect(html).toContain('data-action="edit-plan"');
-      expect(html).toContain('data-action="toggle-plan"');
-      expect(html).toContain('data-action="delete-plan"');
+      expect(html).not.toContain('data-action="add-purchases"');
+      expect(html).not.toContain('data-action="edit-plan"');
+      expect(html).not.toContain('data-action="delete-plan"');
+      expect(html).not.toContain('data-action="toggle-plan"');
+      // History view stays visible regardless.
+      expect(html).toContain('data-action="view-history"');
     });
 
-    test('shows row Run/Pause/Edit/Disable on planned purchases (user has delete:plans since PR #660)', async () => {
+    test('hides planned-purchase row action buttons for non-admin (no /me/permissions endpoint yet)', async () => {
       await loadPlans();
       const pp = document.getElementById('planned-purchases-list') as HTMLElement;
       const html = pp.innerHTML;
-      expect(html).toContain('data-action="run"');
-      expect(html).toContain('data-action="pause"');
-      expect(html).toContain('data-action="edit"');
-      expect(html).toContain('data-action="disable"');
+      expect(html).not.toContain('data-action="run"');
+      expect(html).not.toContain('data-action="pause"');
+      expect(html).not.toContain('data-action="edit"');
+      expect(html).not.toContain('data-action="disable"');
     });
   });
 

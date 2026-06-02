@@ -1,38 +1,41 @@
 /**
  * Permission helper for CUDly frontend.
  *
- * Issue #365: drives UI gating so a non-admin session never sees a
- * button whose only outcome is a backend 403 + "admin access required"
- * toast. The backend remains the security boundary (handlers still call
- * `requirePermission`); this helper is a UX-only gate.
+ * PR #912 removed the `role` column from users and sessions.
+ * Authorization is now purely group-membership based. The server
+ * derives every permission from the union of the groups a user
+ * belongs to via HasPermissionAPI; the frontend mirrors that by
+ * checking group membership for the UI-gating predicates below.
  *
- * The role-to-default-permissions map lives in ./permissions.generated.ts,
- * which is regenerated from the backend constants in
- * internal/auth/types.go (DefaultAdminPermissions /
- * DefaultUserPermissions / DefaultReadOnlyPermissions) by
- * `go run ./cmd/gen-permissions`. A pre-commit hook + CI step re-runs the
- * generator and `git diff --exit-code` so the committed file never drifts
- * from the Go source of truth.
+ * Admin status = member of the Administrators group
+ * (UUID 00000000-0000-5000-8000-000000000001). That group carries
+ * the `admin:*` capability on the backend, which grants every action
+ * on every resource. The three built-in groups seeded by migration
+ * 000057 are:
  *
- * The closed-union `Action` and `Resource` types below are hand-written
- * and mirror the `Action*` / `Resource*` constants in
- * internal/auth/types.go. They drift less often than the default sets
- * (most schema changes add a permission to a role, not a new top-level
- * constant), so we keep the compile-time safety they give callers and
- * accept the small bookkeeping cost when a new constant is added on the
- * Go side. The permissions.test.ts suite exercises the helpers; the
- * codegen check catches the data drift.
+ *   Administrators   00000000-0000-5000-8000-000000000001  (admin:*)
+ *   Standard Users   00000000-0000-5000-8000-000000000005
+ *   Read-Only Users  00000000-0000-5000-8000-000000000006
  *
- * Group-grant permissions are not folded in here. The current
- * `state.currentUser` carries only role; group memberships live in
- * `availableGroups` which is loaded only on the admin Users page (a
- * path readonly users can't reach). When a future enhancement adds a
- * `/me/permissions` round-trip, replace `getRolePermissions(role)`
- * with the server-provided permission set and keep the API the same.
+ * The closed-union Action and Resource types below are hand-written
+ * and mirror the Action* / Resource* constants in
+ * internal/auth/types.go.
+ *
+ * The frontend is a UX-only gate. The backend still enforces
+ * permissions on every request; a wrong-positive here surfaces as a
+ * 403 on click, and a wrong-negative just hides a button.
+ *
+ * The ADMIN_PERMS / USER_PERMS / READONLY_PERMS sets from
+ * permissions.generated.ts remain exported for the effective-
+ * permissions display in the admin Users page expand panel.
+ * They are not used for session gating anymore.
  */
 
 import * as state from './state';
 import { ADMIN_PERMS, USER_PERMS, READONLY_PERMS } from './permissions.generated';
+
+// Re-export so the user expand panel can still display them.
+export { ADMIN_PERMS, USER_PERMS, READONLY_PERMS };
 
 // Action verbs. Closed enum so typos at call sites become compile
 // errors. Mirrors the constants in internal/auth/types.go.
@@ -65,10 +68,53 @@ export type Resource =
   | '*';
 
 /**
- * Return the default permission set for the given role as a readonly
- * set of `${action}:${resource}` strings. Unknown roles return the
- * empty set (no permissions) so a typo in role assignment fails closed
- * rather than open.
+ * Well-known group UUID for the Administrators group seeded by
+ * migration 000057. Being a member of this group is the frontend
+ * equivalent of the backend's HasPermissionAPI(admin, *) == true.
+ */
+export const ADMINISTRATORS_GROUP_ID = '00000000-0000-5000-8000-000000000001';
+
+/**
+ * Return true when the current session user is a member of the
+ * Administrators group. This replaces the former `user.role === "admin"`
+ * check that PR #912 removed from both the backend and the API response.
+ *
+ * A null user (logged out, pre-init race) returns false.
+ */
+export function isAdmin(): boolean {
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  return Array.isArray(user.groups) && user.groups.includes(ADMINISTRATORS_GROUP_ID);
+}
+
+/**
+ * Returns true when the current session's group membership grants the
+ * specified permission.
+ *
+ * Administrators-group members pass every check (admin:* covers every
+ * action/resource pair). For all other groups a full /me/permissions
+ * round-trip is needed to resolve fine-grained permissions; that
+ * endpoint is not yet available, so non-admins return false here and
+ * the backend remains the authoritative gate.
+ *
+ * UX-only gate. A wrong-positive surfaces as a 403 on click; a
+ * wrong-negative just hides a button.
+ */
+export function canAccess(action: Action, resource: Resource): boolean {
+  // Suppress unused-variable warning -- action/resource are kept in
+  // the signature for forward-compatibility with the /me/permissions
+  // endpoint that will replace this stub.
+  void action; void resource;
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  return isAdmin();
+}
+
+/**
+ * Return the well-known permission set for a legacy role name. Kept
+ * for the effective-permissions display on the admin Users page, which
+ * shows what permissions the built-in role-mirror groups carry.
+ * No longer used for session gating.
  */
 export function getRolePermissions(role: string | undefined | null): ReadonlySet<string> {
   switch (role) {
@@ -81,34 +127,4 @@ export function getRolePermissions(role: string | undefined | null): ReadonlySet
     default:
       return new Set();
   }
-}
-
-/**
- * Returns true when the current session's role grants the
- * `${action}:${resource}` permission.
- *
- * Admin role short-circuits to true for every check (admin:* covers
- * every action/resource pair). A null user (logged out, or pre-init
- * race) returns false for everything.
- *
- * UX-only gate. The backend still enforces; a wrong-positive here
- * surfaces as a 403 on click, and a wrong-negative just hides a
- * button.
- */
-export function canAccess(action: Action, resource: Resource): boolean {
-  const user = state.getCurrentUser();
-  if (!user) return false;
-  const perms = getRolePermissions(user.role);
-  if (perms.has('admin:*')) return true;
-  return perms.has(`${action}:${resource}`);
-}
-
-/**
- * Convenience predicate for the legacy `.admin-only` toggle in
- * auth.ts:updateUserUI. Strictly equivalent to
- * `canAccess('admin', '*')` but spelled for readability at call sites
- * that pre-date the `canAccess` helper.
- */
-export function isAdmin(): boolean {
-  return canAccess('admin', '*');
 }

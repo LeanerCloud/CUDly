@@ -46,7 +46,7 @@ jest.mock('../state', () => ({
   setCurrentAccountIDs: jest.fn(),
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
-  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', role: 'admin' }),
+  getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
 }));
 
 jest.mock('../history', () => ({ viewPlanHistory: jest.fn() }));

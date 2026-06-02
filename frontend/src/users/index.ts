@@ -24,7 +24,8 @@ export { renderUsers, renderUserStats, updateBulkActionsBar } from './userList';
 export { openCreateUserModal, openEditUserModal, closeUserModal, saveUser } from './userModals';
 
 // Re-export user actions
-export { loadUsers, deleteUser, bulkDeleteUsers, bulkChangeRole, bulkAddToGroup } from './userActions';
+// bulkChangeRole removed in #912 (no role concept).
+export { loadUsers, deleteUser, bulkDeleteUsers, bulkAddToGroup } from './userActions';
 
 // Re-export permission matrix
 export { renderPermissionMatrix } from './permissionMatrix';

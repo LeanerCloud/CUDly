@@ -15,7 +15,7 @@ import {
 } from './state';
 import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
 import { openEditUserModal, deleteUser, loadUsers } from './userActions';
-import { getRolePermissions } from '../permissions';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 /**
  * Render user statistics
@@ -25,7 +25,10 @@ export function renderUserStats(): void {
   if (!statsContainer) return;
 
   const totalUsers = allUsers.length;
-  const adminUsers = allUsers.filter(u => u.role === 'admin').length;
+  // Count administrators by group membership (PR #912: role dropped).
+  const adminUsers = allUsers.filter(u =>
+    Array.isArray(u.groups) && u.groups.includes(ADMINISTRATORS_GROUP_ID)
+  ).length;
   const mfaEnabled = allUsers.filter(u => u.mfa_enabled).length;
   const showing = filteredUsers.length;
 
@@ -72,7 +75,6 @@ export function renderUsers(users: APIUser[]): void {
           </th>
           <th width="32"></th>
           <th>Email</th>
-          <th>Role</th>
           <th>Groups</th>
           <th>MFA</th>
           <th>Created</th>
@@ -95,7 +97,6 @@ export function renderUsers(users: APIUser[]): void {
                 ${user.id === 'current' ? '<span class="badge badge-info">You</span>' : ''}
               </div>
             </td>
-            <td><span class="badge badge-${user.role === 'readonly' ? 'readonly' : user.role}">${user.role}</span></td>
             <td>
               <div class="groups-cell">
                 ${user.groups.length > 0 ? user.groups.map(g => `<span class="badge badge-group">${escapeHtml(groupName(g))}</span>`).join(' ') : '<span class="text-muted">No groups</span>'}
@@ -116,7 +117,7 @@ export function renderUsers(users: APIUser[]): void {
             </td>
           </tr>
           <tr class="user-expand-row hidden" data-user-id="${escapeHtml(user.id)}">
-            <td colspan="9">
+            <td colspan="8">
               <div class="user-expand-panel" data-user-id="${escapeHtml(user.id)}"></div>
             </td>
           </tr>
@@ -141,18 +142,16 @@ function groupName(groupId: string): string {
 }
 
 /**
- * Compute the effective permissions for a user: union of role defaults and
- * all group permissions. Returns permissions as {action}:{resource} strings.
+ * Compute the effective permissions for a user from their group
+ * memberships. Returns permissions as {action}:{resource} strings.
  *
- * Role defaults come from the shared permissions module so the badge here
- * and the global UI gates stay in lockstep (issue #365). Group-grant
- * permissions are layered on top here because this admin-only page is the
- * one place `availableGroups` is loaded.
+ * PR #912 removed user.role; permissions now derive purely from the
+ * union of the groups the user belongs to. availableGroups is loaded
+ * on this admin-only page so we can resolve group permissions here.
  */
 function effectivePermissions(user: APIUser): string[] {
-  const perms = new Set<string>(getRolePermissions(user.role));
+  const perms = new Set<string>();
 
-  // Group permissions
   user.groups.forEach(gid => {
     const g = availableGroups.find(gr => gr.id === gid);
     g?.permissions?.forEach(p => {

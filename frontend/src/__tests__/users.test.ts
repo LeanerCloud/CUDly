@@ -285,8 +285,8 @@ describe('users/state', () => {
   describe('allUsers and filteredUsers', () => {
     it('should set and get users', () => {
       const users = [
-        { id: '1', email: 'user1@test.com', role: 'user', groups: [], mfa_enabled: false },
-        { id: '2', email: 'user2@test.com', role: 'admin', groups: [], mfa_enabled: true }
+        { id: '1', email: 'user1@test.com', groups: [], mfa_enabled: false },
+        { id: '2', email: 'user2@test.com', groups: ['00000000-0000-5000-8000-000000000001'], mfa_enabled: true }
       ];
 
       userState.setAllUsers(users as any);
@@ -295,7 +295,7 @@ describe('users/state', () => {
 
     it('should set and get filtered users', () => {
       const users = [
-        { id: '1', email: 'user1@test.com', role: 'user', groups: [], mfa_enabled: false }
+        { id: '1', email: 'user1@test.com', groups: [], mfa_enabled: false }
       ];
 
       userState.setFilteredUsers(users as any);
@@ -323,7 +323,7 @@ describe('users/state', () => {
 
   describe('currentEditingUser', () => {
     it('should set and get current editing user', () => {
-      const user = { id: '1', email: 'test@test.com', role: 'user', groups: [], mfa_enabled: false };
+      const user = { id: '1', email: 'test@test.com', groups: [], mfa_enabled: false };
       userState.setCurrentEditingUser(user as any);
       expect(userState.currentEditingUser).toEqual(user);
     });
@@ -374,10 +374,10 @@ describe('users/state', () => {
 // ============================================================================
 describe('users/filters', () => {
   const mockUsers = [
-    { id: '1', email: 'admin@test.com', role: 'admin', groups: ['admins'], mfa_enabled: true },
-    { id: '2', email: 'user@test.com', role: 'user', groups: ['users'], mfa_enabled: false },
-    { id: '3', email: 'viewer@test.com', role: 'viewer', groups: [], mfa_enabled: true },
-    { id: '4', email: 'another.user@example.com', role: 'user', groups: ['users', 'developers'], mfa_enabled: true }
+    { id: '1', email: 'admin@test.com', groups: ['00000000-0000-5000-8000-000000000001'], mfa_enabled: true },
+    { id: '2', email: 'user@test.com', groups: ['users'], mfa_enabled: false },
+    { id: '3', email: 'viewer@test.com', groups: [], mfa_enabled: true },
+    { id: '4', email: 'another.user@example.com', groups: ['users', 'developers'], mfa_enabled: true }
   ];
 
   beforeEach(() => {
@@ -421,11 +421,19 @@ describe('users/filters', () => {
       expect(userState.filteredUsers.length).toBe(3);
     });
 
-    it('should filter by role', () => {
-      userState.setRoleFilter('user');
+    it('should filter by admin role (Administrators group membership)', () => {
+      userState.setRoleFilter('admin');
       userFilters.applyFilters();
-      expect(userState.filteredUsers.length).toBe(2);
-      expect(userState.filteredUsers.every(u => u.role === 'user')).toBe(true);
+      // Only the user in the Administrators group matches
+      expect(userState.filteredUsers.length).toBe(1);
+      expect(userState.filteredUsers[0]?.email).toBe('admin@test.com');
+    });
+
+    it('should filter non-admin users with role filter', () => {
+      userState.setRoleFilter('user'); // non-admin = not in Administrators group
+      userFilters.applyFilters();
+      // 3 users not in Administrators group
+      expect(userState.filteredUsers.length).toBe(3);
     });
 
     it('should filter by MFA enabled', () => {
@@ -443,10 +451,10 @@ describe('users/filters', () => {
     });
 
     it('should filter by group', () => {
-      userState.setGroupFilter('admins');
+      userState.setGroupFilter('00000000-0000-5000-8000-000000000001');
       userFilters.applyFilters();
       expect(userState.filteredUsers.length).toBe(1);
-      expect(userState.filteredUsers[0]!.groups).toContain('admins');
+      expect(userState.filteredUsers[0]!.groups).toContain('00000000-0000-5000-8000-000000000001');
     });
 
     it('should filter by users group (multiple users)', () => {
@@ -461,7 +469,7 @@ describe('users/filters', () => {
       expect(userState.filteredUsers.length).toBe(0);
     });
 
-    it('should combine multiple filters', () => {
+    it('should combine multiple filters (mfa + admin group)', () => {
       userState.setMfaFilter('enabled');
       userState.setRoleFilter('admin');
       userFilters.applyFilters();
@@ -469,16 +477,17 @@ describe('users/filters', () => {
       expect(userState.filteredUsers[0]?.email).toBe('admin@test.com');
     });
 
-    it('should combine search and role filter', () => {
+    it('should combine search and non-admin role filter', () => {
       userState.setSearchQuery('user');
-      userState.setRoleFilter('user');
+      userState.setRoleFilter('user'); // non-admin
       userFilters.applyFilters();
+      // 'user@test.com' and 'another.user@example.com' match search + non-admin
       expect(userState.filteredUsers.length).toBe(2);
     });
 
     it('should combine all filters', () => {
       userState.setSearchQuery('user');
-      userState.setRoleFilter('user');
+      userState.setRoleFilter('user'); // non-admin
       userState.setMfaFilter('enabled');
       userState.setGroupFilter('users');
       userFilters.applyFilters();
@@ -520,9 +529,10 @@ describe('users/filters', () => {
   });
 
   describe('handleFilterChange', () => {
-    it('should handle role filter change', () => {
+    it('should handle role filter change (admin = Administrators group)', () => {
       userFilters.handleFilterChange('role', 'admin');
       expect(userState.roleFilter).toBe('admin');
+      // Only the Administrators group member matches
       expect(userState.filteredUsers.length).toBe(1);
     });
 
@@ -533,8 +543,8 @@ describe('users/filters', () => {
     });
 
     it('should handle group filter change', () => {
-      userFilters.handleFilterChange('group', 'admins');
-      expect(userState.groupFilter).toBe('admins');
+      userFilters.handleFilterChange('group', '00000000-0000-5000-8000-000000000001');
+      expect(userState.groupFilter).toBe('00000000-0000-5000-8000-000000000001');
       expect(userState.filteredUsers.length).toBe(1);
     });
 
@@ -552,7 +562,7 @@ describe('users/filters', () => {
       userState.setSearchQuery('test');
       userState.setRoleFilter('admin');
       userState.setMfaFilter('enabled');
-      userState.setGroupFilter('admins');
+      userState.setGroupFilter('00000000-0000-5000-8000-000000000001');
 
       userFilters.clearFilters();
 
@@ -584,6 +594,7 @@ describe('users/filters', () => {
     it('should re-render all users after clearing', () => {
       userState.setRoleFilter('admin');
       userFilters.applyFilters();
+      // Only 1 Administrators-group member
       expect(userState.filteredUsers.length).toBe(1);
 
       userFilters.clearFilters();
@@ -653,8 +664,8 @@ describe('users/filters', () => {
 // ============================================================================
 describe('users/userList', () => {
   const mockUsers = [
-    { id: '1', email: 'admin@test.com', role: 'admin', groups: ['admins'], mfa_enabled: true, created_at: '2024-01-01T00:00:00Z' },
-    { id: '2', email: 'user@test.com', role: 'user', groups: [], mfa_enabled: false, created_at: '2024-01-02T00:00:00Z' }
+    { id: '1', email: 'admin@test.com', groups: ['00000000-0000-5000-8000-000000000001'], mfa_enabled: true, created_at: '2024-01-01T00:00:00Z' },
+    { id: '2', email: 'user@test.com', groups: [], mfa_enabled: false, created_at: '2024-01-02T00:00:00Z' }
   ];
 
   beforeEach(() => {
@@ -782,12 +793,13 @@ describe('users/userList', () => {
       expect(selectAll?.checked).toBe(true);
     });
 
-    it('should render role badges', () => {
+    it('should render group badges (role column removed, PR #912)', () => {
       userList.renderUsers(mockUsers as any);
-
+      // The Role column was removed; verify the table renders without throwing
       const container = document.getElementById('users-list');
-      expect(container?.innerHTML).toContain('badge-admin');
-      expect(container?.innerHTML).toContain('badge-user');
+      expect(container?.querySelector('table')).toBeTruthy();
+      // Group badges still appear
+      expect(container?.innerHTML).toContain('badge-group');
     });
 
     it('should render MFA status badges', () => {
@@ -803,7 +815,9 @@ describe('users/userList', () => {
 
       const container = document.getElementById('users-list');
       expect(container?.innerHTML).toContain('badge-group');
-      expect(container?.innerHTML).toContain('admins');
+      // User 1 is in the Administrators group (ADMIN_GID); since availableGroups
+      // is empty the group name lookup falls back to the UUID itself.
+      expect(container?.innerHTML).toContain('00000000');
     });
 
     it('should show "No groups" for users without groups', () => {
@@ -837,7 +851,7 @@ describe('users/userList', () => {
 
     it('should show dash for missing created_at', () => {
       const usersWithoutDate = [
-        { id: '1', email: 'test@test.com', role: 'user', groups: [], mfa_enabled: false }
+        { id: '1', email: 'test@test.com', groups: [], mfa_enabled: false }
       ];
       userList.renderUsers(usersWithoutDate as any);
 
@@ -856,7 +870,7 @@ describe('users/userList', () => {
 
     it('should render last login relative time when set', () => {
       const usersWithLogin = [
-        { id: '1', email: 'test@test.com', role: 'user', groups: [], mfa_enabled: false, last_login: new Date().toISOString() }
+        { id: '1', email: 'test@test.com', groups: [], mfa_enabled: false, last_login: new Date().toISOString() }
       ];
       userList.renderUsers(usersWithLogin as any);
 
@@ -866,7 +880,7 @@ describe('users/userList', () => {
 
     it('should mark current user with "You" badge', () => {
       const usersWithCurrent = [
-        { id: 'current', email: 'me@test.com', role: 'user', groups: [], mfa_enabled: false }
+        { id: 'current', email: 'me@test.com', groups: [], mfa_enabled: false }
       ];
       userList.renderUsers(usersWithCurrent as any);
 
@@ -877,7 +891,7 @@ describe('users/userList', () => {
 
     it('should escape HTML in email', () => {
       const usersWithXss = [
-        { id: '1', email: '<script>alert("xss")</script>', role: 'user', groups: [], mfa_enabled: false }
+        { id: '1', email: '<script>alert("xss")</script>', groups: [], mfa_enabled: false }
       ];
       userList.renderUsers(usersWithXss as any);
 
@@ -981,8 +995,8 @@ describe('users/userList', () => {
 // ============================================================================
 describe('users/userActions', () => {
   const mockUsers = [
-    { id: '1', email: 'user1@test.com', role: 'user', groups: [], mfa_enabled: false },
-    { id: '2', email: 'user2@test.com', role: 'admin', groups: ['admins'], mfa_enabled: true }
+    { id: '1', email: 'user1@test.com', groups: [], mfa_enabled: false },
+    { id: '2', email: 'user2@test.com', groups: ['admins'], mfa_enabled: true }
   ];
 
   // `allowed_accounts: []` matches the backend Group shape after the
@@ -1196,72 +1210,12 @@ describe('users/userActions', () => {
     });
   });
 
-  describe('bulkChangeRole', () => {
-    beforeEach(() => {
-      userState.setAllUsers(mockUsers as any);
-      (global.confirm as jest.Mock).mockReturnValue(true);
-    });
-
-    it('should update role for selected users', async () => {
-      userState.addSelectedUserId('1');
-      userState.addSelectedUserId('2');
-
-      await userActions.bulkChangeRole('admin');
-
-      expect(api.updateUser).toHaveBeenCalledWith('1', { role: 'admin' });
-      expect(api.updateUser).toHaveBeenCalledWith('2', { role: 'admin' });
-    });
-
-    it('should not update when no users selected', async () => {
-      await userActions.bulkChangeRole('admin');
-
-      expect(api.updateUser).not.toHaveBeenCalled();
-    });
-
-    it('should show confirmation with count and role', async () => {
-      userState.addSelectedUserId('1');
-
-      await userActions.bulkChangeRole('admin');
-
-      expect(global.confirm).toHaveBeenCalledWith(
-        expect.stringContaining('admin')
-      );
-    });
-
-    it('should not update when cancelled', async () => {
-      (global.confirm as jest.Mock).mockReturnValue(false);
-      userState.addSelectedUserId('1');
-
-      await userActions.bulkChangeRole('admin');
-
-      expect(api.updateUser).not.toHaveBeenCalled();
-    });
-
-    it('should clear selection after update', async () => {
-      userState.addSelectedUserId('1');
-
-      await userActions.bulkChangeRole('user');
-
-      expect(userState.selectedUserIds.size).toBe(0);
-    });
-
-    it('should show success message', async () => {
-      jest.useFakeTimers();
-      userState.addSelectedUserId('1');
-
-      await userActions.bulkChangeRole('admin');
-
-      expect(document.querySelector('.toast-success')).toBeTruthy();
-      jest.useRealTimers();
-    });
-
-    it('should handle update error', async () => {
-      userState.addSelectedUserId('1');
-      (api.updateUser as jest.Mock).mockRejectedValue(new Error('Update failed'));
-
-      await userActions.bulkChangeRole('admin');
-
-      expect(document.querySelector('.toast-error')).toBeTruthy();
+  describe('bulkChangeRole (removed in PR #912)', () => {
+    it('bulkChangeRole no longer exists on userActions', () => {
+      // PR #912 removed the role concept. bulkChangeRole was removed from
+      // userActions. Verify the export is absent so callers that relied
+      // on it are caught at compile/test time.
+      expect((userActions as any).bulkChangeRole).toBeUndefined();
     });
   });
 
@@ -1376,7 +1330,7 @@ describe('users/userModals', () => {
   const mockUser = {
     id: '1',
     email: 'test@test.com',
-    role: 'user',
+    // role removed: PR #912 -- authorization is group-membership based.
     groups: ['users'],
     mfa_enabled: false
   };
@@ -1396,10 +1350,7 @@ describe('users/userModals', () => {
           <div id="password-fields">
             <input type="password" id="user-password" />
           </div>
-          <select id="user-role">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-          </select>
+          <!-- role selector removed in PR #912 -->
           <select id="user-groups" multiple></select>
           <button type="submit">Save</button>
         </form>
@@ -1520,7 +1471,7 @@ describe('users/userModals', () => {
 
       expect((document.getElementById('user-id') as HTMLInputElement).value).toBe('1');
       expect((document.getElementById('user-email') as HTMLInputElement).value).toBe('test@test.com');
-      expect((document.getElementById('user-role') as HTMLSelectElement).value).toBe('user');
+      // role field removed in PR #912
     });
 
     it('should hide password field when editing', async () => {
@@ -1597,19 +1548,22 @@ describe('users/userModals', () => {
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
-      (document.getElementById('user-role') as HTMLSelectElement).value = 'user';
+
+      // PR #912: >= 1 group required. Select the first option populated by openCreateUserModal.
+      const gs7 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs7.options.length > 0) gs7.options[0]!.selected = true;
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
 
       await userModals.saveUser(event);
 
-      expect(api.createUser).toHaveBeenCalledWith({
-        email: 'new@test.com',
-        password: 'SecurePass123!',
-        role: 'user',
-        groups: []
-      });
+      expect(api.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'new@test.com',
+          password: 'SecurePass123!',
+        })
+      );
       jest.useRealTimers();
     });
 
@@ -1618,8 +1572,6 @@ describe('users/userModals', () => {
       await userModals.openEditUserModal('1');
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'updated@test.com';
-      (document.getElementById('user-role') as HTMLSelectElement).value = 'admin';
-
       const event = new Event('submit');
       event.preventDefault = jest.fn();
 
@@ -1627,7 +1579,7 @@ describe('users/userModals', () => {
 
       expect(api.updateUser).toHaveBeenCalledWith('1', {
         email: 'updated@test.com',
-        role: 'admin',
+        // role removed: PR #912
         groups: ['users']
       });
       jest.useRealTimers();
@@ -1663,12 +1615,16 @@ describe('users/userModals', () => {
 
     it('should allow empty password for new user (invite flow, issue #348)', async () => {
       // Empty password used to be a validation error; after issue #348
-      // it triggers the invite flow — createUser is called with an
+      // it triggers the invite flow -- createUser is called with an
       // empty password and the backend emails a set-password link.
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = '';
+
+      // PR #912: >= 1 group required. Select first option so validation passes.
+      const gs5 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs5.options.length > 0) gs5.options[0]!.selected = true;
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1683,12 +1639,35 @@ describe('users/userModals', () => {
       expect(document.querySelector('.toast-error')).toBeNull();
     });
 
+
+    it('should reject save when zero groups selected (PR #912 required-group validation)', async () => {
+      userModals.openCreateUserModal();
+
+      (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
+      (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
+
+      // Ensure no groups are selected
+      const groupsSelect = document.getElementById('user-groups') as HTMLSelectElement;
+      Array.from(groupsSelect.options).forEach(o => { o.selected = false; });
+
+      const event = new Event('submit');
+      event.preventDefault = jest.fn();
+
+      await userModals.saveUser(event);
+
+      // Backend would reject with 400; frontend should show a clear validation message.
+      expect(api.createUser).not.toHaveBeenCalled();
+      expect(document.querySelector('.toast-error')).toBeTruthy();
+    });
     it('should close modal after save', async () => {
       jest.useFakeTimers();
       userModals.openCreateUserModal();
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
+
+      const gs2 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs2.options.length > 0) gs2.options[0]!.selected = true;
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1707,6 +1686,9 @@ describe('users/userModals', () => {
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
 
+      const gs3 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs3.options.length > 0) gs3.options[0]!.selected = true;
+
       const event = new Event('submit');
       event.preventDefault = jest.fn();
 
@@ -1722,6 +1704,9 @@ describe('users/userModals', () => {
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
+
+      const gs4 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs4.options.length > 0) gs4.options[0]!.selected = true;
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1752,6 +1737,11 @@ describe('users/userModals', () => {
 
       (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
       (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
+
+      // PR #912: select a group so the required-group check passes and
+      // the error comes from the API call, not the validation.
+      const gs6 = document.getElementById('user-groups') as HTMLSelectElement;
+      if (gs6.options.length > 0) gs6.options[0]!.selected = true;
 
       const event = new Event('submit');
       event.preventDefault = jest.fn();
@@ -1943,51 +1933,19 @@ describe('users/handlers', () => {
       expect(api.deleteUser).toHaveBeenCalled();
     });
 
-    it('should set up bulk role change handler', async () => {
+    it('bulk-role-btn is intentionally not wired (PR #912: role concept dropped)', async () => {
+      // bulkChangeRole was removed. The handler does not wire bulk-role-btn
+      // anymore. Clicking it must be a no-op rather than throwing.
       userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue('admin');
-
       userHandlers.setupUserHandlers();
-
       const bulkRoleBtn = document.getElementById('bulk-role-btn');
-      bulkRoleBtn?.click();
-
-      // Wait for async operation
+      if (bulkRoleBtn) bulkRoleBtn.click();
       await new Promise(resolve => setTimeout(resolve, 0));
-
-      expect(api.updateUser).toHaveBeenCalledWith('1', { role: 'admin' });
-    });
-
-    it('should validate role input', async () => {
-      userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue('invalid');
-
-      userHandlers.setupUserHandlers();
-
-      const bulkRoleBtn = document.getElementById('bulk-role-btn');
-      bulkRoleBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 0));
-
-      expect(api.updateUser).not.toHaveBeenCalled();
-    });
-
-    it('should handle cancelled role prompt', async () => {
-      userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue(null);
-
-      userHandlers.setupUserHandlers();
-
-      const bulkRoleBtn = document.getElementById('bulk-role-btn');
-      bulkRoleBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 0));
-
       expect(api.updateUser).not.toHaveBeenCalled();
     });
 
     it('should set up bulk group handler', async () => {
-      const mockUsers = [{ id: '1', email: 'test@test.com', role: 'user', groups: [], mfa_enabled: false }];
+      const mockUsers = [{ id: '1', email: 'test@test.com', groups: [], mfa_enabled: false }];
       userState.setAllUsers(mockUsers as any);
       userState.addSelectedUserId('1');
       (global.prompt as jest.Mock).mockReturnValue('admins');
@@ -2023,8 +1981,8 @@ describe('users/handlers', () => {
 // ============================================================================
 describe('users module integration', () => {
   const mockUsers = [
-    { id: '1', email: 'admin@test.com', role: 'admin', groups: ['admins'], mfa_enabled: true, created_at: '2024-01-01' },
-    { id: '2', email: 'user@test.com', role: 'user', groups: [], mfa_enabled: false, created_at: '2024-01-02' }
+    { id: '1', email: 'admin@test.com', groups: ['00000000-0000-5000-8000-000000000001'], mfa_enabled: true, created_at: '2024-01-01' },
+    { id: '2', email: 'user@test.com', groups: [], mfa_enabled: false, created_at: '2024-01-02' }
   ];
 
   const mockGroups = [

@@ -2,6 +2,7 @@
  * Auth module tests
  */
 import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from '../auth';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 // Mock the api module
 jest.mock('../api', () => {
@@ -404,7 +405,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'test@example.com',
-        role: 'user'
+        groups: []
       });
 
       updateUserUI();
@@ -417,7 +418,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'test@example.com',
-        role: 'user'
+        groups: []
       });
 
       updateUserUI();
@@ -439,7 +440,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'admin-1',
         email: 'admin@example.com',
-        role: 'admin'
+        groups: [ADMINISTRATORS_GROUP_ID]
       });
 
       updateUserUI();
@@ -454,7 +455,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'user@example.com',
-        role: 'user'
+        groups: []
       });
 
       updateUserUI();
@@ -469,7 +470,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'test@example.com',
-        role: 'user'
+        groups: []
       });
 
       updateUserUI();
@@ -483,7 +484,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'test@example.com',
-        role: 'user'
+        groups: []
       });
       (api.logout as jest.Mock).mockResolvedValue({});
 
@@ -522,7 +523,7 @@ describe('Auth Module', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'user-1',
         email: 'test@example.com',
-        role: 'user'
+        groups: []
       });
     });
 

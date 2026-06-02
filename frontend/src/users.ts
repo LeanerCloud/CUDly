@@ -20,7 +20,7 @@ export {
   saveUser,
   deleteUser,
   bulkDeleteUsers,
-  bulkChangeRole,
+  // bulkChangeRole removed in #912 (role concept dropped).
   bulkAddToGroup,
   setupUserHandlers
 } from './users/index';
