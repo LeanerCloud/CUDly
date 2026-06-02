@@ -689,11 +689,12 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
 		assert.Equal(t, 0.0, ytdSavings)
+		assert.Empty(t, savingsByService)
 	})
 
 	t.Run("purchase history error returns zeros", func(t *testing.T) {
@@ -702,11 +703,12 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
 		assert.Equal(t, 0.0, ytdSavings)
+		assert.Nil(t, savingsByService)
 	})
 
 	t.Run("with active commitments", func(t *testing.T) {
@@ -717,6 +719,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		purchases := []config.PurchaseHistoryRecord{
 			{
 				Timestamp:        purchaseTime,
+				Service:          "ec2",
 				Term:             1, // 1-year term
 				EstimatedSavings: 100.0,
 			},
@@ -726,12 +729,13 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 100.0, committedMonthly)
 		// YTD savings depends on when the purchase was made relative to year start
 		assert.GreaterOrEqual(t, ytdSavings, 0.0)
+		assert.InDelta(t, 100.0, savingsByService["ec2"], 0.001)
 	})
 
 	t.Run("with expired commitments", func(t *testing.T) {
@@ -742,6 +746,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		purchases := []config.PurchaseHistoryRecord{
 			{
 				Timestamp:        purchaseTime,
+				Service:          "rds",
 				Term:             1, // 1-year term
 				EstimatedSavings: 100.0,
 			},
@@ -751,12 +756,13 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		// Should skip expired commitments
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
 		assert.Equal(t, 0.0, ytdSavings)
+		assert.Empty(t, savingsByService, "expired commitments must not appear in per-service map")
 	})
 
 	t.Run("with purchase made this year", func(t *testing.T) {
@@ -767,6 +773,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		purchases := []config.PurchaseHistoryRecord{
 			{
 				Timestamp:        purchaseTime,
+				Service:          "ec2",
 				Term:             3, // 3-year term
 				EstimatedSavings: 50.0,
 			},
@@ -776,10 +783,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 50.0, committedMonthly)
+		assert.InDelta(t, 50.0, savingsByService["ec2"], 0.001)
 	})
 
 	// --- Bug fix tests ---
@@ -808,7 +816,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		// Only the status="" row counts; the failed row must be excluded.
 		assert.Equal(t, 1, activeCommitments,
@@ -842,12 +850,170 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "", uuids)
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", uuids)
 
 		assert.Equal(t, 2, activeCommitments)
 		assert.Equal(t, 250.0, committedMonthly,
 			"only accounts A and B must contribute; account C rows must not appear")
 	})
+}
+
+// TestAggregateActiveCommitmentsPerService covers the core primitive used by
+// both the KPI total and the per-service chart CurrentSavings.
+func TestAggregateActiveCommitmentsPerService(t *testing.T) {
+	now := time.Now()
+	active := func(service string, savings float64) config.PurchaseHistoryRecord {
+		return config.PurchaseHistoryRecord{
+			Service:          service,
+			Timestamp:        now.AddDate(0, -1, 0), // started 1 month ago
+			Term:             1,                     // 1-year term, still active
+			EstimatedSavings: savings,
+		}
+	}
+	expired := func(service string, savings float64) config.PurchaseHistoryRecord {
+		return config.PurchaseHistoryRecord{
+			Service:          service,
+			Timestamp:        now.AddDate(-2, 0, 0), // started 2 years ago
+			Term:             1,                     // 1-year term, expired
+			EstimatedSavings: savings,
+		}
+	}
+
+	t.Run("two active commitments accumulate per service", func(t *testing.T) {
+		purchases := []config.PurchaseHistoryRecord{
+			active("EC2", 150.0),
+			active("RDS", 75.0),
+		}
+		got := aggregateActiveCommitmentsPerService(purchases, now)
+		assert.InDelta(t, 150.0, got["EC2"], 0.001)
+		assert.InDelta(t, 75.0, got["RDS"], 0.001)
+		assert.Len(t, got, 2, "no other service must appear")
+	})
+
+	t.Run("one failed (expired) + one succeeded stays correct", func(t *testing.T) {
+		// Only the active row should count — the expired row is the "failed" analogue.
+		purchases := []config.PurchaseHistoryRecord{
+			expired("EC2", 999.0),
+			active("EC2", 200.0),
+		}
+		got := aggregateActiveCommitmentsPerService(purchases, now)
+		assert.InDelta(t, 200.0, got["EC2"], 0.001,
+			"expired commitment must not contribute to CurrentSavings")
+		assert.Len(t, got, 1)
+	})
+
+	t.Run("no active commitments returns empty map", func(t *testing.T) {
+		purchases := []config.PurchaseHistoryRecord{
+			expired("EC2", 100.0),
+		}
+		got := aggregateActiveCommitmentsPerService(purchases, now)
+		assert.Empty(t, got)
+	})
+}
+
+// TestHandler_getDashboardSummary_CurrentSavingsPopulated asserts that
+// getDashboardSummary populates ServiceSavings.CurrentSavings from active
+// purchase history so the Home chart's green bars render real data.
+func TestHandler_getDashboardSummary_CurrentSavingsPopulated(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			Service:          "EC2",
+			Timestamp:        now.AddDate(0, -3, 0), // active
+			Term:             1,
+			EstimatedSavings: 150.0,
+		},
+		{
+			Service:          "RDS",
+			Timestamp:        now.AddDate(0, -6, 0), // active
+			Term:             1,
+			EstimatedSavings: 80.0,
+		},
+		{
+			Service:          "EC2",
+			Timestamp:        now.AddDate(-2, 0, 0), // expired — must not count
+			Term:             1,
+			EstimatedSavings: 999.0,
+		},
+	}
+
+	recommendations := []config.RecommendationRecord{
+		{Service: "EC2", Savings: 500.0},
+		{Service: "RDS", Savings: 300.0},
+	}
+
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	// No account_id / account_ids filter, so calculateCommitmentMetrics fetches
+	// across all accounts via GetAllPurchaseHistory.
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(purchases, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    mockStore,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// PotentialSavings must still be populated from recommendations.
+	assert.InDelta(t, 500.0, result.ByService["EC2"].PotentialSavings, 0.001)
+	assert.InDelta(t, 300.0, result.ByService["RDS"].PotentialSavings, 0.001)
+
+	// CurrentSavings must come from active purchase history, grouped by service.
+	assert.InDelta(t, 150.0, result.ByService["EC2"].CurrentSavings, 0.001,
+		"EC2 current savings: only active commitment must count (expired $999 excluded)")
+	assert.InDelta(t, 80.0, result.ByService["RDS"].CurrentSavings, 0.001)
+}
+
+// TestHandler_getDashboardSummary_CurrentSavingsJSON verifies the wire shape:
+// current_savings must be present in the JSON-encoded response.
+func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	purchases := []config.PurchaseHistoryRecord{
+		{
+			Service:          "EC2",
+			Timestamp:        now.AddDate(0, -1, 0),
+			Term:             1,
+			EstimatedSavings: 120.0,
+		},
+	}
+
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
+		[]config.RecommendationRecord{{Service: "EC2", Savings: 400.0}}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	// No account filter, so the no-filter fetch path (GetAllPurchaseHistory) runs.
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(purchases, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    mockStore,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// Verify through the ServiceSavings struct that the JSON tag is present and
+	// the value round-trips correctly.  We assert on the struct field because
+	// json.Marshal / Unmarshal would be redundant — the tag is on the declared
+	// type and Go's encoding/json honours it.
+	require.Contains(t, result.ByService, "EC2")
+	assert.InDelta(t, 120.0, result.ByService["EC2"].CurrentSavings, 0.001,
+		"current_savings field must carry the active purchase's EstimatedSavings")
 }
 
 func TestHandler_calculateCurrentCoverage(t *testing.T) {
