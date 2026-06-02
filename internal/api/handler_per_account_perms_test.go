@@ -490,8 +490,8 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// Guard against future code paths that resolve service configs before filtering:
 	// stub rds so an unexpected GetServiceConfig call doesn't panic the test.
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
-	// calculateCommitmentMetrics calls GetPurchaseHistory for YTD/committed totals.
-	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	// calculateCommitmentMetrics calls GetAllPurchaseHistory when no account filter is set.
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}

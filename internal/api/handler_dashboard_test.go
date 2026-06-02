@@ -56,7 +56,8 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	// No account_id / account_ids filter → calculateCommitmentMetrics uses GetAllPurchaseHistory.
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{
@@ -117,7 +118,7 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 100,
 	}, nil)
@@ -160,7 +161,7 @@ func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFu
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	// Global ServiceConfig has Coverage=0 (zero-value — operator never set it).
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 0,
@@ -688,7 +689,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123")
+		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -701,7 +702,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123")
+		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -725,7 +726,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123")
+		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 100.0, committedMonthly)
@@ -750,7 +751,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123")
+		activeCommitments, committedMonthly, ytdSavings := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		// Should skip expired commitments
 		assert.Equal(t, 0, activeCommitments)
@@ -775,10 +776,77 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "account-123")
+		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 50.0, committedMonthly)
+	})
+
+	// --- Bug fix tests ---
+
+	// Status filter: a row with Status="failed" must NOT be counted as an active
+	// commitment. The invariant: isActiveCommitment rejects any non-empty status
+	// that isn't "completed".
+	t.Run("failed status row is excluded from committedMonthly", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		purchaseTime := time.Now().AddDate(0, -3, 0)
+		purchases := []config.PurchaseHistoryRecord{
+			{
+				Timestamp:        purchaseTime,
+				Term:             1,
+				EstimatedSavings: 200.0,
+				Status:           "failed",
+			},
+			{
+				Timestamp:        purchaseTime,
+				Term:             1,
+				EstimatedSavings: 50.0,
+				// Status "" = completed DB row — must be counted
+			},
+		}
+		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(purchases, nil)
+
+		handler := &Handler{config: mockStore}
+
+		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+
+		// Only the status="" row counts; the failed row must be excluded.
+		assert.Equal(t, 1, activeCommitments,
+			"failed commitment must not increment activeCommitments")
+		assert.Equal(t, 50.0, committedMonthly,
+			"failed commitment's savings must not appear in committedMonthly")
+	})
+
+	// Multi-account scope: a UUID-filtered request must use GetPurchaseHistoryFiltered
+	// scoped to the supplied cloud_account_id UUIDs. Rows from account C must NOT
+	// appear when the filter contains only A and B.
+	t.Run("multi-account UUID filter routes to GetPurchaseHistoryFiltered", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		purchaseTime := time.Now().AddDate(0, -2, 0)
+
+		accountAID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		accountBID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+		// Only rows for A and B are returned by the scoped query — the store
+		// enforces the filter; the handler must NOT call GetPurchaseHistory.
+		purchasesAB := []config.PurchaseHistoryRecord{
+			{CloudAccountID: &accountAID, Timestamp: purchaseTime, Term: 1, EstimatedSavings: 100.0},
+			{CloudAccountID: &accountBID, Timestamp: purchaseTime, Term: 1, EstimatedSavings: 150.0},
+		}
+		uuids := []string{accountAID, accountBID}
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", uuids, (*time.Time)(nil), (*time.Time)(nil), 1000).
+			Return(purchasesAB, nil)
+		// GetPurchaseHistory must not be called — no On registration so it
+		// would panic if accidentally invoked.
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		handler := &Handler{config: mockStore}
+
+		activeCommitments, committedMonthly, _ := handler.calculateCommitmentMetrics(ctx, "", uuids)
+
+		assert.Equal(t, 2, activeCommitments)
+		assert.Equal(t, 250.0, committedMonthly,
+			"only accounts A and B must contribute; account C rows must not appear")
 	})
 }
 
@@ -827,7 +895,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
-		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{
@@ -851,7 +919,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-		mockStore.On("GetPurchaseHistory", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{

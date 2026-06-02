@@ -22,7 +22,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	effectiveAccountID, err := resolveDashboardAccountID(params)
+	legacyAccountID, cloudAccountUUIDs, err := resolveDashboardAccountScope(params)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, effectiveAccountID)
+	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, legacyAccountID, cloudAccountUUIDs)
 
 	return &DashboardSummaryResponse{
 		PotentialMonthlySavings: totalSavings,
@@ -65,26 +65,36 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	}, nil
 }
 
-// resolveDashboardAccountID chooses the single account_id passed into the
-// (legacy, single-account) commitment metrics calculation:
-//   - one ID in `account_ids` → use it
-//   - multiple IDs → empty (no filter; logged as observability)
-//   - none → fall back to the legacy singular `account_id` param
-func resolveDashboardAccountID(params map[string]string) (string, error) {
-	accountIDs, err := parseAccountIDs(params["account_ids"])
-	if err != nil {
-		return "", NewClientError(400, err.Error())
+// resolveDashboardAccountScope parses the account filter params and returns
+// the two disjoint representations used by commitment-metrics fetching:
+//
+//   - legacyAccountID: the singular `account_id` param (cloud-provider account
+//     number, e.g. "123456789012"), passed as-is to GetPurchaseHistory when
+//     no UUID-based filter is present. Empty string means "no legacy filter".
+//
+//   - cloudAccountUUIDs: UUIDs from the `account_ids` param, matched against
+//     purchase_history.cloud_account_id via GetPurchaseHistoryFiltered. Non-nil
+//     (even if empty) when `account_ids` was present and valid.
+//
+// Exactly one of legacyAccountID or cloudAccountUUIDs is meaningful per call:
+// when account_ids is supplied, legacyAccountID is set to "" so the caller
+// uses the UUID path; when only account_id is supplied, cloudAccountUUIDs is
+// nil so the caller uses the legacy path; when neither is supplied, both are
+// zero-valued and the caller fetches all history.
+func resolveDashboardAccountScope(params map[string]string) (legacyAccountID string, cloudAccountUUIDs []string, err error) {
+	uuids, parseErr := parseAccountIDs(params["account_ids"])
+	if parseErr != nil {
+		return "", nil, NewClientError(400, parseErr.Error())
 	}
 
-	switch len(accountIDs) {
-	case 1:
-		return accountIDs[0], nil
-	case 0:
-		return params["account_id"], nil
-	default:
-		logging.Infof("dashboard: multi-account filter requested (%d accounts); returning unfiltered metrics until per-account breakdown is implemented", len(accountIDs))
-		return "", nil
+	if len(uuids) > 0 {
+		// UUID-based multi-account filter — takes precedence over legacy param.
+		return "", uuids, nil
 	}
+
+	// No UUID filter: fall back to the legacy singular cloud-provider account
+	// number. Empty string means "fetch all accounts" (no filter).
+	return params["account_id"], nil, nil
 }
 
 // filterDashboardRecommendations applies the session's allowed_accounts filter
@@ -396,45 +406,85 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 	return p.Timestamp.Add(termDuration)
 }
 
-// isActiveCommitment reports whether the purchase's term has not yet
-// expired as of `now`. The boundary is strict (After): a commitment is
-// active right up to the instant its term ends. Same predicate shared
-// by the dashboard aggregate and the per-commitment inventory endpoint.
+// isActiveCommitment reports whether the purchase is active: its term has not
+// yet expired as of `now` AND its status is one of the successful terminal
+// states ("" for DB-backed rows where the column is unpersisted, or
+// "completed"). Rows synthesised from failed/cancelled/expired executions
+// carry a non-empty status other than "completed" and are excluded so they
+// do not inflate the committed_monthly KPI. The boundary is strict (After):
+// a commitment is active right up to the instant its term ends.
+//
+// Same predicate shared by the dashboard aggregate and the per-commitment
+// inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
 func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
+	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
+	// Synthesised rows set it to "failed", "expired", "cancelled", "pending",
+	// "notified", "approved", "running", or "paused". Only "" and "completed"
+	// represent a commitment that is actually live on the provider.
+	if p.Status != "" && p.Status != "completed" {
+		return false
+	}
 	return !now.After(commitmentExpiry(p))
 }
 
-// calculateCommitmentMetrics calculates active commitments and savings from purchase history
-func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountID string) (activeCommitments int, committedMonthly, ytdSavings float64) {
-	// Get purchase history (last 1000 purchases should be sufficient)
-	purchases, err := h.config.GetPurchaseHistory(ctx, accountID, 1000)
+// calculateCommitmentMetrics aggregates active-commitment counts and monthly
+// savings from purchase history. The fetch strategy depends on the filter:
+//
+//   - cloudAccountUUIDs non-empty: GetPurchaseHistoryFiltered scoped to those
+//     cloud_account_id UUIDs (multi-account UUID filter from `account_ids`).
+//   - legacyAccountID non-empty: GetPurchaseHistory filtered by account_id
+//     (cloud-provider account number, e.g. "123456789012"; legacy single-account
+//     filter from the `account_id` param).
+//   - both empty: GetAllPurchaseHistory (no account filter).
+//
+// EstimatedSavings on purchase_history rows is always written in monthly units
+// (populated from PurchaseExecution.EstimatedSavings which derives from
+// recommendation monthly savings at purchase time — see SavePurchaseHistory
+// and the purchase manager). No unit normalisation is needed.
+func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountID string, cloudAccountUUIDs []string) (activeCommitments int, committedMonthly, ytdSavings float64) {
+	const fetchLimit = 1000
+
+	var (
+		purchases []config.PurchaseHistoryRecord
+		err       error
+	)
+
+	switch {
+	case len(cloudAccountUUIDs) > 0:
+		// Multi-account UUID filter: match purchase_history.cloud_account_id.
+		purchases, err = h.config.GetPurchaseHistoryFiltered(ctx, "", cloudAccountUUIDs, nil, nil, fetchLimit)
+	case legacyAccountID != "":
+		// Legacy single-account filter: match purchase_history.account_id.
+		purchases, err = h.config.GetPurchaseHistory(ctx, legacyAccountID, fetchLimit)
+	default:
+		// No account filter: fetch across all accounts.
+		purchases, err = h.config.GetAllPurchaseHistory(ctx, fetchLimit)
+	}
+
 	if err != nil {
-		// Log error but don't fail the request
+		// Log error but don't fail the dashboard request.
 		return 0, 0, 0
 	}
 
-	// Get current time from context or use now
 	currentTime := time.Now()
 	yearStart := time.Date(currentTime.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 
 	for _, p := range purchases {
 		if !isActiveCommitment(p, currentTime) {
-			continue // Skip expired commitments
+			continue
 		}
 
-		// Count active commitments
 		activeCommitments++
 
-		// Add to committed monthly (EstimatedSavings is typically monthly)
+		// EstimatedSavings is in monthly units (see doc comment above).
 		committedMonthly += p.EstimatedSavings
 
-		// Calculate YTD savings (savings accumulated since year start)
+		// YTD savings: count from year start or from purchase date, whichever
+		// is later, using a 30-day month approximation (same as original).
 		if p.Timestamp.Before(yearStart) {
-			// Purchase made before this year, count full year so far
 			monthsSinceYearStart := int(currentTime.Sub(yearStart).Hours() / (24 * 30))
 			ytdSavings += p.EstimatedSavings * float64(monthsSinceYearStart)
 		} else {
-			// Purchase made this year, count from purchase date
 			monthsSincePurchase := int(currentTime.Sub(p.Timestamp).Hours() / (24 * 30))
 			ytdSavings += p.EstimatedSavings * float64(monthsSincePurchase)
 		}
