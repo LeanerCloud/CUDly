@@ -170,7 +170,11 @@ func staticDirFromEnv() string {
 }
 
 // isStaticPath returns true if the path should be handled by the static file
-// server rather than the API. API paths start with /api/ or are /health.
+// server rather than the API. API paths start with /api/ or are /health or
+// /version. /version is a public root-path endpoint (build metadata, no auth)
+// registered in the API router table; it must not fall through to the SPA
+// fallback on the Lambda path, matching the explicit mux.HandleFunc("/version")
+// registration used on the HTTP/Cloud Run path in internal/server/http.go.
 // OIDC discovery paths (/.well-known/*) are intercepted earlier by the
 // transport layer via api.IsOIDCDiscoveryPath, so they never reach here.
 func isStaticPath(urlPath string) bool {
@@ -181,6 +185,9 @@ func isStaticPath(urlPath string) bool {
 		return false
 	}
 	if clean == "/health" {
+		return false
+	}
+	if clean == "/version" {
 		return false
 	}
 	return true
