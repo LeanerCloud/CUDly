@@ -141,40 +141,53 @@ func (s *Service) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPI
 	return key, nil
 }
 
-// RevokeAPIKey deactivates an API key (soft delete)
-func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
-	// Get the key to verify ownership
+// authorizeAPIKeyAccess looks up the key and the caller, then returns the key
+// together with a permission error if the caller is neither the key owner nor
+// an admin. The action string ("revoke" / "delete") is used only in the error
+// message so callers get a context-specific message. Pulled out of
+// RevokeAPIKey and DeleteAPIKey to deduplicate the identical ownership check
+// and keep both functions under the cyclomatic limit.
+func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, action string) (*UserAPIKey, error) {
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("API key not found")
+			return nil, fmt.Errorf("API key not found")
 		}
-		return fmt.Errorf("failed to get API key: %w", err)
+		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
-		return fmt.Errorf("API key not found")
+		return nil, fmt.Errorf("API key not found")
 	}
 
-	// Verify ownership (unless admin)
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
+			return nil, fmt.Errorf("user not found")
 		}
-		return fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
-		return fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user not found")
 	}
 
 	if key.UserID != userID {
 		isAdmin, err := s.UserHasAdminCapability(ctx, userID)
 		if err != nil {
-			return fmt.Errorf("failed to check admin capability: %w", err)
+			return nil, fmt.Errorf("failed to check admin capability: %w", err)
 		}
 		if !isAdmin {
-			return fmt.Errorf("unauthorized: cannot revoke another user's API key")
+			return nil, fmt.Errorf("unauthorized: cannot %s another user's API key", action)
 		}
+	}
+
+	return key, nil
+}
+
+// RevokeAPIKey deactivates an API key (soft delete)
+func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
+	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "revoke")
+	if err != nil {
+		return err
 	}
 
 	// Revoke the key
@@ -190,38 +203,9 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 
 // DeleteAPIKey permanently deletes an API key
 func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error {
-	// Get the key to verify ownership
-	key, err := s.store.GetAPIKeyByID(ctx, keyID)
+	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "delete")
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("API key not found")
-		}
-		return fmt.Errorf("failed to get API key: %w", err)
-	}
-	if key == nil {
-		return fmt.Errorf("API key not found")
-	}
-
-	// Verify ownership (unless admin)
-	user, err := s.store.GetUserByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
-		return fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
-	}
-
-	if key.UserID != userID {
-		isAdmin, err := s.UserHasAdminCapability(ctx, userID)
-		if err != nil {
-			return fmt.Errorf("failed to check admin capability: %w", err)
-		}
-		if !isAdmin {
-			return fmt.Errorf("unauthorized: cannot delete another user's API key")
-		}
+		return err
 	}
 
 	// Delete the key

@@ -333,12 +333,8 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 	// from a user who currently has it, ensure at least one other member
 	// keeps it.
 	if containsGroup(prior, DefaultAdminGroupID) && !containsGroup(next, DefaultAdminGroupID) {
-		count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
-		if err != nil {
-			return fmt.Errorf("failed to count administrators: %w", err)
-		}
-		if count <= 1 {
-			return ErrLastAdmin
+		if err := s.checkLastAdminConstraint(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -355,6 +351,21 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 		if !canManage {
 			return ErrSelfEscalation
 		}
+	}
+	return nil
+}
+
+// checkLastAdminConstraint returns ErrLastAdmin if removing the
+// Administrators group from its current holder would leave the group with
+// zero members. Pulled out of guardGroupChange to keep that function under
+// the cyclomatic limit.
+func (s *Service) checkLastAdminConstraint(ctx context.Context) error {
+	count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
+	if err != nil {
+		return fmt.Errorf("failed to count administrators: %w", err)
+	}
+	if count <= 1 {
+		return ErrLastAdmin
 	}
 	return nil
 }
