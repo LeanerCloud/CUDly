@@ -2749,8 +2749,14 @@ function buildVariantRowMarkup(
   // The column header also omits the select-all checkbox, so the column is
   // visually absent rather than present-but-empty, matching the no-actions
   // experience on Plans and Purchases for the same role.
+  // Issue #120: inline "Plan" button deep-links into the Create Purchase Plan
+  // modal pre-seeded with this rec. Only rendered when the session has
+  // create:plans permission (mirrors the bulk Create Plan button gate).
+  const planBtnHtml = canAccess('create', 'plans')
+    ? `<button type="button" class="btn btn-small rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">Plan</button>`
+    : '';
   const checkboxCell = showCheckboxes
-    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation"></td>`
+    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">${planBtnHtml}</td>`
     : '';
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
@@ -4194,6 +4200,20 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
         expandedCells.add(key);
       }
       renderRecommendationsList(loadedRecs);
+    });
+  });
+
+  // Issue #120: per-row Plan button deep-links into Create Purchase Plan modal.
+  // Fires openCreatePlanFromBottomBox with the single rec so the modal is
+  // pre-seeded -- same path as the bulk Create Plan button but scoped to one row.
+  container.querySelectorAll<HTMLButtonElement>('button.rec-plan-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const recId = btn.dataset['recId'] ?? '';
+      if (!recId) return;
+      const rec = recommendations.find((r) => r.id === recId);
+      if (!rec) return;
+      void openCreatePlanFromBottomBox([rec]);
     });
   });
 }
