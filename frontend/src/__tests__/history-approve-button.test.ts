@@ -69,6 +69,14 @@ import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 // existing admins on first deploy of issue #923). approve-any:purchases is
 // carved out of admin:* and requires Purchaser group membership.
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] };
+// Admin without Purchaser membership and without effectivePermissions
+// for any carved-out spending verb. Issue #923 explicitly carves
+// approve-any:purchases / retry-any:purchases / execute:purchases OUT
+// of admin:*, so this user MUST NOT see Approve / Retry buttons on
+// rows they did not create. Regression guard for CR #924 F5 — if a
+// future refactor reintroduces isAdmin() as the gate, this test
+// catches it.
+const ADMIN_NO_PURCH = { id: 'admin-no-purch-uuid', email: 'admin-no-purch@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
 // REG_USER carries the default-user effective permission set (approve-own
 // + cancel-own + retry-own on purchases) so canAccess returns true for
 // own-row actions without needing the bootstrap fetch. The previous
@@ -369,5 +377,34 @@ describe('History inline Approve button (issue #286)', () => {
     expect(approveBtn?.disabled).toBe(false);
     expect(cancelBtn?.disabled).toBe(false);
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+  });
+
+  test('admin WITHOUT Purchaser membership does not see Approve on rows they did not create (CR #924 F5)', async () => {
+    // Issue #923 + CR #924 F5: approve-any:purchases is carved out of
+    // admin:*. canApprovePendingRow must gate on
+    // canAccess('approve-any', 'purchases'), NOT on isAdmin() or
+    // isPurchaser() group membership alone. A bare admin (no Purchaser
+    // group, no effectivePermissions yet) is exactly the case where
+    // the carve-out matters: the legacy implementation would have
+    // shown Approve on every pending row.
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_NO_PURCH);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'exec-mine', created_by_user_id: ADMIN_NO_PURCH.id }),
+        makeRow({ purchase_id: 'exec-other', created_by_user_id: OTHER_UUID }),
+        makeRow({ purchase_id: 'exec-legacy', created_by_user_id: undefined }),
+      ],
+    });
+
+    await loadHistory();
+
+    // Scope to the history list (not the approval queue card).
+    const list = document.getElementById('history-list')!;
+    const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
+    const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
+    // Approve renders only via the approve-own fallback (matching
+    // created_by_user_id), NOT approve-any.
+    expect(ids).toEqual(['exec-mine']);
   });
 });

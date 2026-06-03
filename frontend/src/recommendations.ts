@@ -22,7 +22,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
-import { canAccess, isPurchaser } from './permissions';
+import { canAccess } from './permissions';
 
 // Issue #869: true when the current session can take any action on
 // recommendations (purchase or plan). Readonly/viewer sessions have neither
@@ -3457,11 +3457,13 @@ function mountBottomActionBox(): HTMLElement | null {
   box.appendChild(purchaseBtn);
 
   // Issue #923: show an informational banner when the session can view
-  // recommendations but cannot execute purchases (not in Purchaser group).
-  // The banner is visible only to users who have view access but lack
-  // the Purchaser group membership -- pure read-only users won't reach
-  // this page's action area anyway.
-  if (!isPurchaser()) {
+  // recommendations but cannot execute purchases. The predicate MUST
+  // mirror the Purchase CTA's gate (canAccess('execute', 'purchases'))
+  // so a custom-role user who holds execute:purchases via a non-seeded
+  // group sees the live button without a contradictory "you can view
+  // but not execute" notice. Pure read-only users won't reach this
+  // page's action area anyway.
+  if (!canAccess('execute', 'purchases')) {
     const noPurchaseBanner = document.createElement('div');
     noPurchaseBanner.className = 'info-banner';
     noPurchaseBanner.setAttribute('role', 'note');

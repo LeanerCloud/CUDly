@@ -21,7 +21,27 @@ WHERE id IN (
     '00000000-0000-5000-8000-000000000004'
 );
 
--- Insert the Purchaser group (idempotent on both id and name conflicts).
+-- Fail closed if a pre-existing group already owns the name "Purchaser"
+-- under a different UUID. Without this guard the bare ON CONFLICT DO
+-- NOTHING below would silently skip the seed and leave
+-- DefaultPurchaserGroupID absent, breaking the admin-backfill UPDATE
+-- further down and every callsite that keys off the fixed UUID.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM groups
+        WHERE name = 'Purchaser'
+          AND id <> '00000000-0000-5000-8000-000000000005'
+    ) THEN
+        RAISE EXCEPTION
+            'migration 000058: a group named ''Purchaser'' already exists with a different id; rename it before applying this migration so the seeded id (00000000-0000-5000-8000-000000000005) can be created';
+    END IF;
+END $$;
+
+-- Insert the Purchaser group. Idempotent on the seeded id only -- a
+-- name-collision on a different id is caught by the DO block above so
+-- the seed never silently goes missing.
 INSERT INTO groups (id, name, description, permissions, allowed_accounts, system_managed)
 VALUES (
     '00000000-0000-5000-8000-000000000005',
@@ -39,7 +59,7 @@ VALUES (
     ARRAY['*'],
     TRUE
 )
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
 -- Auto-assign every existing admin-group member to the Purchaser group
 -- so upgrade preserves current behavior. Admins can later remove

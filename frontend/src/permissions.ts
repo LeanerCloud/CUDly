@@ -109,16 +109,44 @@ export function isAdmin(): boolean {
 }
 
 /**
- * Return true when the current session user is a member of the
- * Purchaser group. The three money-spending verbs
- * (execute:purchases, approve-any:purchases, retry-any:purchases) are
- * carved out of the admin:* wildcard on the backend (issue #923) and
- * require explicit Purchaser-group membership (or any custom group
- * that grants the same verbs via effectivePermissions).
+ * Return true when the current session is authorised to execute the
+ * three carved-out money-spending verbs (execute:purchases,
+ * approve-any:purchases, retry-any:purchases). When the backend has
+ * delivered effectivePermissions (post-bootstrap) we drive off the
+ * permission set itself so a user who holds any of those verbs via a
+ * custom group (not just the seeded Purchaser group) also returns
+ * true. While effectivePermissions is still loading we fall back to
+ * seeded-group membership so the helper agrees with the canAccess()
+ * carve-out fallback in the same window.
+ *
+ * Callers that need a hard verb-specific gate should prefer
+ * canAccess('execute', 'purchases'). isPurchaser() is the
+ * verb-agnostic "can spend money at all" predicate (true if ANY of
+ * the three carved-out verbs is granted), which is what the
+ * no-Purchaser banners use.
  */
 export function isPurchaser(): boolean {
   const user = state.getCurrentUser();
   if (!user) return false;
+  if (user.effectivePermissions) {
+    // Match canAccess()'s semantics: a permission entry with
+    // resource '*' satisfies the carved-out verb on 'purchases' the
+    // same way the backend's HasPermission accepts ResourceAll. Walk
+    // each carved-out key and accept either an exact match or a
+    // wildcard-resource match on the same action.
+    for (const key of ADMIN_CARVED_OUTS) {
+      const colon = key.indexOf(':');
+      if (colon < 0) continue;
+      const action = key.slice(0, colon);
+      const resource = key.slice(colon + 1);
+      for (const p of user.effectivePermissions) {
+        if (p.action === action && (p.resource === resource || p.resource === '*')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   return Array.isArray(user.groups) && user.groups.includes(PURCHASER_GROUP_ID);
 }
 

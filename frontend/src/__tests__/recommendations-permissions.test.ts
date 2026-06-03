@@ -94,6 +94,15 @@ const mockUser = (role: string | null) => {
   );
 };
 
+// Direct group-set mocking for tests that need to assert specific
+// group combinations (e.g. admin WITHOUT Purchaser for the carve-out
+// regression checks per CR #924 F5).
+const mockUserWithGroups = (groups: string[], effectivePermissions?: { action: string; resource: string }[]) => {
+  (state.getCurrentUser as jest.Mock).mockReturnValue(
+    { id: 'u', email: 'u@example.com', groups, effectivePermissions },
+  );
+};
+
 const setupDom = () => {
   const recsTab = document.createElement('div');
   recsTab.id = 'opportunities-tab';
@@ -174,6 +183,49 @@ describe('Recommendations action-box permission gating (issue #365)', () => {
     const plan = document.getElementById('create-plan-btn') as HTMLButtonElement;
     expect(purchase.hidden).toBe(true);
     expect(plan.hidden).toBe(true);
+  });
+
+  test('admin WITHOUT Purchaser hides Purchase, keeps Create Plan, shows no-Purchaser notice (CR #924 F3)', async () => {
+    // Issue #923 + CR #924 F3: execute:purchases is carved out of
+    // admin:*. A bare admin (no Purchaser group, no effectivePermissions
+    // yet) sees the Create Plan button (create:plans is NOT carved out)
+    // but NOT the Purchase one-off button. The no-Purchaser banner must
+    // appear, driven by canAccess('execute', 'purchases') so it stays
+    // in lockstep with the Purchase CTA.
+    mockUserWithGroups([ADMINISTRATORS_GROUP_ID]);
+    await loadRecommendations();
+    const purchase = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    const plan = document.getElementById('create-plan-btn') as HTMLButtonElement;
+    expect(purchase).not.toBeNull();
+    expect(plan).not.toBeNull();
+    expect(purchase.hidden).toBe(true);
+    expect(plan.hidden).toBe(false);
+    // No-Purchaser banner present.
+    const actionBox = document.getElementById('recommendations-action-box')!;
+    const banners = actionBox.querySelectorAll('.info-banner');
+    expect(banners.length).toBe(1);
+    expect(banners[0]?.textContent).toContain('You can view but not execute purchases');
+  });
+
+  test('custom (non-seeded) group with explicit execute:purchases shows Purchase + no banner (CR #924 F3/F4)', async () => {
+    // CR #924 F3 + F4: the banner must NOT appear when a custom group
+    // (not PURCHASER_GROUP_ID) carries execute:purchases via
+    // effectivePermissions. The previous isPurchaser()-only predicate
+    // would have shown the contradictory "you can view but not execute"
+    // notice alongside a live Purchase CTA.
+    const customGid = '00000000-0000-5000-8000-00000000abcd';
+    mockUserWithGroups([customGid], [
+      { action: 'execute', resource: 'purchases' },
+      { action: 'create', resource: 'plans' },
+      { action: 'view', resource: 'recommendations' },
+    ]);
+    await loadRecommendations();
+    const purchase = document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    expect(purchase.hidden).toBe(false);
+    // No banner -- the predicate matches the live CTA.
+    const actionBox = document.getElementById('recommendations-action-box')!;
+    const banners = actionBox.querySelectorAll('.info-banner');
+    expect(banners.length).toBe(0);
   });
 
   test('the action-box capacity input stays visible for all sessions', async () => {
