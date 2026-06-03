@@ -35,7 +35,7 @@ BEGIN
           AND id <> '00000000-0000-5000-8000-000000000005'
     ) THEN
         RAISE EXCEPTION
-            'migration 000058: a group named ''Purchaser'' already exists with a different id; rename it before applying this migration so the seeded id (00000000-0000-5000-8000-000000000005) can be created';
+            'migration 000059: a group named ''Purchaser'' already exists with a different id; rename it before applying this migration so the seeded id (00000000-0000-5000-8000-000000000005) can be created';
     END IF;
 END $$;
 
