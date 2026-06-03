@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -794,7 +795,41 @@ func TestService_UpdateUserProfile(t *testing.T) {
 
 		err := service.UpdateUserProfile(ctx, "user-123", "new@example.com", "WrongPassword", "SecureTest@456")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "current password is incorrect")
+		// The handler must receive the sentinel so it can produce a 401 instead
+		// of a 500. Assert errors.Is in addition to the string check (issue #929).
+		assert.True(t, errors.Is(err, ErrCurrentPasswordIncorrect),
+			"UpdateUserProfile wrong-password must return ErrCurrentPasswordIncorrect sentinel")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("duplicate email returns ErrEmailInUse sentinel", func(t *testing.T) {
+		// Verifies issue #929: updateUserEmail must return the ErrEmailInUse
+		// sentinel (not a plain fmt.Errorf string) so the API handler can map
+		// it to a 409 with a privacy-preserving message.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
+		testUser := &User{
+			ID:           "user-123",
+			Email:        "old@example.com",
+			PasswordHash: string(hash),
+			Active:       true,
+		}
+		otherUser := &User{
+			ID:    "other-456",
+			Email: "taken@example.com",
+		}
+
+		mockStore.On("GetUserByID", ctx, "user-123").Return(testUser, nil).Once()
+		mockStore.On("GetUserByEmail", ctx, "taken@example.com").Return(otherUser, nil).Once()
+
+		err := service.UpdateUserProfile(ctx, "user-123", "taken@example.com", "OldPassword123", "")
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrEmailInUse),
+			"UpdateUserProfile duplicate-email must return ErrEmailInUse sentinel")
 
 		mockStore.AssertExpectations(t)
 	})

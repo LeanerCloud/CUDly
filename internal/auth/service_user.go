@@ -452,7 +452,7 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email st
 	}
 
 	if !s.verifyPassword(currentPassword, user.PasswordHash) {
-		return fmt.Errorf("current password is incorrect")
+		return ErrCurrentPasswordIncorrect
 	}
 
 	if err := s.updateUserEmail(ctx, user, email); err != nil {
@@ -492,7 +492,7 @@ func (s *Service) updateUserEmail(ctx context.Context, user *User, email string)
 			return err
 		}
 		if existing != nil {
-			return fmt.Errorf("email already in use")
+			return ErrEmailInUse
 		}
 		user.Email = email
 	}

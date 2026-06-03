@@ -34,6 +34,12 @@ var (
 	// permission. Mapped to 403 (issue #907).
 	ErrSelfEscalation = errors.New("cannot escalate your own group membership")
 
+	// ErrCurrentPasswordIncorrect is returned by UpdateUserProfile when the
+	// caller-supplied current password does not match the stored hash. Mapped
+	// to 401 at the API layer (the acting user is verifying their own
+	// credential, so a precise message is safe -- issue #929).
+	ErrCurrentPasswordIncorrect = errors.New("Current password is incorrect")
+
 	// MFA login-gate sentinels — used by the login API handler to map
 	// to machine-readable response codes (mfa_required /
 	// invalid_mfa_code) so the frontend can branch on the error class
