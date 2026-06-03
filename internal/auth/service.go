@@ -123,6 +123,11 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 
 	user, err := s.getUserAndValidateStatus(ctx, req.Email)
 	if err != nil {
+		// Run a dummy bcrypt compare so the response time for a non-existent
+		// user is indistinguishable from a wrong-password attempt on a real
+		// account. Without this, the missing-row path returns immediately
+		// (no bcrypt), leaking account existence via timing (issue #416).
+		s.verifyPassword(req.Password, dummyPasswordHash)
 		return nil, err
 	}
 
@@ -136,22 +141,23 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 // getUserAndValidateStatus retrieves user and checks if account is active and unlocked
 func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*User, error) {
 	user, err := s.store.GetUserByEmail(ctx, email)
-	if err != nil {
-		return nil, fmt.Errorf("authentication failed")
-	}
-	if user == nil {
-		return nil, fmt.Errorf("Check your email address and password and try again")
+	if err != nil || user == nil {
+		// Return the same generic message for both "user not found" and store
+		// errors so callers cannot distinguish a missing account from a DB
+		// failure (issue #416). The caller (Login) runs a dummy bcrypt compare
+		// after this to equalise response time with the wrong-password path.
+		return nil, fmt.Errorf("invalid email or password")
 	}
 
 	if !user.Active {
-		return nil, fmt.Errorf("Check your email address and password and try again")
+		return nil, fmt.Errorf("invalid email or password")
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
-		return nil, fmt.Errorf("Check your email address and password and try again")
+		return nil, fmt.Errorf("invalid email or password")
 	}
 	// NOTE: when LockedUntil is set but the window has already expired, the user falls
 	// through here with FailedLoginAttempts and LockedUntil still set in memory.
@@ -180,14 +186,16 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 // the slice on a match).
 func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req LoginRequest) error {
 	// Use a generic error for missing password hash to avoid leaking account state
-	// (a distinct message would reveal that the account exists but has no password set)
+	// (a distinct message would reveal that the account exists but has no password set).
+	// Both branches return the same message as the "user not found" path so the
+	// full login failure surface is uniform (issue #416).
 	if user.PasswordHash == "" {
-		return fmt.Errorf("Check your email address and password and try again")
+		return fmt.Errorf("invalid email or password")
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
 		s.recordFailedLogin(ctx, user)
-		return fmt.Errorf("Check your email address and password and try again")
+		return fmt.Errorf("invalid email or password")
 	}
 
 	if user.MFAEnabled {

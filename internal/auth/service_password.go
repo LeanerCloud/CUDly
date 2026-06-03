@@ -18,6 +18,16 @@ import (
 // This adds about 4x more computational cost compared to DefaultCost (10).
 const bcryptCost = 12
 
+// dummyPasswordHash is a pre-computed bcrypt hash of a random constant string.
+// It is used by Login to run a timing-equalising bcrypt.CompareHashAndPassword
+// when the requested email does not exist, so an attacker cannot distinguish a
+// missing account from a wrong-password attempt via response time (issue #416).
+// The plain-text "dummy" value is intentionally unguessable and never stored.
+//
+// Generated once at compile time with cost bcryptCost (12).
+// nolint:gosec -- this is a public sentinel hash, not a credential
+var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO"
+
 // Password validation constants following NIST guidelines
 const (
 	minPasswordLength       = 12  // Minimum password length
