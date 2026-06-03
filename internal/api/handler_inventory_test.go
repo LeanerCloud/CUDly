@@ -183,7 +183,7 @@ func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 			Timestamp:   now.AddDate(0, -3, 0),
 			Term:        1,
 			Count:       1,
-			MonthlyCost: 80.0,
+			MonthlyCost: float64Ptr(80.0),
 		},
 		{
 			AccountID:   "acc-1",
@@ -193,7 +193,7 @@ func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 			Timestamp:   now.AddDate(0, -3, 0),
 			Term:        1,
 			Count:       2,
-			MonthlyCost: 120.0,
+			MonthlyCost: float64Ptr(120.0),
 		},
 	}
 
@@ -496,7 +496,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 			Service:     "ec2",
 			Timestamp:   now.AddDate(0, -3, 0),
 			Term:        1,
-			MonthlyCost: 200.0,
+			MonthlyCost: float64Ptr(200.0),
 		},
 		{
 			AccountID:   "acc-1",
@@ -505,7 +505,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 			Service:     "compute",
 			Timestamp:   now.AddDate(0, -3, 0),
 			Term:        1,
-			MonthlyCost: 999.0, // must be dropped by the provider=aws chip
+			MonthlyCost: float64Ptr(999.0), // must be dropped by the provider=aws chip
 		},
 	}
 
