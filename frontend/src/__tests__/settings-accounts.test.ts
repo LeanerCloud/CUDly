@@ -6,7 +6,8 @@ import {
   loadAccountsForProvider,
   loadOverridesPanel,
   openOverrideModal,
-  setupSettingsHandlers
+  setupSettingsHandlers,
+  setGlobalDefaultsForTest,
 } from '../settings';
 
 jest.mock('../api', () => ({
@@ -1709,5 +1710,110 @@ describe('deleteAccount — pending-executions 409 handling (issue #606)', () =>
       return opts.kind === 'error';
     });
     expect(errorCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #112 — "Inherit (currently: X)" labels in the override modal
+// ---------------------------------------------------------------------------
+
+describe('Override modal Inherit labels (issue #112)', () => {
+  /** Minimal DOM for openOverrideModal: just the fields the function touches. */
+  function buildOverrideModalDOM(): void {
+    document.body.replaceChildren();
+
+    const modal = document.createElement('div');
+    modal.id = 'override-modal';
+    modal.className = 'modal hidden';
+
+    const form = document.createElement('form');
+    form.id = 'override-form';
+
+    const acctIdInput = document.createElement('input');
+    acctIdInput.type = 'hidden';
+    acctIdInput.id = 'override-account-id';
+    form.appendChild(acctIdInput);
+
+    const provInput = document.createElement('input');
+    provInput.type = 'hidden';
+    provInput.id = 'override-provider';
+    form.appendChild(provInput);
+
+    const svcSel = document.createElement('select');
+    svcSel.id = 'override-service';
+    form.appendChild(svcSel);
+
+    const termSel = document.createElement('select');
+    termSel.id = 'override-term';
+    const termInherit = document.createElement('option');
+    termInherit.value = '';
+    termInherit.textContent = 'Inherit (use global default)';
+    termSel.appendChild(termInherit);
+    for (const v of ['1', '3']) {
+      const o = document.createElement('option');
+      o.value = v;
+      termSel.appendChild(o);
+    }
+    form.appendChild(termSel);
+
+    const paySel = document.createElement('select');
+    paySel.id = 'override-payment';
+    form.appendChild(paySel);
+
+    const covInput = document.createElement('input');
+    covInput.type = 'number';
+    covInput.id = 'override-coverage';
+    covInput.placeholder = 'Inherit (use global default)';
+    form.appendChild(covInput);
+
+    const errEl = document.createElement('p');
+    errEl.id = 'override-form-error';
+    form.appendChild(errEl);
+
+    const submitBtn = document.createElement('button');
+    submitBtn.type = 'submit';
+    form.appendChild(submitBtn);
+
+    modal.appendChild(form);
+    document.body.appendChild(modal);
+  }
+
+  afterEach(() => {
+    // Reset to default so other tests are not affected.
+    setGlobalDefaultsForTest({ term: 3, payment: 'all-upfront', coverage: 80 });
+  });
+
+  test('term and payment inherit options reflect the current global defaults (3yr / all-upfront)', () => {
+    buildOverrideModalDOM();
+    setGlobalDefaultsForTest({ term: 3, payment: 'all-upfront', coverage: 80 });
+
+    const panel = document.createElement('div');
+    openOverrideModal('acc-1', 'aws', [], panel);
+
+    const termInherit = document.querySelector<HTMLOptionElement>('#override-term option[value=""]');
+    expect(termInherit?.textContent).toBe('Inherit (currently: 3 Years)');
+
+    const payInherit = document.querySelector<HTMLOptionElement>('#override-payment option[value=""]');
+    expect(payInherit?.textContent).toBe('Inherit (currently: All Upfront)');
+
+    const covInput = document.getElementById('override-coverage') as HTMLInputElement;
+    expect(covInput.placeholder).toBe('Inherit (currently: 80%)');
+  });
+
+  test('inherit labels update when globals differ from defaults (1yr / no-upfront / 70%)', () => {
+    buildOverrideModalDOM();
+    setGlobalDefaultsForTest({ term: 1, payment: 'no-upfront', coverage: 70 });
+
+    const panel = document.createElement('div');
+    openOverrideModal('acc-1', 'aws', [], panel);
+
+    const termInherit = document.querySelector<HTMLOptionElement>('#override-term option[value=""]');
+    expect(termInherit?.textContent).toBe('Inherit (currently: 1 Year)');
+
+    const payInherit = document.querySelector<HTMLOptionElement>('#override-payment option[value=""]');
+    expect(payInherit?.textContent).toBe('Inherit (currently: No Upfront)');
+
+    const covInput = document.getElementById('override-coverage') as HTMLInputElement;
+    expect(covInput.placeholder).toBe('Inherit (currently: 70%)');
   });
 });
