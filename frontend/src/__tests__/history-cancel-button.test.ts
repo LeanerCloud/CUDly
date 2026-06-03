@@ -63,7 +63,23 @@ import { getCurrentUser } from '../state';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
-const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
+// REG_USER carries the default-user effective permission set (cancel-own
+// + approve-own + retry-own on purchases) so canAccess('cancel-own',
+// 'purchases') returns true without needing the bootstrap fetch. The
+// previous `groups: []` shape relied on the pre-#917 role-string gate
+// that no longer exists; the post-rebase canAccess only honors the
+// loaded effectivePermissions, so the test fixture must populate it.
+const REG_USER = {
+  id: 'user-uuid',
+  email: 'user@example.com',
+  groups: [],
+  effectivePermissions: [
+    { action: 'cancel-own', resource: 'purchases' },
+    { action: 'approve-own', resource: 'purchases' },
+    { action: 'retry-own', resource: 'purchases' },
+    { action: 'view', resource: 'history' },
+  ],
+};
 const OTHER_UUID = 'other-uuid';
 
 function setupDOM(): void {
