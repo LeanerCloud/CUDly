@@ -142,6 +142,12 @@ type PurchaseManagerInterface interface {
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	// GetRecommendationByID fetches a single rec by its application-level id,
+	// bypassing account-override filtering so deep-linked URLs to override-
+	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by
+	// the override filter; callers render a "hidden" banner. Returns nil, nil,
+	// nil when the rec is absent or fully suppressed.
+	GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error)
 }
 
 // AuthServiceInterface defines auth service methods used by handler
@@ -379,6 +385,12 @@ type RecommendationDetailResponse struct {
 	UsageHistory     []UsagePoint `json:"usage_history"`
 	ConfidenceBucket string       `json:"confidence_bucket"`
 	ProvenanceNote   string       `json:"provenance_note"`
+	// HiddenBy is non-nil when the rec is filtered out by an account-service
+	// override (issue #214). Each element names one failing dimension:
+	// "enabled=false", "engine", "region", or "resource_type". The frontend
+	// renders a "hidden by your override" banner when this field is present.
+	// Absent (null) means the rec is fully visible.
+	HiddenBy []string `json:"hidden_by,omitempty"`
 }
 
 // PlansResponse holds the purchase plans response

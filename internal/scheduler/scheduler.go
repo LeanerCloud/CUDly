@@ -976,6 +976,79 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 	return recs, nil
 }
 
+// GetRecommendationByID fetches a single recommendation by its application-
+// level ID (the id field in the stored payload), bypassing the account-override
+// filter so deep-linked URLs to override-hidden recs still resolve.
+//
+// Suppressions are still applied: a rec whose remaining count has been
+// suppressed to zero is treated as gone (returns nil, nil, nil) so the caller
+// can render a 404 rather than a "hidden" banner for actively-dismissed recs.
+//
+// hiddenBy is non-nil (one or more reason strings) when the rec exists and
+// passes the suppression check, but would be dropped by the account-override
+// filter. Possible reasons: "enabled=false", "engine", "region",
+// "resource_type".  The caller renders a "hidden by your override" banner.
+//
+// Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
+func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
+	recs, err := s.config.ListStoredRecommendations(ctx, config.RecommendationFilter{ID: id})
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetRecommendationByID: store lookup: %w", err)
+	}
+	if len(recs) == 0 {
+		return nil, nil, nil
+	}
+
+	// Apply suppressions. A fully-suppressed rec becomes genuinely absent from
+	// the caller's perspective (the suppression is intentional user action).
+	recs, err = s.applySuppressions(ctx, recs)
+	if err != nil {
+		// Over-show: on suppression read failure treat the rec as un-suppressed.
+		logging.Errorf("GetRecommendationByID: suppression check failed; treating rec as un-suppressed: %v", err)
+	}
+	if len(recs) == 0 {
+		return nil, nil, nil
+	}
+	found := &recs[0]
+
+	// Check whether the account-override filter would drop this rec. This is
+	// a read-only call — we never drop it here, only report the reasons.
+	if found.CloudAccountID != nil {
+		resolved, resolveErr := config.ResolveAccountConfigsForRecs(ctx, s.config, recs)
+		if resolveErr != nil {
+			// Non-fatal: if the override check fails we surface the rec without
+			// a hidden_by marker (over-show is the safer default).
+			logging.Errorf("GetRecommendationByID: override resolution failed; returning rec without hidden_by: %v", resolveErr)
+			return found, nil, nil
+		}
+		cfg := resolved[config.AccountConfigKey(*found.CloudAccountID, found.Provider, found.Service)]
+		if cfg != nil {
+			hiddenBy = overrideHiddenReasons(found, cfg)
+		}
+	}
+
+	return found, hiddenBy, nil
+}
+
+// overrideHiddenReasons returns a non-empty slice when rec would be dropped by
+// the given resolved ServiceConfig, naming each failing dimension.
+func overrideHiddenReasons(rec *config.RecommendationRecord, cfg *config.ServiceConfig) []string {
+	var reasons []string
+	if !cfg.Enabled {
+		reasons = append(reasons, "enabled=false")
+	}
+	if !engineMatches(rec.Engine, cfg) {
+		reasons = append(reasons, "engine")
+	}
+	if !inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions) {
+		reasons = append(reasons, "region")
+	}
+	if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
+		reasons = append(reasons, "resource_type")
+	}
+	return reasons
+}
+
 // resolveEffectiveCacheTTL returns the effective stale-while-revalidate TTL
 // and whether background auto-refresh has been explicitly disabled (value 0).
 // It prefers the DB-configured RecommendationsCacheStaleHours; falls back to

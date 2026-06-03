@@ -390,6 +390,7 @@ type RecommendationFilter struct {
 	Region     string   // "" = all regions
 	AccountIDs []string // nil/empty = all accounts
 	MinSavings float64  // 0 = no floor on monthly savings
+	ID         string   // "" = all ids; non-empty = exact match on the id column
 }
 
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no

@@ -704,6 +704,19 @@ func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.R
 	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
 }
 
+func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {
+	args := m.Called(ctx, id)
+	var rec *config.RecommendationRecord
+	if args.Get(0) != nil {
+		rec = args.Get(0).(*config.RecommendationRecord)
+	}
+	var hiddenBy []string
+	if args.Get(1) != nil {
+		hiddenBy = args.Get(1).([]string)
+	}
+	return rec, hiddenBy, args.Error(2)
+}
+
 // MockAuthService is a mock implementation of the auth service
 type MockAuthService struct {
 	mock.Mock
