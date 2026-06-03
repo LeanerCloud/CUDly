@@ -20,6 +20,7 @@ import {
 import * as api from '../api';
 import { refreshRecommendations as refreshRecsAPI } from '../api/recommendations';
 import { showToast } from '../toast';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
 jest.mock('../api', () => ({
   getRecommendations: jest.fn().mockResolvedValue({ summary: {}, recommendations: [], regions: [] }),
@@ -74,7 +75,7 @@ import * as state from '../state';
 
 const mockUser = (role: string | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', role },
+    role === null ? null : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID] : [] },
   );
 };
 
