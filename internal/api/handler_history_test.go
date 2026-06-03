@@ -477,7 +477,8 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 			assert.Equal(t, 1, row.Count)
 			assert.Equal(t, 0.0, row.UpfrontCost, "upfront must come from the rec")
 			assert.Equal(t, 1.2333, row.EstimatedSavings, "savings must come from the rec")
-			assert.Equal(t, 2.117, row.MonthlyCost, "monthly cost must come from the rec")
+			require.NotNil(t, row.MonthlyCost, "monthly cost must come from the rec")
+			assert.InDelta(t, 2.117, *row.MonthlyCost, 1e-9, "monthly cost must come from the rec")
 			assert.Equal(t, "no-upfront", row.Payment, "payment must come from the rec, not be left blank (#733)")
 			assert.NotEmpty(t, row.StatusDescription,
 				"in-progress rows must carry a human-readable status description, not render as a finished purchase")
@@ -1176,7 +1177,8 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 
 		assert.Equal(t, accountID, row.AccountID, "Account must fall back to rec.CloudAccountID when exec.CloudAccountID is nil (#733)")
 		assert.Equal(t, "all-upfront", row.Payment, "Payment must be copied from the single rec (#733)")
-		assert.Equal(t, 7.5, row.MonthlyCost, "MonthlyCost must come from the rec")
+		require.NotNil(t, row.MonthlyCost, "MonthlyCost must come from the rec")
+		assert.InDelta(t, 7.5, *row.MonthlyCost, 1e-9, "MonthlyCost must come from the rec")
 	})
 
 	t.Run("multi-rec uniform pending row collapses Account + Payment, sums MonthlyCost", func(t *testing.T) {
@@ -1213,7 +1215,8 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 
 		assert.Equal(t, accountID, row.AccountID, "Account must collapse to the shared rec value (#733)")
 		assert.Equal(t, "no-upfront", row.Payment, "Payment must collapse to the shared rec value (#733)")
-		assert.InDelta(t, 7.5, row.MonthlyCost, 1e-9, "MonthlyCost must sum across recs (#733)")
+		require.NotNil(t, row.MonthlyCost, "MonthlyCost must sum across recs (#733)")
+		assert.InDelta(t, 7.5, *row.MonthlyCost, 1e-9, "MonthlyCost must sum across recs (#733)")
 	})
 
 	t.Run("multi-rec heterogeneous Payment collapses to empty for honest dash fallback", func(t *testing.T) {

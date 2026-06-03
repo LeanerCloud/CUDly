@@ -524,22 +524,25 @@ type ServiceSavings struct {
 // The field stays in the response shape so a future "expiring soon"
 // sub-state has a slot without a breaking API change.
 type InventoryCommitment struct {
-	ID               string    `json:"id"`
-	Provider         string    `json:"provider"`
-	AccountID        string    `json:"account_id"`
-	AccountName      string    `json:"account_name,omitempty"`
-	Service          string    `json:"service"`
-	ResourceType     string    `json:"resource_type,omitempty"`
-	Region           string    `json:"region"`
-	Count            int       `json:"count"`
-	TermYears        int       `json:"term_years"`
-	PaymentOption    string    `json:"payment_option,omitempty"`
-	StartDate        time.Time `json:"start_date"`
-	EndDate          time.Time `json:"end_date"`
-	UpfrontCost      float64   `json:"upfront_cost"`
-	MonthlyCost      float64   `json:"monthly_cost"`
-	EstimatedSavings float64   `json:"estimated_savings"`
-	Status           string    `json:"status"`
+	ID            string    `json:"id"`
+	Provider      string    `json:"provider"`
+	AccountID     string    `json:"account_id"`
+	AccountName   string    `json:"account_name,omitempty"`
+	Service       string    `json:"service"`
+	ResourceType  string    `json:"resource_type,omitempty"`
+	Region        string    `json:"region"`
+	Count         int       `json:"count"`
+	TermYears     int       `json:"term_years"`
+	PaymentOption string    `json:"payment_option,omitempty"`
+	StartDate     time.Time `json:"start_date"`
+	EndDate       time.Time `json:"end_date"`
+	UpfrontCost   float64   `json:"upfront_cost"`
+	// MonthlyCost is nil when the source purchase_history row has a NULL
+	// monthly_cost (provider did not return a monthly breakdown). The
+	// frontend renders "—" for nil and "$X.XX" when non-nil.
+	MonthlyCost      *float64 `json:"monthly_cost"`
+	EstimatedSavings float64  `json:"estimated_savings"`
+	Status           string   `json:"status"`
 }
 
 // InventoryCommitmentsResponse is the envelope returned by

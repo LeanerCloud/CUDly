@@ -492,7 +492,7 @@ func TestPostgresStore_SavePurchaseHistory_NilDB(t *testing.T) {
 		Term:             3,
 		Payment:          "all-upfront",
 		UpfrontCost:      2250.00,
-		MonthlyCost:      0,
+		MonthlyCost:      pf(0),
 		EstimatedSavings: 450.00,
 		PlanID:           "plan-123",
 		PlanName:         "RDS Plan",

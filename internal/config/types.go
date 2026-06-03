@@ -461,24 +461,33 @@ type RIUtilizationCacheEntry struct {
 // layer never writes it (tag `dynamodbav:"-"` keeps it out of persistence),
 // and the API layer populates it as "completed" or "pending" before returning.
 type PurchaseHistoryRecord struct {
-	AccountID        string    `json:"account_id" dynamodbav:"account_id"`
-	PurchaseID       string    `json:"purchase_id" dynamodbav:"purchase_id"`
-	Timestamp        time.Time `json:"timestamp" dynamodbav:"timestamp"`
-	Provider         string    `json:"provider" dynamodbav:"provider"`
-	Service          string    `json:"service" dynamodbav:"service"`
-	Region           string    `json:"region" dynamodbav:"region"`
-	ResourceType     string    `json:"resource_type" dynamodbav:"resource_type"`
-	Count            int       `json:"count" dynamodbav:"count"`
-	Term             int       `json:"term" dynamodbav:"term"`
-	Payment          string    `json:"payment" dynamodbav:"payment"`
-	UpfrontCost      float64   `json:"upfront_cost" dynamodbav:"upfront_cost"`
-	MonthlyCost      float64   `json:"monthly_cost" dynamodbav:"monthly_cost"`
-	EstimatedSavings float64   `json:"estimated_savings" dynamodbav:"estimated_savings"`
-	PlanID           string    `json:"plan_id,omitempty" dynamodbav:"plan_id,omitempty"`
-	PlanName         string    `json:"plan_name,omitempty" dynamodbav:"plan_name,omitempty"`
-	RampStep         int       `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
-	CloudAccountID   *string   `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
-	Status           string    `json:"status,omitempty" dynamodbav:"-"`
+	AccountID    string    `json:"account_id" dynamodbav:"account_id"`
+	PurchaseID   string    `json:"purchase_id" dynamodbav:"purchase_id"`
+	Timestamp    time.Time `json:"timestamp" dynamodbav:"timestamp"`
+	Provider     string    `json:"provider" dynamodbav:"provider"`
+	Service      string    `json:"service" dynamodbav:"service"`
+	Region       string    `json:"region" dynamodbav:"region"`
+	ResourceType string    `json:"resource_type" dynamodbav:"resource_type"`
+	Count        int       `json:"count" dynamodbav:"count"`
+	Term         int       `json:"term" dynamodbav:"term"`
+	Payment      string    `json:"payment" dynamodbav:"payment"`
+	UpfrontCost  float64   `json:"upfront_cost" dynamodbav:"upfront_cost"`
+	// MonthlyCost is nil when the provider API did not return a monthly
+	// recurring breakdown for this commitment (e.g. Azure all-upfront where
+	// no recurring charge exists at the commitment layer). GCP commitments
+	// are monthly-billed in this repo, so they always populate MonthlyCost.
+	// The frontend renders "—" for nil, "$X.XX" when populated. Aggregations
+	// must skip nil entries rather than treating them as $0 to avoid
+	// distorting totals. Migration 000063 dropped the NOT NULL constraint so
+	// new rows can carry NULL; existing rows with 0.0 are preserved as-is
+	// (those are real zeros from AWS all-upfront commitments).
+	MonthlyCost      *float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
+	EstimatedSavings float64  `json:"estimated_savings" dynamodbav:"estimated_savings"`
+	PlanID           string   `json:"plan_id,omitempty" dynamodbav:"plan_id,omitempty"`
+	PlanName         string   `json:"plan_name,omitempty" dynamodbav:"plan_name,omitempty"`
+	RampStep         int      `json:"ramp_step,omitempty" dynamodbav:"ramp_step,omitempty"`
+	CloudAccountID   *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	Status           string   `json:"status,omitempty" dynamodbav:"-"`
 	// Approver holds the email address the approval request was sent to (or
 	// would have been, if SES failed). Set only on pending rows, so the
 	// History UI can show "awaiting approval from <addr>" and the user knows

@@ -380,9 +380,7 @@ func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.
 		row.Payment = r.Payment
 		row.UpfrontCost = r.UpfrontCost
 		row.EstimatedSavings = r.Savings
-		if r.MonthlyCost != nil {
-			row.MonthlyCost = *r.MonthlyCost
-		}
+		row.MonthlyCost = r.MonthlyCost
 		return
 	}
 	row.Region = "multiple"
@@ -390,7 +388,7 @@ func projectRecommendationFields(row *config.PurchaseHistoryRecord, exec config.
 	row.Service = collapseRecommendationService(recs)
 	row.Term = collapseRecommendationTerm(recs)
 	row.Payment = collapseRecommendationPayment(recs)
-	row.MonthlyCost = sumRecommendationMonthlyCost(recs)
+	row.MonthlyCost = sumRecommendationMonthlyCostPtr(recs)
 	row.UpfrontCost = exec.TotalUpfrontCost
 	row.EstimatedSavings = exec.EstimatedSavings
 }
@@ -486,21 +484,24 @@ func collapseRecommendationAccount(recs []config.RecommendationRecord) string {
 	return first
 }
 
-// sumRecommendationMonthlyCost adds up the per-rec MonthlyCost values in a
-// multi-rec execution so the Approval queue's Monthly Cost cell shows the
-// committed recurring spend for the full basket. Nil per-rec entries
-// contribute 0 (the provider API did not return a monthly breakdown for
-// that rec) — the same treatment as the single-rec branch, which only
-// copies MonthlyCost when non-nil and otherwise leaves the row's field at
-// the zero value.
-func sumRecommendationMonthlyCost(recs []config.RecommendationRecord) float64 {
+// sumRecommendationMonthlyCostPtr sums the per-rec MonthlyCost values for a
+// multi-rec execution row in the Approval queue. Nil entries (provider API
+// did not return a monthly breakdown) are skipped. Returns nil when every rec
+// has a nil MonthlyCost so the row renders as "—" rather than "$0.00".
+// Returns a pointer to the accumulated total otherwise.
+func sumRecommendationMonthlyCostPtr(recs []config.RecommendationRecord) *float64 {
 	var total float64
+	anyNonNil := false
 	for _, r := range recs {
 		if r.MonthlyCost != nil {
 			total += *r.MonthlyCost
+			anyNonNil = true
 		}
 	}
-	return total
+	if !anyNonNil {
+		return nil
+	}
+	return &total
 }
 
 // MaxHistoryDateRangeDays caps the inclusive start/end window the History

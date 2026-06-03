@@ -1444,6 +1444,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 	for rows.Next() {
 		var record PurchaseHistoryRecord
 		var planID, planName, cloudAccountID sql.NullString
+		var monthlyCost sql.NullFloat64
 
 		err := rows.Scan(
 			&record.AccountID,
@@ -1457,7 +1458,7 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 			&record.Term,
 			&record.Payment,
 			&record.UpfrontCost,
-			&record.MonthlyCost,
+			&monthlyCost,
 			&record.EstimatedSavings,
 			&planID,
 			&planName,
@@ -1466,6 +1467,13 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
+		}
+
+		// Handle nullable monthly_cost: nil means "provider did not return a
+		// monthly breakdown"; 0.0 means "explicitly $0 recurring charge".
+		if monthlyCost.Valid {
+			v := monthlyCost.Float64
+			record.MonthlyCost = &v
 		}
 
 		// Handle nullable strings
