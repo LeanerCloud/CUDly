@@ -41,12 +41,16 @@ func sessionReq(token string) *events.LambdaFunctionURLRequest {
 	}
 }
 
-// adminSession returns an admin session for handler tests.
+// adminSession returns an admin session for handler tests. Uses the
+// apiKeyAdminUserID sentinel so authorizeSessionRevoke short-circuits via
+// the stateless-admin-key branch and no HasPermissionAPI mocks are needed.
+// Group-based admin users (post-#907) go through the {admin, *} permission
+// match; that path is covered by the dedicated authorizeSessionRevoke tests
+// below, which assert the HasPermissionAPI call shape explicitly.
 func revokeAdminSession() *Session {
 	return &Session{
-		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		UserID: apiKeyAdminUserID,
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 }
 
@@ -310,11 +314,11 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 func TestParseAzureReservationIDs(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name         string
-		purchaseID   string
-		wantOrderID  string
-		wantResID    string
-		wantErr      bool
+		name        string
+		purchaseID  string
+		wantOrderID string
+		wantResID   string
+		wantErr     bool
 	}{
 		{
 			name:        "full ARM path",
@@ -363,7 +367,9 @@ func TestAuthorizeSessionRevoke_Admin(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	h := &Handler{auth: mockAuth}
-	adminSess := &Session{Role: "admin", UserID: "u-1"}
+	// Stateless-admin-key sentinel short-circuits via session.UserID ==
+	// apiKeyAdminUserID. No HasPermissionAPI mocks required.
+	adminSess := &Session{UserID: apiKeyAdminUserID}
 	r := &config.PurchaseHistoryRecord{}
 	err := h.authorizeSessionRevoke(ctx, adminSess, r)
 	require.NoError(t, err)
@@ -378,7 +384,7 @@ func TestAuthorizeSessionRevoke_RevokeAny(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-any", "purchases").Return(true, nil)
 
 	h := &Handler{auth: mockAuth}
-	sess := &Session{Role: "user", UserID: "u-1"}
+	sess := &Session{UserID: "u-1"}
 	r := &config.PurchaseHistoryRecord{}
 	err := h.authorizeSessionRevoke(ctx, sess, r)
 	require.NoError(t, err)
@@ -396,7 +402,7 @@ func TestAuthorizeSessionRevoke_RevokeOwn_AccountAccessGranted(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "u-1").Return([]string{accountUUID}, nil)
 
 	h := &Handler{auth: mockAuth}
-	sess := &Session{Role: "user", UserID: "u-1"}
+	sess := &Session{UserID: "u-1"}
 	r := &config.PurchaseHistoryRecord{CloudAccountID: &accountUUID}
 	err := h.authorizeSessionRevoke(ctx, sess, r)
 	require.NoError(t, err)
@@ -415,7 +421,7 @@ func TestAuthorizeSessionRevoke_RevokeOwn_WrongAccount(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "u-1").Return([]string{otherUUID}, nil)
 
 	h := &Handler{auth: mockAuth}
-	sess := &Session{Role: "user", UserID: "u-1"}
+	sess := &Session{UserID: "u-1"}
 	r := &config.PurchaseHistoryRecord{CloudAccountID: &accountUUID}
 	err := h.authorizeSessionRevoke(ctx, sess, r)
 	require.Error(t, err)
@@ -434,7 +440,7 @@ func TestAuthorizeSessionRevoke_NoPermission(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-own", "purchases").Return(false, nil)
 
 	h := &Handler{auth: mockAuth}
-	sess := &Session{Role: "user", UserID: "u-1"}
+	sess := &Session{UserID: "u-1"}
 	r := &config.PurchaseHistoryRecord{}
 	err := h.authorizeSessionRevoke(ctx, sess, r)
 	require.Error(t, err)

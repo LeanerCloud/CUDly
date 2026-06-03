@@ -123,7 +123,11 @@ func (h *Handler) dispatchProviderRevoke(ctx context.Context, record *config.Pur
 // authorizeSessionRevoke enforces the revoke-any / revoke-own RBAC matrix.
 // Mirror of authorizeSessionCancel / authorizeSessionApprove patterns.
 func (h *Handler) authorizeSessionRevoke(ctx context.Context, session *Session, record *config.PurchaseHistoryRecord) error {
-	if session.Role == "admin" {
+	// The stateless admin API key has full access and no user row to resolve
+	// permissions from. Administrators-group users fall through and pass via
+	// the revoke-any HasPermissionAPI check below, since {admin, *} matches
+	// any requested permission.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 
