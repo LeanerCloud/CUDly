@@ -3447,6 +3447,84 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
     // Non-SP bucket title still uses the raw service slug.
     expect(sectionTitles.some((t) => t.includes('AWS / ec2'))).toBe(true);
   });
+
+  // Issue #249: mixed-SP bucket renders collapsible per-plan-type sub-rows
+  // inside the fan-out section so the operator can see how the bulk-buy is
+  // split across plan types before submitting.
+  test('mixed-SP fan-out section renders per-plan-type breakdown (closes #249)', async () => {
+    const recs = [
+      { id: 's1', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 2, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws', cloud_account_id: 'a1', service: 'savings-plans-sagemaker', resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      { id: 'e1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',                     resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings:  50, upfront_cost: 300 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // The SP bucket section must contain a <details> element with the
+    // plan-type breakdown (issue #249).
+    const spSection = Array.from(document.querySelectorAll('.fanout-bucket')).find(
+      (s) => s.querySelector('h4')?.textContent?.includes('Savings Plans'),
+    );
+    expect(spSection).toBeDefined();
+
+    // The collapsible group is present with "+2 plan types" summary.
+    const details = spSection!.querySelector('details.fanout-sp-plan-types');
+    expect(details).not.toBeNull();
+    const summaryText = details!.querySelector('summary')?.textContent ?? '';
+    expect(summaryText).toBe('+2 plan types');
+
+    // Each plan type gets its own row labelled with the short plan-type name.
+    const planRows = Array.from(details!.querySelectorAll('p.fanout-sp-plan-type-row'))
+      .map((el) => el.textContent ?? '');
+    expect(planRows).toHaveLength(2);
+    expect(planRows.some((t) => t.startsWith('Savings Plans (Compute)'))).toBe(true);
+    expect(planRows.some((t) => t.startsWith('Savings Plans (SageMaker)'))).toBe(true);
+
+    // EC2 (non-SP) bucket must NOT render the plan-type breakdown.
+    const ec2Section = Array.from(document.querySelectorAll('.fanout-bucket')).find(
+      (s) => s.querySelector('h4')?.textContent?.includes('ec2'),
+    );
+    expect(ec2Section).toBeDefined();
+    expect(ec2Section!.querySelector('details.fanout-sp-plan-types')).toBeNull();
+  });
+
+  // Issue #249 regression: umbrella slugs ("savings-plans", "savingsplans")
+  // must be excluded from byPlanType so they do not inflate the "+N plan
+  // types" count or render a spurious non-concrete plan-type row.
+  test('umbrella SP slugs excluded from plan-type fan-out count (issue #249)', async () => {
+    const recs = [
+      { id: 's1', provider: 'aws',   cloud_account_id: 'a1', service: 'savings-plans-compute',   resource_type: 'sp', region: 'us-east-1', count: 2, term: 1, savings: 100, upfront_cost: 500 },
+      { id: 's2', provider: 'aws',   cloud_account_id: 'a1', service: 'savings-plans',            resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 800 },
+      { id: 's3', provider: 'azure', cloud_account_id: 'a1', service: 'savingsplans',             resource_type: 'sp', region: 'us-east-1', count: 1, term: 1, savings:  50, upfront_cost: 300 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(recs.map((r) => r.id as string)));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    const spSections = Array.from(document.querySelectorAll('.fanout-bucket')).filter(
+      (s) => s.querySelector('h4')?.textContent?.includes('Savings Plans'),
+    );
+    expect(spSections.length).toBeGreaterThan(0);
+
+    // Only 1 concrete plan type (Compute) after filtering umbrella slugs;
+    // the collapsible block must NOT be rendered (size < 2) for any SP bucket.
+    for (const section of spSections) {
+      expect(section.querySelector('details.fanout-sp-plan-types')).toBeNull();
+    }
+  });
 });
 
 // Issue #658: Azure SP rows (service="savingsplans") must collapse into

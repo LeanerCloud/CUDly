@@ -14,6 +14,7 @@ import {
   paymentOptionsFor,
   SAVINGS_PLANS_BUCKET_KEY,
   savingsPlansBucketLabel,
+  UMBRELLA_SLUGS,
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
@@ -3936,6 +3937,55 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   totals.className = 'fanout-bucket-totals';
   totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
+
+  // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render
+  // a collapsible per-plan-type breakdown so operators can see how their
+  // bulk-buy is split across Compute / SageMaker / EC2 Instance / Database
+  // plan types before submitting. Collapsed by default to keep the modal
+  // compact; the chevron in the <summary> affords expand.
+  if (isSPBucket) {
+    // Group recs by their per-rec service slug, excluding umbrella slugs
+    // (e.g. "savings-plans", "savingsplans") that represent the SP family
+    // as a whole rather than a specific plan type. Including them would
+    // inflate the "+N plan types" count and render a spurious non-concrete
+    // plan-type row. Issue #249.
+    const byPlanType = new Map<string, LocalRecommendation[]>();
+    for (const r of b.recs) {
+      if (UMBRELLA_SLUGS.has(r.service)) continue;
+      const existing = byPlanType.get(r.service);
+      if (existing) {
+        existing.push(r);
+      } else {
+        byPlanType.set(r.service, [r]);
+      }
+    }
+    if (byPlanType.size >= 2) {
+      const details = document.createElement('details');
+      details.className = 'fanout-sp-plan-types';
+      const summaryEl = document.createElement('summary');
+      summaryEl.className = 'fanout-sp-plan-types-summary';
+      summaryEl.textContent = `+${byPlanType.size} plan types`;
+      details.appendChild(summaryEl);
+
+      for (const [slug, planRecs] of byPlanType) {
+        const planLabel = savingsPlansBucketLabel([slug]);
+        const planTotal = planRecs.reduce(
+          (acc, r) => ({
+            count: acc.count + r.count,
+            upfront: acc.upfront + r.upfront_cost,
+            savings: acc.savings + r.savings,
+          }),
+          { count: 0, upfront: 0, savings: 0 },
+        );
+        const row = document.createElement('p');
+        row.className = 'fanout-sp-plan-type-row';
+        row.textContent = `${planLabel}: ${planTotal.count} commitment${planTotal.count === 1 ? '' : 's'} · ${formatCurrency(planTotal.upfront)} upfront · ${formatCostForPeriod(planTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+        details.appendChild(row);
+      }
+
+      section.appendChild(details);
+    }
+  }
 
   return section;
 }
