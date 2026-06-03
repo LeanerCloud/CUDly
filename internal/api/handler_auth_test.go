@@ -947,6 +947,68 @@ func TestHandler_updateProfile_AcceptsValidEmail(t *testing.T) {
 	mockAuth.AssertCalled(t, "UpdateUserProfile", ctx, "12345678-1234-1234-1234-123456789abc", "new@example.com", "", "")
 }
 
+// TestHandler_updateProfile_WrongCurrentPassword verifies that a wrong current
+// password returned by the auth service is surfaced as 401, not a generic 500
+// (issue #929). The acting user is checking their own credential so a precise
+// message is safe and helpful.
+func TestHandler_updateProfile_WrongCurrentPassword(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.On("UpdateUserProfile", mock.MatchedBy(func(c context.Context) bool { return c != nil }), "12345678-1234-1234-1234-123456789abc", "", "wrongpass", "").
+		Return(auth.ErrCurrentPasswordIncorrect)
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("wrongpass"))
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+		Body:    `{"email": "", "current_password": "` + encoded + `"}`,
+	}
+
+	_, err := handler.updateProfile(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "wrong-password error must be a ClientError, not a 500")
+	assert.Equal(t, 401, ce.code)
+	assert.Equal(t, auth.ErrCurrentPasswordIncorrect.Error(), ce.message)
+}
+
+// TestHandler_updateProfile_DuplicateEmail verifies that a duplicate-email
+// conflict is surfaced as 409 with a privacy-preserving message that does NOT
+// confirm whether another account holds the address (issue #929).
+func TestHandler_updateProfile_DuplicateEmail(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.On("UpdateUserProfile", mock.MatchedBy(func(c context.Context) bool { return c != nil }), "12345678-1234-1234-1234-123456789abc", "taken@example.com", "mypass", "").
+		Return(auth.ErrEmailInUse)
+
+	handler := &Handler{auth: mockAuth}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("mypass"))
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+		Body:    `{"email": "taken@example.com", "current_password": "` + encoded + `"}`,
+	}
+
+	_, err := handler.updateProfile(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "duplicate-email error must be a ClientError, not a 500")
+	assert.Equal(t, 409, ce.code)
+	// Must NOT expose the raw ErrEmailInUse message which would confirm another
+	// account exists. The privacy-preserving message is "Unable to update email".
+	assert.Equal(t, "Unable to update email", ce.message)
+	assert.NotContains(t, ce.message, "already in use", "response must not confirm another account's existence")
+}
+
 // TestHandler_resetPassword_DecodesBase64 verifies issue #356: the
 // resetPassword handler must base64-decode new_password before forwarding to
 // the service, matching the pattern used by login / change-password /

@@ -394,10 +394,30 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 
 	// Update profile through auth service
 	if err := h.auth.UpdateUserProfile(ctx, session.UserID, profileReq.Email, currentPassword, newPassword); err != nil {
-		return nil, err
+		return nil, mapProfileUpdateError(err)
 	}
 
 	return map[string]string{"status": "profile updated"}, nil
+}
+
+// mapProfileUpdateError converts profile-update service errors to the correct
+// HTTP status code and a user-facing message.
+//
+//   - ErrCurrentPasswordIncorrect -> 401 with a precise message (the acting
+//     user is verifying their own credential, so specificity is safe).
+//   - ErrEmailInUse -> 409 with a neutral message that does NOT confirm whether
+//     another account holds the address; prevents account enumeration via the
+//     profile-update path (issue #929).
+//   - All other errors pass through unchanged for handleRequestError to render
+//     as 500.
+func mapProfileUpdateError(err error) error {
+	switch {
+	case errors.Is(err, auth.ErrCurrentPasswordIncorrect):
+		return NewClientError(401, err.Error())
+	case errors.Is(err, auth.ErrEmailInUse):
+		return NewClientError(409, "Unable to update email")
+	}
+	return err
 }
 
 // decodeProfilePasswords decodes the optional base64-encoded current and new
