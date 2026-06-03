@@ -103,6 +103,11 @@ export interface LocalRecommendation {
   suppressed_count?: number;
   suppression_expires_at?: string;
   primary_suppression_execution_id?: string;
+  // usage_history carries the last 7 daily RI-coverage percentages (0-100,
+  // oldest-to-newest) returned by the AWS CE GetReservationCoverage API.
+  // null or absent means the collector did not populate it (non-AWS providers
+  // or pre-#239 cached rows); the cell renders "—" in that case.
+  usage_history?: number[] | null;
 }
 
 export interface RecommendationsSummary {

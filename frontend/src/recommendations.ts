@@ -1440,7 +1440,7 @@ export function pickBestVariantPerCell(recs: readonly LocalRecommendation[]): Lo
 export interface ColumnDef {
   key: state.RecommendationsColumnId;
   label: string;
-  kind: 'numeric' | 'categorical';
+  kind: 'numeric' | 'categorical' | 'visual';
   // Issue #480: direction applied on the first click of a previously-
   // unsorted column. Text columns and most numerics get 'asc' (A→Z, low →
   // high) per platform convention. Two exceptions stay 'desc': `savings`
@@ -1449,6 +1449,10 @@ export interface ColumnDef {
   // clicks on the active column still toggle desc <-> asc regardless of
   // this default.
   defaultSortDirection?: 'asc' | 'desc';
+  // sortable defaults to true. Set to false for visual-only columns
+  // (e.g. the usage_history sparkline) that have no meaningful sort order.
+  // Visual columns also suppress the column-filter button.
+  sortable?: boolean;
 }
 
 export const COLUMN_DEFS: readonly ColumnDef[] = [
@@ -1465,6 +1469,9 @@ export const COLUMN_DEFS: readonly ColumnDef[] = [
   { key: 'monthly_cost',          label: 'Monthly Cost',      kind: 'numeric'     },
   { key: 'on_demand_monthly',     label: 'On-Demand Monthly', kind: 'numeric',     defaultSortDirection: 'desc' },
   { key: 'effective_savings_pct', label: 'Effective %',       kind: 'numeric'     },
+  // usage_history is a visual-only sparkline column (closes #239 Part 2).
+  // sortable:false suppresses the sort header and column-filter button.
+  { key: 'usage_history',         label: 'Coverage (7d)',     kind: 'visual', sortable: false },
 ];
 
 // Issue #480: per-column default sort direction. Defaults to 'asc' unless
@@ -1580,13 +1587,14 @@ function categoricalCellValue(r: LocalRecommendation, col: state.Recommendations
     case 'region':         return r.region ?? '';
     case 'term':           return r.term == null ? '' : String(r.term);
     case 'payment':        return r.payment ?? '';
-    // Numeric columns shouldn't reach this branch; return empty for type-safety.
+    // Numeric / visual columns shouldn't reach this branch; return empty for type-safety.
     case 'count':
     case 'savings':
     case 'upfront_cost':
     case 'monthly_cost':
     case 'on_demand_monthly':
-    case 'effective_savings_pct':   return '';
+    case 'effective_savings_pct':
+    case 'usage_history':           return '';
   }
 }
 
@@ -1609,7 +1617,7 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     // Return NaN for null effective_savings_pct so any numeric predicate
     // returns false rather than coincidentally matching 0.
     case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
-    // Categorical columns shouldn't reach this branch; return NaN so any
+    // Categorical / visual columns shouldn't reach this branch; return NaN so any
     // numeric predicate returns false rather than coincidentally matching 0.
     case 'provider':
     case 'account':
@@ -1617,7 +1625,8 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     case 'resource_type':
     case 'region':
     case 'term':
-    case 'payment':       return Number.NaN;
+    case 'payment':
+    case 'usage_history': return Number.NaN;
   }
 }
 
@@ -1650,7 +1659,7 @@ export function displayPrecision(col: state.RecommendationsColumnId, period: Cos
     case 'upfront_cost':
       // Always formatted via formatCurrency with default digits.
       return CURRENCY_DEFAULT_DIGITS;
-    // Categorical columns never reach the numeric filter path; default
+    // Categorical / visual columns never reach the numeric filter path; default
     // is irrelevant but match formatCurrency's default-digit count for safety.
     case 'provider':
     case 'account':
@@ -1659,6 +1668,7 @@ export function displayPrecision(col: state.RecommendationsColumnId, period: Cos
     case 'region':
     case 'term':
     case 'payment':
+    case 'usage_history':
       return CURRENCY_DEFAULT_DIGITS;
   }
 }
@@ -2612,6 +2622,44 @@ function formatPayment(payment: string | undefined): string {
   return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
 }
 
+// renderUsageSparkline returns an inline SVG polyline representing the
+// usage_history coverage percentages (0-100, oldest-to-newest). Returns
+// the em-dash character when pcts is null, undefined, or empty so the cell
+// degrades gracefully for non-AWS providers and pre-#239 cached rows.
+//
+// The SVG is 56x20px. The polyline plots each point at x = i/(n-1) * 56
+// and y = (1 - pct/100) * 18 + 1 so 0% maps to the bottom (y=19) and
+// 100% maps to the top (y=1). A single-point series renders as a filled
+// circle rather than a line so a "1 day" history doesn't look broken.
+//
+// No user content is interpolated into the SVG; all values are numbers
+// so XSS is structurally impossible here.
+export function renderUsageSparkline(pcts: number[] | null | undefined): string {
+  if (!pcts || pcts.length === 0) return '—';
+  const clamped = pcts.map((v) => {
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(100, v));
+  });
+  const w = 56;
+  const h = 20;
+  const pad = 1;
+  const innerH = h - 2 * pad;
+  const n = clamped.length;
+  const aria = `RI coverage last ${n} days: ${clamped.map((v) => `${v.toFixed(1)}%`).join(', ')}`;
+  if (n === 1) {
+    const cy = pad + innerH * (1 - clamped[0]! / 100);
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${aria}" class="usage-sparkline"><circle cx="${(w / 2).toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="currentColor"/></svg>`;
+  }
+  const points = clamped
+    .map((p, i) => {
+      const x = (i / (n - 1)) * w;
+      const y = pad + innerH * (1 - p / 100);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${aria}" class="usage-sparkline"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 // renderColumnCell renders a single <td> for the given column key.
 // All column cell rendering is centralised here so buildVariantRowMarkup
 // can iterate over COLUMN_DEFS (or a visibility-filtered subset in
@@ -2656,6 +2704,12 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
       return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
     case 'effective_savings_pct':
       return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
+    case 'usage_history':
+      // Render a 7-point inline SVG sparkline of daily RI-coverage pcts.
+      // renderUsageSparkline returns "—" for null/absent so the cell
+      // degrades cleanly for non-AWS providers and pre-#239 cached rows.
+      // No escaping needed: renderUsageSparkline only interpolates numbers.
+      return `<td class="usage-sparkline-cell" title="RI coverage last 7 days">${renderUsageSparkline(rec.usage_history)}</td>`;
   }
 }
 
@@ -2715,9 +2769,14 @@ function buildListMarkup(
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
     return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
   };
-  const sortHeader = (column: state.RecommendationsColumnId): string => {
-    const lbl = getColumnLabel(column, period);
-    return `<th class="sortable" data-sort="${column}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(column, sort.column, sort.direction)}${filterBtn(column)}</th>`;
+  const colHeader = (col: ColumnDef): string => {
+    const lbl = getColumnLabel(col.key, period);
+    // Visual-only columns (e.g. usage_history sparkline) are not sortable and
+    // have no column-filter button; render a plain non-interactive <th>.
+    if (col.sortable === false) {
+      return `<th>${lbl}</th>`;
+    }
+    return `<th class="sortable" data-sort="${col.key}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -2852,7 +2911,7 @@ function buildListMarkup(
       <thead>
         <tr>
           ${checkboxColHeader}
-          ${visibleCols.map((c) => sortHeader(c.key)).join('')}
+          ${visibleCols.map((c) => colHeader(c)).join('')}
         </tr>
       </thead>
       <tbody>

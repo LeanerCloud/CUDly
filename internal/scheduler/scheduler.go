@@ -1363,6 +1363,7 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			MonthlyCost:  rec.RecurringMonthlyCost, // nil when provider API didn't return a monthly breakdown
 			Savings:      rec.EstimatedSavings,
 			OnDemandCost: nonZeroPtr(rec.OnDemandCost), // nil when provider API didn't return a baseline; frontend falls back to reconstruction (#274)
+			UsageHistory: rec.UsageHistory,             // daily coverage pcts (nil when provider not yet wired; see #239)
 			Selected:     true,                         // Default to selected
 			Purchased:    false,
 		})

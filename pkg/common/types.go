@@ -208,6 +208,14 @@ type Recommendation struct {
 	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
 	// omitempty ensures nil is absent from JSON (not written as null).
 	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
+
+	// UsageHistory is an ordered slice of daily coverage/utilisation
+	// percentages (0-100) for the last N days of the lookback window
+	// (oldest-to-newest). Populated by cloud collectors that can source the
+	// signal from the provider API; nil when not yet wired or when the
+	// provider returned no data (frontend renders "—" in that case).
+	// Not written to CSV (no column heading — enrichment-only field).
+	UsageHistory []float64 `json:"usage_history,omitempty" csv:"-"`
 }
 
 // ServiceDetails is an interface for service-specific details
