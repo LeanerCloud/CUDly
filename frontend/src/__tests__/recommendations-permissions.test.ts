@@ -17,7 +17,7 @@
  *   Plan modal with the row's rec pre-seeded. The button follows the
  *   same create:plans permission gate.
  */
-import { loadRecommendations } from '../recommendations';
+import { loadRecommendations, resetExpandedCells } from '../recommendations';
 import * as api from '../api';
 
 jest.mock('../api', () => ({
@@ -385,5 +385,84 @@ describe('Per-row Plan button deep-link (issue #120)', () => {
     const calledWith = mockOpenCreatePlanModal.mock.calls[0]![0] as unknown[];
     expect(Array.isArray(calledWith)).toBe(true);
     expect((calledWith as { id: string }[])[0]!.id).toBe('rec-120');
+  });
+});
+
+// Issue #135 + #869: SP plan-type group child rows must honor showCheckboxes.
+// Two SP recs of different plan types in the same (provider, account, region)
+// scope group under one SP parent row. When expanded, each per-plan-type child
+// cell renders a variant row via buildVariantRowMarkup. Those nested calls must
+// forward showCheckboxes so readonly sessions get no checkbox cells, matching
+// the non-SP path and the column header (which omits the select-all checkbox).
+describe('Recommendations SP-group child-row checkbox gating (issue #135 + #869)', () => {
+  // Two AWS savings-plans recs with distinct plan-type slugs but the same
+  // scope -> two cell keys -> one SP group with 2 plan types.
+  const spRecCompute = {
+    ...sampleRec,
+    id: 'sp1',
+    service: 'savings-plans-compute',
+    resource_type: 'compute',
+    savings: 300,
+  };
+  const spRecEc2 = {
+    ...sampleRec,
+    id: 'sp2',
+    service: 'savings-plans-ec2instance',
+    resource_type: 'ec2instance',
+    savings: 250,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // expandedSpGroups is module-level state; reset so the SP group starts
+    // collapsed in every test and the chevron click reliably expands it.
+    resetExpandedCells();
+    setupDom();
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {},
+      recommendations: [spRecCompute, spRecEc2],
+      regions: [],
+    });
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([spRecCompute, spRecEc2]);
+  });
+
+  const expandSpGroup = (): HTMLTableElement => {
+    const list = document.getElementById('recommendations-list');
+    const table = list?.querySelector('table') as HTMLTableElement | null;
+    expect(table).not.toBeNull();
+    const chevron = table!.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
+    expect(chevron).not.toBeNull();
+    chevron!.click();
+    return list!.querySelector('table') as HTMLTableElement;
+  };
+
+  test('readonly role: expanded SP-group child variant rows have no checkbox-col', async () => {
+    mockUser('readonly');
+    await loadRecommendations();
+    const table = expandSpGroup();
+
+    // The SP group expanded into per-plan-type child variant rows.
+    const childRows = table.querySelectorAll('tr.rec-variant-row');
+    expect(childRows.length).toBeGreaterThan(0);
+
+    // The bug this guards: child rows must not render a checkbox cell for
+    // readonly sessions (showCheckboxes must be threaded into the nested call).
+    for (const row of Array.from(childRows)) {
+      expect(row.querySelectorAll('td.checkbox-col').length).toBe(0);
+      expect(row.querySelectorAll('input[data-rec-id]').length).toBe(0);
+    }
+  });
+
+  test('admin role: expanded SP-group child variant rows retain checkbox-col', async () => {
+    mockUser('admin');
+    await loadRecommendations();
+    const table = expandSpGroup();
+
+    const childRows = table.querySelectorAll('tr.rec-variant-row');
+    expect(childRows.length).toBeGreaterThan(0);
+
+    for (const row of Array.from(childRows)) {
+      expect(row.querySelectorAll('td.checkbox-col').length).toBe(1);
+    }
   });
 });
