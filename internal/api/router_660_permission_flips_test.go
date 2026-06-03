@@ -264,13 +264,15 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 // ---- RI Exchange ----------------------------------------------------------
 
 // TestExecuteExchange_PermissionGate covers POST /api/ri-exchange/execute.
-// The handler requires execute:purchases.
+// The handler requires execute:ri-exchange (not execute:purchases) because
+// RI exchanges are financially irreversible; the two permissions are
+// intentionally disjoint so granting one does not implicitly grant the other.
 func TestExecuteExchange_PermissionGate(t *testing.T) {
 	ctx := context.Background()
 	const userID = "55555555-5555-5555-5555-555555555555"
 
-	t.Run("user without execute:purchases is rejected with 403", func(t *testing.T) {
-		mockAuth := authForUserWith(ctx, t, userID, "execute", "purchases", false)
+	t.Run("user without execute:ri-exchange is rejected with 403", func(t *testing.T) {
+		mockAuth := authForUserWith(ctx, t, userID, "execute", "ri-exchange", false)
 		h := &Handler{auth: mockAuth}
 		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
 		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
@@ -281,13 +283,32 @@ func TestExecuteExchange_PermissionGate(t *testing.T) {
 	// the real AWS exchange client. We verify the permission gate passes by
 	// checking the error is NOT a 403 when the permission is granted; the
 	// AWS SDK call will fail with a non-403 (connection refused / 500).
-	t.Run("user with execute:purchases clears 403 gate", func(t *testing.T) {
-		mockAuth := authForUserWith(ctx, t, userID, "execute", "purchases", true)
+	t.Run("user with execute:ri-exchange clears 403 gate", func(t *testing.T) {
+		mockAuth := authForUserWith(ctx, t, userID, "execute", "ri-exchange", true)
 		h := &Handler{auth: mockAuth}
 		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
 		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
 		// The error will be from the AWS SDK (not a 403), proving the gate passed.
 		assertNotForbidden(t, err)
+	})
+
+	// Isolation test: execute:purchases does NOT grant access to RI exchange.
+	// This is the key invariant of the permission split: the two resources are
+	// disjoint; holding one does not imply the other.
+	t.Run("user with execute:purchases cannot execute RI exchange (403)", func(t *testing.T) {
+		// The mock grants execute:purchases (true) but the handler asks for
+		// execute:ri-exchange. HasPermissionAPI will be called with the
+		// ri-exchange resource and must return false.
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "user-token").Return(userSessionFixture(userID), nil)
+		// Handler asks for "execute":"ri-exchange"; this user does NOT have it.
+		mockAuth.On("HasPermissionAPI", ctx, userID, "execute", "ri-exchange").Return(false, nil)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+		h := &Handler{auth: mockAuth}
+		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
+		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
+		assert403(t, err)
 	})
 }
 

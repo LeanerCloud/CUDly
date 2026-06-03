@@ -616,6 +616,275 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ---- RI Exchange --------------------------------------------------------
+  /api/ri-exchange/instances:
+    get:
+      operationId: listConvertibleRIs
+      tags: [RIExchange]
+      summary: List convertible Reserved Instances eligible for exchange
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Convertible RI list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/azure-instances:
+    get:
+      operationId: listExchangeableAzureRIs
+      tags: [RIExchange]
+      summary: List Azure Reserved Instances eligible for exchange
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Azure exchangeable RI list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/target-offerings:
+    get:
+      operationId: listTargetOfferings
+      tags: [RIExchange]
+      summary: List available RI offerings to exchange into
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Target offering list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/utilization:
+    get:
+      operationId: getRIUtilization
+      tags: [RIExchange]
+      summary: Get utilization metrics for Reserved Instances
+      responses:
+        '200':
+          description: RI utilization data
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/reshape-recommendations:
+    get:
+      operationId: getReshapeRecommendations
+      tags: [RIExchange]
+      summary: Get reshape recommendations for convertible RIs
+      responses:
+        '200':
+          description: Reshape recommendation list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/quote:
+    post:
+      operationId: getExchangeQuote
+      tags: [RIExchange]
+      summary: Get a quote for an RI exchange before executing
+      description: >
+        Requires `view:purchases` permission. Returns the exchange valuation
+        without committing any financial transaction.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Exchange quote
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/execute:
+    post:
+      operationId: executeRIExchange
+      tags: [RIExchange]
+      summary: Execute an RI exchange (irreversible)
+      description: >
+        Requires `execute:ri-exchange` permission. This is intentionally a
+        separate, narrower permission from `execute:purchases` because RI
+        exchanges submitted to AWS cannot be rolled back. Non-admin users must
+        be explicitly granted `execute:ri-exchange` via a custom group; there
+        is no default user-role grant.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ri_ids, targets, max_payment_due_usd]
+              properties:
+                ri_ids:
+                  type: array
+                  items:
+                    type: string
+                targets:
+                  type: array
+                  items:
+                    type: object
+                max_payment_due_usd:
+                  type: string
+                  description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+      responses:
+        '200':
+          description: Exchange submitted
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/config:
+    get:
+      operationId: getRIExchangeConfig
+      tags: [RIExchange]
+      summary: Get RI exchange configuration
+      description: Requires `view:config` permission.
+      responses:
+        '200':
+          description: RI exchange configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: updateRIExchangeConfig
+      tags: [RIExchange]
+      summary: Update RI exchange configuration
+      description: Requires `update:config` permission.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/history:
+    get:
+      operationId: getRIExchangeHistory
+      tags: [RIExchange]
+      summary: Get RI exchange history
+      responses:
+        '200':
+          description: RI exchange history list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/approve/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: approveRIExchange
+      tags: [RIExchange]
+      summary: Approve a pending RI exchange (token-based, no session required)
+      security: []
+      responses:
+        '200':
+          description: Exchange approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/ri-exchange/reject/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: rejectRIExchange
+      tags: [RIExchange]
+      summary: Reject a pending RI exchange (token-based, no session required)
+      security: []
+      responses:
+        '200':
+          description: Exchange rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   # ---- History ------------------------------------------------------------
   /api/history:
     get:

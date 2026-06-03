@@ -132,6 +132,7 @@ describe('permissions', () => {
       expect(canAccess('view', 'users')).toBe(true);
       expect(canAccess('delete', 'plans')).toBe(true);
       expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('execute', 'ri-exchange')).toBe(true);
       expect(canAccess('view', 'accounts')).toBe(true);
     });
 
@@ -191,6 +192,31 @@ describe('permissions', () => {
       expect(canAccess('execute', 'purchases')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
       expect(canAccess('view', 'users')).toBe(false);
+    });
+
+    test('execute:purchases in effective set does NOT imply execute:ri-exchange (issue #660 isolation)', () => {
+      // RI exchanges are financially irreversible (no AWS rollback). The
+      // permission split intentionally makes execute:ri-exchange disjoint
+      // from execute:purchases so granting one does not transitively grant
+      // the other. This guards the frontend gating mirror of the backend
+      // gate exercised in router_660_permission_flips_test.go.
+      const perms: PermissionEntry[] = [
+        { action: 'execute', resource: 'purchases' },
+      ];
+      mockUserWithGroups([STD_GID], perms);
+      expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('execute', 'ri-exchange')).toBe(false);
+    });
+
+    test('execute:ri-exchange in effective set grants only ri-exchange, not purchases', () => {
+      // Inverse of the previous test: holding execute:ri-exchange does NOT
+      // imply execute:purchases either. The two permissions are disjoint.
+      const perms: PermissionEntry[] = [
+        { action: 'execute', resource: 'ri-exchange' },
+      ];
+      mockUserWithGroups([STD_GID], perms);
+      expect(canAccess('execute', 'ri-exchange')).toBe(true);
+      expect(canAccess('execute', 'purchases')).toBe(false);
     });
 
     test('admin wildcard in effectivePermissions grants everything', () => {

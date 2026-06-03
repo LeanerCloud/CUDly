@@ -380,7 +380,15 @@ const (
 	ResourceUsers           = "users"
 	ResourceGroups          = "groups"
 	ResourceAPIKeys         = "api-keys"
-	ResourceAll             = "*"
+	// ResourceRIExchange gates RI-exchange-specific operations. The execute
+	// verb on this resource is deliberately separate from execute:purchases
+	// because RI exchanges are financially irreversible (the AWS API does
+	// not have a rollback path once an exchange is submitted). Admins carry
+	// implicit access via {ActionAdmin, ResourceAll}. Non-admin roles must
+	// be explicitly granted execute:ri-exchange by a custom group; there is
+	// no default user-role grant.
+	ResourceRIExchange = "ri-exchange"
+	ResourceAll        = "*"
 )
 
 // DefaultAdminPermissions returns full admin permissions
