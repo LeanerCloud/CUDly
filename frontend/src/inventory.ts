@@ -110,7 +110,7 @@ export async function loadActiveCommitments(): Promise<void> {
   // account chip is single-select; forward only when exactly one is active.
   const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
 
-  // 5 rows × 10 cols matches the rendered table shape (see
+  // 5 rows × 11 cols matches the rendered table shape (see
   // renderActiveCommitmentsTable). The renderer wipes the container's
   // children for a clean handoff from the skeleton.
   showSkeletonRows(container, 5, ACTIVE_COMMITMENTS_COLS);
