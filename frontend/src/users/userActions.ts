@@ -4,6 +4,7 @@
 
 import * as api from '../api';
 import { getCurrentUser } from '../state';
+import { isAdmin, isPurchaser, PURCHASER_GROUP_ID } from '../permissions';
 import {
   allUsers,
   filteredUsers,
@@ -93,6 +94,31 @@ export async function loadUsers(): Promise<void> {
     const matrixContainer = document.getElementById('permission-matrix');
     if (matrixContainer) {
       renderPermissionMatrix(groups, matrixContainer);
+    }
+
+    // Issue #923: first-run prompt for admins not in the Purchaser group.
+    // Show once per browser (stored in localStorage). The Purchaser group
+    // must exist (migration 000058) before the prompt is relevant, so we
+    // check that availableGroups contains it before surfacing the dialog.
+    const PROMPT_KEY = 'cudly:purchaser-prompt-dismissed';
+    const purchaserGroupExists = groups.some(g => g.id === PURCHASER_GROUP_ID);
+    if (
+      purchaserGroupExists &&
+      isAdmin() &&
+      !isPurchaser() &&
+      !localStorage.getItem(PROMPT_KEY)
+    ) {
+      localStorage.setItem(PROMPT_KEY, '1');
+      // Use the existing confirmDialog as a non-destructive notification.
+      void confirmDialog({
+        title: 'Purchaser group: separation of duties',
+        body:
+          'Recommended: add yourself to the Purchaser group only if no separate ' +
+          'finance team will execute purchases. Otherwise leave it to dedicated ' +
+          'Purchaser user(s). You can manage membership in the Groups panel below.',
+        confirmLabel: 'Got it',
+        destructive: false,
+      });
     }
   } catch (error) {
     console.error('Failed to load users/groups:', error);

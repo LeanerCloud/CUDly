@@ -75,6 +75,27 @@ export type Resource =
 export const ADMINISTRATORS_GROUP_ID = '00000000-0000-5000-8000-000000000001';
 
 /**
+ * Well-known group UUID for the Purchaser group seeded by migration
+ * 000058 (issue #923). The three money-spending verbs
+ * (execute:purchases, approve-any:purchases, retry-any:purchases) are
+ * carved out of the admin:* wildcard and require explicit membership
+ * in this group (or a custom group that grants the same verbs).
+ */
+export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000005';
+
+/**
+ * The set of (action, resource) pairs carved out of the admin:*
+ * wildcard. Mirrors adminCarvedOuts in internal/auth/types.go.
+ * Admin-group members must also be in the Purchaser group to pass
+ * these checks.
+ */
+const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
+  'execute:purchases',
+  'approve-any:purchases',
+  'retry-any:purchases',
+]);
+
+/**
  * Return true when the current session user is a member of the
  * Administrators group. This replaces the former `user.role === "admin"`
  * check that PR #912 removed from both the backend and the API response.
@@ -88,37 +109,100 @@ export function isAdmin(): boolean {
 }
 
 /**
+ * Return true when the current session is authorised to execute the
+ * three carved-out money-spending verbs (execute:purchases,
+ * approve-any:purchases, retry-any:purchases). When the backend has
+ * delivered effectivePermissions (post-bootstrap) we drive off the
+ * permission set itself so a user who holds any of those verbs via a
+ * custom group (not just the seeded Purchaser group) also returns
+ * true. While effectivePermissions is still loading we fall back to
+ * seeded-group membership so the helper agrees with the canAccess()
+ * carve-out fallback in the same window.
+ *
+ * Callers that need a hard verb-specific gate should prefer
+ * canAccess('execute', 'purchases'). isPurchaser() is the
+ * verb-agnostic "can spend money at all" predicate (true if ANY of
+ * the three carved-out verbs is granted), which is what the
+ * no-Purchaser banners use.
+ */
+export function isPurchaser(): boolean {
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  if (user.effectivePermissions) {
+    // Match canAccess()'s semantics: a permission entry with
+    // resource '*' satisfies the carved-out verb on 'purchases' the
+    // same way the backend's HasPermission accepts ResourceAll. Walk
+    // each carved-out key and accept either an exact match or a
+    // wildcard-resource match on the same action.
+    for (const key of ADMIN_CARVED_OUTS) {
+      const colon = key.indexOf(':');
+      if (colon < 0) continue;
+      const action = key.slice(0, colon);
+      const resource = key.slice(colon + 1);
+      for (const p of user.effectivePermissions) {
+        if (p.action === action && (p.resource === resource || p.resource === '*')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  return Array.isArray(user.groups) && user.groups.includes(PURCHASER_GROUP_ID);
+}
+
+/**
  * Returns true when the current session's effective permissions grant
  * the specified action on the specified resource.
  *
  * When effectivePermissions is populated (fetched from
  * GET /api/auth/me/permissions on login/bootstrap) the set is
- * consulted directly: admin:* grants everything; otherwise an exact
- * action:resource match is required.
+ * consulted directly: admin:* grants everything EXCEPT the three
+ * money-spending verbs carved out of admin:* by the backend
+ * (issue #923) -- those require an explicit (action, resource) entry
+ * in effectivePermissions (which the backend only returns when the
+ * user is in the Purchaser group or a custom group that grants the
+ * verb directly). For non-admin entries an exact action:resource
+ * match (or matching action with resource '*') is required.
  *
  * While effectivePermissions is not yet loaded (e.g. during the first
  * render before the async fetch completes) the function falls back to
- * the group-membership admin check so Administrators-group members
- * aren't locked out during bootstrap. Non-admins see buttons hidden
- * briefly -- acceptable because the full set loads immediately after
- * login.
+ * group-membership checks: Administrators-group members pass every
+ * check EXCEPT the carved-out money-spending verbs, which require
+ * Purchaser-group membership. This mirrors the backend's
+ * HasPermission carve-out so UX and enforcement agree on the same
+ * verbs whether or not effectivePermissions has loaded yet.
  *
- * UX-only gate. The backend still enforces on every request.
+ * UX-only gate. The backend still enforces on every request; a
+ * wrong-positive surfaces as a 403 on click, a wrong-negative just
+ * hides a button.
  */
 export function canAccess(action: Action, resource: Resource): boolean {
   const user = state.getCurrentUser();
   if (!user) return false;
 
+  const key = `${action}:${resource}`;
+  const isCarvedOut = ADMIN_CARVED_OUTS.has(key);
+
   // Use the server-provided effective permission set when available.
   if (user.effectivePermissions) {
     for (const p of user.effectivePermissions) {
-      if (p.action === 'admin' && p.resource === '*') return true;
-      if (p.action === action && (p.resource === resource || p.resource === '*')) return true;
+      // admin:* covers everything EXCEPT the carved-out verbs.
+      if (p.action === 'admin' && p.resource === '*' && !isCarvedOut) {
+        return true;
+      }
+      if (p.action === action && (p.resource === resource || p.resource === '*')) {
+        return true;
+      }
     }
     return false;
   }
 
-  // Fallback while permissions are still loading: admins pass, others block.
+  // Fallback while permissions are still loading. Mirror the backend's
+  // carve-out: admin grants everything except the money-spending verbs,
+  // which require explicit Purchaser-group membership.
+  if (isCarvedOut) {
+    return isPurchaser();
+  }
   return isAdmin();
 }
 

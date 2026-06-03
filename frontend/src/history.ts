@@ -11,7 +11,7 @@ import { confirmDialog } from './confirmDialog';
 import { buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
-import { isAdmin, canAccess } from './permissions';
+import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { getAccountName } from './recommendations';
 
@@ -406,22 +406,26 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // false-positive here surfaces as a 403 toast on click rather than a
 // successful approve.
 //
-// Heuristic mirrors canCancelPendingRow:
+// Heuristic:
 //   * status must be "pending" or "notified";
-//   * admin → always yes;
-//   * non-admin matching the row's created_by_user_id → yes (approve-own);
-//   * legacy rows with NULL created_by_user_id → no (the email-token path
-//     remains the escape hatch).
-//
-// As with canCancelPendingRow, we don't surface the approve-any verb
-// because no default role grants it; if/when an operator role lands
-// with approve-any, broaden this check accordingly.
+//   * any session with approve-any:purchases (carved-out admin verb,
+//     seeded on Purchaser group; can also come from a custom group via
+//     effectivePermissions) → approve-any;
+//   * otherwise the row's created_by_user_id must match the current
+//     user (approve-own);
+//   * legacy rows with NULL created_by_user_id → no (the email-token
+//     path remains the escape hatch).
 function canApprovePendingRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'pending' && status !== 'notified') return false;
   const user = getCurrentUser();
   if (!user) return false;
-  if (isAdmin()) return true;
+  // approve-any:purchases is carved out of admin:* (issue #923) and is
+  // granted by the seeded Purchaser group OR any custom group that
+  // explicitly lists the verb in effectivePermissions. Gate on the
+  // verb directly so a non-seeded role with the same grant still
+  // approves rows the backend would also let through.
+  if (canAccess('approve-any', 'purchases')) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
@@ -431,15 +435,18 @@ function canApprovePendingRow(p: HistoryPurchase): boolean {
 // (issue #47). UX gate only — the backend authorizeSessionRetry in
 // internal/api/handler_purchases.go remains the security boundary.
 //
-// Heuristic mirrors canCancelPendingRow:
+// Heuristic:
 //   * status must be "failed";
 //   * row must NOT carry an ops_hint (persistent failure → no retry,
 //     show the hint instead);
 //   * row must NOT already have a retry_execution_id (we don't allow
 //     retrying the same failure twice — the user should retry the
 //     latest descendant in the chain);
-//   * admin → always yes;
-//   * non-admin matching the row's created_by_user_id → yes (retry-own).
+//   * any session with retry-any:purchases (carved-out admin verb,
+//     seeded on Purchaser group; can also come from a custom group via
+//     effectivePermissions) → retry-any;
+//   * otherwise the row's created_by_user_id must match the current
+//     user (retry-own).
 function canRetryFailedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'failed') return false;
@@ -447,7 +454,12 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
   if (p.retry_execution_id) return false; // already retried — user should act on the descendant
   const user = getCurrentUser();
   if (!user) return false;
-  if (isAdmin()) return true;
+  // retry-any:purchases is carved out of admin:* (issue #923) and is
+  // granted by the seeded Purchaser group OR any custom group that
+  // explicitly lists the verb in effectivePermissions. Gate on the
+  // verb directly so a non-seeded role with the same grant still
+  // retries rows the backend would also let through.
+  if (canAccess('retry-any', 'purchases')) return true;
   if (!p.created_by_user_id) return false;
   return p.created_by_user_id === user.id;
 }
@@ -578,6 +590,31 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   if (!container) return;
 
   lastPurchases = purchases;
+
+  // Issue #923: inject a read-only notice for sessions that lack the
+  // carved-out spending verbs the buttons in this table need. Approve /
+  // Retry are gated by canApprovePendingRow / canRetryFailedRow which
+  // call canAccess('approve-any','purchases') and
+  // canAccess('retry-any','purchases'); use the same predicate here so
+  // the banner stays in lockstep with the visible buttons (a user who
+  // holds either verb via a custom group sees no contradictory
+  // notice).
+  const canApproveAny = canAccess('approve-any', 'purchases');
+  const canRetryAny = canAccess('retry-any', 'purchases');
+  const hasAnyCarvedOut = canApproveAny || canRetryAny;
+  const existingBanner = document.getElementById('history-no-purchaser-banner');
+  if (!existingBanner && !hasAnyCarvedOut) {
+    const banner = document.createElement('div');
+    banner.id = 'history-no-purchaser-banner';
+    banner.className = 'info-banner';
+    banner.setAttribute('role', 'note');
+    banner.textContent =
+      'You can view but not execute purchases. ' +
+      'Ask an admin to add you to the Purchaser group, or add yourself in Settings → Users.';
+    container.parentElement?.insertBefore(banner, container);
+  } else if (existingBanner && hasAnyCarvedOut) {
+    existingBanner.remove();
+  }
 
   // Reset the filter when the dataset changes so the user isn't stuck on an
   // empty "Cancelled" slice after reloading with a fresh query.

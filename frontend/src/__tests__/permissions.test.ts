@@ -4,7 +4,9 @@
  * Issue #917: canAccess() now consults user.effectivePermissions when
  * populated (fetched from GET /api/auth/me/permissions on bootstrap).
  * When effectivePermissions is absent (loading race) it falls back to
- * the group-membership admin check: admin passes, others block.
+ * group-membership checks: admin passes everywhere EXCEPT the three
+ * money-spending verbs carved out by issue #923, which require
+ * explicit Purchaser-group membership.
  *
  * isAdmin() returns true when the current user is a member of the
  * Administrators group (UUID 00000000-0000-5000-8000-000000000001).
@@ -12,7 +14,7 @@
  * getRolePermissions() is kept for the effective-permissions display in
  * the admin Users page and still returns the same sets as before.
  */
-import { canAccess, getRolePermissions, isAdmin, ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { canAccess, getRolePermissions, isAdmin, isPurchaser, ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 import type { PermissionEntry } from '../api/types';
 
 jest.mock('../state', () => ({
@@ -22,7 +24,11 @@ jest.mock('../state', () => ({
 import * as state from '../state';
 
 const ADMIN_GID = ADMINISTRATORS_GROUP_ID;
-const STD_GID = '00000000-0000-5000-8000-000000000005';
+// Standard Users group seeded by migration 000057. Must NOT collide with
+// PURCHASER_GROUP_ID ('...005'); otherwise the fallback path (effectivePermissions
+// absent) would treat the standard-user fixture as a Purchaser and let the
+// carved-out money-spending verbs through (CR finding, PR #924).
+const STD_GID = '00000000-0000-5000-8000-000000000002';
 const RO_GID = '00000000-0000-5000-8000-000000000006';
 
 const mockUserWithGroups = (groups: string[], effectivePermissions?: PermissionEntry[]) => {
@@ -126,14 +132,43 @@ describe('permissions', () => {
   });
 
   describe('canAccess - fallback (effectivePermissions absent)', () => {
-    test('Administrators group member passes all checks via group-membership fallback', () => {
+    test('Administrators group member passes non-spending checks via group-membership fallback', () => {
       mockUserWithGroups([ADMIN_GID]);
       expect(canAccess('admin', '*')).toBe(true);
       expect(canAccess('view', 'users')).toBe(true);
       expect(canAccess('delete', 'plans')).toBe(true);
-      expect(canAccess('execute', 'purchases')).toBe(true);
-      expect(canAccess('execute', 'ri-exchange')).toBe(true);
       expect(canAccess('view', 'accounts')).toBe(true);
+      // execute:ri-exchange is NOT carved out of admin:* (issue #660 split it
+      // from execute:purchases), so an admin-only member still passes it.
+      expect(canAccess('execute', 'ri-exchange')).toBe(true);
+      // execute:purchases is carved out of admin:* and requires Purchaser membership.
+      expect(canAccess('execute', 'purchases')).toBe(false);
+      expect(canAccess('approve-any', 'purchases')).toBe(false);
+      expect(canAccess('retry-any', 'purchases')).toBe(false);
+    });
+
+    test('Administrators + Purchaser group member passes all checks including spending', () => {
+      mockUserWithGroups([ADMIN_GID, PURCHASER_GROUP_ID]);
+      expect(canAccess('admin', '*')).toBe(true);
+      expect(canAccess('view', 'users')).toBe(true);
+      expect(canAccess('delete', 'plans')).toBe(true);
+      expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('approve-any', 'purchases')).toBe(true);
+      expect(canAccess('retry-any', 'purchases')).toBe(true);
+      expect(canAccess('view', 'accounts')).toBe(true);
+    });
+
+    test('Purchaser-only (no admin) passes carved-out verbs but not other admin actions', () => {
+      mockUserWithGroups([PURCHASER_GROUP_ID]);
+      // Purchaser group grants the three carved-out verbs.
+      expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('approve-any', 'purchases')).toBe(true);
+      expect(canAccess('retry-any', 'purchases')).toBe(true);
+      // But Purchaser membership alone is not admin -- non-spending admin
+      // actions remain denied during the fallback path.
+      expect(canAccess('admin', '*')).toBe(false);
+      expect(canAccess('view', 'users')).toBe(false);
+      expect(canAccess('delete', 'plans')).toBe(false);
     });
 
     test('Standard Users group member blocked during loading (effectivePermissions undefined)', () => {
@@ -219,7 +254,11 @@ describe('permissions', () => {
       expect(canAccess('execute', 'purchases')).toBe(false);
     });
 
-    test('admin wildcard in effectivePermissions grants everything', () => {
+    test('admin wildcard in effectivePermissions grants everything except carved-out spending verbs', () => {
+      // Mirror the backend (issue #923): admin:* covers every check EXCEPT
+      // execute/approve-any/retry-any on purchases. Those require an
+      // explicit (action, resource) entry from a non-admin group such
+      // as Purchaser.
       const perms: PermissionEntry[] = [
         { action: 'admin', resource: '*' },
       ];
@@ -227,7 +266,57 @@ describe('permissions', () => {
       expect(canAccess('admin', '*')).toBe(true);
       expect(canAccess('delete', 'plans')).toBe(true);
       expect(canAccess('view', 'users')).toBe(true);
+      // Carved-out verbs deny even with admin:* in the effective set.
+      expect(canAccess('execute', 'purchases')).toBe(false);
+      expect(canAccess('approve-any', 'purchases')).toBe(false);
+      expect(canAccess('retry-any', 'purchases')).toBe(false);
+    });
+
+    test('admin wildcard plus explicit Purchaser grants in effectivePermissions cover everything', () => {
+      // What the backend returns for an Administrators + Purchaser user:
+      // admin:* (from Administrators) PLUS the three explicit verbs (from
+      // Purchaser). The explicit entries cover the carve-out.
+      const perms: PermissionEntry[] = [
+        { action: 'admin', resource: '*' },
+        { action: 'execute', resource: 'purchases' },
+        { action: 'approve-any', resource: 'purchases' },
+        { action: 'retry-any', resource: 'purchases' },
+      ];
+      mockUserWithGroups([ADMIN_GID, PURCHASER_GROUP_ID], perms);
+      expect(canAccess('admin', '*')).toBe(true);
+      expect(canAccess('delete', 'plans')).toBe(true);
+      expect(canAccess('view', 'users')).toBe(true);
       expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('approve-any', 'purchases')).toBe(true);
+      expect(canAccess('retry-any', 'purchases')).toBe(true);
+    });
+
+    test('Purchaser explicit grants in effectivePermissions allow spending without admin:*', () => {
+      // A Purchaser-only user (no admin) gets just the seven verbs in
+      // DefaultPurchaserPermissions. canAccess must allow the spending
+      // verbs and the four view verbs, and deny everything else.
+      const perms: PermissionEntry[] = [
+        { action: 'execute', resource: 'purchases' },
+        { action: 'approve-any', resource: 'purchases' },
+        { action: 'retry-any', resource: 'purchases' },
+        { action: 'view', resource: 'recommendations' },
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'purchases' },
+        { action: 'view', resource: 'history' },
+      ];
+      mockUserWithGroups([PURCHASER_GROUP_ID], perms);
+      expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('approve-any', 'purchases')).toBe(true);
+      expect(canAccess('retry-any', 'purchases')).toBe(true);
+      expect(canAccess('view', 'recommendations')).toBe(true);
+      expect(canAccess('view', 'plans')).toBe(true);
+      expect(canAccess('view', 'purchases')).toBe(true);
+      expect(canAccess('view', 'history')).toBe(true);
+      // Non-Purchaser admin actions remain denied.
+      expect(canAccess('admin', '*')).toBe(false);
+      expect(canAccess('delete', 'plans')).toBe(false);
+      expect(canAccess('view', 'users')).toBe(false);
+      expect(canAccess('cancel-any', 'purchases')).toBe(false);
     });
 
     test('empty effectivePermissions array denies everything', () => {
@@ -253,6 +342,118 @@ describe('permissions', () => {
       mockNoUser();
       expect(canAccess('view', 'recommendations')).toBe(false);
       expect(canAccess('admin', '*')).toBe(false);
+    });
+
+    test('custom (non-seeded) group with carved-out grants in effectivePermissions allows spending', () => {
+      // CR #924 F4 + F5 regression: a custom group that does not include
+      // PURCHASER_GROUP_ID but DOES carry execute/approve-any/retry-any
+      // on purchases must satisfy canAccess for those verbs. The seeded
+      // Purchaser group is not the only legitimate source of the
+      // carve-out; the backend already allows this shape via the
+      // group's effectivePermissions, so the frontend must agree.
+      const customGid = '00000000-0000-5000-8000-00000000abcd';
+      const perms: PermissionEntry[] = [
+        { action: 'execute', resource: 'purchases' },
+        { action: 'approve-any', resource: 'purchases' },
+        { action: 'retry-any', resource: 'purchases' },
+        { action: 'view', resource: 'recommendations' },
+        { action: 'view', resource: 'plans' },
+        { action: 'view', resource: 'purchases' },
+        { action: 'view', resource: 'history' },
+      ];
+      mockUserWithGroups([customGid], perms);
+      // The three carved-out spending verbs are granted by the explicit
+      // entries even without PURCHASER_GROUP_ID membership.
+      expect(canAccess('execute', 'purchases')).toBe(true);
+      expect(canAccess('approve-any', 'purchases')).toBe(true);
+      expect(canAccess('retry-any', 'purchases')).toBe(true);
+      expect(canAccess('view', 'recommendations')).toBe(true);
+      expect(canAccess('view', 'history')).toBe(true);
+      // Non-purchaser admin actions remain denied.
+      expect(canAccess('admin', '*')).toBe(false);
+      expect(canAccess('delete', 'plans')).toBe(false);
+      expect(canAccess('view', 'users')).toBe(false);
+      expect(canAccess('cancel-any', 'purchases')).toBe(false);
+    });
+  });
+
+  describe('isPurchaser', () => {
+    test('seeded Purchaser group member (no effectivePermissions yet) returns true via fallback', () => {
+      // Pre-bootstrap loading window: effectivePermissions not yet
+      // populated. The helper falls back to seeded group membership.
+      mockUserWithGroups([PURCHASER_GROUP_ID]);
+      expect(isPurchaser()).toBe(true);
+    });
+
+    test('user without Purchaser group and no effectivePermissions returns false', () => {
+      mockUserWithGroups([ADMIN_GID]); // admin only
+      expect(isPurchaser()).toBe(false);
+    });
+
+    test('explicit execute:purchases grant in effectivePermissions (custom group) returns true', () => {
+      // CR #924 F4: isPurchaser() must reflect effective permissions,
+      // not just seeded group ID. A user whose custom group grants
+      // execute:purchases is a spender even without PURCHASER_GROUP_ID.
+      const customGid = '00000000-0000-5000-8000-00000000beef';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: 'purchases' },
+        { action: 'view', resource: 'recommendations' },
+      ]);
+      expect(isPurchaser()).toBe(true);
+    });
+
+    test('explicit approve-any:purchases grant returns true', () => {
+      const customGid = '00000000-0000-5000-8000-00000000cafe';
+      mockUserWithGroups([customGid], [
+        { action: 'approve-any', resource: 'purchases' },
+      ]);
+      expect(isPurchaser()).toBe(true);
+    });
+
+    test('explicit retry-any:purchases grant returns true', () => {
+      const customGid = '00000000-0000-5000-8000-00000000face';
+      mockUserWithGroups([customGid], [
+        { action: 'retry-any', resource: 'purchases' },
+      ]);
+      expect(isPurchaser()).toBe(true);
+    });
+
+    test('wildcard resource on a carved-out action grants Purchaser (matches canAccess semantics)', () => {
+      // canAccess('execute', 'purchases') returns true for a
+      // {execute, *} entry. isPurchaser() must agree so the two helpers
+      // do not diverge when an unusual-but-legal permission shape
+      // arrives from the backend.
+      const customGid = '00000000-0000-5000-8000-00000000d00d';
+      mockUserWithGroups([customGid], [
+        { action: 'execute', resource: '*' },
+      ]);
+      expect(isPurchaser()).toBe(true);
+    });
+
+    test('admin:* in effectivePermissions WITHOUT explicit carved-out grants returns false', () => {
+      // The backend carves the three spending verbs OUT of admin:*.
+      // isPurchaser() must reflect that carve-out: a user whose
+      // effectivePermissions are admin:* only (no explicit carve-out
+      // entries from Purchaser membership) is NOT a spender. Note that
+      // {admin, *} does NOT match {execute, *} / {approve-any, *} /
+      // {retry-any, *} because the actions differ.
+      mockUserWithGroups([ADMIN_GID], [
+        { action: 'admin', resource: '*' },
+      ]);
+      expect(isPurchaser()).toBe(false);
+    });
+
+    test('empty effectivePermissions array returns false even with PURCHASER_GROUP_ID', () => {
+      // Loading is complete (effectivePermissions is defined and
+      // empty); group membership without backend confirmation is not
+      // enough.
+      mockUserWithGroups([PURCHASER_GROUP_ID], []);
+      expect(isPurchaser()).toBe(false);
+    });
+
+    test('null user (logged out) returns false', () => {
+      mockNoUser();
+      expect(isPurchaser()).toBe(false);
     });
   });
 });

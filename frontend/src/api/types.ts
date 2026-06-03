@@ -416,6 +416,9 @@ export interface APIGroup {
   description: string;
   permissions: Permission[];
   allowed_accounts?: string[];
+  // system_managed groups are seeded by migrations; they cannot be
+  // renamed or deleted via the UI (only membership can change).
+  system_managed?: boolean;
   created_at?: string;
   updated_at?: string;
 }

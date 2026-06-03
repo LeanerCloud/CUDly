@@ -3441,11 +3441,12 @@ function mountBottomActionBox(): HTMLElement | null {
   box.appendChild(capacityLabel);
 
   // Purchase one-off (preserved ID). Issue #365: hide for sessions
-  // that lack `execute:purchases` (admin only by default; user and
-  // readonly never see the button). The element stays in the DOM so
-  // the click handler stays wired and the existing `updateBottomAction
-  // Box` updates still flow through; `.hidden` toggles via the HTML
-  // hidden attribute which renders as `display: none`.
+  // that lack `execute:purchases`. After issue #923, execute:purchases
+  // requires Purchaser-group membership; Administrators-group alone is
+  // no longer sufficient. The element stays in the DOM so the click
+  // handler stays wired and the existing `updateBottomActionBox`
+  // updates still flow through; `.hidden` toggles via the HTML hidden
+  // attribute which renders as `display: none`.
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
@@ -3454,6 +3455,23 @@ function mountBottomActionBox(): HTMLElement | null {
   purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
   purchaseBtn.hidden = !canAccess('execute', 'purchases');
   box.appendChild(purchaseBtn);
+
+  // Issue #923: show an informational banner when the session can view
+  // recommendations but cannot execute purchases. The predicate MUST
+  // mirror the Purchase CTA's gate (canAccess('execute', 'purchases'))
+  // so a custom-role user who holds execute:purchases via a non-seeded
+  // group sees the live button without a contradictory "you can view
+  // but not execute" notice. Pure read-only users won't reach this
+  // page's action area anyway.
+  if (!canAccess('execute', 'purchases')) {
+    const noPurchaseBanner = document.createElement('div');
+    noPurchaseBanner.className = 'info-banner';
+    noPurchaseBanner.setAttribute('role', 'note');
+    noPurchaseBanner.textContent =
+      'You can view but not execute purchases. ' +
+      'Ask an admin to add you to the Purchaser group, or add yourself in Settings → Users.';
+    box.appendChild(noPurchaseBanner);
+  }
 
   // Create Purchase Plan (relocated from old top bar). Issue #365:
   // hide for sessions that lack `create:plans` (readonly loses it;

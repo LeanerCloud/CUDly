@@ -69,10 +69,18 @@ import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
-import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
+// Admin user includes Purchaser membership (mirrors the auto-migration for
+// existing admins on first deploy of issue #923). retry-any:purchases is
+// carved out of admin:* and requires Purchaser group membership.
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] };
 const REG_USER = { id: 'user-uuid', email: 'user@example.com', groups: [] };
+// Admin WITHOUT Purchaser membership. retry-any:purchases is carved
+// out of admin:* by issue #923, so this user MUST NOT see Retry on
+// rows they did not create. Regression guard for CR #924 F5 -- if a
+// future refactor reintroduces isAdmin() as the gate, this catches it.
+const ADMIN_NO_PURCH = { id: 'admin-no-purch-uuid', email: 'admin-no-purch@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
 const OTHER_UUID = 'other-uuid';
 
 function setupDOM(): void {
@@ -429,5 +437,32 @@ describe('History inline Retry button (issue #47)', () => {
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     expect(btn?.disabled).toBe(false);
+  });
+
+  test('admin WITHOUT Purchaser membership does not see Retry on rows they did not create (CR #924 F5)', async () => {
+    // Issue #923 + CR #924 F5: retry-any:purchases is carved out of
+    // admin:*. canRetryFailedRow must gate on
+    // canAccess('retry-any', 'purchases'), NOT on isAdmin() or
+    // isPurchaser() group membership alone. A bare admin (no Purchaser
+    // group, no effectivePermissions yet) is exactly the case where
+    // the carve-out matters: the legacy implementation would have
+    // shown Retry on every failed row.
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_NO_PURCH);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'fail-mine', created_by_user_id: ADMIN_NO_PURCH.id }),
+        makeRow({ purchase_id: 'fail-other', created_by_user_id: OTHER_UUID }),
+        makeRow({ purchase_id: 'fail-legacy', created_by_user_id: undefined }),
+      ],
+    });
+
+    await loadHistory();
+
+    const buttons = document.querySelectorAll<HTMLButtonElement>('.history-retry-btn');
+    const ids = Array.from(buttons).map((b) => b.dataset['retryId']);
+    // Retry renders only via the retry-own fallback (matching
+    // created_by_user_id), NOT retry-any.
+    expect(ids).toEqual(['fail-mine']);
   });
 });

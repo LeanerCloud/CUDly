@@ -695,20 +695,22 @@ func TestPostgresStore_CleanupExpiredSessions(t *testing.T) {
 func createMockRowWithGroup(group *Group) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
-			if len(dest) >= 8 {
+			if len(dest) >= 9 {
 				*dest[0].(*string) = group.ID
 				*dest[1].(*string) = group.Name
 				*dest[2].(*string) = group.Description
 				// dest[3] is permissions JSON
 				*dest[3].(*[]byte) = []byte(`[]`)
 				*dest[4].(*[]string) = group.AllowedAccounts
-				*dest[5].(*time.Time) = group.CreatedAt
-				*dest[6].(*time.Time) = group.UpdatedAt
-				// dest[7] is sql.NullString for CreatedBy
+				// dest[5] is system_managed (issue #923)
+				*dest[5].(*bool) = group.SystemManaged
+				*dest[6].(*time.Time) = group.CreatedAt
+				*dest[7].(*time.Time) = group.UpdatedAt
+				// dest[8] is sql.NullString for CreatedBy
 				if group.CreatedBy != "" {
-					*dest[7].(*sql.NullString) = sql.NullString{String: group.CreatedBy, Valid: true}
+					*dest[8].(*sql.NullString) = sql.NullString{String: group.CreatedBy, Valid: true}
 				} else {
-					*dest[7].(*sql.NullString) = sql.NullString{Valid: false}
+					*dest[8].(*sql.NullString) = sql.NullString{Valid: false}
 				}
 			}
 			return nil
