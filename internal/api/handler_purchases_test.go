@@ -3080,7 +3080,6 @@ func TestHandler_executePurchase_DirectExec_NoPermission(t *testing.T) {
 	userSession := &Session{
 		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 		Email:  "user@example.com",
-		Role:   "user",
 	}
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
 	// Base execute:purchases grant — passes the validateExecutePurchaseRequest
@@ -3120,11 +3119,17 @@ func TestHandler_executePurchase_DirectExec_ExecuteAny(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
-	// Admin role short-circuits the permission matrix (no HasPermissionAPI call
-	// expected) but we still need ApproveAndExecute on the purchase mock.
+	// execute-any grant covers admin users (Administrators-group {admin,*}
+	// wildcard matches ActionExecuteAny). The old session.Role shortcut was
+	// removed in issue #940 — HasPermissionAPI is now always consulted.
+	// First, the outer gate: requirePermission("execute","purchases").
+	mockAuth.On("HasPermissionAPI", ctx, adminSession.UserID, "execute", "purchases").Return(true, nil)
+	// Then the direct-execute gate: authorizeSessionExecuteDirect("execute-any").
+	mockAuth.On("HasPermissionAPI", ctx, adminSession.UserID, "execute-any", "purchases").Return(true, nil)
+	// Scope check: no allowed_accounts restriction for this test.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, adminSession.UserID).Return([]string{}, nil)
 	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), adminSession.Email).Return(nil)
 	setupDirectExecMocks(ctx, mockStore)
 
@@ -3157,7 +3162,6 @@ func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
 	ownerSession := &Session{
 		UserID: ownerID,
 		Email:  "owner@example.com",
-		Role:   "user",
 	}
 	mockAuth.On("ValidateSession", ctx, "owner-token").Return(ownerSession, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute", "purchases").Return(true, nil)
@@ -3198,7 +3202,7 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteOwn_NonOwner(t *testing.T)
 
 	sessionUserID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
 	differentCreatorID := "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-	session := &Session{UserID: sessionUserID, Role: "user"}
+	session := &Session{UserID: sessionUserID}
 
 	mockAuth.On("HasPermissionAPI", ctx, sessionUserID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, sessionUserID, "execute-own", "purchases").Return(true, nil)
@@ -3210,4 +3214,61 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteOwn_NonOwner(t *testing.T)
 	require.True(t, ok, "expected a clientError")
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "execute-own requires you to be the creator")
+}
+
+// TestHandler_authorizeSessionExecuteDirect_AdminGroupViaExecuteAny verifies
+// that an Administrators-group user whose {admin,*} wildcard resolves to
+// execute-any is PERMITTED by the HasPermissionAPI path (not a dead
+// session.Role shortcut that was removed in issue #940).
+func TestHandler_authorizeSessionExecuteDirect_AdminGroupViaExecuteAny(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	adminUserID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	creatorID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	session := &Session{UserID: adminUserID}
+
+	// Administrators-group wildcard {admin,*} covers execute-any.
+	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "execute-any", "purchases").Return(true, nil)
+
+	handler := &Handler{auth: mockAuth}
+	err := handler.authorizeSessionExecuteDirect(ctx, session, creatorID)
+	require.NoError(t, err)
+}
+
+// TestHandler_authorizeSessionExecuteDirect_NoGrant verifies that a session
+// without execute-any or execute-own on purchases is rejected with 403.
+func TestHandler_authorizeSessionExecuteDirect_NoGrant(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	userID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	creatorID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	session := &Session{UserID: userID}
+
+	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-own", "purchases").Return(false, nil)
+
+	handler := &Handler{auth: mockAuth}
+	err := handler.authorizeSessionExecuteDirect(ctx, session, creatorID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 403, ce.code)
+}
+
+// TestHandler_authorizeSessionExecuteDirect_NilAuth verifies that a nil auth
+// component returns 500 (fail-closed per feedback_fail_closed_middleware.md).
+func TestHandler_authorizeSessionExecuteDirect_NilAuth(t *testing.T) {
+	ctx := context.Background()
+	session := &Session{UserID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}
+
+	handler := &Handler{auth: nil}
+	err := handler.authorizeSessionExecuteDirect(ctx, session, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError")
+	assert.Equal(t, 500, ce.code)
 }

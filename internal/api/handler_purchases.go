@@ -510,14 +510,18 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 // resolveCreatorUserID before this call; "" on non-human or legacy rows).
 //
 // Gate logic (mirrors authorizeSessionApprove / authorizeSessionCancel):
-//   - admin role: always permitted.
-//   - execute-any: permitted regardless of creator.
+//   - stateless admin API key: always permitted (apiKeyAdminUserID sentinel).
+//   - execute-any: permitted regardless of creator. Administrators-group users
+//     pass here because {admin, *} matches ActionExecuteAny.
 //   - execute-own: permitted only when creatorID == session.UserID and both
 //     are non-empty (prevents an empty-string collision from granting access).
 //   - no matching grant: 403 fail-closed; nil auth component is a 500 as
 //     per feedback_fail_closed_middleware.md.
 func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Session, creatorID string) error {
-	if session.Role == "admin" {
+	// Stateless admin API key: full access, no user row. Administrators-group
+	// users pass via the execute-any HasPermissionAPI check below, since
+	// {admin, *} matches any requested permission.
+	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {
