@@ -731,9 +731,49 @@ func TestPostgresStoreDB_PurchaseHistory(t *testing.T) {
 				assert.Equal(t, "rds", h.Service)
 				assert.Equal(t, 3, h.Count)
 				assert.Equal(t, "Test Plan", h.PlanName)
+				require.NotNil(t, h.MonthlyCost, "expected non-nil MonthlyCost for explicit 0.0 row")
+				assert.Equal(t, 0.0, *h.MonthlyCost)
 			}
 		}
 		assert.True(t, found, "Expected purchase record not found")
+	})
+
+	t.Run("MonthlyCost nil round-trip", func(t *testing.T) {
+		// Regression guard for migration 000063: a row inserted with
+		// MonthlyCost: nil must round-trip back as nil (NULL -> nil), not 0.0.
+		// This is the contract the slice's main change established, and the
+		// frontend depends on it to render a dash instead of "$0.00" for Azure
+		// all-upfront commitments where no recurring charge exists.
+		record := &PurchaseHistoryRecord{
+			AccountID:        "123456789012",
+			PurchaseID:       "purchase-nil-cost",
+			Timestamp:        time.Now().Truncate(time.Microsecond),
+			Provider:         "azure",
+			Service:          "vm",
+			Region:           "eastus",
+			ResourceType:     "Standard_D4s_v3",
+			Count:            1,
+			Term:             1,
+			Payment:          "all-upfront",
+			UpfrontCost:      1200.00,
+			MonthlyCost:      nil,
+			EstimatedSavings: 240.00,
+		}
+
+		err := store.SavePurchaseHistory(ctx, record)
+		require.NoError(t, err)
+
+		history, err := store.GetPurchaseHistory(ctx, "123456789012", 10)
+		require.NoError(t, err)
+
+		found := false
+		for _, h := range history {
+			if h.PurchaseID == "purchase-nil-cost" {
+				found = true
+				assert.Nil(t, h.MonthlyCost, "expected nil MonthlyCost to round-trip as nil (NULL -> nil)")
+			}
+		}
+		assert.True(t, found, "Expected nil-MonthlyCost record not found")
 	})
 
 	t.Run("SavePurchaseHistory with empty optional fields", func(t *testing.T) {

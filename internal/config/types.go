@@ -463,13 +463,14 @@ type PurchaseHistoryRecord struct {
 	Payment      string    `json:"payment" dynamodbav:"payment"`
 	UpfrontCost  float64   `json:"upfront_cost" dynamodbav:"upfront_cost"`
 	// MonthlyCost is nil when the provider API did not return a monthly
-	// recurring breakdown for this commitment (e.g. Azure/GCP all-upfront
-	// where no recurring charge exists at the commitment layer). The frontend
-	// renders "—" for nil, "$X.XX" when populated. Aggregations must skip nil
-	// entries rather than treating them as $0 to avoid distorting totals.
-	// Migration 000063 dropped the NOT NULL constraint so new rows can carry
-	// NULL; existing rows with 0.0 are preserved as-is (those are real zeros
-	// from AWS all-upfront commitments).
+	// recurring breakdown for this commitment (e.g. Azure all-upfront where
+	// no recurring charge exists at the commitment layer). GCP commitments
+	// are monthly-billed in this repo, so they always populate MonthlyCost.
+	// The frontend renders "—" for nil, "$X.XX" when populated. Aggregations
+	// must skip nil entries rather than treating them as $0 to avoid
+	// distorting totals. Migration 000063 dropped the NOT NULL constraint so
+	// new rows can carry NULL; existing rows with 0.0 are preserved as-is
+	// (those are real zeros from AWS all-upfront commitments).
 	MonthlyCost      *float64 `json:"monthly_cost" dynamodbav:"monthly_cost"`
 	EstimatedSavings float64  `json:"estimated_savings" dynamodbav:"estimated_savings"`
 	PlanID           string   `json:"plan_id,omitempty" dynamodbav:"plan_id,omitempty"`
