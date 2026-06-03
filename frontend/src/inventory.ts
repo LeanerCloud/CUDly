@@ -179,6 +179,26 @@ function buildActiveCommitmentsEmptyMessage(provider?: string, accountID?: strin
 }
 
 /**
+ * Build a context-aware empty-state message for a per-provider Coverage card.
+ * When chip filters are active the message names the scope so the user knows
+ * the result is filtered rather than genuinely absent usage.
+ *
+ * @param providerLabel - Display name of the provider (e.g. "AWS").
+ * @param activeProvider - The provider chip value, if one is set.
+ * @param activeAccountID - The account chip value, if exactly one is selected.
+ */
+function buildCoverageEmptyMessage(
+  providerLabel: string,
+  activeProvider?: string,
+  activeAccountID?: string,
+): string {
+  if (activeProvider || activeAccountID) {
+    return `No ${providerLabel} usage for the selected account/filter.`;
+  }
+  return `No usage detected for ${providerLabel}.`;
+}
+
+/**
  * Render the per-commitment table into `container`. Empty list yields
  * an inline `.empty` paragraph instead of an empty table so the user
  * gets a real message ("no active commitments"), not a blank header.
@@ -302,7 +322,7 @@ export async function loadCoverageBreakdown(): Promise<void> {
 
   try {
     const data = await api.getCoverageBreakdown({ provider: provider || undefined, accountID });
-    renderCoverageBreakdown(container, data.providers);
+    renderCoverageBreakdown(container, data.providers, provider || undefined, accountID);
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
@@ -326,7 +346,12 @@ function wireCoverageRefreshButton(): void {
  * textContent -- no innerHTML -- so no escaping helper is needed (XSS posture
  * matches the active-commitments section per issue #340).
  */
-function renderCoverageBreakdown(container: HTMLElement, providers: ProviderCoverageSection[]): void {
+function renderCoverageBreakdown(
+  container: HTMLElement,
+  providers: ProviderCoverageSection[],
+  activeProvider?: string,
+  activeAccountID?: string,
+): void {
   clearChildren(container);
 
   if (!providers || providers.length === 0) {
@@ -335,11 +360,15 @@ function renderCoverageBreakdown(container: HTMLElement, providers: ProviderCove
   }
 
   for (const section of providers) {
-    container.appendChild(buildProviderSection(section));
+    container.appendChild(buildProviderSection(section, activeProvider, activeAccountID));
   }
 }
 
-function buildProviderSection(section: ProviderCoverageSection): HTMLElement {
+function buildProviderSection(
+  section: ProviderCoverageSection,
+  activeProvider?: string,
+  activeAccountID?: string,
+): HTMLElement {
   const card = document.createElement('section');
   card.className = 'card coverage-provider-card';
 
@@ -347,8 +376,10 @@ function buildProviderSection(section: ProviderCoverageSection): HTMLElement {
   const header = document.createElement('div');
   header.className = 'section-header';
 
+  const providerLabel = PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider.toUpperCase();
+
   const title = document.createElement('h3');
-  title.textContent = PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider.toUpperCase();
+  title.textContent = providerLabel;
   header.appendChild(title);
 
   if (section.overall_coverage_pct !== null && section.overall_coverage_pct !== undefined) {
@@ -363,7 +394,7 @@ function buildProviderSection(section: ProviderCoverageSection): HTMLElement {
   if (!section.services || section.services.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = `No usage detected for ${PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider}.`;
+    empty.textContent = buildCoverageEmptyMessage(providerLabel, activeProvider, activeAccountID);
     card.appendChild(empty);
     return card;
   }
