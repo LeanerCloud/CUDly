@@ -54,6 +54,12 @@ jest.mock('../state', () => ({
   // because permissions.ts has a top-level import of ./state which is the very
   // module being mocked (circular init). permissions.test.ts pins the value.
   getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
+  // Issue #166 follow-up: plans.ts now reads per-column filter state via
+  // these accessors. Default to "no filters" so legacy assertions keep
+  // passing; tests that exercise the popover override per-case.
+  getPlansColumnFilters: jest.fn().mockReturnValue({}),
+  setPlansColumnFilter: jest.fn(),
+  clearAllPlansColumnFilters: jest.fn(),
 }));
 
 // Mock history module

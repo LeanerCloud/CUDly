@@ -56,6 +56,9 @@ jest.mock('../state', () => ({
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
   getCurrentUser: jest.fn().mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] }),
+  getPlansColumnFilters: jest.fn().mockReturnValue({}),
+  setPlansColumnFilter: jest.fn(),
+  clearAllPlansColumnFilters: jest.fn(),
 }));
 
 jest.mock('../history', () => ({
