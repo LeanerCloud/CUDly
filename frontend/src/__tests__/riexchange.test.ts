@@ -46,6 +46,12 @@ jest.mock('../state', () => ({
   getCurrentProvider: jest.fn(() => 'aws'),
   getCurrentAccountIDs: jest.fn(() => []),
   getCurrentUser: jest.fn(() => ({ id: 'u', email: 'u@example.com', groups: ['00000000-0000-5000-8000-000000000001'] })),
+  // RI Exchange column-filter slice (issue #166 follow-up). Tests don't
+  // exercise the filter state directly; an empty record + no-op setters
+  // keep renderRecommendations on its happy path.
+  getRiExchangeColumnFilters: jest.fn(() => ({})),
+  setRiExchangeColumnFilter: jest.fn(),
+  clearAllRiExchangeColumnFilters: jest.fn(),
 }));
 
 import {
@@ -441,6 +447,13 @@ describe('reshape recommendations table', () => {
     tableContainer = document.createElement('div');
     tableContainer.id = 'ri-exchange-recommendations-list';
     document.body.appendChild(tableContainer);
+    // Re-apply the column-filter mock impl after a prior test's
+    // jest.resetAllMocks(); without this the renderer blows up on
+    // Object.entries(undefined) when reading filter state.
+    const stateMod = jest.requireMock('../state') as {
+      getRiExchangeColumnFilters: jest.Mock;
+    };
+    stateMod.getRiExchangeColumnFilters.mockReturnValue({});
   });
 
   afterEach(() => {

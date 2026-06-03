@@ -24,6 +24,12 @@ jest.mock('../state', () => ({
   // (issue #871); default to the AWS, all-accounts path used by these tests.
   getCurrentProvider: jest.fn(() => 'aws'),
   getCurrentAccountIDs: jest.fn(() => []),
+  // RI Exchange column-filter slice (issue #166 follow-up). Permission
+  // tests don't drive filter state; empty record keeps rendering on the
+  // happy path.
+  getRiExchangeColumnFilters: jest.fn(() => ({})),
+  setRiExchangeColumnFilter: jest.fn(),
+  clearAllRiExchangeColumnFilters: jest.fn(),
 }));
 
 import * as api from '../api';
