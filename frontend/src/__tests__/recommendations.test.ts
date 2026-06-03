@@ -3827,9 +3827,13 @@ describe('effectiveMonthlySavings', () => {
 });
 
 describe('effectiveSavingsPct', () => {
+  // mk() defaults to 'azure' for reconstruction-path tests. AWS rows require
+  // on_demand_cost to be set; without it effectiveSavingsPct returns null
+  // (#323). Azure reconstruction is still valid (Azure may omit on_demand_cost
+  // for older cached rows where the field was not yet populated).
   const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
     id: 'r',
-    provider: 'aws',
+    provider: 'azure',
     service: 'ec2',
     resource_type: 't3.medium',
     region: 'us-east-1',
@@ -3876,7 +3880,7 @@ describe('effectiveSavingsPct', () => {
     expect(pct!).toBeCloseTo(-17.65, 1);
   });
 
-  test('undefined/null monthly_cost returns null (data not provided — cannot compute effective %)', () => {
+  test('undefined/null monthly_cost returns null (data not provided)', () => {
     // monthly_cost null/undefined means the provider API did not return a monthly
     // recurring breakdown. Without it we cannot reconstruct on_demand_monthly,
     // so effectiveSavingsPct must return null rather than collapsing the
@@ -3893,6 +3897,35 @@ describe('effectiveSavingsPct', () => {
     // onDemand = 0 + 100 + 0 = 100; effective = 100/100 * 100 = 100%
     expect(pct).not.toBeNull();
     expect(pct!).toBeCloseTo(100, 1);
+  });
+
+  // #323: AWS rows require the provider-canonical on_demand_cost; without it
+  // the reconstruction formula (monthly_cost + savings + amortized) diverges
+  // from the true CE baseline and produces misleadingly high percentages.
+  describe('AWS reconstruction fallback returns null (#323)', () => {
+    const mkAws = (overrides: Partial<LocalRecommendation>): LocalRecommendation =>
+      mk({ provider: 'aws', ...overrides });
+
+    test('AWS row with no on_demand_cost returns null regardless of monthly_cost', () => {
+      // Repro: RI rec where EstimatedMonthlyOnDemandCost was absent from the
+      // CE response. Reconstruction gives a number but it diverges from the
+      // real denominator, so null is the correct sentinel.
+      expect(effectiveSavingsPct(mkAws({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 }))).toBeNull();
+    });
+
+    test('AWS row with on_demand_cost=0 (treated as not-populated) returns null', () => {
+      // Backend nonZeroPtr converts 0 -> nil, so 0 at the frontend means the
+      // field was absent. Same outcome as missing.
+      expect(effectiveSavingsPct(mkAws({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1, on_demand_cost: 0 }))).toBeNull();
+    });
+
+    test('AWS row with valid on_demand_cost computes normally', () => {
+      // When CE supplies the baseline, the formula is well-defined.
+      // effectiveSavings = 100 - 0 = 100; pct = 100 / 300 * 100 = 33.33%
+      const pct = effectiveSavingsPct(mkAws({ savings: 100, upfront_cost: 0, monthly_cost: 200, term: 1, on_demand_cost: 300 }));
+      expect(pct).not.toBeNull();
+      expect(pct!).toBeCloseTo(33.33, 1);
+    });
   });
 
   // #274: on_demand_cost (when populated by the provider) is used directly
@@ -4136,7 +4169,8 @@ describe('Monthly Cost + Effective % column rendering', () => {
   });
 
   test('no-upfront row: Monthly Cost shows rec.monthly_cost, Effective % is positive', async () => {
-    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1 });
+    // AWS row requires on_demand_cost (#323); add it so the pct column renders.
+    const rec = baseRec({ savings: 100, upfront_cost: 0, monthly_cost: 50, term: 1, on_demand_cost: 150 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
@@ -4151,7 +4185,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
   });
 
   test('all-upfront row: Monthly Cost shows $0, Effective % accounts for amortization', async () => {
-    const rec = baseRec({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 });
+    // AWS row requires on_demand_cost (#323). savings=50, upfront=600, term=1
+    // => amortized=50, effectiveSavings=0. on_demand_cost=100 => pct=0.0%.
+    const rec = baseRec({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1, on_demand_cost: 100 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
@@ -4180,7 +4216,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
   });
 
   test('negative-effective row: Effective % cell has effective-pct-negative class', async () => {
-    const rec = baseRec({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1 });
+    // AWS row requires on_demand_cost (#323). savings=10, upfront=1200, term=1
+    // => amortized=100, effectiveSavings=-90. on_demand_cost=510 => pct<0.
+    const rec = baseRec({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1, on_demand_cost: 510 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
