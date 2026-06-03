@@ -138,10 +138,10 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	// rather than the full contract term (which overprices older RIs).
 	remainingMonths := computeRemainingMonths(row.Timestamp, row.Term)
 
-	// Validate and normalise the price schedule. MonthlyCost is nullable
-	// (nil means the provider returned no recurring breakdown); treat absent
-	// as $0 recurring for the default price-schedule computation.
-	var monthlyCost float64
+	// Validate and normalise the price schedule. A nil MonthlyCost means the
+	// provider recorded no recurring breakdown (issue #258 made the field
+	// nullable); treat absent as zero recurring contribution to residual value.
+	monthlyCost := 0.0
 	if row.MonthlyCost != nil {
 		monthlyCost = *row.MonthlyCost
 	}
