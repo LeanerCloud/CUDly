@@ -1168,6 +1168,25 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 /* Info icon tooltip */
+/* Issue #909: Opportunities lookback selector toolbar. */
+.recommendations-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0.5rem 0;
+}
+
+.recommendations-toolbar:empty {
+    display: none;
+}
+
+.lookback-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+}
+
 .info-icon {
     display: inline-block;
     cursor: help;

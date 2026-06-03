@@ -107,6 +107,12 @@
             <!-- Opportunities Tab (renamed from Recommendations in #340) -->
             <div id="opportunities-tab" class="tab-content" role="tabpanel" aria-labelledby="opportunities-tab-btn">
                 <section id="recommendations-summary"></section>
+                <!-- Issue #909: AWS lookback selector + scope tooltip.
+                     Populated by recommendations.ts:renderLookbackToolbar on
+                     load (prefilled from /api/config; disabled for non-admin
+                     sessions). Changing it persists recommendations_lookback_days
+                     and triggers a recommendations re-collect for the new window. -->
+                <section id="recommendations-toolbar" class="recommendations-toolbar"></section>
                 <!-- Per-column header filters replace the old top filter bar.
                      The Clear-filters badge + aria-live count are injected
                      by recommendations.ts:renderFilterStatusBar above the
