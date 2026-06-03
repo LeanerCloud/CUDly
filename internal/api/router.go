@@ -203,6 +203,10 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/auth/login", Method: "POST", Handler: r.loginHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/logout", Method: "POST", Handler: r.logoutHandler, Auth: AuthUser},
 		{ExactPath: "/api/auth/me", Method: "GET", Handler: r.getCurrentUserHandler, Auth: AuthUser},
+		// Effective permission set for the authenticated user (issue #917).
+		// Must be listed before /api/auth/me so an exact-path match fires
+		// rather than a future prefix match. Auth level mirrors /api/auth/me.
+		{ExactPath: "/api/auth/me/permissions", Method: "GET", Handler: r.getCurrentUserPermissionsHandler, Auth: AuthUser},
 		{ExactPath: "/api/auth/check-admin", Method: "GET", Handler: r.checkAdminExistsHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/setup-admin", Method: "POST", Handler: r.setupAdminHandler, Auth: AuthPublic},
 		{ExactPath: "/api/auth/forgot-password", Method: "POST", Handler: r.forgotPasswordHandler, Auth: AuthPublic},
@@ -575,6 +579,10 @@ func (r *Router) logoutHandler(ctx context.Context, req *events.LambdaFunctionUR
 
 func (r *Router) getCurrentUserHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getCurrentUser(ctx, req)
+}
+
+func (r *Router) getCurrentUserPermissionsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getCurrentUserPermissions(ctx, req)
 }
 
 func (r *Router) checkAdminExistsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

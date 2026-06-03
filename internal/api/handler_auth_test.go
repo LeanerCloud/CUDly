@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1189,3 +1190,182 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 // returns the same value the real service would.
 func ErrMFARequired_test() error    { return mfaRequiredSentinel }
 func ErrInvalidMFACode_test() error { return mfaInvalidSentinel }
+
+// Tests for GET /api/auth/me/permissions (issue #917).
+
+func TestHandler_getCurrentUserPermissions_NoAuthService(t *testing.T) {
+	ctx := context.Background()
+	handler := &Handler{auth: nil}
+	req := &events.LambdaFunctionURLRequest{}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication service not configured")
+}
+
+func TestHandler_getCurrentUserPermissions_NoToken(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+func TestHandler_getCurrentUserPermissions_InvalidSession(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("ValidateSession", ctx, "bad-token").Return((*Session)(nil), errors.New("expired"))
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer bad-token"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+// TestHandler_getCurrentUserPermissions_RegularUser asserts that a non-admin user
+// with two groups gets the union of their groups' permissions and is_admin == false.
+func TestHandler_getCurrentUserPermissions_RegularUser(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "user-1"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+
+	// Two groups: one grants view:recommendations, the other view:plans.
+	perms := []auth.APIPermission{
+		{Action: "view", Resource: "recommendations"},
+		{Action: "view", Resource: "plans"},
+	}
+	mockAuth.On("GetUserPermissionsAPI", ctx, "user-1").Return(perms, nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	assert.False(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 2)
+	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
+	assert.Equal(t, PermissionEntry{Action: "view", Resource: "plans"}, result.Permissions[1])
+}
+
+// TestHandler_getCurrentUserPermissions_Admin asserts that an Administrators-group
+// member gets the {admin, *} wildcard and is_admin == true.
+func TestHandler_getCurrentUserPermissions_Admin(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "admin-1"}
+	mockAuth.On("ValidateSession", ctx, "admin-tok").Return(session, nil)
+
+	perms := []auth.APIPermission{
+		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
+	}
+	mockAuth.On("GetUserPermissionsAPI", ctx, "admin-1").Return(perms, nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-tok"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 1)
+	assert.Equal(t, PermissionEntry{Action: "admin", Resource: "*"}, result.Permissions[0])
+}
+
+// TestHandler_getCurrentUserPermissions_Unauth ensures unauthenticated requests get 401.
+func TestHandler_getCurrentUserPermissions_Unauth(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, mock.Anything).Return((*Session)(nil), errors.New("invalid"))
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer bogus"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+}
+
+// TestHandler_getCurrentUserPermissions_UnexpectedPayload guards CR #922 F1:
+// when GetUserPermissionsAPI returns an unexpected payload shape, the handler
+// must fail loudly (server error) rather than silently degrade to an empty
+// permission set (which would render as "user lost access" in the frontend).
+func TestHandler_getCurrentUserPermissions_UnexpectedPayload(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "user-1"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	// Adapter returns the wrong concrete type (e.g. a misconfigured
+	// implementation). The handler must surface this as a server error,
+	// not silently return an empty PermissionEntry slice.
+	mockAuth.On("GetUserPermissionsAPI", ctx, "user-1").Return("not-a-permissions-slice", nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	// Not a 4xx ClientError — it's a server bug, must surface as 500.
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "unexpected payload should NOT be a ClientError (would mask the server bug as a 4xx)")
+	assert.Contains(t, err.Error(), "GetUserPermissionsAPI returned unexpected payload type")
+}
+
+// TestHandler_getCurrentUserPermissions_AdminAPIKey guards CR #922 F2:
+// the AuthUser route admits the stateless admin API key as well as bearer
+// sessions, so the handler must honour an X-API-Key-authenticated request
+// instead of forcing a bearer session a second time and returning 401.
+func TestHandler_getCurrentUserPermissions_AdminAPIKey(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{auth: mockAuth, apiKey: "admin-secret"}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "admin-secret"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	// The stateless admin API key has no backing user row, so the handler
+	// short-circuits to {admin, *} + is_admin=true rather than calling
+	// GetUserPermissionsAPI (which would fail to find an admin-api-key row).
+	assert.True(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 1)
+	assert.Equal(t, PermissionEntry{Action: auth.ActionAdmin, Resource: auth.ResourceAll}, result.Permissions[0])
+}
+
+// TestHandler_getCurrentUserPermissions_UserAPIKey guards CR #922 F2:
+// a user API key resolves to the owning user, and the handler must look
+// up that user's effective permissions instead of returning 401 because
+// the request has no bearer token.
+func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	user := &auth.User{ID: "user-42"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return((any)(nil), any(user), nil)
+
+	perms := []auth.APIPermission{
+		{Action: "view", Resource: "recommendations"},
+	}
+	mockAuth.On("GetUserPermissionsAPI", ctx, "user-42").Return(perms, nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
+	result, err := handler.getCurrentUserPermissions(ctx, req)
+	require.NoError(t, err)
+	assert.False(t, result.IsAdmin)
+	require.Len(t, result.Permissions, 1)
+	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
+}

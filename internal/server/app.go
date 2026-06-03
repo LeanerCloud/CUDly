@@ -1013,6 +1013,10 @@ func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, actio
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
 
+func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
+	return a.service.GetUserPermissionsAPI(ctx, userID)
+}
+
 // Account access
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := a.service.BuildAuthContext(ctx, userID)

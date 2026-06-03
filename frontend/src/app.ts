@@ -59,6 +59,21 @@ export async function init(): Promise<void> {
   try {
     const user = await api.getCurrentUser();
     state.setCurrentUser(user);
+
+    // Fetch the effective permission set from /api/auth/me/permissions
+    // (issue #917) and merge it onto the user state so canAccess() can
+    // consult the real group-derived set instead of blocking non-admins.
+    // Best-effort: a failure here must not prevent the app from loading.
+    try {
+      const permsResp = await api.getUserPermissions();
+      const updatedUser = state.getCurrentUser();
+      if (updatedUser) {
+        state.setCurrentUser({ ...updatedUser, effectivePermissions: permsResp.permissions });
+      }
+    } catch (permErr) {
+      console.warn('Failed to fetch effective permissions, using fallback gating:', permErr);
+    }
+
     initRouter();
     // Deep-link check BEFORE tab routing: the path /purchases/{approve,
     // cancel}/:id?token=… isn't a tab — it's a one-shot action landing

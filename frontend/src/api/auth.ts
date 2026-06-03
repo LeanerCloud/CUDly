@@ -6,6 +6,8 @@ import { apiRequest, getAuthHeaders, setAuthToken, setCsrfToken, clearAuth, addC
 import type {
   LoginResponse,
   User,
+  PermissionEntry,
+  UserPermissionsResponse,
   PublicInfo,
   MFASetupResponse,
   MFARecoveryCodesResponse,
@@ -108,6 +110,50 @@ export async function logout(): Promise<void> {
  */
 export async function getCurrentUser(): Promise<User> {
   return apiRequest<User>('/auth/me');
+}
+
+/**
+ * Fetch the effective permission set for the current user from
+ * GET /api/auth/me/permissions (issue #917). Returns the full
+ * UserPermissionsResponse including is_admin.
+ *
+ * Called on login/bootstrap and the result is merged onto the
+ * current-user state so canAccess() can consult it.
+ *
+ * Runtime-validates the response shape (same pattern as setupMFA /
+ * getResetTokenStatus) so a malicious or misconfigured server can't
+ * inject a non-array `permissions` value that would later crash
+ * canAccess()'s `for (const p of user.effectivePermissions)` loop. On
+ * any shape mismatch this throws so the caller (app.ts) falls back to
+ * the safe group-membership gating instead of rendering with broken
+ * permission state.
+ */
+export async function getUserPermissions(): Promise<UserPermissionsResponse> {
+  const data = await apiRequest<unknown>('/auth/me/permissions');
+  if (data === null || typeof data !== 'object') {
+    throw new Error(`getUserPermissions response was not an object: ${JSON.stringify(data)}`);
+  }
+  const { permissions, is_admin } = data as { permissions?: unknown; is_admin?: unknown };
+  if (!Array.isArray(permissions)) {
+    throw new Error(`getUserPermissions response.permissions is not an array: ${JSON.stringify(permissions)}`);
+  }
+  const validated: PermissionEntry[] = permissions.map((entry, i) => {
+    if (entry === null || typeof entry !== 'object') {
+      throw new Error(`getUserPermissions response.permissions[${i}] is not an object: ${JSON.stringify(entry)}`);
+    }
+    const { action, resource } = entry as { action?: unknown; resource?: unknown };
+    if (typeof action !== 'string') {
+      throw new Error(`getUserPermissions response.permissions[${i}].action is not a string: ${JSON.stringify(action)}`);
+    }
+    if (typeof resource !== 'string') {
+      throw new Error(`getUserPermissions response.permissions[${i}].resource is not a string: ${JSON.stringify(resource)}`);
+    }
+    return { action, resource };
+  });
+  if (typeof is_admin !== 'boolean') {
+    throw new Error(`getUserPermissions response.is_admin is not a boolean: ${JSON.stringify(is_admin)}`);
+  }
+  return { permissions: validated, is_admin };
 }
 
 /**

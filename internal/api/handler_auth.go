@@ -103,6 +103,105 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 	}, nil
 }
 
+// getCurrentUserPermissions handles GET /api/auth/me/permissions.
+// It returns the effective permission set for the authenticated user,
+// derived from the union of all their group permissions. The same path
+// the backend uses for enforcement (GetUserPermissionsAPI -> GetUserPermissions).
+//
+// Auth: the route is AuthUser, which admits admin API key, user API
+// key, OR a bearer-token session (see router.go AuthLevel doc). The
+// handler resolves the authenticated user from any of those three
+// credentials rather than re-requiring a bearer session — otherwise a
+// caller that authenticated upstream with an API key would still get a
+// 401 here.
+func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UserPermissionsResponse, error) {
+	if h.auth == nil {
+		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	userID, err := h.resolveAuthenticatedUserID(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// The stateless admin API key has no backing user row, so the
+	// per-user permission lookup would fail. It is a full-access
+	// infrastructure credential — surface it as {admin, *} + is_admin
+	// (matches the requireAdmin / requirePermission short-circuit).
+	if userID == apiKeyAdminUserID {
+		return &UserPermissionsResponse{
+			Permissions: []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
+			IsAdmin:     true,
+		}, nil
+	}
+
+	raw, err := h.auth.GetUserPermissionsAPI(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// GetUserPermissionsAPI returns []auth.APIPermission via any to avoid
+	// an import cycle between the api and auth packages. Fail loudly on
+	// an unexpected payload shape: a silent fall-through to an empty
+	// slice would render as "user lost all access" in the frontend and
+	// mask the real server bug.
+	apiPerms, ok := raw.([]auth.APIPermission)
+	if !ok {
+		logging.Errorf("getCurrentUserPermissions: GetUserPermissionsAPI returned %T, want []auth.APIPermission", raw)
+		return nil, fmt.Errorf("GetUserPermissionsAPI returned unexpected payload type %T", raw)
+	}
+	entries := make([]PermissionEntry, len(apiPerms))
+	isAdmin := false
+	for i, p := range apiPerms {
+		entries[i] = PermissionEntry{Action: p.Action, Resource: p.Resource}
+		if p.Action == auth.ActionAdmin && p.Resource == auth.ResourceAll {
+			isAdmin = true
+		}
+	}
+
+	return &UserPermissionsResponse{
+		Permissions: entries,
+		IsAdmin:     isAdmin,
+	}, nil
+}
+
+// resolveAuthenticatedUserID resolves the calling user's ID from any of
+// the three auth modes admitted by AuthUser routes (admin API key, user
+// API key, bearer-token session). Returns a 401 ClientError if no valid
+// credential is present. The stateless admin API key returns the
+// apiKeyAdminUserID sentinel — callers that need a real user row must
+// special-case it (see getCurrentUserPermissions for the {admin, *}
+// short-circuit).
+func (h *Handler) resolveAuthenticatedUserID(ctx context.Context, req *events.LambdaFunctionURLRequest) (string, error) {
+	// Admin API key first (stateless, no per-user lookup).
+	apiKey := extractAPIKey(req)
+	if h.checkAdminAPIKey(apiKey) {
+		return apiKeyAdminUserID, nil
+	}
+
+	// User API key: resolves to the owning user row.
+	if apiKey != "" {
+		_, user, err := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
+		if err == nil {
+			if u, ok := user.(*auth.User); ok && u != nil {
+				return u.ID, nil
+			}
+		}
+		// fall through to bearer-session if the API key didn't validate.
+	}
+
+	// Bearer-token session.
+	token := h.extractBearerToken(req)
+	if token == "" {
+		return "", NewClientError(401, "no authorization token provided")
+	}
+	session, err := h.auth.ValidateSession(ctx, token)
+	if err != nil || session == nil {
+		return "", NewClientError(401, "invalid session")
+	}
+	return session.UserID, nil
+}
+
 func (h *Handler) checkAdminExists(ctx context.Context, req *events.LambdaFunctionURLRequest) (*AdminExistsResponse, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")

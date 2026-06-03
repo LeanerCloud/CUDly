@@ -185,6 +185,10 @@ type AuthServiceInterface interface {
 	ListGroupsAPI(ctx context.Context) (any, error)
 	// Permission checking
 	HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error)
+	// GetUserPermissionsAPI returns the effective permission set for a user
+	// (union of all group permissions). Used by GET /api/auth/me/permissions.
+	// Returns []auth.APIPermission converted to []PermissionEntry by the handler.
+	GetUserPermissionsAPI(ctx context.Context, userID string) (any, error)
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
@@ -393,6 +397,22 @@ type CurrentUserResponse struct {
 // AdminExistsResponse holds the admin exists check response
 type AdminExistsResponse struct {
 	AdminExists bool `json:"admin_exists"`
+}
+
+// PermissionEntry is a single {action, resource} pair in the permissions
+// response. Constraints are omitted from the wire shape for now; the
+// frontend uses the pair for UX gating only.
+type PermissionEntry struct {
+	Action   string `json:"action"`
+	Resource string `json:"resource"`
+}
+
+// UserPermissionsResponse is the response shape for GET /api/auth/me/permissions.
+// Permissions is the effective set derived from the union of the user's groups.
+// IsAdmin mirrors whether the effective set contains the {admin, *} wildcard.
+type UserPermissionsResponse struct {
+	Permissions []PermissionEntry `json:"permissions"`
+	IsAdmin     bool              `json:"is_admin"`
 }
 
 // MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
