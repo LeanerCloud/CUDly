@@ -1842,6 +1842,7 @@ function buildPopoverContent(
       const expr = input!.value.trim();
       if (expr === '') {
         state.setRecommendationsColumnFilter(column, null);
+        saveColumnFilters(state.getRecommendationsColumnFilters());
         errorEl!.textContent = '';
         rerenderRecommendations();
         return;
@@ -1853,6 +1854,7 @@ function buildPopoverContent(
       }
       errorEl!.textContent = '';
       state.setRecommendationsColumnFilter(column, { kind: 'expr', expr });
+      saveColumnFilters(state.getRecommendationsColumnFilters());
       rerenderRecommendations();
     };
     input.addEventListener('blur', commit);
@@ -1955,6 +1957,7 @@ function buildPopoverContent(
       } else {
         state.setRecommendationsColumnFilter(column, { kind: 'set', values: selected });
       }
+      saveColumnFilters(state.getRecommendationsColumnFilters());
       updateAllTriState();
       updateSPTriState();
       rerenderRecommendations();
@@ -1973,6 +1976,7 @@ function buildPopoverContent(
       } else {
         state.setRecommendationsColumnFilter(column, { kind: 'set', values: [] });
       }
+      saveColumnFilters(state.getRecommendationsColumnFilters());
       updateAllTriState();
       updateSPTriState();
       rerenderRecommendations();
@@ -2016,6 +2020,7 @@ function buildPopoverContent(
     if (input) {
       // Numeric column: Clear drops the expression entirely (no filter).
       state.setRecommendationsColumnFilter(column, null);
+      saveColumnFilters(state.getRecommendationsColumnFilters());
       input.value = '';
       if (errorEl) errorEl.textContent = '';
       rerenderRecommendations();
@@ -2454,6 +2459,7 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
       badge.className = 'clear-filters';
       badge.addEventListener('click', () => {
         state.clearAllRecommendationsColumnFilters();
+        saveColumnFilters(state.getRecommendationsColumnFilters());
         rerenderRecommendations();
       });
       bar.insertBefore(badge, live);
@@ -3098,6 +3104,79 @@ export function saveColumnVisibility(hidden: ReadonlySet<state.RecommendationsCo
   } catch {
     // Private-browsing / quota-exceeded — non-fatal.
   }
+}
+
+// ---------------------------------------------------------------------------
+// Column filters — localStorage persistence (issue #163)
+// ---------------------------------------------------------------------------
+
+const COLUMN_FILTERS_LS_KEY = 'cudly.recs.columnFilters.v1';
+const COLUMN_FILTERS_SCHEMA_VERSION = 1;
+
+// Full set of valid column ids, used as an allowlist when loading from
+// localStorage so stale or hand-edited keys are silently dropped.
+const VALID_COLUMN_IDS = new Set<state.RecommendationsColumnId>([
+  'provider', 'account', 'service', 'resource_type', 'region',
+  'count', 'term', 'payment', 'savings', 'upfront_cost',
+  'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
+]);
+
+interface ColumnFiltersSchema {
+  schemaVersion: number;
+  filters: Record<string, state.RecommendationsColumnFilter>;
+}
+
+/** Load column filter state from localStorage. Returns empty object on any error. Exported for tests. */
+export function loadColumnFilters(): state.RecommendationsColumnFilters {
+  try {
+    const raw = localStorage.getItem(COLUMN_FILTERS_LS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<ColumnFiltersSchema>;
+    if (parsed.schemaVersion !== COLUMN_FILTERS_SCHEMA_VERSION) return {};
+    if (!parsed.filters || typeof parsed.filters !== 'object' || Array.isArray(parsed.filters)) return {};
+    const result: state.RecommendationsColumnFilters = {};
+    for (const [key, value] of Object.entries(parsed.filters)) {
+      // Drop unknown column ids (stale after a column rename or deletion).
+      if (!VALID_COLUMN_IDS.has(key as state.RecommendationsColumnId)) continue;
+      // Validate filter shape: must be kind:'set' with string[] or kind:'expr' with string.
+      if (value && value.kind === 'set' && Array.isArray(value.values)
+          && value.values.every((v) => typeof v === 'string')) {
+        result[key as state.RecommendationsColumnId] = { kind: 'set', values: value.values };
+      } else if (value && value.kind === 'expr' && typeof value.expr === 'string' && value.expr !== '') {
+        result[key as state.RecommendationsColumnId] = { kind: 'expr', expr: value.expr };
+      }
+      // Anything else (malformed, hand-edited) is silently dropped.
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/** Persist column filter state to localStorage. Exported for tests. */
+export function saveColumnFilters(filters: state.RecommendationsColumnFilters): void {
+  try {
+    const payload: ColumnFiltersSchema = {
+      schemaVersion: COLUMN_FILTERS_SCHEMA_VERSION,
+      filters: filters as Record<string, state.RecommendationsColumnFilter>,
+    };
+    localStorage.setItem(COLUMN_FILTERS_LS_KEY, JSON.stringify(payload));
+  } catch {
+    // Private-browsing / quota-exceeded — non-fatal.
+  }
+}
+
+// Seed flag: set to true once column filters are loaded from localStorage
+// on first render so subsequent renders don't overwrite in-session changes.
+let columnFiltersSeeded = false;
+
+/**
+ * Reset column-filter seeded state. Exported for tests only — not part of
+ * the public API. Call in beforeEach to ensure tests don't share seeding state.
+ */
+export function resetColumnFiltersState(): void {
+  columnFiltersSeeded = false;
+  state.clearAllRecommendationsColumnFilters();
 }
 
 // Seed flag: set to true once column visibility is loaded from localStorage
@@ -3858,6 +3937,20 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
 function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   const container = document.getElementById('recommendations-list');
   if (!container) return;
+
+  // Seed column filters from localStorage on the first render (issue #163).
+  // columnFiltersSeeded stays true for the rest of the session so in-session
+  // changes are not overwritten on subsequent rerenders.
+  if (!columnFiltersSeeded) {
+    const persisted = loadColumnFilters();
+    for (const [col, filter] of Object.entries(persisted)) {
+      state.setRecommendationsColumnFilter(
+        col as state.RecommendationsColumnId,
+        filter,
+      );
+    }
+    columnFiltersSeeded = true;
+  }
 
   // Seed column visibility from localStorage on the first render.
   // columnVisibilitySeeded stays true for the rest of the session so
