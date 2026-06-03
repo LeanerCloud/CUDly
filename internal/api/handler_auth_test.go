@@ -101,6 +101,43 @@ func TestHandler_login_AuthError(t *testing.T) {
 	assert.Equal(t, 401, ce.code)
 }
 
+// TestHandler_login_OpaqueError_HidesInternalMessage is a regression test for
+// issue #937: the login catch-all 401 must return the opaque "invalid
+// credentials" string regardless of what the auth service returns. Internal
+// error messages (e.g. "internal: user 42 locked since 2025-01-01") must never
+// be forwarded to the client because they reveal account state.
+func TestHandler_login_OpaqueError_HidesInternalMessage(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	// A service error containing distinctive internal detail that must never
+	// reach the client.
+	internalMsg := "internal: user 42 locked since 2025-01-01T00:00:00Z"
+	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), errors.New(internalMsg)).Once()
+
+	handler := &Handler{auth: mockAuth}
+
+	encodedPassword := base64.StdEncoding.EncodeToString([]byte("anypassword"))
+	req := &events.LambdaFunctionURLRequest{
+		Body: `{"email": "victim@example.com", "password": "` + encodedPassword + `"}`,
+	}
+
+	result, err := handler.login(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "login failure must be a ClientError")
+	assert.Equal(t, 401, ce.code)
+	// The opaque message must be returned.
+	assert.Equal(t, "invalid credentials", ce.message)
+	// The internal message must not leak to the client.
+	assert.NotContains(t, ce.message, "internal:", "internal error detail must not be forwarded to the client")
+	assert.NotContains(t, ce.message, "user 42", "user identifier must not appear in the 401 response")
+	assert.NotContains(t, ce.message, "locked", "account state must not appear in the 401 response")
+}
+
 func TestHandler_logout_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

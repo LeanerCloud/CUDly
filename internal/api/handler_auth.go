@@ -50,7 +50,10 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 		if errors.Is(err, auth.ErrInvalidMFACode) {
 			return nil, NewClientError(401, "invalid_mfa_code")
 		}
-		return nil, NewClientError(401, err.Error())
+		// All other auth failures (wrong password, account not found, locked, etc.)
+		// collapse to a single opaque 401. Never forward err.Error() verbatim - it
+		// may reveal internal account state.
+		return nil, NewClientError(401, "invalid credentials")
 	}
 
 	return response, nil
