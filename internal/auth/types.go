@@ -403,6 +403,28 @@ const (
 	// contact_email gate (PR #101), not these verbs.
 	ActionApproveOwn = "approve-own"
 	ActionApproveAny = "approve-any"
+	// ActionExecuteOwn / ActionExecuteAny gate the direct-execute shortcut
+	// on the Recommendations page (issue #289). A holder skips the approval
+	// email and immediately commits the purchase, with audit fields
+	// (executed_by_user_id, executed_at, pre_approval_skip_reason) stamped
+	// on the execution row.
+	//
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//     both verbs.
+	//   * RoleUser — NO default grant. This is a finance-impacting permission
+	//     that must be explicitly granted per-user/per-role. Even trusted
+	//     users submit via the approval flow by default; only deliberately
+	//     privileged accounts should hold this verb.
+	//   * RoleReadOnly — neither verb.
+	//
+	// execute-own: allows direct-execute only for executions where
+	//   created_by_user_id == session user (the user drafted the purchase
+	//   themselves). Like approve-own, legacy rows with NULL creator are
+	//   unreachable for non-admins via this verb.
+	// execute-any: allows direct-execute regardless of creator; no ownership
+	//   check. No default non-admin grant; add to a custom operator group.
+	ActionExecuteOwn = "execute-own"
+	ActionExecuteAny = "execute-any"
 )
 
 // Predefined resources

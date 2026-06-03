@@ -316,6 +316,9 @@ export interface PurchaseResult {
   // alice@acme.com") per the CR pass on PR #294 / issue #288. Absent when
   // recipient resolution itself failed (no approvers configured).
   approval_recipient?: string;
+  // True when the request was handled via the direct-execute path (issue
+  // #289). Absent (undefined) on the standard approval-required flow.
+  direct_execute?: boolean;
   results?: Array<{
     recommendation_id: string;
     status: string;

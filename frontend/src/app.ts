@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
-import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, type FanOutBucket } from './recommendations';
+import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, type FanOutBucket } from './recommendations';
 import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, getSettingsSubTabFromPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
@@ -322,6 +322,12 @@ async function handleExecutePurchase(): Promise<void> {
     return;
   }
 
+  // Read the execute mode set by the modal toggle (issue #289).
+  // "direct" means the session has execute-any/execute-own and chose to
+  // bypass approval; "" is the default approval-required path.
+  const executeMode = getExecuteMode();
+  const isDirect = executeMode === 'direct';
+
   // Disable the button BEFORE awaiting the confirm dialog and the network
   // call so a double-click or rapid re-click can't fire a second POST and
   // mint a duplicate pending execution (#644). The button is re-enabled on
@@ -332,22 +338,30 @@ async function handleExecutePurchase(): Promise<void> {
     executeBtn.textContent = 'Sending...';
   }
 
-  // Default approval-required path: clicking sends an approval request to
-  // the configured approver(s) — it does NOT spend money. The actual
-  // upfront charge fires only after an approver clicks the email link.
-  // Issue #289 will introduce a session-permission branch where holders
-  // of `execute-any:purchases` can opt into direct execution; until that
-  // lands, every user is on this approval path.
-  const ok = await confirmDialog({
-    title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
-    body: 'This will email an approval request to the configured approver. Cloud commitments are charged only after the approver clicks the link in that email.',
-    confirmLabel: 'Send for approval',
-    destructive: false,
-  });
+  const defaultBtnLabel = isDirect ? 'Execute Purchase Now' : 'Send for Approval';
+
+  // Confirmation dialog varies by mode:
+  //   - Approval path: low-friction, non-destructive.
+  //   - Direct-execute path: red destructive dialog with cost callout and
+  //     cancellation-window reminder (issue #289 acceptance criteria).
+  const ok = isDirect
+    ? await confirmDialog({
+        title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} now?`,
+        body: 'This will charge the full upfront amount immediately. This bypasses the approval step. AWS allows cancellation within 24 hours via the Account & Billing console.',
+        confirmLabel: 'Execute Purchase Now',
+        destructive: true,
+      })
+    : await confirmDialog({
+        title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
+        body: 'This will email an approval request to the configured approver. Cloud commitments are charged only after the approver clicks the link in that email.',
+        confirmLabel: 'Send for approval',
+        destructive: false,
+      });
+
   if (!ok) {
     if (executeBtn) {
       executeBtn.disabled = false;
-      executeBtn.textContent = 'Send for Approval';
+      executeBtn.textContent = defaultBtnLabel;
     }
     return;
   }
@@ -380,18 +394,26 @@ async function handleExecutePurchase(): Promise<void> {
     : 100;
 
   try {
-    const result = await api.executePurchase(apiRecs, capacityPercent);
+    const result = await api.executePurchase(apiRecs, capacityPercent, executeMode || undefined);
     closePurchaseModal();
     clearPurchaseModalRecommendations();
+    clearExecuteMode();
 
-    // The backend now surfaces email-send status so the toast can be honest
-    // about what the user should do next. When email_sent is undefined we
-    // fall back to the old "check your email" message for backward compat
-    // with any pre-deploy caller that hasn't picked up the new field yet.
-    if (result.email_sent === false) {
+    if (isDirect) {
+      // Direct-execute: purchase is already committed; inform the user.
+      showToast({
+        message: `Purchase executed immediately (id ${result.execution_id.slice(0, 8)}). Check Purchase History for the result.`,
+        kind: 'success',
+        timeout: 15_000,
+      });
+    } else if (result.email_sent === false) {
+      // The backend now surfaces email-send status so the toast can be honest
+      // about what the user should do next. When email_sent is undefined we
+      // fall back to the old "check your email" message for backward compat
+      // with any pre-deploy caller that hasn't picked up the new field yet.
       const reason = result.email_reason || 'reason unavailable';
       showToast({
-        message: `Purchase queued as pending (id ${result.execution_id.slice(0, 8)}…) but the approval email did not send: ${reason}. Approve or cancel it from the Purchase History tab.`,
+        message: `Purchase queued as pending (id ${result.execution_id.slice(0, 8)}) but the approval email did not send: ${reason}. Approve or cancel it from the Purchase History tab.`,
         kind: 'warning',
         timeout: null,
       });
@@ -405,7 +427,7 @@ async function handleExecutePurchase(): Promise<void> {
       showToast({
         message: recipient
           ? `Approval request sent to ${recipient}.`
-          : 'Purchase submitted — check your email to approve.',
+          : 'Purchase submitted - check your email to approve.',
         kind: 'success',
         timeout: 10_000,
       });
@@ -420,11 +442,12 @@ async function handleExecutePurchase(): Promise<void> {
     await loadDashboard();
   } catch (error) {
     const err = error as Error;
-    showToast({ message: `Failed to send purchase for approval: ${err.message}`, kind: 'error' });
+    const verb = isDirect ? 'execute' : 'send for approval';
+    showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
     if (executeBtn) {
       executeBtn.disabled = false;
-      executeBtn.textContent = 'Send for Approval';
+      executeBtn.textContent = defaultBtnLabel;
     }
   }
 }

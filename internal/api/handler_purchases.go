@@ -501,6 +501,53 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 	return nil
 }
 
+// authorizeSessionExecuteDirect returns nil when the session is permitted to
+// bypass the approval email and execute a purchase immediately under the
+// execute-any / execute-own RBAC rules added in issue #289.
+// Returns a 403 ClientError otherwise.
+//
+// creatorID is the creator of the execution being submitted (resolved via
+// resolveCreatorUserID before this call; "" on non-human or legacy rows).
+//
+// Gate logic (mirrors authorizeSessionApprove / authorizeSessionCancel):
+//   - admin role: always permitted.
+//   - execute-any: permitted regardless of creator.
+//   - execute-own: permitted only when creatorID == session.UserID and both
+//     are non-empty (prevents an empty-string collision from granting access).
+//   - no matching grant: 403 fail-closed; nil auth component is a 500 as
+//     per feedback_fail_closed_middleware.md.
+func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Session, creatorID string) error {
+	if session.Role == "admin" {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires execute-any or execute-own on purchases")
+	}
+
+	// execute-own: both IDs must be non-empty and must match (empty-string
+	// collision would otherwise grant access to any null-creator row).
+	if session.UserID == "" || creatorID == "" || creatorID != session.UserID {
+		return NewClientError(403, "permission denied: execute-own requires you to be the creator of this purchase")
+	}
+	return nil
+}
+
 func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
@@ -1152,6 +1199,15 @@ type ExecutePurchaseRequest struct {
 	// counts, so backend math ignores this field for purchase work.
 	// 0 / absent defaults to 100 ("full capacity").
 	CapacityPercent int `json:"capacity_percent,omitempty"`
+	// ExecuteMode controls whether this request bypasses the approval
+	// email and executes the purchase immediately. The only accepted
+	// non-empty value is "direct"; any other value is treated as the
+	// default approval-required flow. The handler re-checks the
+	// execute-any/execute-own RBAC gate before honouring "direct",
+	// even if the session already passed the execute:purchases gate in
+	// validateExecutePurchaseRequest, so a client that sets this field
+	// without the privilege receives a 403 rather than silent fallback.
+	ExecuteMode string `json:"execute_mode,omitempty"`
 }
 
 // validateExecutePurchaseRequest handles the permission check, body parse,
@@ -1555,6 +1611,21 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		return buildDuplicatePurchaseResponse(dupExec), nil
 	}
 
+	// Direct-execute path (issue #289): a session with execute-any or
+	// execute-own on purchases can request execute_mode="direct" to bypass
+	// the approval email and commit the purchase immediately.
+	//
+	// authorizeSessionExecuteDirect is a hard gate — any check failure
+	// returns a 403 rather than falling through to the email path. This
+	// prevents a client that sets execute_mode="direct" but only holds the
+	// base execute:purchases verb from silently degrading to the email flow.
+	if execReq.ExecuteMode == "direct" {
+		if err := h.authorizeSessionExecuteDirect(ctx, session, creatorID); err != nil {
+			return nil, err
+		}
+		return h.directExecutePurchase(ctx, execution, session)
+	}
+
 	// Send approval email synchronously so the response can surface the
 	// actual outcome. The DB write above is the source of truth — email is
 	// best-effort and never blocks the response body; the returned
@@ -1563,14 +1634,28 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, execReq.Recommendations, totalUpfront, totalSavings)
 	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
 
+	return buildApprovalPendingResponse(executionID, status, len(execReq.Recommendations), totalUpfront, totalSavings, emailSent, emailReason, recipient), nil
+}
+
+// buildApprovalPendingResponse assembles the JSON-serialisable response body
+// for the approval-pending path of executePurchase. Extracted to keep
+// executePurchase cyclomatic complexity within the project limit.
+func buildApprovalPendingResponse(
+	executionID string,
+	status string,
+	recCount int,
+	totalUpfront, totalSavings float64,
+	emailSent bool,
+	emailReason, recipient string,
+) map[string]any {
 	message := "Purchase execution created and pending approval"
 	if !emailSent {
-		message = "Purchase execution created but approval email could not be sent — see email_reason"
+		message = "Purchase execution created but approval email could not be sent - see email_reason"
 	}
 	resp := map[string]any{
 		"execution_id":         executionID,
 		"status":               status,
-		"recommendation_count": len(execReq.Recommendations),
+		"recommendation_count": recCount,
 		"total_upfront_cost":   totalUpfront,
 		"estimated_savings":    totalSavings,
 		"email_sent":           emailSent,
@@ -1582,7 +1667,70 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	if recipient != "" {
 		resp["approval_recipient"] = recipient
 	}
-	return resp, nil
+	return resp
+}
+
+// directExecutePurchase is the direct-execute branch of executePurchase
+// (issue #289). It is called after the execution row has been persisted as
+// "pending" and after authorizeSessionExecuteDirect has confirmed the session
+// holds execute-any or execute-own on purchases.
+//
+// Steps:
+//  1. Stamp the three audit fields (executed_by_user_id, executed_at,
+//     pre_approval_skip_reason) onto the in-memory execution so
+//     SavePurchaseExecution persists them in the next call inside
+//     ApproveAndExecute.
+//  2. Delegate to purchase.Manager.ApproveAndExecute, which atomically
+//     transitions the row to "approved" and then runs the purchase
+//     synchronously. ApproveAndExecute already stamps ApprovedBy; we pass
+//     the session email as the actor so the approved_by column also records
+//     who direct-executed.
+//  3. Return a "completed" status to the caller.
+//
+// The audit fields are best-effort if ApproveAndExecute's SavePurchaseExecution
+// races with our pre-call stamp -- but in practice ApproveAndExecute calls
+// SavePurchaseExecution once after a successful TransitionExecutionStatus, at
+// which point our pre-stamp is already on the row that was loaded by
+// TransitionExecutionStatus. The critical audit invariant is that a non-nil
+// executed_by_user_id always co-occurs with a non-nil pre_approval_skip_reason,
+// and both are set atomically in the same SavePurchaseExecution call here.
+func (h *Handler) directExecutePurchase(ctx context.Context, execution *config.PurchaseExecution, session *Session) (any, error) {
+	t0 := time.Now()
+	executionID := execution.ExecutionID
+	logging.Infof("purchase[%s]: directExecutePurchase entry (auth=session)", executionID)
+
+	// Stamp audit fields before the status transition so they are
+	// present on the row the reaper / history query reads.
+	if session.UserID != "" {
+		uid := session.UserID
+		execution.ExecutedByUserID = &uid
+	}
+	now := time.Now()
+	execution.ExecutedAt = &now
+	skipReason := "direct-execute permission"
+	execution.PreApprovalSkipReason = &skipReason
+	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+		// Audit-gap: stamp failed but don't block the purchase. Log at
+		// error level so a CloudWatch alarm can catch persistent failures.
+		logging.Errorf("AUDIT GAP: failed to stamp direct-execute audit fields on %s: %v", executionID, err)
+	}
+
+	if err := h.purchase.ApproveAndExecute(ctx, executionID, session.Email); err != nil {
+		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
+			executionID, time.Since(t0), err)
+		return nil, NewClientError(409, fmt.Sprintf("execution %s could not be direct-executed: %v", executionID, err))
+	}
+
+	logging.Infof("purchase[%s]: directExecutePurchase completed in %s", executionID, time.Since(t0))
+	return map[string]any{
+		"execution_id":         executionID,
+		"status":               "completed",
+		"recommendation_count": len(execution.Recommendations),
+		"total_upfront_cost":   execution.TotalUpfrontCost,
+		"estimated_savings":    execution.EstimatedSavings,
+		"direct_execute":       true,
+		"message":              "Purchase executed immediately (direct-execute permission).",
+	}, nil
 }
 
 // archeraEducationURL returns dashboardBase + "/archera-insurance", or "" when

@@ -3839,6 +3839,22 @@ export function clearFanOutBuckets(): void {
   currentFanOutBuckets = null;
 }
 
+// currentExecuteMode holds the mode selected by the execute-mode toggle in
+// the purchase modal (issue #289). "direct" means the session holder has
+// execute-any/execute-own and explicitly chose to bypass the approval email.
+// "" (empty) is the default approval-required path. Cleared when the modal
+// closes. Read by app.ts handleExecutePurchase to set execute_mode in the
+// POST body.
+let currentExecuteMode: '' | 'direct' = '';
+
+export function getExecuteMode(): '' | 'direct' {
+  return currentExecuteMode;
+}
+
+export function clearExecuteMode(): void {
+  currentExecuteMode = '';
+}
+
 // resolveBucketPaymentSeed picks the default Payment value for a
 // bucket per issue #111 sub-option (ii):
 //   - When all recs in the bucket share one non-empty cloud_account_id
@@ -4618,19 +4634,106 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
 
   while (container.firstChild) container.removeChild(container.firstChild);
 
-  // Approval-required note: clicking the modal's primary button does NOT
-  // execute the purchase — it sends an approval-request email to the
-  // configured approver(s). The actual upfront charges fire only when an
-  // approver clicks the link in that email. Issue #288 closed the
-  // earlier "Execute Purchase" button-label gap that implied immediate
-  // execution; #289 will introduce a session-permission branch where
-  // holders of `execute-any:purchases` can opt into direct execution and
-  // this note will become conditional on the resolved auth path.
-  const approvalNote = document.createElement('p');
-  approvalNote.className = 'approval-required-note';
-  approvalNote.textContent =
-    'Submitting will email an approval request to the configured approver — commitments are charged only after the approver clicks the link in that email.';
-  container.appendChild(approvalNote);
+  // Reset the execute mode for this modal session so a prior direct-execute
+  // choice does not carry over to a freshly opened modal (issue #289).
+  currentExecuteMode = '';
+
+  // Execute-mode toggle (issue #289): shown only to sessions with
+  // execute-any:purchases or execute-own:purchases. Everyone else sees only
+  // the approval-required note with no toggle.
+  const canDirectExecute =
+    canAccess('execute-any', 'purchases') || canAccess('execute-own', 'purchases');
+
+  if (canDirectExecute) {
+    // Toggle section: "How would you like to handle this purchase?"
+    const toggleSection = document.createElement('div');
+    toggleSection.className = 'form-section execute-mode-toggle';
+
+    const toggleLabel = document.createElement('p');
+    toggleLabel.className = 'execute-mode-label';
+    toggleLabel.textContent = 'How would you like to handle this purchase?';
+    toggleSection.appendChild(toggleLabel);
+
+    const radioGroup = document.createElement('div');
+    radioGroup.className = 'execute-mode-radio-group';
+    radioGroup.setAttribute('role', 'radiogroup');
+    radioGroup.setAttribute('aria-label', 'Purchase execution mode');
+
+    // Option 1: Send for Approval (default)
+    const approvalRadioLabel = document.createElement('label');
+    approvalRadioLabel.className = 'execute-mode-radio-label';
+    const approvalRadio = document.createElement('input');
+    approvalRadio.type = 'radio';
+    approvalRadio.name = 'execute-mode';
+    approvalRadio.value = '';
+    approvalRadio.checked = true;
+    approvalRadio.id = 'execute-mode-approval';
+    approvalRadioLabel.appendChild(approvalRadio);
+    approvalRadioLabel.appendChild(document.createTextNode(' Send for Approval (default)'));
+    radioGroup.appendChild(approvalRadioLabel);
+
+    // Option 2: Execute Now
+    const directRadioLabel = document.createElement('label');
+    directRadioLabel.className = 'execute-mode-radio-label';
+    const directRadio = document.createElement('input');
+    directRadio.type = 'radio';
+    directRadio.name = 'execute-mode';
+    directRadio.value = 'direct';
+    directRadio.id = 'execute-mode-direct';
+    directRadioLabel.appendChild(directRadio);
+    directRadioLabel.appendChild(document.createTextNode(' Execute Now'));
+    radioGroup.appendChild(directRadioLabel);
+
+    toggleSection.appendChild(radioGroup);
+    container.appendChild(toggleSection);
+
+    // Warning callout shown only when "Execute Now" is selected.
+    const directWarning = document.createElement('div');
+    directWarning.className = 'direct-execute-warning';
+    directWarning.hidden = true;
+    directWarning.setAttribute('role', 'alert');
+    directWarning.setAttribute('aria-live', 'polite');
+    container.appendChild(directWarning);
+
+    // Wire radio changes to update state + show/hide warning.
+    const updateExecuteMode = (): void => {
+      currentExecuteMode = directRadio.checked ? 'direct' : '';
+      directWarning.hidden = currentExecuteMode !== 'direct';
+      if (currentExecuteMode === 'direct') {
+        // Compute total upfront from currently checked rows for the warning.
+        let totalUpfront = 0;
+        for (const idx of checkedPurchaseIndices) {
+          const r = currentPurchaseRecommendations[idx];
+          if (r) totalUpfront += r.upfront_cost;
+        }
+        while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
+        const icon = document.createElement('strong');
+        icon.textContent = 'Warning: ';
+        directWarning.appendChild(icon);
+        const text = document.createTextNode(
+          `This will charge $${totalUpfront.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately. ` +
+          'This bypasses the approval step. AWS allows cancellation within 24 hours via the Account & Billing console.',
+        );
+        directWarning.appendChild(text);
+      }
+      // Update the submit button label to reflect the selected mode.
+      const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+      if (executeBtn) {
+        executeBtn.textContent =
+          currentExecuteMode === 'direct' ? 'Execute Purchase Now' : 'Send for Approval';
+      }
+    };
+
+    approvalRadio.addEventListener('change', updateExecuteMode);
+    directRadio.addEventListener('change', updateExecuteMode);
+  } else {
+    // No direct-execute permission: show the standard approval-required note.
+    const approvalNote = document.createElement('p');
+    approvalNote.className = 'approval-required-note';
+    approvalNote.textContent =
+      'Submitting will email an approval request to the configured approver - commitments are charged only after the approver clicks the link in that email.';
+    container.appendChild(approvalNote);
+  }
 
   // Commitments table with per-row Include checkboxes, Term, and Payment selects.
   const commitsSection = document.createElement('div');

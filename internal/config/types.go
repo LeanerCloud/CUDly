@@ -264,6 +264,20 @@ type PurchaseExecution struct {
 	// field is non-nil). Migration 000051 adds the column; new rows
 	// always carry a non-nil value.
 	ApprovalTokenExpiresAt *time.Time `json:"approval_token_expires_at,omitempty" dynamodbav:"approval_token_expires_at,omitempty"`
+	// ExecutedByUserID is the UUID of the session user who triggered a
+	// direct-execute (issue #289, execute-any/execute-own). NULL on rows
+	// that went through the normal approval flow. Non-null signals the
+	// approval step was intentionally skipped by an authorized operator.
+	// Migration 000058 adds the column.
+	ExecutedByUserID *string `json:"executed_by_user_id,omitempty" dynamodbav:"executed_by_user_id,omitempty"`
+	// ExecutedAt is the UTC timestamp when the direct-execute path fired.
+	// NULL for rows on the normal approval flow. Migration 000058.
+	ExecutedAt *time.Time `json:"executed_at,omitempty" dynamodbav:"executed_at,omitempty"`
+	// PreApprovalSkipReason is a human-readable token describing why the
+	// approval step was skipped. For direct-execute rows it is the literal
+	// string "direct-execute permission". NULL on every normal-flow row.
+	// Migration 000058.
+	PreApprovalSkipReason *string `json:"pre_approval_skip_reason,omitempty" dynamodbav:"pre_approval_skip_reason,omitempty"`
 }
 
 // IsCancelable reports whether an execution may still be cancelled. Only the

@@ -47,6 +47,8 @@ export type Action =
   | 'retry-any'
   | 'approve-own'
   | 'approve-any'
+  | 'execute-own'
+  | 'execute-any'
   | 'admin';
 
 // Resource names. Closed enum for the same reason.
