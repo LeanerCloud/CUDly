@@ -471,8 +471,15 @@ func TestHandler_requiresCSRFValidation(t *testing.T) {
 	// DELETE on protected endpoint requires CSRF
 	assert.True(t, h.requiresCSRFValidation("DELETE", "/api/plans/123"))
 
-	// POST on approve (token-based) is exempt
-	assert.False(t, h.requiresCSRFValidation("POST", "/api/purchases/approve/uuid"))
+	// POST on approve/cancel routes: these are AuthPublic so validateSecurity
+	// skips CSRF via isPublicEndpoint() before requiresCSRFValidation is
+	// reached. The session-authed sub-paths (approvePurchaseViaSession /
+	// cancelPurchaseViaSession) enforce CSRF directly inside the handler.
+	// requiresCSRFValidation is therefore never consulted for these paths --
+	// but if it ever were, it must NOT return false (that would silently
+	// double-exempt). The middleware exemption was removed by issue #404.
+	assert.True(t, h.requiresCSRFValidation("POST", "/api/purchases/approve/uuid"))
+	assert.True(t, h.requiresCSRFValidation("POST", "/api/purchases/cancel/uuid"))
 }
 
 // ---------------------------------------------------------------------------

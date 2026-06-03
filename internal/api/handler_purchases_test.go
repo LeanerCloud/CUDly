@@ -300,6 +300,8 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
 	mockAuth.grantAdmin()
+	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	// CRITICAL ASSERTION: session-authed approve goes through
@@ -344,6 +346,8 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
 	mockAuth.grantAdmin()
+	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(errors.New("AWS RI purchase failed"))
@@ -462,6 +466,8 @@ func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
 	mockAuth.grantAdmin()
+	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	// Guard does not fire; ApproveAndExecute is called normally.
@@ -500,6 +506,8 @@ func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
 	mockAuth.grantAdmin()
+	// approvePurchaseViaSession enforces CSRF on the session-authed path (issue #404).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
@@ -1976,6 +1984,12 @@ func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session,
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	// cancelPurchaseViaSession enforces CSRF on the session-authed path (issue
+	// #404). sessionCancelReq carries no CSRF header, so ValidateCSRFToken is
+	// called with an empty csrfToken. Tests exercising the session-authed cancel
+	// branch must allow this call; deny tests that only exercise the RBAC check
+	// may never reach ValidateCSRFToken if the session is nil.
+	mockAuth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil).Maybe()
 	// Authorization is permission-based for every caller now (issue #907): even
 	// an Administrators-group member resolves cancel-any/cancel-own through
 	// HasPermissionAPI, so register the permission mocks unconditionally.
@@ -2252,11 +2266,15 @@ func TestHandler_cancelPurchase_Session_RejectsMissingSession(t *testing.T) {
 	mockConfig.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
 
 	handler := &Handler{config: mockConfig, auth: new(MockAuthService)}
-	// No Authorization header → 401, not 403. Tokenless + sessionless is
-	// the only state where the user can't reach either branch.
+	// No Authorization header → CSRF fires first (issue #404: cancelPurchaseViaSession
+	// now enforces CSRF before requireSession). A tokenless request can't provide a
+	// valid CSRF binding, so we get a 403 "CSRF validation failed".
 	_, err := handler.cancelPurchase(context.Background(), &events.LambdaFunctionURLRequest{}, cancelExecID, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no authorization token provided")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "CSRF validation failed")
 }
 
 // TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate is the

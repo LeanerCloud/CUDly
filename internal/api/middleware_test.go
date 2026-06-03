@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHandler_isPublicEndpoint(t *testing.T) {
@@ -237,4 +239,193 @@ func TestHandler_authenticate_BearerTokenWithAPIKey(t *testing.T) {
 	}
 	// Should be false because API key is configured and bearer token is invalid
 	assert.False(t, handler.authenticate(ctx, req))
+}
+
+// ---------------------------------------------------------------------------
+// CSRF boundary tests for session-authed approve/cancel (issue #404)
+// ---------------------------------------------------------------------------
+
+// TestApproveViaSession_RequiresCSRF asserts that a session-authenticated POST
+// to approvePurchaseViaSession is rejected when the request carries no CSRF
+// token.  Pre-fix, the blanket "/api/purchases/approve/" middleware exemption
+// meant this call succeeded without a CSRF token.
+func TestApproveViaSession_RequiresCSRF(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "email-tok",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{Email: adminEmail}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	// Authorization is group-membership-only after issue #907: the session must
+	// pass the approve-* HasPermissionAPI check to reach the CSRF guard, since
+	// the dispatcher authorizes before invoking approvePurchaseViaSession.
+	mockAuth.grantAdmin()
+	// CSRF token is empty → ValidateCSRFToken must return an error so the
+	// request is rejected. This is the critical regression assertion for #404.
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("csrf mismatch"))
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+
+	// Request with a valid session but NO CSRF token header.
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "CSRF validation failed")
+}
+
+// TestApproveViaSession_PassesCSRF asserts that a session-authenticated POST
+// to approvePurchaseViaSession succeeds when a valid CSRF token is supplied.
+// This confirms the CSRF guard does not block the legitimate dashboard flow.
+func TestApproveViaSession_PassesCSRF(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	adminEmail := "admin@example.com"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "email-tok",
+		Status:          "pending",
+		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{Email: adminEmail}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	// Authorization is group-membership-only after issue #907: the session must
+	// pass the approve-* HasPermissionAPI check before the CSRF guard runs.
+	mockAuth.grantAdmin()
+	// Valid CSRF token supplied → ValidateCSRFToken succeeds.
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "csrf-abc").Return(nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+
+	handler := &Handler{config: mockConfig, auth: mockAuth, purchase: mockPurchase}
+
+	// Request with a valid session AND a valid CSRF token header.
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"authorization": "Bearer sess-tok",
+			"x-csrf-token":  "csrf-abc",
+		},
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
+}
+
+// TestCancelViaSession_RequiresCSRF asserts that a session-authenticated POST
+// to cancelPurchaseViaSession is rejected when the request carries no CSRF
+// token.  Mirror of TestApproveViaSession_RequiresCSRF for the cancel path.
+func TestCancelViaSession_RequiresCSRF(t *testing.T) {
+	ctx := context.Background()
+	execID := "55555555-5555-5555-5555-555555555555"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		Status:      "pending",
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
+	// Authorization is group-membership-only after issue #907: the session must
+	// pass the cancel-* HasPermissionAPI check to reach the CSRF guard, since
+	// the dispatcher authorizes before invoking cancelPurchaseViaSession.
+	mockAuth.grantAdmin()
+	// No CSRF token → ValidateCSRFToken must return error to block the request.
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("csrf mismatch"))
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.cancelPurchase(ctx, req, execID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "CSRF validation failed")
+}
+
+// TestTokenOnlyApprove_BypassesCSRF asserts that the email-link token path
+// does NOT invoke approvePurchaseViaSession, so CSRF is not checked on that
+// code path. The token path uses authorizeApprovalAction which validates the
+// signed token directly -- it has no session cookie to forge.
+//
+// The caller must supply a session whose email matches the contact_email (the
+// approval gate added in PR #101 ensures only the intended inbox can confirm
+// via the email link). Because the session has no approve-* RBAC, the handler
+// falls through from the session-authed branch to the token branch.
+func TestTokenOnlyApprove_BypassesCSRF(t *testing.T) {
+	ctx := context.Background()
+	execID := "12345678-1234-1234-1234-123456789abc"
+	contactEmail := "contact@example.com"
+
+	mockConfig := new(MockConfigStore)
+	accountID := "acct-1"
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "email-token",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		NotificationEmail: &contactEmail,
+	}, nil)
+
+	// Session is present but has no approve-* permissions → RBAC denies,
+	// falls through to the token branch. CSRF is NOT called on the token
+	// branch (approvePurchaseViaSession is never reached).
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("ApproveExecution", ctx, execID, "email-token", contactEmail).Return(nil)
+
+	handler := &Handler{config: mockConfig, auth: mockAuth, purchase: mockPurchase}
+
+	// Session header present (so tryGetSession succeeds) but no CSRF header.
+	// The session has no approve-* permission → falls to token branch.
+	// No ValidateCSRFToken mock is registered here, so if the code ever
+	// called ValidateCSRFToken, the test would panic with "unexpected call".
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+		// Intentionally no x-csrf-token header.
+	}
+	result, err := handler.approvePurchase(ctx, req, execID, "email-token")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", result.(map[string]string)["status"])
 }
