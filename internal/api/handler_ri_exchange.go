@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
@@ -171,17 +171,50 @@ type azureExchangeClient interface {
 }
 
 // buildAzureExchangeClient returns the injected factory result when one has
-// been set (test path), or constructs a real Azure compute client otherwise
-// (production path). Returns an error when the real Azure credential cannot
-// be obtained.
-func (h *Handler) buildAzureExchangeClient(subscriptionID string) (azureExchangeClient, error) {
+// been set (test path), or constructs a real Azure compute client by resolving
+// per-subscription credentials via the project's credential resolver (production
+// path).
+//
+// Credential resolution mirrors every other Azure call in the project
+// (scheduler.collectAzureForAccount, purchase/execution.go resolveAzureProvider):
+// look up the registered CloudAccount whose ExternalID matches subscriptionID,
+// then call credentials.ResolveAzureTokenCredentialWithOpts with the Handler's
+// wired OIDC signer so managed_identity / client_secret / WIF all work.
+//
+// Graceful empty-state rules (returns nil client, nil error):
+//   - subscriptionID is empty AND no Azure accounts are registered at all:
+//     Azure is not configured; the caller returns an empty reservations list.
+//   - subscriptionID is provided but no matching CloudAccount is found:
+//     treated as "Azure not configured for this subscription".
+//
+// A genuine configuration error (missing credentials, auth failure) returns
+// a non-nil error that the handler maps to a 500 with a clear message.
+func (h *Handler) buildAzureExchangeClient(ctx context.Context, subscriptionID string) (azureExchangeClient, error) {
 	if h.azureExchangeFactory != nil {
 		return h.azureExchangeFactory(subscriptionID), nil
 	}
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+
+	// Look up the registered Azure CloudAccount by its subscription ID.
+	// For Azure, ExternalID stores the subscription ID (see handler_accounts.go:
+	// buildSelfAccountRequest sets ExternalID = si.ExternalID() = si.SubscriptionID).
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
 	if err != nil {
-		return nil, fmt.Errorf("azure: obtain default credential: %w", err)
+		return nil, fmt.Errorf("azure: look up account for subscription %q: %w", subscriptionID, err)
 	}
+	if account == nil {
+		// No Azure account registered for this subscription.
+		// Return nil client so the caller emits a graceful empty state.
+		return nil, nil
+	}
+
+	cred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, account, h.credStore, credentials.AzureResolveOptions{
+		Signer:    h.signer,
+		IssuerURL: h.issuerURL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("azure: resolve credentials for subscription %q: %w", subscriptionID, err)
+	}
+
 	// Region is left empty -- ListExchangeableReservations uses the tenant-
 	// wide armreservations API which is not scoped to a region.
 	return azurecompute.NewClient(cred, subscriptionID, ""), nil
@@ -191,9 +224,10 @@ func (h *Handler) buildAzureExchangeClient(subscriptionID string) (azureExchange
 // eligible for the cross-SKU/cross-region exchange flow (InstanceFlexibility
 // == On, ProvisioningState == Succeeded). Requires "view:purchases" permission.
 //
-// The optional ?subscription_id= query parameter scopes the client to a
-// specific subscription for the capacity-provider registration check; the
-// listing itself is tenant-wide.
+// The optional ?subscription_id= query parameter scopes the credential lookup
+// to the matching registered CloudAccount. When no Azure account is configured
+// for the requested subscription (or no subscription is specified and none are
+// registered), the handler returns an empty reservations list rather than a 500.
 func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
@@ -201,9 +235,15 @@ func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.Lamb
 
 	subscriptionID := req.QueryStringParameters["subscription_id"]
 
-	client, err := h.buildAzureExchangeClient(subscriptionID)
+	client, err := h.buildAzureExchangeClient(ctx, subscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+	}
+	if client == nil {
+		// No Azure account configured for this subscription (or no Azure accounts
+		// registered at all). Return an empty list rather than a 500 so the page
+		// renders a "no reservations" state instead of an opaque error banner.
+		return &ExchangeableAzureRIsResponse{Reservations: []azurecompute.ExchangeableReservation{}}, nil
 	}
 
 	reservations, err := client.ListExchangeableReservations(ctx)
