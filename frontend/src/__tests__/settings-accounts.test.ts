@@ -1357,6 +1357,96 @@ describe('Account overrides modal', () => {
     expect(opts.body).not.toContain('Reset');
   });
 
+  describe('toast-undo for Delete override (issue #113)', () => {
+    const overrideFixture = {
+      account_id: 'acc-1',
+      provider: 'aws',
+      service: 'rds',
+      term: 1,
+      payment: 'all-upfront',
+      coverage: 75,
+      enabled: true,
+    };
+
+    test('Delete shows info toast with Undo action and clears row (click-Undo path)', async () => {
+      (api.listAccountServiceOverrides as jest.Mock)
+        .mockResolvedValueOnce([overrideFixture])  // initial render
+        .mockResolvedValue([]);                     // reload after delete + reload after undo
+      (api.deleteAccountServiceOverride as jest.Mock).mockResolvedValue(undefined);
+      (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue(overrideFixture);
+      mockConfirmDialog.mockResolvedValue(true);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const deleteBtn = Array.from(panel.querySelectorAll('button'))
+        .find(b => b.textContent === 'Delete') as HTMLButtonElement;
+      expect(deleteBtn).toBeDefined();
+
+      deleteBtn.click();
+      // Flush the confirm + delete + reload chain.
+      for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); }
+
+      expect(api.deleteAccountServiceOverride).toHaveBeenCalledWith('acc-1', 'aws', 'rds');
+
+      // An info toast with an Undo action must have been shown.
+      const toastCalls = mockShowToast.mock.calls.map(c => c[0]) as Array<{
+        kind?: string;
+        message?: string;
+        actions?: Array<{ label: string; onClick: () => void }>;
+        timeout?: number | null;
+      }>;
+      const undoToast = toastCalls.find(t => t.kind === 'info' && t.message?.includes('aws/rds'));
+      expect(undoToast).toBeDefined();
+      expect(undoToast!.actions).toBeDefined();
+      expect(undoToast!.actions!.length).toBe(1);
+      expect(undoToast!.actions![0]!.label).toBe('Undo');
+      // 5-second TTL per issue spec.
+      expect(undoToast!.timeout).toBe(5_000);
+
+      // Simulate clicking Undo.
+      undoToast!.actions![0]!.onClick();
+      for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); }
+
+      // saveAccountServiceOverride must have been called with the original snapshot.
+      expect(api.saveAccountServiceOverride).toHaveBeenCalledWith(
+        'acc-1', 'aws', 'rds',
+        expect.objectContaining({
+          term: 1,
+          payment: 'all-upfront',
+          coverage: 75,
+          enabled: true,
+        }),
+      );
+    });
+
+    test('let-it-expire path: override is permanently gone after toast timeout', async () => {
+      (api.listAccountServiceOverrides as jest.Mock)
+        .mockResolvedValueOnce([overrideFixture])
+        .mockResolvedValue([]);
+      (api.deleteAccountServiceOverride as jest.Mock).mockResolvedValue(undefined);
+      mockConfirmDialog.mockResolvedValue(true);
+
+      const panel = document.createElement('div');
+      document.body.appendChild(panel);
+      await loadOverridesPanel('acc-1', panel, 'aws');
+
+      const deleteBtn = Array.from(panel.querySelectorAll('button'))
+        .find(b => b.textContent === 'Delete') as HTMLButtonElement;
+      deleteBtn.click();
+      for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); }
+
+      // Undo was NOT clicked; saveAccountServiceOverride must not have been called.
+      expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+      // The delete did fire.
+      expect(api.deleteAccountServiceOverride).toHaveBeenCalledTimes(1);
+      // The panel reloaded to show the empty state (no more override rows).
+      const table = panel.querySelector('table.overrides-table');
+      expect(table).toBeNull();
+    });
+  });
+
   describe('override commitmentOptions parity (issue #107)', () => {
     test('inline payment selector hides invalid options for RDS term=3 row', async () => {
       // RDS rejects 3yr no-upfront per commitmentOptions invalidCombinations.
