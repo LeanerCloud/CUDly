@@ -2939,7 +2939,7 @@ function buildListMarkup(
       for (const ck of childCellKeys) {
         const childVariants = groups.get(ck)!;
         if (childVariants.length === 1) {
-          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, true, visibleCols));
+          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, true, visibleCols, showCheckboxes));
           continue;
         }
 
@@ -2991,7 +2991,7 @@ function buildListMarkup(
         if (isCellExpanded) {
           const sortedChildVariants = sortVariantsInCell(childVariants);
           for (const v of sortedChildVariants) {
-            rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols));
+            rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
           }
         }
       }
