@@ -6942,7 +6942,7 @@ describe('Issue #135: groupSpCellKeys helper', () => {
     const cellKeys = Array.from(result.values())[0]!;
     // order must match sortedKeys order (insertion order here)
     expect(cellKeys).toHaveLength(3);
-    expect(cellKeys[0]).toBe(sortedKeys[0]);
+    expect(cellKeys).toEqual(sortedKeys);
   });
 
   test('does not group SP recs from different accounts', () => {
@@ -7104,6 +7104,12 @@ describe('Issue #135: SP group parent row rendered in table', () => {
     // aria-expanded should flip
     const updatedChevron = document.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
     expect(updatedChevron!.getAttribute('aria-expanded')).toBe('true');
+
+    // Collapse back: child rows should hide again and aria-expanded should reset.
+    updatedChevron!.click();
+    expect(document.querySelectorAll('.recommendation-row').length).toBe(0);
+    const collapsedChevron = document.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
+    expect(collapsedChevron!.getAttribute('aria-expanded')).toBe('false');
   });
 
   test('single SP plan type renders as a flat row with no group parent', async () => {
