@@ -3945,9 +3945,15 @@ func TestHandler_revokePurchase_ValidToken(t *testing.T) {
 	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, ContactEmail: revokerEmail}, nil
 	}
-	// SavePurchaseExecution for the revocation_requested update.
+	// Atomic conditional transition completed/partially_completed ->
+	// revocation_requested, returning the updated row.
+	mockStore.On("TransitionExecutionStatus", ctx, execID,
+		[]string{"completed", "partially_completed"}, "revocation_requested").
+		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
+	// SavePurchaseExecution stamps CancelledBy on the returned row.
 	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
-		return e.ExecutionID == execID && e.Status == "revocation_requested"
+		return e.ExecutionID == execID && e.Status == "revocation_requested" &&
+			e.CancelledBy != nil && *e.CancelledBy == revokerEmail
 	})).Return(nil)
 
 	mockAuth := new(MockAuthService)
@@ -4055,6 +4061,190 @@ func TestHandler_revokePurchase_NotFound(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
 	assert.Equal(t, 404, ce.code)
+}
+
+// TestHandler_revokePurchase_ExpiredToken verifies that a matching token whose
+// ApprovalTokenExpiresAt deadline has passed is rejected with 409, so a stale
+// completed execution cannot be marked revocation_requested via an old link.
+// Regression test for the revoke-token expiry CR finding (PR #889).
+func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
+	ctx := context.Background()
+	execID := "55555555-5555-5555-5555-555555555555"
+	token := "expiredbutmatching"
+	contactEmail := "contact@acct.example.com"
+	accountID := "acct-1"
+	past := time.Now().Add(-1 * time.Hour)
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:            execID,
+		ApprovalToken:          token,
+		ApprovalTokenExpiresAt: &past,
+		Status:                 "completed",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		QueryStringParameters: map[string]string{"token": token},
+	}
+	_, err := handler.revokePurchase(ctx, req, execID, token)
+	require.Error(t, err, "expired revocation token must be rejected")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.message, "expired")
+}
+
+// TestHandler_revokePurchase_SessionAdminCancelAny exercises the tokenless
+// session-authorized revoke branch (tryRevokeViaSession -> revokeViaSession)
+// for an admin holding cancel-any on purchases. It asserts the atomic
+// TransitionExecutionStatus call and the revocation_requested result.
+// Covers the session-auth revoke branch CR finding (PR #889).
+func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
+	ctx := context.Background()
+	execID := "66666666-6666-6666-6666-666666666666"
+	adminEmail := "admin@example.com"
+	adminUserID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+	exec := buildCompletedExec(execID, "unused-token")
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID,
+		[]string{"completed", "partially_completed"}, "revocation_requested").
+		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == execID && e.CancelledBy != nil && *e.CancelledBy == adminEmail
+	})).Return(nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").
+		Return(&Session{UserID: adminUserID, Email: adminEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "cancel-any", "purchases").Return(true, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	// No token query param: forces the tokenless session-auth path.
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer admin-token"},
+	}
+	result, err := handler.revokePurchase(ctx, req, execID, "")
+	require.NoError(t, err, "session admin with cancel-any must succeed")
+	resultMap := result.(map[string]string)
+	assert.Equal(t, "revocation_requested", resultMap["status"])
+	mockStore.AssertExpectations(t)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_revokePurchase_SessionOwnerCancelOwn exercises the tokenless
+// session-auth branch for a non-admin owner holding cancel-own on a purchase
+// they created. Covers the session-auth revoke branch CR finding (PR #889).
+func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
+	ctx := context.Background()
+	execID := "77777777-7777-7777-7777-777777777777"
+	ownerEmail := "owner@example.com"
+	ownerUserID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	exec := buildCompletedExec(execID, "unused-token")
+	exec.CreatedByUserID = &ownerUserID
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, execID,
+		[]string{"completed", "partially_completed"}, "revocation_requested").
+		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == execID && e.CancelledBy != nil && *e.CancelledBy == ownerEmail
+	})).Return(nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "owner-token").
+		Return(&Session{UserID: ownerUserID, Email: ownerEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-own", "purchases").Return(true, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer owner-token"},
+	}
+	result, err := handler.revokePurchase(ctx, req, execID, "")
+	require.NoError(t, err, "session owner with cancel-own must succeed")
+	resultMap := result.(map[string]string)
+	assert.Equal(t, "revocation_requested", resultMap["status"])
+	mockStore.AssertExpectations(t)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_revokePurchase_SessionNoPermissionNoToken verifies that a session
+// lacking both cancel-any and cancel-own, with no token supplied, is denied:
+// the session branch returns permission-denied and falls through to the
+// tokenless 401. Covers the session-auth revoke branch CR finding (PR #889).
+func TestHandler_revokePurchase_SessionNoPermissionNoToken(t *testing.T) {
+	ctx := context.Background()
+	execID := "88888888-8888-8888-8888-888888888888"
+	userEmail := "nobody@example.com"
+	userID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+	exec := buildCompletedExec(execID, "unused-token")
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "user-token").
+		Return(&Session{UserID: userID, Email: userEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer user-token"},
+	}
+	_, err := handler.revokePurchase(ctx, req, execID, "")
+	require.Error(t, err, "no permission and no token must be denied")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 401, ce.code)
+	mockStore.AssertExpectations(t)
+	mockAuth.AssertExpectations(t)
+}
+
+// TestHandler_revokeViaSession_ConcurrentTransition verifies that a lost-update
+// race (the row's status changed between read and the conditional UPDATE) is
+// surfaced as a 409 rather than silently overwriting. Regression test for the
+// atomic-status-transition CR finding (PR #889).
+func TestHandler_revokeViaSession_ConcurrentTransition(t *testing.T) {
+	ctx := context.Background()
+	execID := "99999999-9999-9999-9999-999999999999"
+
+	exec := buildCompletedExec(execID, "tok")
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("TransitionExecutionStatus", ctx, execID,
+		[]string{"completed", "partially_completed"}, "revocation_requested").
+		Return(nil, fmt.Errorf("%w: execution %s", config.ErrExecutionNotInExpectedStatus, execID))
+
+	handler := &Handler{config: mockStore}
+	_, err := handler.revokeViaSession(ctx, exec, "someone@example.com")
+	require.Error(t, err, "a concurrent transition must surface an error")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error")
+	assert.Equal(t, 409, ce.code)
+	mockStore.AssertExpectations(t)
 }
 
 // ---------------------------------------------------------------------------

@@ -228,8 +228,9 @@ func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
 	return nil
 }
-func (m *MockEmailSender) SendPurchaseExecutedNotification(_ context.Context, _ email.NotificationData) error {
-	return nil
+func (m *MockEmailSender) SendPurchaseExecutedNotification(ctx context.Context, data email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
 }
 func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
