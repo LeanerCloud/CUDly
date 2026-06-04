@@ -1085,12 +1085,19 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 }
 
 // validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken and that it matches the supplied token using constant-time
-// comparison (same guard as ApproveExecution in internal/purchase/approvals.go).
+// ApprovalToken, that the token has not expired, and that it matches the
+// supplied token using constant-time comparison (same guard as
+// ApproveExecution in internal/purchase/approvals.go). Pre-migration rows
+// without an ApprovalTokenExpiresAt (legacy executions created before
+// migration 000051) pass the expiry check, mirroring ApproveExecution.
 // Extracted from revokePurchase to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
 	if execution.ApprovalToken == "" {
 		return NewClientError(403, "invalid revocation token")
+	}
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return NewClientError(409, fmt.Sprintf(
+			"execution %s cannot be revoked: the revocation link has expired", execution.ExecutionID))
 	}
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return NewClientError(403, "invalid revocation token")
@@ -1103,16 +1110,35 @@ func validateRevokeToken(execution *config.PurchaseExecution, token string) erro
 // revocation (AWS support-case) is out of scope for issue #291 — it is
 // handled by the sibling "AWS RI/SP revocation via support case" issue.
 // This call records the intent so the History UI can surface it.
+//
+// The status flip uses TransitionExecutionStatus, which issues a conditional
+// UPDATE WHERE status IN ('completed','partially_completed'). This guards
+// against lost-update races: if the row changed between the GetExecutionByID
+// read and this write (e.g. a concurrent transition), zero rows are affected
+// and we return a 409 rather than blindly overwriting. CancelledBy is stamped
+// in a follow-up SavePurchaseExecution on the freshly-returned row.
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string) (any, error) {
-	execution.Status = "revocation_requested"
-	if revokedBy != "" {
-		rb := revokedBy
-		execution.CancelledBy = &rb
-	}
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+	updated, err := h.config.TransitionExecutionStatus(
+		ctx, execution.ExecutionID,
+		[]string{"completed", "partially_completed"}, "revocation_requested")
+	if err != nil {
+		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+			return nil, NewClientError(409, fmt.Sprintf(
+				"execution %s cannot be revoked: a concurrent operation changed its status", execution.ExecutionID))
+		}
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(404, "execution not found")
+		}
 		return nil, fmt.Errorf("failed to record revocation request for execution %s: %w", execution.ExecutionID, err)
 	}
-	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, revokedBy)
+	if revokedBy != "" {
+		rb := revokedBy
+		updated.CancelledBy = &rb
+		if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
+		}
+	}
+	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, redactEmail(revokedBy))
 	return map[string]string{
 		"status":  "revocation_requested",
 		"message": "Revocation request recorded. Contact AWS Support to complete the cancellation within the allowed window.",
