@@ -145,7 +145,7 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 	if row.MonthlyCost != nil {
 		monthlyCost = *row.MonthlyCost
 	}
-	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.UpfrontCost, monthlyCost)
+	schedule, err := resolveMarketplacePriceSchedule(body.PriceSchedule, remainingMonths, row.Term, row.UpfrontCost, monthlyCost)
 	if err != nil {
 		return nil, NewClientError(400, err.Error())
 	}
@@ -379,13 +379,16 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 // resolveMarketplacePriceSchedule returns a normalised price schedule for the
 // given RI. When the caller supplied an explicit schedule it is validated and
 // returned unchanged. When the caller omitted the schedule (nil / empty), a
-// single-tier default is computed: total remaining value * 0.95 (5% discount
-// to attract buyers; the 12% AWS fee is applied by the Marketplace on top).
+// single-tier default is computed: (upfront_remaining + future_recurring) *
+// 0.95 (5% discount to attract buyers; the 12% AWS fee is applied by the
+// Marketplace on top).
 //
 // remainingMonths must be the actual remaining months (computed via
-// computeRemainingMonths from purchase timestamp and total term — NOT the raw
+// computeRemainingMonths from purchase timestamp and total term -- NOT the raw
 // term field, which would overprice older RIs).
-func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths int, upfrontCost, monthlyCost float64) ([]MarketplacePriceTier, error) {
+// originalTerm is the full contract term in months, used to prorate the
+// upfront cost to its remaining value.
+func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingMonths, originalTerm int, upfrontCost, monthlyCost float64) ([]MarketplacePriceTier, error) {
 	if len(supplied) > 0 {
 		for i, t := range supplied {
 			if t.TermMonths <= 0 {
@@ -398,11 +401,18 @@ func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingM
 		return supplied, nil
 	}
 
-	// Default: spread (upfront + recurring) * 0.95 across remaining term.
+	// Default: spread (upfront_remaining + future_recurring) * 0.95 across
+	// remaining term. The upfront cost is prorated by (remaining/original) to
+	// avoid overpricing older RIs (a 12-month RI at month 6 retains only half
+	// the upfront value; using the full amount would overprice by ~2x).
 	if remainingMonths <= 0 {
 		remainingMonths = 1 // defensive: should not happen for an active RI
 	}
-	totalValue := upfrontCost + (monthlyCost * float64(remainingMonths))
+	upfrontRemaining := 0.0
+	if originalTerm > 0 {
+		upfrontRemaining = upfrontCost * (float64(remainingMonths) / float64(originalTerm))
+	}
+	totalValue := upfrontRemaining + (monthlyCost * float64(remainingMonths))
 	listPrice := totalValue * 0.95
 	if listPrice < 0 {
 		listPrice = 0
