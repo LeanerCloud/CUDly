@@ -144,9 +144,13 @@ func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, 
 }
 
 // resolveAccountNamesByID fetches the complete account list once and returns
-// a map from account ID → display name. Used by handlers that filter records
-// (recommendations, purchases, history) by account ID but need name-based
-// matching in auth.MatchesAccount.
+// a map from account identifier → display name. The map is keyed by BOTH
+// the internal UUID (CloudAccount.ID) and the cloud-provider external ID
+// (CloudAccount.ExternalID, e.g. an AWS account number or Azure subscription
+// ID). Dual-keying is necessary because different record types use different
+// identifiers: recommendation records carry the UUID (cloud_account_id FK)
+// while legacy purchase_history rows carry the external ID (account_id
+// VARCHAR). Without both keys, the name lookup always misses for one path.
 //
 // Returns an empty map on error; callers fall through to ID-only matching,
 // which is still safe (MatchesAccount falls back to ID comparison).
@@ -155,9 +159,13 @@ func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string
 	if err != nil {
 		return map[string]string{}
 	}
-	nameByID := make(map[string]string, len(accounts))
+	// Allocate 2× capacity since each account contributes two keys.
+	nameByID := make(map[string]string, len(accounts)*2)
 	for _, a := range accounts {
 		nameByID[a.ID] = a.Name
+		if a.ExternalID != "" {
+			nameByID[a.ExternalID] = a.Name
+		}
 	}
 	return nameByID
 }

@@ -93,10 +93,15 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 	}
 
 	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	// Use realistic fixtures: CloudAccount.ID is a UUID; CloudAccount.ExternalID is
+	// the provider external ID (e.g. AWS account number) that matches
+	// PurchaseHistoryRecord.AccountID. The name lookup in resolveAccountNamesByID
+	// must key by ExternalID, not UUID, to find the name — this is the regression
+	// guard for issue #952.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{
-			{ID: "acc-active", Name: "Active Account"},
-			{ID: "acc-expired", Name: "Expired Account"},
+			{ID: "11111111-0000-0000-0000-000000000001", ExternalID: "acc-active", Name: "Active Account"},
+			{ID: "11111111-0000-0000-0000-000000000002", ExternalID: "acc-expired", Name: "Expired Account"},
 		}, nil
 	}
 
@@ -111,7 +116,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 	row := resp.Commitments[0]
 	assert.Equal(t, "acc-active:p-active", row.ID, "id namespaces account+purchase")
 	assert.Equal(t, "acc-active", row.AccountID)
-	assert.Equal(t, "Active Account", row.AccountName, "account name must be joined from ListCloudAccounts")
+	assert.Equal(t, "Active Account", row.AccountName, "account name must be resolved via ExternalID (issue #952)")
 	assert.Equal(t, "aws", row.Provider)
 	assert.Equal(t, "ec2", row.Service)
 	assert.Equal(t, 2, row.Count)
@@ -149,7 +154,7 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 
 	mockStore.On("GetPurchaseHistory", ctx, "acc-1", config.MaxListLimit).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
-		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
+		return []config.CloudAccount{{ID: "22222222-0000-0000-0000-000000000001", ExternalID: "acc-1", Name: "Account One"}}, nil
 	}
 
 	mockAuth, req := adminInventoryReq(ctx)
