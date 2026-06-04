@@ -699,28 +699,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 		}
 	}
 	if len(f.AccountIDs) > 0 || len(f.ExternalIDs) > 0 {
-		// AccountIDs are cloud_accounts UUIDs; ExternalIDs are the cloud-provider
-		// external account numbers resolved from them. An execution's effective
-		// account id may be EITHER representation: exec.CloudAccountID and the
-		// per-rec CloudAccountID hold the UUID for UUID-attributed executions,
-		// while a legacy/ambient execution may only carry the external number.
-		// Match against both sets so an external-id-only pending row isn't
-		// dropped (the mirror of the SQL dual-column predicate, issue #701/#498).
-		//
-		// Use the same two-level account resolution as executionToHistoryRow:
-		// exec.CloudAccountID first, then the rec-level fallback. This ensures
-		// web bulk-purchase executions (exec.CloudAccountID == nil) are not
-		// silently dropped when the caller filters by account.
-		var accountID string
-		if exec.CloudAccountID != nil {
-			accountID = *exec.CloudAccountID
-		} else {
-			accountID = collapseRecommendationAccount(exec.Recommendations)
-		}
-		if accountID == "" {
-			return false
-		}
-		if !stringInSlice(accountID, f.AccountIDs) && !stringInSlice(accountID, f.ExternalIDs) {
+		if !accountMatchesFilters(exec, f.AccountIDs, f.ExternalIDs) {
 			return false
 		}
 	}
@@ -730,6 +709,33 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 		}
 	}
 	return true
+}
+
+// accountMatchesFilters pulls the dual-id account-match logic out of
+// matchesExecution to keep it under the cyclomatic limit.
+//
+// AccountIDs are cloud_accounts UUIDs; ExternalIDs are the cloud-provider
+// external account numbers resolved from them. An execution's effective
+// account ID may be EITHER representation: exec.CloudAccountID and the
+// per-rec CloudAccountID hold the UUID for UUID-attributed executions,
+// while a legacy/ambient execution may only carry the external number.
+// Match against both sets so an external-id-only pending row is not
+// dropped (the mirror of the SQL dual-column predicate, issue #701/#498).
+//
+// Uses the same two-level account resolution as executionToHistoryRow:
+// exec.CloudAccountID first, then the rec-level fallback, so web bulk-purchase
+// executions (exec.CloudAccountID == nil) are not silently dropped.
+func accountMatchesFilters(exec config.PurchaseExecution, accountIDs, externalIDs []string) bool {
+	var accountID string
+	if exec.CloudAccountID != nil {
+		accountID = *exec.CloudAccountID
+	} else {
+		accountID = collapseRecommendationAccount(exec.Recommendations)
+	}
+	if accountID == "" {
+		return false
+	}
+	return stringInSlice(accountID, accountIDs) || stringInSlice(accountID, externalIDs)
 }
 
 // executionHasProvider reports whether any of the execution's

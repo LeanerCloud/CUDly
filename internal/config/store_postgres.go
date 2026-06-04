@@ -1391,6 +1391,31 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// appendAccountPredicate pulls the dual-column account-predicate arg-building
+// branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
+//
+// Either list alone is sufficient: a UUID-only filter still matches
+// NULL-cloud_account_id rows via the resolved external IDs, and an
+// external-only filter matches UUID-only rows once the caller resolves them.
+// Both empty returns conds/args unchanged (no account clause -> all accounts).
+// The OR is wrapped in parentheses so it composes with the surrounding AND chain.
+func appendAccountPredicate(conds []string, args []any, accountIDs, externalIDs []string) ([]string, []any) {
+	if len(accountIDs) == 0 && len(externalIDs) == 0 {
+		return conds, args
+	}
+	var ors []string
+	if len(accountIDs) > 0 {
+		args = append(args, accountIDs)
+		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
+	}
+	if len(externalIDs) > 0 {
+		args = append(args, externalIDs)
+		ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+	}
+	conds = append(conds, "("+strings.Join(ors, " OR ")+")")
+	return conds, args
+}
+
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the
 // supplied filter set, newest-first, capped at filter.Limit. See the
 // StoreInterface docstring and PurchaseHistoryFilter for the per-field
@@ -1437,26 +1462,7 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	if filter.Provider != "" {
 		add("provider = $%d", filter.Provider)
 	}
-	// Dual-column account predicate. Either list alone is sufficient: a UUID-only
-	// filter still matches NULL-cloud_account_id rows via the resolved external
-	// ids, and an external-only filter matches UUID-only rows once the caller has
-	// resolved them. Both empty -> no account clause (all accounts). Build the OR
-	// as a single bracketed condition so it composes with the AND of the other
-	// clauses. NULL rows in the non-matching column are simply not selected by
-	// ANY(), so unattributed rows are still excluded (issue #211 semantics) unless
-	// they match the other column.
-	if len(filter.AccountIDs) > 0 || len(filter.ExternalIDs) > 0 {
-		var ors []string
-		if len(filter.AccountIDs) > 0 {
-			args = append(args, filter.AccountIDs)
-			ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
-		}
-		if len(filter.ExternalIDs) > 0 {
-			args = append(args, filter.ExternalIDs)
-			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
-		}
-		conds = append(conds, "("+strings.Join(ors, " OR ")+")")
-	}
+	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDs)
 	if filter.Start != nil {
 		add("timestamp >= $%d", *filter.Start)
 	}
