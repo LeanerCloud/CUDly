@@ -72,39 +72,34 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 			"fresh bootstrap admin (with-password path) must have the Administrators group assigned")
 	})
 
-	t.Run("post-migration drift repair", func(t *testing.T) {
+	t.Run("re-run with existing correct admin (post-057 idempotency)", func(t *testing.T) {
+		// Migration 000057 added a CHECK constraint (users_min_one_group)
+		// that prevents group_ids from being NULL or empty, so the
+		// pre-057 drift scenario (empty group_ids on an existing admin row)
+		// is structurally impossible post-057. This sub-test verifies that
+		// re-running RunMigrations when the admin already exists with the
+		// correct group_ids is a no-op that neither fails nor doubles the
+		// group entry (issue #945).
 		container, err := testhelpers.SetupPostgresContainer(ctx, t)
 		require.NoError(t, err)
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		// First pass: run migrations only, no admin yet. Migration 000024
-		// seeds the Administrators group row but does not insert any
-		// admin user.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		// First pass: create admin via the normal path (migrations + bootstrap).
+		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, adminEmail, ""))
 
-		// Simulate an out-of-band manual DB seed that inserted an admin
-		// without group_ids (the bug pattern from issue #351 - happens
-		// when an operator runs INSERT INTO users directly).
-		_, err = pool.Exec(ctx, `
-			INSERT INTO users (id, email, password_hash, salt, role, active, group_ids, created_at, updated_at)
-			VALUES (gen_random_uuid(), $1, '', '', 'admin', false, '{}', NOW(), NOW())
-		`, adminEmail)
-		require.NoError(t, err)
+		initial := queryAdminGroupIDs(t, ctx, pool, adminEmail)
+		require.Equal(t, []string{defaultAdminGroupIDTest}, initial,
+			"test setup: admin must have the Administrators group after first run")
 
-		// Verify the drift state before re-running RunMigrations.
-		drifted := queryAdminGroupIDs(t, ctx, pool, adminEmail)
-		require.Empty(t, drifted, "test setup: admin should start with empty group_ids")
-
-		// Second pass: re-run RunMigrations with the admin email. The
-		// m.Up() inside is a no-op (already at head, returns
-		// ErrNoChange) but ensureAdminUser still fires and triggers
-		// the code-level backfill via assignAdminGroupAndWarn.
+		// Second pass: re-run RunMigrations with the same admin email.
+		// ensureAdminUser fires again; ON CONFLICT DO NOTHING skips the
+		// insert; assignAdminGroupAndWarn is a no-op (group_ids is non-empty).
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, adminEmail, ""))
 
 		got := queryAdminGroupIDs(t, ctx, pool, adminEmail)
 		assert.Equal(t, []string{defaultAdminGroupIDTest}, got,
-			"post-migration drift must self-heal on the next ensureAdminUser run")
+			"re-running RunMigrations on an existing correctly-grouped admin must be a no-op")
 	})
 
 	t.Run("idempotency", func(t *testing.T) {
@@ -149,7 +144,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 
 		_, err = pool.Exec(ctx, `
 			UPDATE users SET group_ids = ARRAY[$1]::UUID[]
-			WHERE email = $2 AND role = 'admin'
+			WHERE email = $2
 		`, customGroupID, adminEmail)
 		require.NoError(t, err)
 
