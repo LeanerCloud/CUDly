@@ -77,13 +77,14 @@ export type Resource =
 export const ADMINISTRATORS_GROUP_ID = '00000000-0000-5000-8000-000000000001';
 
 /**
- * Well-known group UUID for the Purchaser group seeded by migration
- * 000058 (issue #923). The three money-spending verbs
- * (execute:purchases, approve-any:purchases, retry-any:purchases) are
- * carved out of the admin:* wildcard and require explicit membership
- * in this group (or a custom group that grants the same verbs).
+ * Well-known group UUID for the Purchaser group relocated by migration
+ * 000064 (issue #942; originally seeded for issue #923). The three
+ * money-spending verbs (execute:purchases, approve-any:purchases,
+ * retry-any:purchases) are carved out of the admin:* wildcard and
+ * require explicit membership in this group (or a custom group that
+ * grants the same verbs).
  */
-export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000005';
+export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000007';
 
 /**
  * The set of (action, resource) pairs carved out of the admin:*

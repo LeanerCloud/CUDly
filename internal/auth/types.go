@@ -310,10 +310,11 @@ const (
 // group so the group card shows members on a fresh install.
 const DefaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 
-// DefaultPurchaserGroupID is the fixed UUID of the Purchaser group seeded
-// by migration 000054. It holds the three money-spending verbs carved out
-// of the admin:* wildcard (issue #923).
-const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000005"
+// DefaultPurchaserGroupID is the fixed UUID of the Purchaser group, relocated
+// by migration 000064 to resolve the UUID collision with "Standard Users"
+// (issue #942). It holds the three money-spending verbs carved out of the
+// admin:* wildcard (issue #923).
+const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000007"
 
 // GroupPurchaser is the canonical name of the system-managed Purchaser
 // group. MUST match the literal name inserted by migration
