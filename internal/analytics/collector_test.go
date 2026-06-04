@@ -200,7 +200,7 @@ func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return nil, nil
 }
 
-func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, providerFilter string, accountIDs []string, start, end *time.Time, limit int) ([]config.PurchaseHistoryRecord, error) {
+func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter config.PurchaseHistoryFilter) ([]config.PurchaseHistoryRecord, error) {
 	return nil, nil
 }
 

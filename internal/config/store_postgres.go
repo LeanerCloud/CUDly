@@ -1392,19 +1392,33 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 }
 
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the
-// supplied filter set, newest-first, capped at limit. See the StoreInterface
-// docstring for the per-filter semantics. Each WHERE clause is appended
-// only when its filter is populated, so callers that pass an empty
-// providerFilter / nil accountIDs / nil dates get the same plan-shape as
-// GetAllPurchaseHistory. Implementation mirrors buildRecommendationFilter
+// supplied filter set, newest-first, capped at filter.Limit. See the
+// StoreInterface docstring and PurchaseHistoryFilter for the per-field
+// semantics. Each WHERE clause is appended only when its field is populated,
+// so an empty filter gets the same plan-shape as GetAllPurchaseHistory.
+// Implementation mirrors buildRecommendationFilter
 // (store_postgres_recommendations.go).
+//
+// The account predicate matches BOTH identifier columns:
+//
+//	(cloud_account_id = ANY($uuids) OR account_id = ANY($externals))
+//
+// purchase_history carries two account identifiers and either may be the only
+// one populated on a given row: cloud_account_id (the cloud_accounts UUID FK,
+// added in migration 000011 with no backfill, so NULL on every direct-execute /
+// ambient / pre-000011 row) and account_id (the cloud-provider external number,
+// e.g. an AWS account number, always populated). The top-bar Account chip emits
+// the UUID, so a UUID-only predicate silently dropped every NULL-cloud_account_id
+// row (issue #701/#498) while an external-only predicate dropped every row that
+// only has the UUID (issue #866). Matching both columns includes rows written by
+// either path. The caller resolves the requested UUIDs to their (provider,
+// external_id) pairs scoped to the user's accessible accounts before populating
+// ExternalIDs, so cross-provider external-id reuse cannot leak.
 func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	ctx context.Context,
-	providerFilter string,
-	accountIDs []string,
-	start, end *time.Time,
-	limit int,
+	filter PurchaseHistoryFilter,
 ) ([]PurchaseHistoryRecord, error) {
+	limit := filter.Limit
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
@@ -1420,19 +1434,34 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
 		args = append(args, val)
 	}
-	if providerFilter != "" {
-		add("provider = $%d", providerFilter)
+	if filter.Provider != "" {
+		add("provider = $%d", filter.Provider)
 	}
-	if len(accountIDs) > 0 {
-		// NULL cloud_account_id rows are excluded once a list is supplied,
-		// same as buildRecommendationFilter (issue #211 semantics).
-		add("cloud_account_id = ANY($%d)", accountIDs)
+	// Dual-column account predicate. Either list alone is sufficient: a UUID-only
+	// filter still matches NULL-cloud_account_id rows via the resolved external
+	// ids, and an external-only filter matches UUID-only rows once the caller has
+	// resolved them. Both empty -> no account clause (all accounts). Build the OR
+	// as a single bracketed condition so it composes with the AND of the other
+	// clauses. NULL rows in the non-matching column are simply not selected by
+	// ANY(), so unattributed rows are still excluded (issue #211 semantics) unless
+	// they match the other column.
+	if len(filter.AccountIDs) > 0 || len(filter.ExternalIDs) > 0 {
+		var ors []string
+		if len(filter.AccountIDs) > 0 {
+			args = append(args, filter.AccountIDs)
+			ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
+		}
+		if len(filter.ExternalIDs) > 0 {
+			args = append(args, filter.ExternalIDs)
+			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+		}
+		conds = append(conds, "("+strings.Join(ors, " OR ")+")")
 	}
-	if start != nil {
-		add("timestamp >= $%d", *start)
+	if filter.Start != nil {
+		add("timestamp >= $%d", *filter.Start)
 	}
-	if end != nil {
-		add("timestamp <= $%d", *end)
+	if filter.End != nil {
+		add("timestamp <= $%d", *filter.End)
 	}
 
 	where := ""
