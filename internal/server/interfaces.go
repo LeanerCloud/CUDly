@@ -28,6 +28,15 @@ type PurchaseManagerInterface interface {
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
 	ApproveAndExecute(ctx context.Context, execID, actor string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
+	// RecoverStrandedApprovals sweeps purchase_executions stranded in the
+	// "approved" status past the internal staleApprovedThreshold and, for
+	// AWS-only executions, idempotently re-drives them to completion (so an
+	// interrupted sync run actually finishes) before the reaper would fail
+	// them; mixed/Azure/GCP/legacy rows are safe-failed for visibility.
+	// Returns the number of rows acted on. Wired into the
+	// "reap_stuck_purchases" scheduled task ahead of ReapStuckExecutions.
+	// See issue #632.
+	RecoverStrandedApprovals(ctx context.Context) (int, error)
 	// ReapStuckExecutions sweeps purchase_executions stuck in
 	// approved/running longer than reapAfter and flips them to "failed"
 	// via the existing TransitionExecutionStatus CAS. Wired into the

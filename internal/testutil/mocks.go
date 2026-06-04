@@ -45,6 +45,7 @@ type MockPurchaseManager struct {
 	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string) error
 	ApproveAndExecuteFunc                 func(ctx context.Context, execID, actor string) error
 	CancelExecutionFunc                   func(ctx context.Context, execID, token, actor string) error
+	RecoverStrandedApprovalsFunc          func(ctx context.Context) (int, error)
 	ReapStuckExecutionsFunc               func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
 }
 
@@ -88,6 +89,13 @@ func (m *MockPurchaseManager) CancelExecution(ctx context.Context, execID, token
 		return m.CancelExecutionFunc(ctx, execID, token, actor)
 	}
 	return nil
+}
+
+func (m *MockPurchaseManager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
+	if m.RecoverStrandedApprovalsFunc != nil {
+		return m.RecoverStrandedApprovalsFunc(ctx)
+	}
+	return 0, nil
 }
 
 func (m *MockPurchaseManager) ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {

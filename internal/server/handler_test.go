@@ -152,6 +152,65 @@ func TestHandleScheduledTask(t *testing.T) {
 	}
 }
 
+// TestHandleReapStuckPurchasesRunsRecoveryFirst is the regression test for
+// issue #632: the AWS-scoped re-drive sweep (RecoverStrandedApprovals, added
+// by PR #728) was built and unit-tested but never dispatched at runtime, so
+// stranded "approved" executions were only ever failed by the reaper instead
+// of being re-driven to completion. This asserts that the reap_stuck_purchases
+// task now invokes RecoverStrandedApprovals BEFORE ReapStuckExecutions, and
+// that a recovery error does not block the reaper (the durable safety net).
+func TestHandleReapStuckPurchasesRunsRecoveryFirst(t *testing.T) {
+	t.Run("recovery runs before reaper", func(t *testing.T) {
+		t.Setenv("PURCHASE_APPROVED_REAP_AFTER", "")
+		ctx := testutil.TestContext(t)
+
+		var order []string
+		mockPurchase := &testutil.MockPurchaseManager{
+			RecoverStrandedApprovalsFunc: func(ctx context.Context) (int, error) {
+				order = append(order, "recover")
+				return 1, nil
+			},
+			ReapStuckExecutionsFunc: func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {
+				order = append(order, "reap")
+				return &purchase.ReapResult{}, nil
+			},
+		}
+
+		app := &Application{Scheduler: &testutil.MockScheduler{}, Purchase: mockPurchase}
+		_, err := app.HandleScheduledTask(ctx, TaskReapStuckPurchases)
+		testutil.AssertNoError(t, err)
+
+		if len(order) != 2 || order[0] != "recover" || order[1] != "reap" {
+			t.Fatalf("expected recovery then reaper, got %v", order)
+		}
+	})
+
+	t.Run("recovery error does not block reaper", func(t *testing.T) {
+		t.Setenv("PURCHASE_APPROVED_REAP_AFTER", "")
+		ctx := testutil.TestContext(t)
+
+		reaped := false
+		mockPurchase := &testutil.MockPurchaseManager{
+			RecoverStrandedApprovalsFunc: func(ctx context.Context) (int, error) {
+				return 0, errors.New("recovery sweep db error")
+			},
+			ReapStuckExecutionsFunc: func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error) {
+				reaped = true
+				return &purchase.ReapResult{}, nil
+			},
+		}
+
+		app := &Application{Scheduler: &testutil.MockScheduler{}, Purchase: mockPurchase}
+		_, err := app.HandleScheduledTask(ctx, TaskReapStuckPurchases)
+		// Recovery failure is logged, not propagated; the reaper still runs
+		// and the task succeeds on the reaper's result.
+		testutil.AssertNoError(t, err)
+		if !reaped {
+			t.Fatal("reaper must still run when recovery sweep errors")
+		}
+	})
+}
+
 func TestTaskLockID(t *testing.T) {
 	t.Run("deterministic", func(t *testing.T) {
 		id1 := taskLockID(TaskCollectRecommendations)

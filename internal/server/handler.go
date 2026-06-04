@@ -172,17 +172,35 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 	return result, nil
 }
 
-// handleReapStuckPurchases sweeps purchase_executions stuck in
-// approved/running longer than the configured threshold and flips them
-// to "failed" via the existing TransitionExecutionStatus CAS. See
-// internal/purchase/reaper.go + issue #678 for the full rationale and
-// safety properties.
+// handleReapStuckPurchases recovers and reaps stranded purchase executions.
 //
-// The threshold is read fresh from the PURCHASE_APPROVED_REAP_AFTER env
-// var on every invocation (not cached at startup) so an ops tune via
+// It runs two sweeps in order:
+//  1. RecoverStrandedApprovals (issue #632): for executions stranded in
+//     "approved" past the internal staleApprovedThreshold, idempotently
+//     re-drives AWS-only rows to completion so an interrupted sync run
+//     actually finishes, and safe-fails mixed/Azure/GCP/legacy rows.
+//     This must run BEFORE the reaper so AWS strands get a chance to
+//     complete rather than being unconditionally failed.
+//  2. ReapStuckExecutions (issue #678): flips anything still stuck in
+//     approved/running past the configured threshold to "failed" via the
+//     existing TransitionExecutionStatus CAS, so no row can be permanently
+//     stranded. See internal/purchase/reaper.go for the safety properties.
+//
+// The reap threshold is read fresh from the PURCHASE_APPROVED_REAP_AFTER
+// env var on every invocation (not cached at startup) so an ops tune via
 // Lambda env-var rotation takes effect on the next sweep without a
 // redeploy.
+//
+// A recovery-sweep error is logged but NOT propagated: it must not block
+// the reaper, which is the durable safety net that guarantees stranded
+// rows always reach a terminal, retry-able state.
 func (app *Application) handleReapStuckPurchases(ctx context.Context) (*purchase.ReapResult, error) {
+	if recovered, recErr := app.Purchase.RecoverStrandedApprovals(ctx); recErr != nil {
+		log.Printf("Stranded-approval recovery sweep error (continuing to reaper): %v", recErr)
+	} else if recovered > 0 {
+		log.Printf("Stranded-approval recovery sweep recovered %d execution(s)", recovered)
+	}
+
 	reapAfter := purchase.ParseReapAfterFromEnv()
 	log.Printf("Reaping stuck purchase executions (threshold: %s)...", reapAfter)
 	result, err := app.Purchase.ReapStuckExecutions(ctx, reapAfter)
