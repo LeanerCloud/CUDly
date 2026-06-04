@@ -158,8 +158,10 @@ func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string
 	// Purchase history rows pre-date created_by_user_id; ownership is via
 	// account access (same model as the per-account-perms middleware used
 	// elsewhere in the history view).
+	// Fail closed for revoke-own: if the purchase has no account association
+	// we cannot verify ownership, so deny rather than allow an unscoped revoke.
 	if record.CloudAccountID == nil || *record.CloudAccountID == "" {
-		return nil
+		return NewClientError(403, "permission denied: cannot verify ownership for this purchase")
 	}
 	allowed, err := h.auth.GetAllowedAccountsAPI(ctx, userID)
 	if err != nil {
@@ -262,9 +264,8 @@ func (h *Handler) callAzureReturn(
 
 	now := time.Now().UTC()
 	if markErr := h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", ""); markErr != nil {
-		// The Azure API call succeeded; log and continue. The DB write failure
-		// does not reverse the refund.
-		logging.Warnf("revoke azure: MarkPurchaseRevoked failed for %s: %v (Azure return succeeded)", record.PurchaseID, markErr)
+		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after successful Azure return: %v", record.PurchaseID, markErr)
+		return nil, fmt.Errorf("revoke azure: refund submitted but failed to persist revocation state: %w", markErr)
 	}
 
 	// PII policy: log execution and account IDs only, not user identifiers.

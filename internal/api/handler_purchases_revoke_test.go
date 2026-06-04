@@ -448,3 +448,28 @@ func TestAuthorizeSessionRevoke_NoPermission(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
 }
+
+// TestAuthorizeSessionRevoke_RevokeOwn_NilAccountID verifies the fail-closed
+// behaviour: a revoke-own caller must be denied when the purchase row carries
+// no cloud_account_id (legacy/unscoped row), because ownership cannot be
+// verified without an account association.
+func TestAuthorizeSessionRevoke_RevokeOwn_NilAccountID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-own", "purchases").Return(true, nil)
+
+	h := &Handler{auth: mockAuth}
+	sess := &Session{UserID: "u-1"}
+	// Nil CloudAccountID: legacy row with no account association.
+	r := &config.PurchaseHistoryRecord{CloudAccountID: nil}
+	err := h.authorizeSessionRevoke(ctx, sess, r)
+	require.Error(t, err, "revoke-own on unscoped row must be denied")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "cannot verify ownership")
+}
