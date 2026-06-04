@@ -1811,81 +1811,94 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 
 	records := make([]PurchaseHistoryRecord, 0)
 	for rows.Next() {
-		var record PurchaseHistoryRecord
-		var planID, planName, cloudAccountID, offeringClass, listingID, listingState sql.NullString
-		var monthlyCost sql.NullFloat64
-		var revocationWindowClosesAt, revokedAt *time.Time
-		var revokedVia, supportCaseID sql.NullString
-
-		err := rows.Scan(
-			&record.AccountID,
-			&record.PurchaseID,
-			&record.Timestamp,
-			&record.Provider,
-			&record.Service,
-			&record.Region,
-			&record.ResourceType,
-			&record.Count,
-			&record.Term,
-			&record.Payment,
-			&record.UpfrontCost,
-			&monthlyCost,
-			&record.EstimatedSavings,
-			&planID,
-			&planName,
-			&record.RampStep,
-			&cloudAccountID,
-			&revocationWindowClosesAt,
-			&revokedAt,
-			&revokedVia,
-			&supportCaseID,
-			&offeringClass,
-			&listingID,
-			&listingState,
-		)
+		record, err := scanPurchaseHistoryRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
+			return nil, err
 		}
-
-		// Handle nullable monthly_cost: nil means "provider did not return a
-		// monthly breakdown"; 0.0 means "explicitly $0 recurring charge".
-		if monthlyCost.Valid {
-			v := monthlyCost.Float64
-			record.MonthlyCost = &v
-		}
-
-		// Handle nullable strings
-		if planID.Valid {
-			record.PlanID = planID.String
-		}
-		if planName.Valid {
-			record.PlanName = planName.String
-		}
-		if cloudAccountID.Valid {
-			record.CloudAccountID = &cloudAccountID.String
-		}
-		record.RevocationWindowClosesAt = revocationWindowClosesAt
-		record.RevokedAt = revokedAt
-		if revokedVia.Valid {
-			record.RevokedVia = revokedVia.String
-		}
-		if supportCaseID.Valid {
-			record.SupportCaseID = supportCaseID.String
-		}
-		if offeringClass.Valid {
-			record.OfferingClass = offeringClass.String
-		}
-		if listingID.Valid {
-			record.ListingID = listingID.String
-		}
-		if listingState.Valid {
-			record.ListingState = listingState.String
-		}
-
 		records = append(records, record)
 	}
 
 	return records, rows.Err()
+}
+
+// scanPurchaseHistoryRow scans a single purchase_history row and reconciles the
+// nullable columns into a PurchaseHistoryRecord. It is pulled out of
+// queryPurchaseHistory to keep that function under the cyclomatic limit. The
+// column order must match the SELECT lists in GetPurchaseHistory /
+// GetAllPurchaseHistory / GetPurchaseHistoryFiltered (base columns, then the
+// revocation columns from issue #290, then the marketplace columns from #292).
+func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
+	var record PurchaseHistoryRecord
+	var planID, planName, cloudAccountID, offeringClass, listingID, listingState sql.NullString
+	var monthlyCost sql.NullFloat64
+	var revocationWindowClosesAt, revokedAt *time.Time
+	var revokedVia, supportCaseID sql.NullString
+
+	if err := rows.Scan(
+		&record.AccountID,
+		&record.PurchaseID,
+		&record.Timestamp,
+		&record.Provider,
+		&record.Service,
+		&record.Region,
+		&record.ResourceType,
+		&record.Count,
+		&record.Term,
+		&record.Payment,
+		&record.UpfrontCost,
+		&monthlyCost,
+		&record.EstimatedSavings,
+		&planID,
+		&planName,
+		&record.RampStep,
+		&cloudAccountID,
+		&revocationWindowClosesAt,
+		&revokedAt,
+		&revokedVia,
+		&supportCaseID,
+		&offeringClass,
+		&listingID,
+		&listingState,
+	); err != nil {
+		return PurchaseHistoryRecord{}, fmt.Errorf("failed to scan purchase history: %w", err)
+	}
+
+	// Handle nullable monthly_cost: nil means "provider did not return a
+	// monthly breakdown"; 0.0 means "explicitly $0 recurring charge".
+	if monthlyCost.Valid {
+		v := monthlyCost.Float64
+		record.MonthlyCost = &v
+	}
+
+	// Handle nullable strings
+	if planID.Valid {
+		record.PlanID = planID.String
+	}
+	if planName.Valid {
+		record.PlanName = planName.String
+	}
+	if cloudAccountID.Valid {
+		record.CloudAccountID = &cloudAccountID.String
+	}
+	record.RevocationWindowClosesAt = revocationWindowClosesAt
+	record.RevokedAt = revokedAt
+	if revokedVia.Valid {
+		record.RevokedVia = revokedVia.String
+	}
+	if supportCaseID.Valid {
+		record.SupportCaseID = supportCaseID.String
+	}
+	if offeringClass.Valid {
+		record.OfferingClass = offeringClass.String
+	}
+	if listingID.Valid {
+		record.ListingID = listingID.String
+	}
+	if listingState.Valid {
+		record.ListingState = listingState.String
+	}
+
+	return record, nil
 }
 
 // GetPurchaseHistoryByPurchaseID returns the single purchase_history row
