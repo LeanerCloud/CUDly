@@ -506,26 +506,27 @@ var (
 )
 
 // mapMFAServiceError maps a service-layer MFA error to the right
-// client-facing status + message. Service errors land here as plain
-// fmt.Errorf strings (the auth package doesn't export every shape as
-// a sentinel because the handler is the only consumer that needs
-// status-code-level discrimination). Substring matching is OK because
-// the auth package owns these strings and tests pin them.
+// client-facing status + message. The auth package exports typed
+// sentinel errors for each user-correctable condition; we match via
+// errors.Is so a renamed error message in the service never silently
+// drifts the HTTP status. See issue #512.
 func mapMFAServiceError(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "invalid password"),
-		strings.Contains(msg, "invalid MFA code"),
-		strings.Contains(msg, "MFA code or recovery code required"),
-		strings.Contains(msg, "no MFA enrollment in progress"),
-		strings.Contains(msg, "MFA enrollment expired"),
-		strings.Contains(msg, "MFA is not enabled"):
-		return NewClientError(400, msg)
-	case strings.Contains(msg, "authentication failed"):
-		return NewClientError(401, msg)
+	case errors.Is(err, auth.ErrMFAInvalidPassword),
+		errors.Is(err, auth.ErrMFAInvalidCode),
+		errors.Is(err, auth.ErrMFACodeRequired),
+		errors.Is(err, auth.ErrMFANoEnrollmentInProgress),
+		errors.Is(err, auth.ErrMFAEnrollmentExpired),
+		errors.Is(err, auth.ErrMFANotEnabled):
+		return NewClientError(400, err.Error())
+	case errors.Is(err, auth.ErrMFAAuthFailed):
+		// Opaque 401 to prevent user enumeration: the service returns this
+		// for both "user not found" and "DB lookup failed" paths so callers
+		// cannot distinguish the two.
+		return NewClientError(401, err.Error())
 	}
 	return err
 }

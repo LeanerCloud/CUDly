@@ -46,4 +46,29 @@ var (
 	// without substring-matching the human message. See issue #497.
 	ErrMFARequired    = errors.New("mfa_required")
 	ErrInvalidMFACode = errors.New("invalid_mfa_code")
+
+	// MFA service-operation sentinels — returned (wrapped via fmt.Errorf
+	// "%w") by the MFA lifecycle methods in service_mfa.go so the API
+	// handler can map each error class to the right HTTP status code via
+	// errors.Is rather than brittle substring matching. See issue #512.
+	//
+	// ErrMFAInvalidPassword        — wrong current password on setup/disable.
+	// ErrMFAInvalidCode            — wrong TOTP or recovery code.
+	// ErrMFACodeRequired           — MFA-enabled user supplied no code on disable.
+	// ErrMFANoEnrollmentInProgress — MFAEnable called before MFASetup.
+	// ErrMFAEnrollmentExpired      — pending enrollment window elapsed.
+	// ErrMFANotEnabled             — regenerate/disable called when MFA is off.
+	// ErrMFAAuthFailed             — generic opaque auth failure (user not found or
+	//                               DB error; maps to 401 to prevent user enumeration).
+	//
+	// Message strings are intentionally identical to the pre-sentinel
+	// fmt.Errorf literals so that existing tests relying on err.Error()
+	// substrings continue to pass unchanged. See issue #512.
+	ErrMFAInvalidPassword        = errors.New("invalid password")
+	ErrMFAInvalidCode            = errors.New("invalid MFA code")
+	ErrMFACodeRequired           = errors.New("MFA code or recovery code required")
+	ErrMFANoEnrollmentInProgress = errors.New("no MFA enrollment in progress")
+	ErrMFAEnrollmentExpired      = errors.New("MFA enrollment expired")
+	ErrMFANotEnabled             = errors.New("MFA is not enabled")
+	ErrMFAAuthFailed             = errors.New("authentication failed")
 )

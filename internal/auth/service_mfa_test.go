@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -462,4 +463,168 @@ func TestLogin_WithMFA_RecoveryCode_ConsumedOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Empty(t, user.MFARecoveryCodes, "consumed recovery code must be removed from the slice")
+}
+
+// ---------------------------------------------------------------
+// Sentinel-identity tests (issue #512).
+//
+// Each test asserts that the real service returns the expected typed
+// sentinel so that a future rename of the error message string in
+// service_mfa.go causes a compile-time or test failure rather than a
+// silent HTTP-status drift. errors.Is is the contract; the message
+// text is NOT the contract (but is preserved for human readability).
+// ---------------------------------------------------------------
+
+func TestMFASetup_WrongPassword_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	_, err := service.MFASetup(ctx, user.ID, "WrongPassword!@#")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAInvalidPassword),
+		"MFASetup wrong-password must return ErrMFAInvalidPassword, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFAEnable_NoPending_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	_, err := service.MFAEnable(ctx, user.ID, "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFANoEnrollmentInProgress),
+		"MFAEnable with no pending enrollment must return ErrMFANoEnrollmentInProgress, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFAEnable_ExpiredPending_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	secret := "JBSWY3DPEHPK3PXP"
+	expiresAt := time.Now().Add(-1 * time.Minute)
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAPendingSecret = secret
+	user.MFAPendingSecretExpiresAt = &expiresAt
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockStore.On("UpdateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Maybe()
+
+	_, err := service.MFAEnable(ctx, user.ID, totpFor(secret))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAEnrollmentExpired),
+		"MFAEnable with expired enrollment must return ErrMFAEnrollmentExpired, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFAEnable_WrongCode_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	secret := "JBSWY3DPEHPK3PXP"
+	expiresAt := time.Now().Add(mfaPendingExpiry)
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAPendingSecret = secret
+	user.MFAPendingSecretExpiresAt = &expiresAt
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	_, err := service.MFAEnable(ctx, user.ID, "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
+		"MFAEnable wrong code must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFADisable_WrongPassword_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = true
+	user.MFASecret = "JBSWY3DPEHPK3PXP"
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	err := service.MFADisable(ctx, user.ID, "wrong", "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAInvalidPassword),
+		"MFADisable wrong password must return ErrMFAInvalidPassword, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFADisable_NoCode_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = true
+	user.MFASecret = "JBSWY3DPEHPK3PXP"
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	err := service.MFADisable(ctx, user.ID, "SecurePass@123", "")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFACodeRequired),
+		"MFADisable empty code must return ErrMFACodeRequired, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFADisable_WrongCode_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = true
+	user.MFASecret = "JBSWY3DPEHPK3PXP"
+	user.MFARecoveryCodes = []string{"$2a$04$hashedstub"} // won't match any real code
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	err := service.MFADisable(ctx, user.ID, "SecurePass@123", "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
+		"MFADisable wrong code must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFARegenerateRecoveryCodes_NotEnabled_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = false
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	_, err := service.MFARegenerateRecoveryCodes(ctx, user.ID, "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFANotEnabled),
+		"MFARegenerateRecoveryCodes when disabled must return ErrMFANotEnabled, got: %v", err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestMFARegenerateRecoveryCodes_WrongCode_ReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = true
+	user.MFASecret = "JBSWY3DPEHPK3PXP"
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	_, err := service.MFARegenerateRecoveryCodes(ctx, user.ID, "000000")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrMFAInvalidCode),
+		"MFARegenerateRecoveryCodes wrong TOTP must return ErrMFAInvalidCode, got: %v", err)
+	mockStore.AssertExpectations(t)
 }

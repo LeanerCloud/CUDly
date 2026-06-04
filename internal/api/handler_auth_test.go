@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -1176,6 +1177,7 @@ func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
 	assert.Equal(t, "mfa_required", ce.Error())
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
@@ -1193,6 +1195,7 @@ func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
 	assert.Equal(t, "invalid_mfa_code", ce.Error())
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaSetup_HappyPath(t *testing.T) {
@@ -1208,6 +1211,7 @@ func TestHandler_mfaSetup_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SECRET123", resp.Secret)
 	assert.Contains(t, resp.ProvisioningURI, "otpauth://")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
@@ -1215,8 +1219,11 @@ func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	session := &Session{UserID: "user-1", Email: "u@x.com"}
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
+	// The real service returns a wrapped sentinel; the handler maps it to a
+	// 400 ClientError via errors.Is (issue #512). The mock must return the
+	// same sentinel so the errors.Is check in mapMFAServiceError fires.
 	mockAuth.On("MFASetupAPI", ctx, "user-1", "wrong").
-		Return("", "", errors.New("invalid password"))
+		Return("", "", fmt.Errorf("%w", auth.ErrMFAInvalidPassword))
 
 	handler := &Handler{auth: mockAuth}
 	_, err := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("wrong")+`"}`))
@@ -1225,6 +1232,7 @@ func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.Error(), "invalid password")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaEnable_HappyPath(t *testing.T) {
@@ -1239,6 +1247,7 @@ func TestHandler_mfaEnable_HappyPath(t *testing.T) {
 	resp, err := handler.mfaEnable(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 2)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaEnable_NoSession(t *testing.T) {
@@ -1252,6 +1261,7 @@ func TestHandler_mfaEnable_NoSession(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 401, ce.code)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaDisable_HappyPath(t *testing.T) {
@@ -1264,6 +1274,7 @@ func TestHandler_mfaDisable_HappyPath(t *testing.T) {
 	handler := &Handler{auth: mockAuth}
 	_, err := handler.mfaDisable(ctx, authedReq("tok", `{"password":"`+b64("pw")+`","code":"123456"}`))
 	require.NoError(t, err)
+	mockAuth.AssertExpectations(t)
 }
 
 func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
@@ -1278,6 +1289,7 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	resp, err := handler.mfaRegenerateRecoveryCodes(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 1)
+	mockAuth.AssertExpectations(t)
 }
 
 // ErrMFARequired_test / ErrInvalidMFACode_test return the sentinel
@@ -1519,4 +1531,70 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 		"HTTP status must be identical for unknown-user and wrong-password paths")
 	assert.Equal(t, ceNotFound.Error(), ceWrongPass.Error(),
 		"error body must be identical for unknown-user and wrong-password paths to prevent enumeration")
+}
+
+// ---------------------------------------------------------------
+// mapMFAServiceError sentinel-to-HTTP-code mapping tests (issue #512).
+//
+// Each test verifies that a specific auth sentinel maps to the
+// expected HTTP status code in mapMFAServiceError. These tests would
+// fail if someone renames a sentinel value in the auth package
+// without updating the switch in mapMFAServiceError.
+// ---------------------------------------------------------------
+
+func TestMapMFAServiceError_Nil(t *testing.T) {
+	assert.Nil(t, mapMFAServiceError(nil))
+}
+
+func TestMapMFAServiceError_NonSentinelPassesThrough(t *testing.T) {
+	plain := errors.New("database connection lost")
+	got := mapMFAServiceError(plain)
+	_, isClient := IsClientError(got)
+	assert.False(t, isClient, "non-sentinel errors must not be wrapped as ClientError")
+	assert.Equal(t, plain, got)
+}
+
+func testMFASentinel400(t *testing.T, sentinel error, name string) {
+	t.Helper()
+	wrapped := fmt.Errorf("some context: %w", sentinel)
+	got := mapMFAServiceError(wrapped)
+	ce, ok := IsClientError(got)
+	require.True(t, ok, "%s must map to a ClientError, got %T: %v", name, got, got)
+	assert.Equal(t, 400, ce.code, "%s must map to HTTP 400", name)
+	assert.Contains(t, ce.Error(), sentinel.Error())
+}
+
+func TestMapMFAServiceError_InvalidPassword_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFAInvalidPassword, "ErrMFAInvalidPassword")
+}
+
+func TestMapMFAServiceError_InvalidCode_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFAInvalidCode, "ErrMFAInvalidCode")
+}
+
+func TestMapMFAServiceError_CodeRequired_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFACodeRequired, "ErrMFACodeRequired")
+}
+
+func TestMapMFAServiceError_NoEnrollmentInProgress_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFANoEnrollmentInProgress, "ErrMFANoEnrollmentInProgress")
+}
+
+func TestMapMFAServiceError_EnrollmentExpired_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFAEnrollmentExpired, "ErrMFAEnrollmentExpired")
+}
+
+func TestMapMFAServiceError_NotEnabled_Is400(t *testing.T) {
+	testMFASentinel400(t, auth.ErrMFANotEnabled, "ErrMFANotEnabled")
+}
+
+func TestMapMFAServiceError_AuthFailed_Is401(t *testing.T) {
+	// ErrMFAAuthFailed must map to 401 (not 400) to prevent user enumeration:
+	// both "user not found" and "DB error" paths surface as opaque 401.
+	wrapped := fmt.Errorf("some context: %w", auth.ErrMFAAuthFailed)
+	got := mapMFAServiceError(wrapped)
+	ce, ok := IsClientError(got)
+	require.True(t, ok, "ErrMFAAuthFailed must map to a ClientError")
+	assert.Equal(t, 401, ce.code, "ErrMFAAuthFailed must map to HTTP 401")
+	assert.Contains(t, ce.Error(), auth.ErrMFAAuthFailed.Error())
 }
