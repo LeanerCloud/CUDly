@@ -51,7 +51,17 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings := h.calculateCommitmentMetrics(ctx, legacyAccountID, cloudAccountUUIDs)
+	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, legacyAccountID, cloudAccountUUIDs)
+
+	// Populate CurrentSavings on each per-service bucket so the Home page
+	// chart can render the green "Current Savings" bars with real data.
+	// Before this fix, CurrentSavings was always zero because the aggregation
+	// in summarizeRecommendationsWithCoverage only filled PotentialSavings.
+	for svc, monthlySavings := range currentSavingsByService {
+		entry := byService[svc]
+		entry.CurrentSavings = monthlySavings
+		byService[svc] = entry
+	}
 
 	return &DashboardSummaryResponse{
 		PotentialMonthlySavings: totalSavings,
@@ -427,6 +437,22 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 	return !now.After(commitmentExpiry(p))
 }
 
+// aggregateActiveCommitmentsPerService sums EstimatedSavings of active
+// purchase history rows, grouped by their Service field. It applies the
+// shared isActiveCommitment gate (term not expired AND a successful status)
+// so both the KPI total and the per-service chart breakdowns use exactly the
+// same "active" definition.
+func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryRecord, now time.Time) map[string]float64 {
+	byService := make(map[string]float64)
+	for _, p := range purchases {
+		if !isActiveCommitment(p, now) {
+			continue
+		}
+		byService[p.Service] += p.EstimatedSavings
+	}
+	return byService
+}
+
 // calculateCommitmentMetrics aggregates active-commitment counts and monthly
 // savings from purchase history. The fetch strategy depends on the filter:
 //
@@ -439,9 +465,14 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 //
 // EstimatedSavings on purchase_history rows is always written in monthly units
 // (populated from PurchaseExecution.EstimatedSavings which derives from
-// recommendation monthly savings at purchase time — see SavePurchaseHistory
+// recommendation monthly savings at purchase time, see SavePurchaseHistory
 // and the purchase manager). No unit normalisation is needed.
-func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountID string, cloudAccountUUIDs []string) (activeCommitments int, committedMonthly, ytdSavings float64) {
+//
+// The fourth return value is the per-service breakdown of active
+// EstimatedSavings, derived from aggregateActiveCommitmentsPerService so both
+// this KPI path (committedMonthly) and the per-service chart use exactly the
+// same gate.
+func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountID string, cloudAccountUUIDs []string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
 	const fetchLimit = 1000
 
 	var (
@@ -463,11 +494,18 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountI
 
 	if err != nil {
 		// Log error but don't fail the dashboard request.
-		return 0, 0, 0
+		return 0, 0, 0, nil
 	}
 
 	currentTime := time.Now()
 	yearStart := time.Date(currentTime.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Derive the per-service breakdown from the shared primitive so the
+	// active-commitment gate is applied consistently everywhere.
+	savingsByService = aggregateActiveCommitmentsPerService(purchases, currentTime)
+	for _, v := range savingsByService {
+		committedMonthly += v
+	}
 
 	for _, p := range purchases {
 		if !isActiveCommitment(p, currentTime) {
@@ -476,9 +514,10 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountI
 
 		activeCommitments++
 
-		// EstimatedSavings is in monthly units (see doc comment above).
-		committedMonthly += p.EstimatedSavings
-
+		// committedMonthly is derived from aggregateActiveCommitmentsPerService
+		// above (same gate), so it is intentionally NOT summed here to avoid
+		// double-counting. EstimatedSavings is in monthly units (see doc above).
+		//
 		// YTD savings: count from year start or from purchase date, whichever
 		// is later, using a 30-day month approximation (same as original).
 		if p.Timestamp.Before(yearStart) {
@@ -490,7 +529,7 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountI
 		}
 	}
 
-	return activeCommitments, committedMonthly, ytdSavings
+	return activeCommitments, committedMonthly, ytdSavings, savingsByService
 }
 
 // calculateCurrentCoverage calculates the current coverage percentage
