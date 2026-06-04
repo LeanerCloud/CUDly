@@ -40,7 +40,7 @@ func TestHandler_getHistory(t *testing.T) {
 	// account_id "123456789012" is not a known cloud_accounts UUID, so it is
 	// folded into the dual-column filter as an external account number and the
 	// request routes through GetPurchaseHistoryFiltered (issue #701/#498/#866).
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"123456789012"}, Limit: 100}).Return(history, nil)
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: 100}).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -768,7 +768,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		// dropped when combined with provider/account_ids (issue #701/#498/#866).
 		mockStore, handler, req, ctx := newHandler(t)
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", ExternalIDs: []string{"123456789012"}, Limit: config.DefaultListLimit}).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: config.DefaultListLimit}).
 			Return([]config.PurchaseHistoryRecord{}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -783,7 +783,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		// dual-column filter rather than the single-column GetPurchaseHistory
 		// fast path, so its rows surface regardless of cloud_account_id.
 		mockStore, handler, req, ctx := newHandler(t)
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"123456789012"}, Limit: config.DefaultListLimit}).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: config.DefaultListLimit}).
 			Return([]config.PurchaseHistoryRecord{{AccountID: "123456789012", PurchaseID: "p-legacy"}}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -808,7 +808,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 		mockStore.On("GetPurchaseHistoryFiltered", ctx,
 			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
-				return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDs) == 0 &&
+				return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDsByProvider) == 0 &&
 					f.Start != nil && f.Start.Format("2006-01-02") == startDay &&
 					f.End != nil && f.End.Format("2006-01-02") == endDay &&
 					f.Limit == config.DefaultListLimit
@@ -1349,9 +1349,9 @@ func TestHandler_getHistory_ExternalIDOnlyAccount(t *testing.T) {
 		{AccountID: accountBExternal, PurchaseID: "p-B", Provider: "aws", Service: "ec2", UpfrontCost: 100.0, EstimatedSavings: 25.0},
 	}
 	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-		AccountIDs:  []string{accountBUUID},
-		ExternalIDs: []string{accountBExternal},
-		Limit:       config.DefaultListLimit,
+		AccountIDs:            []string{accountBUUID},
+		ExternalIDsByProvider: map[string][]string{"aws": {accountBExternal}},
+		Limit:                 config.DefaultListLimit,
 	}).Return(bRow, nil).Once()
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
@@ -1390,7 +1390,7 @@ func TestMatchesExecution_ExternalIDOnlyPending(t *testing.T) {
 	assert.False(t, uuidOnly.matchesExecution(exec), "UUID-only filter must not match an external-id-only execution")
 
 	// ...but once the external id is resolved into the filter it is retained.
-	dual := historyFilters{AccountIDs: []string{uuid}, ExternalIDs: []string{external}}
+	dual := historyFilters{AccountIDs: []string{uuid}, ExternalIDsByProvider: map[string][]string{"aws": {external}}}
 	assert.True(t, dual.matchesExecution(exec), "external-id-only pending execution must survive when its external id is in the filter")
 }
 

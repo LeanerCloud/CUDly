@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1394,13 +1395,25 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 // appendAccountPredicate pulls the dual-column account-predicate arg-building
 // branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
 //
-// Either list alone is sufficient: a UUID-only filter still matches
+// Either input alone is sufficient: a UUID-only filter still matches
 // NULL-cloud_account_id rows via the resolved external IDs, and an
 // external-only filter matches UUID-only rows once the caller resolves them.
 // Both empty returns conds/args unchanged (no account clause -> all accounts).
-// The OR is wrapped in parentheses so it composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs, externalIDs []string) ([]string, []any) {
-	if len(accountIDs) == 0 && len(externalIDs) == 0 {
+//
+// The external-id half is grouped per provider so each external number is only
+// compared against rows of its own provider:
+//
+//	(cloud_account_id = ANY($u)
+//	   OR (provider = $p1 AND account_id = ANY($e1))
+//	   OR (provider = $p2 AND account_id = ANY($e2)))
+//
+// This preserves the (provider, external_id) pairing so a filter for aws/123
+// never matches azure/123 rows. The "" provider key (legacy raw external
+// number, unknown provider) matches account_id with no provider gate. Providers
+// are sorted for deterministic SQL. The OR is wrapped in parentheses so it
+// composes with the surrounding AND chain.
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) {
+	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}
 	var ors []string
@@ -1408,12 +1421,37 @@ func appendAccountPredicate(conds []string, args []any, accountIDs, externalIDs 
 		args = append(args, accountIDs)
 		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
 	}
-	if len(externalIDs) > 0 {
-		args = append(args, externalIDs)
-		ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+	for _, provider := range sortedProviderKeys(externalIDsByProvider) {
+		exts := externalIDsByProvider[provider]
+		if len(exts) == 0 {
+			continue
+		}
+		if provider == "" {
+			args = append(args, exts)
+			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+			continue
+		}
+		args = append(args, provider)
+		providerArg := len(args)
+		args = append(args, exts)
+		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
+	}
+	if len(ors) == 0 {
+		return conds, args
 	}
 	conds = append(conds, "("+strings.Join(ors, " OR ")+")")
 	return conds, args
+}
+
+// sortedProviderKeys returns the map keys in ascending order so the generated
+// SQL (and its bind-arg ordering) is deterministic across calls and testable.
+func sortedProviderKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the
@@ -1426,7 +1464,8 @@ func appendAccountPredicate(conds []string, args []any, accountIDs, externalIDs 
 //
 // The account predicate matches BOTH identifier columns:
 //
-//	(cloud_account_id = ANY($uuids) OR account_id = ANY($externals))
+//	(cloud_account_id = ANY($uuids)
+//	   OR (provider = $p AND account_id = ANY($extsForP)) OR ...)
 //
 // purchase_history carries two account identifiers and either may be the only
 // one populated on a given row: cloud_account_id (the cloud_accounts UUID FK,
@@ -1437,8 +1476,9 @@ func appendAccountPredicate(conds []string, args []any, accountIDs, externalIDs 
 // row (issue #701/#498) while an external-only predicate dropped every row that
 // only has the UUID (issue #866). Matching both columns includes rows written by
 // either path. The caller resolves the requested UUIDs to their (provider,
-// external_id) pairs scoped to the user's accessible accounts before populating
-// ExternalIDs, so cross-provider external-id reuse cannot leak.
+// external_id) pairs scoped to the user's accessible accounts and groups the
+// external ids by provider, so the external-id half stays provider-scoped and a
+// reused external number (aws/123 vs azure/123) cannot leak the wrong rows.
 func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	ctx context.Context,
 	filter PurchaseHistoryFilter,
@@ -1462,7 +1502,7 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	if filter.Provider != "" {
 		add("provider = $%d", filter.Provider)
 	}
-	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDs)
+	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
 	if filter.Start != nil {
 		add("timestamp >= $%d", *filter.Start)
 	}

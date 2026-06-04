@@ -544,17 +544,21 @@ type historyFilters struct {
 	Provider        string
 	LegacyAccountID string
 	AccountIDs      []string
-	// ExternalIDs are the cloud-provider external account numbers resolved from
-	// AccountIDs (the UUIDs) via Handler.resolveAccountFilterIDs. Populated by
+	// ExternalIDsByProvider are the cloud-provider external account numbers
+	// resolved from AccountIDs (the UUIDs) via Handler.resolveAccountFilterIDs,
+	// grouped by provider so the external-id match stays provider-scoped (a
+	// reused external number across providers cannot leak rows). Populated by
 	// the handler AFTER parse (the resolution needs a DB read), not by
-	// parseHistoryFilters. Both the SQL path (account_id = ANY) and the
-	// in-memory matchesExecution use them so a row/execution that carries only
-	// the external id (cloud_account_id NULL) is still matched (issue #701/#498).
-	ExternalIDs []string
-	HasDate     bool
-	Start       time.Time
-	End         time.Time
-	Limit       int
+	// parseHistoryFilters. Both the SQL path (provider = $p AND account_id =
+	// ANY) and the in-memory matchesExecution use them so a row/execution that
+	// carries only the external id (cloud_account_id NULL) is still matched
+	// (issue #701/#498). The "" provider key means "provider unknown" and
+	// matches the external id regardless of provider (legacy behaviour).
+	ExternalIDsByProvider map[string][]string
+	HasDate               bool
+	Start                 time.Time
+	End                   time.Time
+	Limit                 int
 }
 
 // parseHistoryFilters validates and normalises the /api/history query string.
@@ -698,8 +702,8 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 			return false
 		}
 	}
-	if len(f.AccountIDs) > 0 || len(f.ExternalIDs) > 0 {
-		if !accountMatchesFilters(exec, f.AccountIDs, f.ExternalIDs) {
+	if len(f.AccountIDs) > 0 || len(f.ExternalIDsByProvider) > 0 {
+		if !accountMatchesFilters(exec, f.AccountIDs, f.ExternalIDsByProvider) {
 			return false
 		}
 	}
@@ -714,18 +718,24 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 // accountMatchesFilters pulls the dual-id account-match logic out of
 // matchesExecution to keep it under the cyclomatic limit.
 //
-// AccountIDs are cloud_accounts UUIDs; ExternalIDs are the cloud-provider
-// external account numbers resolved from them. An execution's effective
-// account ID may be EITHER representation: exec.CloudAccountID and the
-// per-rec CloudAccountID hold the UUID for UUID-attributed executions,
-// while a legacy/ambient execution may only carry the external number.
-// Match against both sets so an external-id-only pending row is not
-// dropped (the mirror of the SQL dual-column predicate, issue #701/#498).
+// AccountIDs are cloud_accounts UUIDs; externalIDsByProvider are the
+// cloud-provider external account numbers resolved from them, grouped by
+// provider. An execution's effective account ID may be EITHER representation:
+// exec.CloudAccountID and the per-rec CloudAccountID hold the UUID for
+// UUID-attributed executions, while a legacy/ambient execution may only carry
+// the external number. Match against both so an external-id-only pending row is
+// not dropped (the mirror of the SQL dual-column predicate, issue #701/#498).
+//
+// The external-id match is provider-scoped: an external number matches only when
+// it is listed under the execution's own provider, or under the "" key (unknown
+// provider, legacy behaviour). This mirrors the SQL (provider = $p AND
+// account_id = ANY(...)) and keeps a reused external number across providers
+// (aws/123 vs azure/123) from matching the wrong execution.
 //
 // Uses the same two-level account resolution as executionToHistoryRow:
 // exec.CloudAccountID first, then the rec-level fallback, so web bulk-purchase
 // executions (exec.CloudAccountID == nil) are not silently dropped.
-func accountMatchesFilters(exec config.PurchaseExecution, accountIDs, externalIDs []string) bool {
+func accountMatchesFilters(exec config.PurchaseExecution, accountIDs []string, externalIDsByProvider map[string][]string) bool {
 	var accountID string
 	if exec.CloudAccountID != nil {
 		accountID = *exec.CloudAccountID
@@ -735,7 +745,29 @@ func accountMatchesFilters(exec config.PurchaseExecution, accountIDs, externalID
 	if accountID == "" {
 		return false
 	}
-	return stringInSlice(accountID, accountIDs) || stringInSlice(accountID, externalIDs)
+	if stringInSlice(accountID, accountIDs) {
+		return true
+	}
+	// External-id half: only the execution's own provider group (plus the ""
+	// unknown-provider group) may match, so a reused external number across
+	// providers can't leak.
+	provider := executionProvider(exec)
+	if provider != "" && stringInSlice(accountID, externalIDsByProvider[provider]) {
+		return true
+	}
+	return stringInSlice(accountID, externalIDsByProvider[""])
+}
+
+// executionProvider returns the execution's provider, taken from its first
+// recommendation (all recs in an execution share a provider in practice).
+// Returns "" when no recommendation carries one.
+func executionProvider(exec config.PurchaseExecution) string {
+	for _, r := range exec.Recommendations {
+		if r.Provider != "" {
+			return r.Provider
+		}
+	}
+	return ""
 }
 
 // executionHasProvider reports whether any of the execution's
@@ -765,19 +797,21 @@ func stringInSlice(needle string, haystack []string) bool {
 // fetchPurchaseHistory reads purchases from the store, applying the parsed
 // filter set. The store-level filtered method (issue #701) pushes provider /
 // account / timestamp range into SQL. The account predicate is dual-column
-// (cloud_account_id = ANY(AccountIDs) OR account_id = ANY(ExternalIDs)) so a
-// row that carries only one of the two account representations is still
-// matched — the original #701/#498/#866 bug was that filtering on the sparse
-// cloud_account_id UUID column alone dropped every direct-execute/ambient row.
+// (cloud_account_id = ANY(AccountIDs) OR (provider = $p AND account_id =
+// ANY(ExternalIDsByProvider[p]))) so a row that carries only one of the two
+// account representations is still matched — the original #701/#498/#866 bug was
+// that filtering on the sparse cloud_account_id UUID column alone dropped every
+// direct-execute/ambient row. Grouping the external ids by provider keeps a
+// reused external number across providers from leaking the wrong rows.
 //
 // The no-filter case still uses GetAllPurchaseHistory as a fast path. The
 // legacy singular account_id (LegacyAccountID) is resolved to the same dual-
 // column inputs by the caller (getHistory) and arrives here folded into
-// AccountIDs/ExternalIDs, so there is no longer a separate single-column
-// legacy path to coerce identifiers through.
+// AccountIDs/ExternalIDsByProvider, so there is no longer a separate
+// single-column legacy path to coerce identifiers through.
 func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, error) {
 	noFilters := !filters.HasDate && filters.Provider == "" &&
-		len(filters.AccountIDs) == 0 && len(filters.ExternalIDs) == 0
+		len(filters.AccountIDs) == 0 && len(filters.ExternalIDsByProvider) == 0
 	if noFilters {
 		return h.config.GetAllPurchaseHistory(ctx, filters.Limit)
 	}
@@ -789,35 +823,40 @@ func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilte
 		endPtr = &e
 	}
 	return h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
-		Provider:    filters.Provider,
-		AccountIDs:  filters.AccountIDs,
-		ExternalIDs: filters.ExternalIDs,
-		Start:       startPtr,
-		End:         endPtr,
-		Limit:       filters.Limit,
+		Provider:              filters.Provider,
+		AccountIDs:            filters.AccountIDs,
+		ExternalIDsByProvider: filters.ExternalIDsByProvider,
+		Start:                 startPtr,
+		End:                   endPtr,
+		Limit:                 filters.Limit,
 	})
 }
 
-// resolveHistoryAccountFilter populates filters.AccountIDs / filters.ExternalIDs
-// from the parsed account params so the SQL and in-memory paths share one
-// dual-column account set. The plural `account_ids` (UUIDs) are resolved to
-// their external numbers via resolveAccountFilterIDs. The singular legacy
-// `account_id` is folded in too: it is a top-bar chip UUID for current callers
-// (resolved to UUID + external) or a raw external number for pre-UUID callers.
+// resolveHistoryAccountFilter populates filters.AccountIDs /
+// filters.ExternalIDsByProvider from the parsed account params so the SQL and
+// in-memory paths share one dual-column account set. The plural `account_ids`
+// (UUIDs) are resolved to their per-provider external numbers via
+// resolveAccountFilterIDs. The singular legacy `account_id` is folded in too: it
+// is a top-bar chip UUID for current callers (resolved to UUID + external) or a
+// raw external number for pre-UUID callers (grouped under the "" provider key).
 // Best-effort: resolution failures leave the UUID-only set in place (no worse
 // than the pre-fix behaviour), and the per-record allowed_accounts filter still
 // enforces scoping downstream.
 func (h *Handler) resolveHistoryAccountFilter(ctx context.Context, filters *historyFilters) {
-	uuids, externals := h.resolveAccountFilterIDs(ctx, filters.AccountIDs)
+	uuids, externalsByProvider := h.resolveAccountFilterIDs(ctx, filters.AccountIDs)
 
 	if filters.LegacyAccountID != "" {
-		lUUIDs, lExternals := h.resolveSingleAccountFilterIDs(ctx, filters.LegacyAccountID)
+		lUUIDs, lExternalsByProvider := h.resolveSingleAccountFilterIDs(ctx, filters.LegacyAccountID)
 		uuids = appendMissing(uuids, lUUIDs...)
-		externals = appendMissing(externals, lExternals...)
+		for provider, exts := range lExternalsByProvider {
+			for _, ext := range exts {
+				externalsByProvider = addExternalIDForProvider(externalsByProvider, provider, ext)
+			}
+		}
 	}
 
 	filters.AccountIDs = uuids
-	filters.ExternalIDs = externals
+	filters.ExternalIDsByProvider = externalsByProvider
 }
 
 // appendMissing appends each value to dst only if not already present,

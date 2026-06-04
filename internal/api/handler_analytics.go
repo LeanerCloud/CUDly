@@ -70,10 +70,10 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	// Resolve the requested account (a top-bar chip UUID, or "" for all) to the
 	// dual-column filter inputs so rows that carry only the external account_id
 	// (cloud_account_id NULL) are aggregated (issue #701/#498/#866).
-	accountUUIDs, accountExternalIDs := h.resolveSingleAccountFilterIDs(ctx, accountID)
+	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	// Aggregate history from the analytics client (Postgres-backed).
-	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountUUIDs, accountExternalIDs, start, end, interval)
+	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, interval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query analytics: %w", err)
 	}
@@ -115,10 +115,10 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 	}
 
 	// Resolve account UUID -> dual-column inputs; see getHistoryAnalytics.
-	accountUUIDs, accountExternalIDs := h.resolveSingleAccountFilterIDs(ctx, accountID)
+	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	// Fetch the breakdown from the analytics client (Postgres-backed).
-	data, err := h.analyticsClient.QueryBreakdown(ctx, accountUUIDs, accountExternalIDs, start, end, dimension)
+	data, err := h.analyticsClient.QueryBreakdown(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, dimension)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query breakdown: %w", err)
 	}

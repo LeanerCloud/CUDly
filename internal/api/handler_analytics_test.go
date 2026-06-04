@@ -18,8 +18,8 @@ type MockAnalyticsClient struct {
 	mock.Mock
 }
 
-func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs, accountExternalIDs []string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
-	args := m.Called(ctx, accountUUIDs, accountExternalIDs, start, end, interval)
+func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, interval)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}
@@ -30,8 +30,8 @@ func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs, ac
 	return args.Get(0).([]HistoryDataPoint), summary, args.Error(2)
 }
 
-func (m *MockAnalyticsClient) QueryBreakdown(ctx context.Context, accountUUIDs, accountExternalIDs []string, start, end time.Time, dimension string) (map[string]BreakdownValue, error) {
-	args := m.Called(ctx, accountUUIDs, accountExternalIDs, start, end, dimension)
+func (m *MockAnalyticsClient) QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, dimension string) (map[string]BreakdownValue, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, dimension)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -48,7 +48,7 @@ func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
 	accountExternal := "999988887777"
 
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryHistory", ctx, []string{accountUUID}, []string{accountExternal}, mock.Anything, mock.Anything, "hourly").
+	mockClient.On("QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly").
 		Return([]HistoryDataPoint{{TotalSavings: 50.0, PurchaseCount: 1}}, &HistorySummary{TotalPurchases: 1}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -62,7 +62,7 @@ func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
 	result, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"account_id": accountUUID})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, []string{accountExternal}, mock.Anything, mock.Anything, "hourly")
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly")
 }
 
 // MockAnalyticsCollector is a mock implementation of AnalyticsCollectorInterface
@@ -103,7 +103,7 @@ func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 	// "account-123" is not a known UUID, so resolveSingleAccountFilterIDs
 	// treats it as an external account number: QueryHistory is called with no
 	// UUIDs and account-123 as the external id.
-	mockClient.On("QueryHistory", ctx, []string(nil), []string{"account-123"}, mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string{"": {"account-123"}}, mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -139,7 +139,7 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 
 	dataPoints := []HistoryDataPoint{}
 	// Empty account_id: resolver returns no UUIDs and no external ids.
-	mockClient.On("QueryHistory", ctx, []string(nil), []string(nil), mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -149,7 +149,7 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.NoError(t, err)
 
-	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), []string(nil), mock.Anything, mock.Anything, "hourly")
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly")
 }
 
 func TestHandler_getHistoryAnalytics_InvalidDateRange(t *testing.T) {
@@ -217,7 +217,7 @@ func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
 		"lambda": {PurchaseCount: 5, TotalSavings: 100.0},
 	}
 
-	mockClient.On("QueryBreakdown", ctx, []string(nil), []string{"account-123"}, mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
+	mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string{"": {"account-123"}}, mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -252,7 +252,7 @@ func TestHandler_getHistoryBreakdown_DefaultDimension(t *testing.T) {
 	mockClient := new(MockAnalyticsClient)
 
 	breakdownData := map[string]BreakdownValue{}
-	mockClient.On("QueryBreakdown", ctx, []string(nil), []string(nil), mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
+	mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -262,7 +262,7 @@ func TestHandler_getHistoryBreakdown_DefaultDimension(t *testing.T) {
 	_, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.NoError(t, err)
 
-	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string(nil), []string(nil), mock.Anything, mock.Anything, "service")
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service")
 }
 
 func TestHandler_getHistoryBreakdown_InvalidDateRange(t *testing.T) {

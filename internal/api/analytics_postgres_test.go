@@ -64,15 +64,15 @@ func TestQueryHistory_Success(t *testing.T) {
 		AddRow(bucket1, "rds", "aws", 40.0, 10.0, 1).
 		AddRow(bucket2, "ec2", "aws", 75.0, 0.0, 1)
 
-	// External-id-only filter: predicate is (account_id = ANY($3)), bound to
-	// the single external id. No cloud_account_id half since no UUIDs supplied.
+	// External-id-only filter: predicate is (account_id = ANY($3)), bound to the
+	// single external id. No cloud_account_id half since no UUIDs supplied.
 	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(account_id = ANY\(\$3\)\)`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"acct-1"}).
 		WillReturnRows(rows)
 
 	start := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
-	points, summary, err := client.QueryHistory(ctx, nil, []string{"acct-1"}, start, end, "daily")
+	points, summary, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"acct-1"}}, start, end, "daily")
 	require.NoError(t, err)
 	require.Len(t, points, 2)
 
@@ -169,11 +169,12 @@ func TestQueryBreakdown_ZeroTotalYieldsZeroPct(t *testing.T) {
 }
 
 // TestQueryHistory_DualColumnFilter verifies the dual-column account predicate
-// (issue #701/#498/#866): when a UUID and its resolved external id are both
-// supplied, the WHERE clause ORs cloud_account_id::text = ANY($3) with
-// account_id = ANY($4), so a row that carries only one of the two account
-// representations is still aggregated. pgxmock validates the SQL shape and the
-// array arg binding.
+// (issue #701/#498/#866): when a UUID and its resolved external id (grouped
+// under its provider) are both supplied, the WHERE clause ORs cloud_account_id =
+// ANY($3) with (provider = $4 AND account_id = ANY($5)), so a row that carries
+// only one of the two account representations is still aggregated while the
+// external-id half stays provider-scoped. pgxmock validates the SQL shape and
+// the array arg binding (cloud_account_id is compared directly, no ::text cast).
 func TestQueryHistory_DualColumnFilter(t *testing.T) {
 	client, mock := newMockAnalyticsClient(t)
 	ctx := context.Background()
@@ -184,13 +185,13 @@ func TestQueryHistory_DualColumnFilter(t *testing.T) {
 	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
 		AddRow(bucket, "ec2", "aws", 50.0, 20.0, 1)
 
-	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(cloud_account_id::text = ANY\(\$3\) OR account_id = ANY\(\$4\)\)`).
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, []string{external}).
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(cloud_account_id = ANY\(\$3\) OR \(provider = \$4 AND account_id = ANY\(\$5\)\)\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, "aws", []string{external}).
 		WillReturnRows(rows)
 
 	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
-	points, summary, err := client.QueryHistory(ctx, []string{uuid}, []string{external}, start, end, "daily")
+	points, summary, err := client.QueryHistory(ctx, []string{uuid}, map[string][]string{"aws": {external}}, start, end, "daily")
 	require.NoError(t, err)
 	require.Len(t, points, 1)
 	assert.InDelta(t, 50.0, points[0].TotalSavings, 1e-9)
@@ -210,16 +211,63 @@ func TestQueryBreakdown_DualColumnFilter(t *testing.T) {
 	rows := mock.NewRows([]string{"bucket", "savings", "upfront", "purchases"}).
 		AddRow("rds", 200.0, 80.0, 3)
 
-	mock.ExpectQuery(`(?s)SELECT service AS bucket.*AND \(cloud_account_id::text = ANY\(\$3\) OR account_id = ANY\(\$4\)\)`).
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, []string{external}).
+	mock.ExpectQuery(`(?s)SELECT service AS bucket.*AND \(cloud_account_id = ANY\(\$3\) OR \(provider = \$4 AND account_id = ANY\(\$5\)\)\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, "aws", []string{external}).
 		WillReturnRows(rows)
 
-	out, err := client.QueryBreakdown(ctx, []string{uuid}, []string{external},
+	out, err := client.QueryBreakdown(ctx, []string{uuid}, map[string][]string{"aws": {external}},
 		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		"service")
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.InDelta(t, 200.0, out["rds"].TotalSavings, 1e-9)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestQueryHistory_CrossProviderScoped is the analytics regression for issue
+// #956 CR finding #1: when the same external id "123" exists under two providers
+// the WHERE clause emits a separate provider-gated branch per provider (sorted),
+// so an external id only matches rows of its own provider and aws/123 never
+// pulls azure/123 rows. The args are bound in sorted-provider order.
+func TestQueryHistory_CrossProviderScoped(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+
+	bucket := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
+		AddRow(bucket, "ec2", "aws", 10.0, 5.0, 1)
+
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(\(provider = \$3 AND account_id = ANY\(\$4\)\) OR \(provider = \$5 AND account_id = ANY\(\$6\)\)\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), "aws", []string{"123"}, "azure", []string{"123"}).
+		WillReturnRows(rows)
+
+	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"aws": {"123"}, "azure": {"123"}}, start, end, "daily")
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestQueryHistory_ExternalIDFilter verifies that when only external IDs are
+// supplied, the WHERE clause emits account_id = ANY($3) bound to the flat slice,
+// so a row that carries only account_id (cloud_account_id NULL) is still matched
+// (issue #701/#498/#866).
+func TestQueryHistory_ExternalIDFilter(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+
+	bucket := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
+		AddRow(bucket, "ec2", "aws", 10.0, 5.0, 1)
+
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(account_id = ANY\(\$3\)\)`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{"123456789012"}).
+		WillReturnRows(rows)
+
+	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"123456789012"}}, start, end, "daily")
+	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

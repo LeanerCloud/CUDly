@@ -89,11 +89,11 @@ func (h *Handler) fetchCommitmentRecords(ctx context.Context, params map[string]
 	var rows []config.PurchaseHistoryRecord
 	var err error
 	if accountID := params["account_id"]; accountID != "" {
-		uuids, externalIDs := h.resolveSingleAccountFilterIDs(ctx, accountID)
+		uuids, externalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 		rows, err = h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
-			AccountIDs:  uuids,
-			ExternalIDs: externalIDs,
-			Limit:       config.MaxListLimit,
+			AccountIDs:            uuids,
+			ExternalIDsByProvider: externalIDsByProvider,
+			Limit:                 config.MaxListLimit,
 		})
 	} else {
 		rows, err = h.config.GetAllPurchaseHistory(ctx, config.MaxListLimit)

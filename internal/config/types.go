@@ -479,13 +479,20 @@ type PurchaseHistoryFilter struct {
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
 	// UUID FK) with ANY($). Empty/nil skips this half of the account predicate.
 	AccountIDs []string
-	// ExternalIDs matches purchase_history.account_id (the cloud-provider
-	// external account number) with ANY($). The caller resolves AccountIDs to
-	// their (provider, external_id) pairs scoped to the user's accessible
-	// accounts before populating this, so dual-column matching cannot leak
-	// rows across providers that happen to reuse an external id. Empty/nil
-	// skips this half of the account predicate.
-	ExternalIDs []string
+	// ExternalIDsByProvider matches purchase_history.account_id (the
+	// cloud-provider external account number) scoped per provider. The caller
+	// resolves AccountIDs to their (provider, external_id) pairs and groups the
+	// external ids by provider, so the predicate matches each external id only
+	// against rows of its own provider:
+	//
+	//	(provider = $p AND account_id = ANY($extsForP))
+	//
+	// This keeps the (provider, external_id) pairing intact so a filter for
+	// aws/123 never pulls azure/123 rows that reuse the same external number.
+	// The "" provider key means "provider unknown" (legacy raw external number)
+	// and matches account_id without a provider gate. Empty/nil skips this half
+	// of the account predicate.
+	ExternalIDsByProvider map[string][]string
 	// Start/End bound purchase_history.timestamp. nil for both skips the clause;
 	// nil for either leaves that side open (caller owns any range cap, see
 	// api.MaxHistoryDateRangeDays).

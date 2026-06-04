@@ -90,17 +90,18 @@ type CommitmentOptsInterface interface {
 
 // AnalyticsClientInterface defines the interface for analytics queries.
 //
-// accountUUIDs / accountExternalIDs are the dual-column account filter: rows
-// match when cloud_account_id = ANY(accountUUIDs) OR account_id =
-// ANY(accountExternalIDs). Both nil/empty means "all accounts accessible to
-// the caller" (scoping is enforced upstream in the handler). The handler
-// resolves the requested account (a top-bar chip UUID) into both
-// representations via resolveSingleAccountFilterIDs so rows that carry only the
-// external account_id (cloud_account_id NULL) are still aggregated (issue
-// #701/#498/#866).
+// accountUUIDs / accountExternalIDsByProvider are the dual-column account
+// filter: rows match when cloud_account_id = ANY(accountUUIDs) OR (provider = p
+// AND account_id = ANY(accountExternalIDsByProvider[p])). Both nil/empty means
+// "all accounts accessible to the caller" (scoping is enforced upstream in the
+// handler). The handler resolves the requested account (a top-bar chip UUID)
+// into both representations via resolveSingleAccountFilterIDs so rows that carry
+// only the external account_id (cloud_account_id NULL) are still aggregated, and
+// the external ids stay grouped by provider so a reused external number across
+// providers cannot leak the wrong rows (issue #701/#498/#866).
 type AnalyticsClientInterface interface {
-	QueryHistory(ctx context.Context, accountUUIDs, accountExternalIDs []string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error)
-	QueryBreakdown(ctx context.Context, accountUUIDs, accountExternalIDs []string, start, end time.Time, dimension string) (map[string]BreakdownValue, error)
+	QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error)
+	QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, dimension string) (map[string]BreakdownValue, error)
 }
 
 // AnalyticsCollectorInterface defines the interface for analytics collection

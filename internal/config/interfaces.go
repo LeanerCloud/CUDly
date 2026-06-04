@@ -97,15 +97,17 @@ type StoreInterface interface {
 	// PurchaseHistoryFilter, newest-first, capped at filter.Limit. Each field is
 	// applied independently and only when populated (see PurchaseHistoryFilter).
 	// The account predicate matches BOTH identifier columns:
-	//   (cloud_account_id = ANY(AccountIDs) OR account_id = ANY(ExternalIDs))
+	//   (cloud_account_id = ANY(AccountIDs)
+	//      OR (provider = $p AND account_id = ANY(ExternalIDsByProvider[p])) OR ...)
 	// because purchase_history rows carry the cloud_accounts UUID FK
 	// (cloud_account_id, NULL on direct-execute/ambient/pre-000011 rows) and the
 	// cloud-provider external number (account_id, always populated) independently.
 	// The top-bar Account chip emits the UUID; matching only one column silently
 	// dropped rows that carried only the other (issues #701/#498/#866). The caller
-	// resolves AccountIDs to their (provider, external_id) pairs scoped to the
-	// user's accessible accounts before populating ExternalIDs so cross-provider
-	// external-id reuse cannot leak.
+	// resolves AccountIDs to their external account numbers grouped by provider
+	// and populates ExternalIDsByProvider so rows that carry only account_id are
+	// also matched, while the per-provider grouping keeps a reused external number
+	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
 
 	// RI Exchange history
