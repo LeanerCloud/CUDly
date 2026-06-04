@@ -4,7 +4,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -91,34 +93,38 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	}
 
 	if err := h.config.CreatePurchasePlan(ctx, plan); err != nil {
-		return nil, err
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(http.StatusNotFound, "plan not found")
+		}
+		logging.Errorf("createPlan: CreatePurchasePlan failed (provider=%s service=%s accounts=%d): %v",
+			req.Provider, req.Service, len(req.TargetAccounts), err)
+		return nil, NewClientError(http.StatusInternalServerError, "failed to create plan")
 	}
 
 	// Provider-match validation + plan_accounts insert. SetPlanAccounts is
 	// transactional internally, but the plan-row insert above is not part of
 	// that tx. If either step here fails we roll the plan row back so the
 	// invariant "every purchase_plans row has at least one plan_accounts
-	// row" holds end-to-end — otherwise a validation failure would leave a
-	// fresh universal plan behind, which is exactly the bug class we're
-	// eliminating.
-	//
-	// rollbackPlan undoes the partial CreatePurchasePlan insert. If the
-	// rollback delete itself errors (DB blip, row already gone, etc.), log
-	// at WARN with the plan ID so an operator can clean up manually — we
-	// still surface the original cause to the caller so the user-facing
-	// error is unchanged.
+	// row" holds end-to-end.
 	rollbackPlan := func() {
 		if delErr := h.config.DeletePurchasePlan(ctx, plan.ID); delErr != nil {
 			logging.Warnf("createPlan rollback: failed to delete partial plan %s: %v (manual cleanup may be required)", plan.ID, delErr)
 		}
 	}
+
 	if err := h.validatePlanAccountProviders(ctx, plan.ID, req.TargetAccounts); err != nil {
 		rollbackPlan()
 		return nil, err
 	}
+
 	if err := h.config.SetPlanAccounts(ctx, plan.ID, req.TargetAccounts); err != nil {
 		rollbackPlan()
-		return nil, fmt.Errorf("accounts: %w", err)
+		if errors.Is(err, config.ErrNotFound) {
+			return nil, NewClientError(http.StatusNotFound, "account not found")
+		}
+		logging.Errorf("createPlan: SetPlanAccounts failed (plan=%s accounts=%d): %v",
+			plan.ID, len(req.TargetAccounts), err)
+		return nil, NewClientError(http.StatusInternalServerError, "failed to assign accounts to plan")
 	}
 
 	return plan, nil

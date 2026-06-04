@@ -196,12 +196,10 @@ func TestHandler_createPlan_RejectsEmptyTargetAccounts(t *testing.T) {
 
 // TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError verifies
 // that when SetPlanAccounts fails after CreatePurchasePlan succeeds, AND the
-// rollback DeletePurchasePlan also fails, the caller still receives the
-// original SetPlanAccounts error (wrapped as "accounts: …") rather than the
-// rollback error. The rollback failure is logged at WARN so an operator can
-// clean up manually — see handler_plans.go createPlan rollbackPlan closure.
-// Regression guard for CR #743 finding F1: rollback errors must not be
-// silently discarded.
+// rollback DeletePurchasePlan also fails, the caller still receives a 500
+// ClientError (not the raw DB error) and the rollback error does not leak.
+// The rollback failure is logged at WARN; the SetPlanAccounts error is logged
+// at ERROR -- see handler_plans.go createPlan rollbackPlan closure.
 func TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -238,12 +236,13 @@ func TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError(t *testin
 	result, err := handler.createPlan(ctx, req)
 	assert.Nil(t, result)
 	require.Error(t, err)
-	// Original error from SetPlanAccounts is what reaches the caller —
-	// wrapped as "accounts: …" per the handler. The rollback error is logged
-	// (not returned), so it must NOT appear in the user-facing error chain.
-	assert.Contains(t, err.Error(), "accounts:")
-	assert.True(t, errors.Is(err, setAccountsErr), "expected wrapped SetPlanAccounts error, got %v", err)
-	assert.NotContains(t, err.Error(), "rollback delete boom", "rollback error must not leak into user-facing error")
+	// Handler returns a 500 ClientError with a safe generic message; raw DB
+	// errors are logged, not returned. Rollback error also must not leak.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), "setplanaccounts boom", "DB error must not leak to caller")
+	assert.NotContains(t, ce.Error(), "rollback delete boom", "rollback error must not leak to caller")
 	mockStore.AssertCalled(t, "DeletePurchasePlan", ctx, mock.AnythingOfType("string"))
 }
 
@@ -1034,4 +1033,90 @@ func TestHandler_patchPlan_UpdateError(t *testing.T) {
 	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
 	assert.Error(t, err)
 	assert.Nil(t, result)
+}
+
+// TestHandler_createPlan_UnknownAccountReturns404 is the regression guard for
+// the 500/404 inconsistency: createPlan with a target_accounts entry whose
+// UUID is not present in the store must return 404, not 500.
+func TestHandler_createPlan_UnknownAccountReturns404(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+	unknownAccountID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	// Rollback is triggered when validatePlanAccountProviders returns an error.
+	mockStore.On("DeletePurchasePlan", ctx, mock.AnythingOfType("string")).Return(nil)
+	// GetPurchasePlan is called by getPlanForAccountProviderValidation inside
+	// validatePlanAccountProviders. Return a plan with services so
+	// DerivePlanProviders produces a non-empty expected set and the
+	// provider-match check actually runs (empty services => check skipped).
+	mockStore.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{
+			Services: map[string]config.ServiceConfig{
+				"aws/rds": {Provider: "aws", Service: "rds"},
+			},
+		}, nil
+	}
+	// GetCloudAccount returns nil (not found) to simulate the missing account.
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return nil, nil // nil account, nil error => "not found" branch
+	}
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	body := `{"name": "P", "provider": "aws", "service": "rds", "target_accounts": ["` + unknownAccountID + `"]}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.createPlan(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError (not opaque 500), got %T: %v", err, err)
+	assert.Equal(t, 404, ce.code, "unknown account must return 404, not 500")
+}
+
+// TestHandler_createPlan_DBErrorOnCreateReturns500WithLog verifies that a DB
+// failure on CreatePurchasePlan returns a well-formed 500 ClientError instead
+// of a raw unwrapped error (which would look the same but is less explicit).
+func TestHandler_createPlan_DBErrorOnCreateReturns500WithLog(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	dbErr := errors.New("connection refused")
+	mockStore.On("CreatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(dbErr)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	body := `{"name": "P", "provider": "aws", "service": "rds", "target_accounts": ["` + targetAccountID + `"]}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    body,
+	}
+	result, err := handler.createPlan(ctx, req)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must be wrapped as ClientError, got %T: %v", err, err)
+	assert.Equal(t, 500, ce.code)
+	// Raw DB error must NOT be exposed to the caller.
+	assert.NotContains(t, ce.Error(), "connection refused", "internal DB error must not leak to caller")
 }

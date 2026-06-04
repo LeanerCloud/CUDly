@@ -575,6 +575,8 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
+	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -601,7 +603,7 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 		// target_accounts is required (universal-plans fix). Provider must
 		// also be set so DerivePlanProviders returns non-empty; otherwise
 		// the validation skip-branch would mask the contract.
-		Body: `{"name": "New Plan", "provider": "aws", "service": "rds", "target_accounts": ["11111111-1111-1111-1111-111111111111"]}`,
+		Body: `{"name": "New Plan", "provider": "aws", "service": "rds", "target_accounts": ["` + targetAccountID + `"]}`,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "POST",
