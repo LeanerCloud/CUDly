@@ -144,7 +144,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 
 		_, err = pool.Exec(ctx, `
 			UPDATE users SET group_ids = ARRAY[$1]::UUID[]
-			WHERE email = $2 AND role = 'admin'
+			WHERE email = $2
 		`, customGroupID, adminEmail)
 		require.NoError(t, err)
 

@@ -129,10 +129,10 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string, pass
 		log.Printf("Admin user already exists: %s", email)
 	}
 
-	// Idempotent backfill + invariant check on any pre-existing admin
-	// row whose group_ids drifted to empty after migration 000024's
-	// one-shot backfill already ran.
-	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID); err != nil {
+	// Idempotent backfill + invariant check on the bootstrap admin row
+	// only. Scoping by email prevents the backfill from touching
+	// non-admin users in pre-057/rollback states (issue #945).
+	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID, email); err != nil {
 		return fmt.Errorf("failed to assign admin group: %w", err)
 	}
 	return nil
@@ -184,22 +184,23 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 		log.Printf("Admin user already has a password set: %s (skipping)", email)
 	}
 
-	// Idempotent backfill + invariant check on any pre-existing admin
-	// row whose group_ids drifted to empty after migration 000024's
-	// one-shot backfill already ran.
-	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID); err != nil {
+	// Idempotent backfill + invariant check on the bootstrap admin row
+	// only. Scoping by email prevents the backfill from touching
+	// non-admin users in pre-057/rollback states (issue #945).
+	if err := assignAdminGroupAndWarn(ctx, pool, defaultAdminGroupID, email); err != nil {
 		return fmt.Errorf("failed to assign admin group: %w", err)
 	}
 	return nil
 }
 
 // assignAdminGroupAndWarn runs an idempotent backfill that appends
-// groupID to any user whose group_ids is empty (NULL or zero-length)
-// and who is a member of the Administrators group OR whose group_ids
-// is entirely empty (defensive net). The DISTINCT(unnest(...)) dedupe
-// makes the UPDATE safe to run repeatedly. After the backfill, a
-// defensive SELECT counts any users still showing empty group_ids and
-// logs a WARN so operators see drift in container logs.
+// groupID to the bootstrap admin row (identified by adminEmail) when
+// its group_ids is empty (NULL or zero-length). Scoping by email
+// prevents the backfill from touching non-admin users in pre-057 or
+// rollback states. The DISTINCT(unnest(...)) dedupe makes the UPDATE
+// safe to run repeatedly. After the backfill, a defensive SELECT
+// checks whether the admin row still has empty group_ids and logs a
+// WARN so operators see drift in container logs.
 //
 // Post-migration-000057: the `users_min_one_group` CHECK constraint
 // prevents group_ids from being NULL or zero-length, so this backfill
@@ -212,7 +213,7 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 // when migration 000024 hasn't yet seeded the Administrators group -
 // defence-in-depth, since in practice this function is invoked
 // after RunMigrations -> m.Up() completes.
-func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID string) error {
+func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID string, adminEmail string) error {
 	res, err := pool.Exec(ctx, `
 		UPDATE users
 		SET group_ids = ARRAY(
@@ -221,9 +222,10 @@ func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID st
 			)
 		),
 			updated_at = NOW()
-		WHERE (group_ids IS NULL OR cardinality(group_ids) = 0)
+		WHERE email = $2
+		  AND (group_ids IS NULL OR cardinality(group_ids) = 0)
 		  AND EXISTS (SELECT 1 FROM groups WHERE id = $1::UUID)
-	`, groupID)
+	`, groupID, adminEmail)
 	if err != nil {
 		return fmt.Errorf("failed to backfill admin group_ids: %w", err)
 	}
@@ -234,20 +236,21 @@ func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID st
 		log.Printf("Backfilled group_ids for %d user(s) to include Administrators group", n)
 	}
 
-	// Invariant check: any user still missing group_ids after the
-	// backfill (e.g. EXISTS guard failed because the Administrators
-	// group is missing) is logged loudly so operators notice.
+	// Invariant check: if the bootstrap admin row still has empty
+	// group_ids after the backfill (e.g. EXISTS guard failed because
+	// the Administrators group is missing), log loudly so operators notice.
 	// Post-057, the users_min_one_group CHECK means this count is
 	// always 0 unless a rollback is in progress.
 	var remaining int
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM users
-		WHERE (group_ids IS NULL OR cardinality(group_ids) = 0)
-	`).Scan(&remaining); err != nil {
+		WHERE email = $1
+		  AND (group_ids IS NULL OR cardinality(group_ids) = 0)
+	`, adminEmail).Scan(&remaining); err != nil {
 		return fmt.Errorf("failed to check admin group_ids invariant: %w", err)
 	}
 	if remaining > 0 {
-		log.Printf("WARN: %d user(s) have empty group_ids and the Administrators group could not be assigned. Permissions may not work as expected. Check that migration 000024_seed_default_groups has run successfully.", remaining)
+		log.Printf("WARN: bootstrap admin %s has empty group_ids and the Administrators group could not be assigned. Permissions may not work as expected. Check that migration 000024_seed_default_groups has run successfully.", adminEmail)
 	}
 	return nil
 }
