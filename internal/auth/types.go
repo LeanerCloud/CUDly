@@ -317,7 +317,7 @@ const DefaultPurchaserGroupID = "00000000-0000-5000-8000-000000000005"
 
 // GroupPurchaser is the canonical name of the system-managed Purchaser
 // group. MUST match the literal name inserted by migration
-// 000058_seed_purchaser_group.up.sql so name-based lookups agree with
+// 000059_seed_purchaser_group.up.sql so name-based lookups agree with
 // the seeded row.
 const GroupPurchaser = "Purchaser"
 
