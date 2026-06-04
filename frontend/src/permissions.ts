@@ -83,7 +83,7 @@ export const ADMINISTRATORS_GROUP_ID = '00000000-0000-5000-8000-000000000001';
  * carved out of the admin:* wildcard and require explicit membership
  * in this group (or a custom group that grants the same verbs).
  */
-export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000005';
+export const PURCHASER_GROUP_ID = '00000000-0000-5000-8000-000000000007';
 
 /**
  * The set of (action, resource) pairs carved out of the admin:*
