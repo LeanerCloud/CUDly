@@ -13,11 +13,13 @@ import (
 
 // isPublicEndpoint returns true for endpoints that don't require authentication
 func (h *Handler) isPublicEndpoint(path string) bool {
-	publicEndpoints := []string{
+	// Prefix-matched public endpoints: dynamic routes where the path carries
+	// a resource ID (approval/cancel/revoke tokens, register tokens, docs
+	// sub-paths) and static prefixes that are always fully public.
+	publicPrefixEndpoints := []string{
 		"/health",     // Root health endpoint (no /api prefix)
 		"/api/health", // API health endpoint
 		"/api/info",
-		"/version", // Public build-version endpoint (version / git SHA / build time)
 		"/api/purchases/approve/",
 		"/api/purchases/cancel/",
 		"/api/purchases/revoke/",
@@ -32,13 +34,17 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/docs",
 		"/api/docs",
 	}
-	for _, ep := range publicEndpoints {
+	for _, ep := range publicPrefixEndpoints {
 		if strings.HasPrefix(path, ep) {
 			return true
 		}
 	}
-	// Exact match for POST /api/register (no trailing slash).
-	if path == "/api/register" {
+	// Exact-match singleton public endpoints. These must not be prefix-matched
+	// to prevent "/version-anything" or "/api/register-anything" from
+	// bypassing auth via accidental prefix overlap.
+	switch path {
+	case "/version", // Public build-version endpoint (version / git SHA / build time)
+		"/api/register": // POST /api/register (no trailing slash)
 		return true
 	}
 	return false
