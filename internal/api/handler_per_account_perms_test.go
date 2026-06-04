@@ -363,7 +363,10 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	start := now.Add(-7 * 24 * time.Hour)
 
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryHistory", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything).
+	// permsAccA is a known account UUID (no external id in the fixture), so it
+	// is matched on cloud_account_id only — the uuid set carries it, externals
+	// is nil.
+	mockClient.On("QueryHistory", ctx, []string{permsAccA}, []string(nil), mock.Anything, mock.Anything, mock.Anything).
 		Return([]HistoryDataPoint{}, &HistorySummary{}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -384,7 +387,7 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	require.NoError(t, err, "scoped user must be able to query analytics for account-A")
 	require.NotNil(t, result)
 	// Confirm the analytics backend was reached — not short-circuited.
-	mockClient.AssertCalled(t, "QueryHistory", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{permsAccA}, []string(nil), mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── 5. GET /history/breakdown ───────────────────────────────────────────────
@@ -400,7 +403,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 		"ec2": {PurchaseCount: 3, TotalSavings: 150.0},
 	}
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything).
+	mockClient.On("QueryBreakdown", ctx, []string{permsAccA}, []string(nil), mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedData, nil)
 
 	mockStore := new(MockConfigStore)
@@ -420,7 +423,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err, "scoped user must be able to query breakdown for account-A")
 	require.NotNil(t, result)
-	mockClient.AssertCalled(t, "QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string{permsAccA}, []string(nil), mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected mirrors the

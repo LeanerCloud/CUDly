@@ -685,11 +685,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("no purchase history", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -699,11 +699,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("purchase history error returns zeros", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(nil, errors.New("db error"))
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return(nil, errors.New("db error"))
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -725,11 +725,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(purchases, nil)
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 100.0, committedMonthly)
@@ -752,11 +752,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(purchases, nil)
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		// Should skip expired commitments
 		assert.Equal(t, 0, activeCommitments)
@@ -779,11 +779,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(purchases, nil)
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 50.0, committedMonthly)
@@ -812,11 +812,11 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 				// Status "" = completed DB row — must be counted
 			},
 		}
-		mockStore.On("GetPurchaseHistory", ctx, "account-123", 1000).Return(purchases, nil)
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"account-123"}, Limit: 1000}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "account-123", nil)
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, nil, []string{"account-123"})
 
 		// Only the status="" row counts; the failed row must be excluded.
 		assert.Equal(t, 1, activeCommitments,
@@ -842,7 +842,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			{CloudAccountID: &accountBID, Timestamp: purchaseTime, Term: 1, EstimatedSavings: 150.0},
 		}
 		uuids := []string{accountAID, accountBID}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", uuids, (*time.Time)(nil), (*time.Time)(nil), 1000).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: uuids, Limit: 1000}).
 			Return(purchasesAB, nil)
 		// GetPurchaseHistory must not be called — no On registration so it
 		// would panic if accidentally invoked.
@@ -850,11 +850,39 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", uuids)
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, uuids, nil)
 
 		assert.Equal(t, 2, activeCommitments)
 		assert.Equal(t, 250.0, committedMonthly,
 			"only accounts A and B must contribute; account C rows must not appear")
+	})
+
+	// Keystone (issue #701/#498/#866): an account's commitments may live in rows
+	// that carry only the external account_id (cloud_account_id NULL). When the
+	// dashboard scope resolves the selected UUID to its external id, the
+	// dual-column filter must include those rows so the KPIs aren't zero.
+	t.Run("external-id-only commitment rows are counted via the dual-column filter", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		purchaseTime := time.Now().AddDate(0, -2, 0)
+
+		// Row attributed by external number only (no CloudAccountID).
+		externalOnly := []config.PurchaseHistoryRecord{
+			{AccountID: "999988887777", Timestamp: purchaseTime, Term: 1, EstimatedSavings: 175.0},
+		}
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
+			AccountIDs:  []string{"bbbbbbbb-1111-2222-3333-444444444444"},
+			ExternalIDs: []string{"999988887777"},
+			Limit:       1000,
+		}).Return(externalOnly, nil)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		handler := &Handler{config: mockStore}
+
+		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(
+			ctx, []string{"bbbbbbbb-1111-2222-3333-444444444444"}, []string{"999988887777"})
+
+		assert.Equal(t, 1, activeCommitments, "external-id-only commitment must be counted")
+		assert.Equal(t, 175.0, committedMonthly)
 	})
 }
 

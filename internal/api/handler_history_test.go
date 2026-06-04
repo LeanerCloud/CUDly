@@ -37,7 +37,10 @@ func TestHandler_getHistory(t *testing.T) {
 		{AccountID: "123456789012", PurchaseID: "purchase-1", UpfrontCost: 100.0, EstimatedSavings: 10.0},
 	}
 
-	mockStore.On("GetPurchaseHistory", ctx, "123456789012", 100).Return(history, nil)
+	// account_id "123456789012" is not a known cloud_accounts UUID, so it is
+	// folded into the dual-column filter as an external account number and the
+	// request routes through GetPurchaseHistoryFiltered (issue #701/#498/#866).
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"123456789012"}, Limit: 100}).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -646,6 +649,12 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockAuth, req := adminHistoryReq(ctx)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil).Maybe()
+		// resolveHistoryAccountFilter loads cloud_accounts to resolve UUIDs to
+		// their external ids. Default to an empty list (no resolvable external
+		// ids) unless a sub-test overrides ListCloudAccountsFn.
+		mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+			return nil, nil
+		}
 		return mockStore, &Handler{auth: mockAuth, config: mockStore}, req, ctx
 	}
 
@@ -657,7 +666,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		filtered := []config.PurchaseHistoryRecord{
 			{AccountID: "acc-aws", PurchaseID: "p-aws", Provider: "aws", UpfrontCost: 100.0},
 		}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: config.DefaultListLimit}).
 			Return(filtered, nil).Once()
 
 		// Executions path: two execs, one aws-rec and one azure-rec. Only the
@@ -687,7 +696,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		for _, p := range resp.Purchases {
 			assert.NotEqual(t, "exec-azure", p.PurchaseID, "azure-only execution must be filtered out when provider=aws")
 		}
-		mockStore.AssertCalled(t, "GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit)
+		mockStore.AssertCalled(t, "GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: config.DefaultListLimit})
 	})
 
 	t.Run("provider=all is treated as no filter (legacy SQL path)", func(t *testing.T) {
@@ -698,7 +707,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		_, err := handler.getHistory(ctx, req, map[string]string{"provider": "all"})
 		require.NoError(t, err)
 		mockStore.AssertCalled(t, "GetAllPurchaseHistory", ctx, config.DefaultListLimit)
-		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
 	})
 
 	t.Run("account_ids filter is pushed to SQL and prunes executions", func(t *testing.T) {
@@ -707,7 +716,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		uuidA := "11111111-1111-1111-1111-111111111111"
 		uuidB := "22222222-2222-2222-2222-222222222222"
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string{uuidA, uuidB}, (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{uuidA, uuidB}, Limit: config.DefaultListLimit}).
 			Return([]config.PurchaseHistoryRecord{{AccountID: "acc-A", PurchaseID: "p-A"}}, nil).Once()
 
 		execs := []config.PurchaseExecution{
@@ -750,18 +759,16 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		assert.False(t, ids["exec-nil-account"], "execution with NULL exec.CloudAccountID AND no rec-level CloudAccountID must still be excluded (effective account is empty)")
 	})
 
-	t.Run("legacy singular account_id is ignored when combined with new filters", func(t *testing.T) {
-		// account_id (singular) is the AWS-style VARCHAR(20) account number
-		// matched against purchase_history.account_id by the legacy
-		// GetPurchaseHistory; it is NOT a UUID and therefore must not be
-		// silently coerced into the cloud_account_id (UUID) WHERE clause of
-		// the new GetPurchaseHistoryFiltered method when other filters are
-		// also present. The frontend uses `account_ids` (plural, UUIDs) for
-		// the new shape; the singular param survives only for backward
-		// compatibility with the no-other-filters fast path.
+	t.Run("legacy singular account_id is folded into the dual-column filter", func(t *testing.T) {
+		// account_id (singular) is an AWS-style external account number (not a
+		// known cloud_accounts UUID in this fixture). resolveHistoryAccountFilter
+		// folds it into the ExternalIDs half of the dual-column predicate so it
+		// is matched against purchase_history.account_id alongside any other
+		// filters — fixing the prior bug where the legacy param was silently
+		// dropped when combined with provider/account_ids (issue #701/#498/#866).
 		mockStore, handler, req, ctx := newHandler(t)
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "aws", []string(nil), (*time.Time)(nil), (*time.Time)(nil), config.DefaultListLimit).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", ExternalIDs: []string{"123456789012"}, Limit: config.DefaultListLimit}).
 			Return([]config.PurchaseHistoryRecord{}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -771,16 +778,19 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("legacy singular account_id alone still hits the fast path", func(t *testing.T) {
+	t.Run("legacy singular account_id alone routes through the dual-column filter", func(t *testing.T) {
+		// A bare external account number is now matched on account_id via the
+		// dual-column filter rather than the single-column GetPurchaseHistory
+		// fast path, so its rows surface regardless of cloud_account_id.
 		mockStore, handler, req, ctx := newHandler(t)
-		mockStore.On("GetPurchaseHistory", ctx, "123456789012", config.DefaultListLimit).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDs: []string{"123456789012"}, Limit: config.DefaultListLimit}).
 			Return([]config.PurchaseHistoryRecord{{AccountID: "123456789012", PurchaseID: "p-legacy"}}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 		_, err := handler.getHistory(ctx, req, map[string]string{"account_id": "123456789012"})
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
-		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("start/end date filter is pushed to SQL and prunes executions", func(t *testing.T) {
@@ -796,11 +806,13 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		endDay := now.Format("2006-01-02")
 		outOfRangeDay := now.AddDate(0, 0, -10) // older than the window AND outside the requested range
 
-		mockStore.On("GetPurchaseHistoryFiltered",
-			ctx, "", []string(nil),
-			mock.MatchedBy(func(p *time.Time) bool { return p != nil && p.Format("2006-01-02") == startDay }),
-			mock.MatchedBy(func(p *time.Time) bool { return p != nil && p.Format("2006-01-02") == endDay }),
-			config.DefaultListLimit,
+		mockStore.On("GetPurchaseHistoryFiltered", ctx,
+			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
+				return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDs) == 0 &&
+					f.Start != nil && f.Start.Format("2006-01-02") == startDay &&
+					f.End != nil && f.End.Format("2006-01-02") == endDay &&
+					f.Limit == config.DefaultListLimit
+			}),
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "in-range", PurchaseID: "p-in-range"}}, nil).Once()
 
 		execs := []config.PurchaseExecution{
@@ -833,11 +845,11 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
 
 		uuidA := "55555555-5555-5555-5555-555555555555"
-		mockStore.On("GetPurchaseHistoryFiltered",
-			ctx, "aws", []string{uuidA},
-			mock.MatchedBy(func(p *time.Time) bool { return p != nil }),
-			mock.MatchedBy(func(p *time.Time) bool { return p != nil }),
-			config.DefaultListLimit,
+		mockStore.On("GetPurchaseHistoryFiltered", ctx,
+			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
+				return f.Provider == "aws" && len(f.AccountIDs) == 1 && f.AccountIDs[0] == uuidA &&
+					f.Start != nil && f.End != nil && f.Limit == config.DefaultListLimit
+			}),
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "match", PurchaseID: "p-match"}}, nil).Once()
 
 		now := time.Now().UTC()
@@ -958,7 +970,7 @@ func TestHandler_getHistory_FilterValidation(t *testing.T) {
 			// Sanity guards: no store calls leaked through on a 400.
 			mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
 			mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
@@ -974,7 +986,7 @@ func TestHandler_getHistory_DateRangeBoundary(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockAuth, req := adminHistoryReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string(nil), mock.Anything, mock.Anything, config.DefaultListLimit).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, mock.Anything).
 			Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -1289,7 +1301,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 		// account_ids is set, so fetchPurchaseHistory routes to GetPurchaseHistoryFiltered
 		// (not GetAllPurchaseHistory). No DB rows needed; we only care about the
 		// execution path.
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, "", []string{recAccountID}, (*time.Time)(nil), (*time.Time)(nil), 100).
+		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{recAccountID}, Limit: 100}).
 			Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1304,6 +1316,82 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 
 		assert.Equal(t, recAccountID, row.AccountID, "AccountID must be resolved from the rec when exec.CloudAccountID is nil (#704)")
 	})
+}
+
+// TestHandler_getHistory_ExternalIDOnlyAccount is the end-to-end keystone
+// regression test for issue #701/#498/#866: an account whose purchase_history
+// rows were written by a direct-execute/ambient/legacy path carry only the
+// external account_id (cloud_account_id IS NULL). When the user selects that
+// account by its cloud_accounts UUID (the top-bar chip value), the handler
+// must resolve the UUID to its external id and pass BOTH to the store so the
+// dual-column predicate matches the external-id-only rows. Before the fix the
+// handler filtered cloud_account_id only and the user saw "No purchase history
+// yet" for the account.
+func TestHandler_getHistory_ExternalIDOnlyAccount(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	accountBUUID := "bbbbbbbb-1111-2222-3333-444444444444"
+	accountBExternal := "999988887777"
+
+	// cloud_accounts knows account B's external id; the resolver maps the
+	// requested UUID to it.
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{
+			{ID: accountBUUID, Name: "Account B", Provider: "aws", ExternalID: accountBExternal},
+		}, nil
+	}
+
+	// The store returns account B's row only when the dual-column filter carries
+	// BOTH the UUID and the resolved external id. The row itself has the external
+	// AccountID and (implicitly) a NULL cloud_account_id.
+	bRow := []config.PurchaseHistoryRecord{
+		{AccountID: accountBExternal, PurchaseID: "p-B", Provider: "aws", Service: "ec2", UpfrontCost: 100.0, EstimatedSavings: 25.0},
+	}
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
+		AccountIDs:  []string{accountBUUID},
+		ExternalIDs: []string{accountBExternal},
+		Limit:       config.DefaultListLimit,
+	}).Return(bRow, nil).Once()
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": accountBUUID})
+	require.NoError(t, err)
+	resp := result.(HistoryResponse)
+
+	require.Len(t, resp.Purchases, 1, "external-id-only row must surface when its account UUID is requested")
+	assert.Equal(t, accountBExternal, resp.Purchases[0].AccountID)
+}
+
+// TestMatchesExecution_ExternalIDOnlyPending asserts the in-memory mirror of
+// the dual-column filter: a pending execution attributed only by an external
+// account number (no UUID anywhere) must survive when the request resolves to
+// that external id, so external-id-only pending rows aren't dropped from the
+// approval queue (issue #701/#498/#866).
+func TestMatchesExecution_ExternalIDOnlyPending(t *testing.T) {
+	external := "999988887777"
+	uuid := "bbbbbbbb-1111-2222-3333-444444444444"
+
+	// Execution carries the external number as its effective account id.
+	exec := config.PurchaseExecution{
+		ExecutionID:     "pend-external",
+		Status:          "pending",
+		ScheduledDate:   time.Now(),
+		CloudAccountID:  strPtr(external),
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2"}},
+	}
+
+	// Filtering by the UUID alone drops it (no UUID match)...
+	uuidOnly := historyFilters{AccountIDs: []string{uuid}}
+	assert.False(t, uuidOnly.matchesExecution(exec), "UUID-only filter must not match an external-id-only execution")
+
+	// ...but once the external id is resolved into the filter it is retained.
+	dual := historyFilters{AccountIDs: []string{uuid}, ExternalIDs: []string{external}}
+	assert.True(t, dual.matchesExecution(exec), "external-id-only pending execution must survive when its external id is in the filter")
 }
 
 // TestHandler_getHistory_CompletedExecutionNotDuplicated guards the dedup path.

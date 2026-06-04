@@ -131,8 +131,10 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 }
 
 // TestHandler_listActiveCommitments_AccountFilter verifies the account_id
-// query param routes through GetPurchaseHistory (single-account read)
+// query param routes through the dual-column GetPurchaseHistoryFiltered
 // instead of GetAllPurchaseHistory, and the response respects the filter.
+// "acc-1" is a known cloud_accounts UUID (no external id in this fixture), so
+// it is matched on cloud_account_id only (issue #701/#498/#866).
 func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -152,9 +154,9 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetPurchaseHistory", ctx, "acc-1", config.MaxListLimit).Return(purchases, nil)
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{"acc-1"}, Limit: config.MaxListLimit}).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
-		return []config.CloudAccount{{ID: "22222222-0000-0000-0000-000000000001", ExternalID: "acc-1", Name: "Account One"}}, nil
+		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
 
 	mockAuth, req := adminInventoryReq(ctx)
@@ -167,8 +169,10 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 	require.Len(t, resp.Commitments, 1)
 	assert.Equal(t, "acc-1", resp.Commitments[0].AccountID)
 
-	// GetAllPurchaseHistory must NOT have been called when account_id is set.
+	// GetAllPurchaseHistory and the legacy single-column GetPurchaseHistory must
+	// NOT have been called when account_id is set.
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
+	mockStore.AssertNotCalled(t, "GetPurchaseHistory")
 }
 
 // TestHandler_listActiveCommitments_ProviderFilter verifies the provider
@@ -489,9 +493,9 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 
 	now := time.Now()
 	// Only the acc-1 + aws commitment should reach the aws section.
-	// GetPurchaseHistory(acc-1) is the single-account read path; the
-	// account_id chip routes through it, so the store only returns acc-1
-	// rows here. The provider chip is applied in-memory by
+	// GetPurchaseHistoryFiltered(AccountIDs:[acc-1]) is the per-account read
+	// path; the account_id chip routes through it, so the store only returns
+	// acc-1 rows here. The provider chip is applied in-memory by
 	// fetchCommitmentRecords to drop the azure row.
 	acc1Purchases := []config.PurchaseHistoryRecord{
 		{
@@ -526,7 +530,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 		{Provider: "azure", Service: "compute", Savings: 999.0, CloudAccountID: strPtr("acc-1")},
 	}
 
-	mockStore.On("GetPurchaseHistory", ctx, "acc-1", config.MaxListLimit).Return(acc1Purchases, nil)
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{"acc-1"}, Limit: config.MaxListLimit}).Return(acc1Purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{
 			{ID: "acc-1", Name: "Account One"},
