@@ -76,15 +76,25 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 // drop expired rows before returning) so a high cap is appropriate; an
 // over-truncation here would silently hide rows the user is entitled to.
 //
-// `provider` filtering is applied in-memory after the store read so that
-// the existing single-account and all-accounts store paths remain
-// unchanged; the record set is small enough that a post-read filter has
-// negligible cost.
+// The singular `account_id` (a top-bar chip cloud_accounts UUID for current
+// callers, or a raw external number for legacy ones) is resolved to the
+// dual-column filter inputs so a commitment row that carries only the external
+// account_id (cloud_account_id NULL) is still returned — the original
+// #701/#498/#866 bug was that passing the UUID to the single-column
+// GetPurchaseHistory (account_id) matched nothing.
+//
+// `provider` filtering is applied in-memory after the store read so the
+// record set is small enough that a post-read filter has negligible cost.
 func (h *Handler) fetchCommitmentRecords(ctx context.Context, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
 	var rows []config.PurchaseHistoryRecord
 	var err error
 	if accountID := params["account_id"]; accountID != "" {
-		rows, err = h.config.GetPurchaseHistory(ctx, accountID, config.MaxListLimit)
+		uuids, externalIDs := h.resolveSingleAccountFilterIDs(ctx, accountID)
+		rows, err = h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
+			AccountIDs:  uuids,
+			ExternalIDs: externalIDs,
+			Limit:       config.MaxListLimit,
+		})
 	} else {
 		rows, err = h.config.GetAllPurchaseHistory(ctx, config.MaxListLimit)
 	}

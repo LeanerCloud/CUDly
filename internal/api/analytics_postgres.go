@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
@@ -74,13 +75,44 @@ func dimensionToColumn(dimension string) (string, error) {
 	}
 }
 
+// accountFilterClause builds the dual-column account WHERE fragment and the
+// full positional arg list for the analytics aggregate queries. baseArgs holds
+// the fixed leading binds ($1=start, $2=end); the account array binds (if any)
+// are appended after them and the returned clause references them by the right
+// positions.
+//
+// purchase_history carries two account identifiers, either of which may be the
+// only one populated on a row: account_id (the cloud-provider external number,
+// always populated) and cloud_account_id (the cloud_accounts UUID FK, NULL on
+// every direct-execute/ambient/pre-000011 row). The top-bar chip emits the
+// UUID, so matching only cloud_account_id silently dropped every NULL row
+// (issue #701/#498) and matching only account_id dropped UUID-only rows (#866).
+// We bind the UUIDs and their resolved external numbers separately and OR the
+// two ANY() predicates. Both empty -> "TRUE" (no account filter).
+func accountFilterClause(accountUUIDs, accountExternalIDs []string, baseArgs []any) (clause string, args []any) {
+	args = baseArgs
+	var ors []string
+	if len(accountUUIDs) > 0 {
+		args = append(args, accountUUIDs)
+		ors = append(ors, fmt.Sprintf("cloud_account_id::text = ANY($%d)", len(args)))
+	}
+	if len(accountExternalIDs) > 0 {
+		args = append(args, accountExternalIDs)
+		ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+	}
+	if len(ors) == 0 {
+		return "TRUE", args
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
+}
+
 // QueryHistory aggregates purchase_history rows bucketed by interval.
-// accountID == "" means "all accounts accessible to the caller"; scoping
-// is enforced upstream in the handler. Returns data points in ascending
-// order and a summary covering the full window.
+// Empty accountUUIDs AND accountExternalIDs means "all accounts accessible to
+// the caller"; scoping is enforced upstream in the handler. Returns data points
+// in ascending order and a summary covering the full window.
 func (c *PostgresAnalyticsClient) QueryHistory(
 	ctx context.Context,
-	accountID string,
+	accountUUIDs, accountExternalIDs []string,
 	start, end time.Time,
 	interval string,
 ) ([]HistoryDataPoint, *HistorySummary, error) {
@@ -91,16 +123,12 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 
 	// Single query grouped by (bucket, service, provider) so we can assemble
 	// both the top-line bucket totals and the by_service / by_provider
-	// breakdowns without a second trip to the DB.
+	// breakdowns without a second trip to the DB. The account predicate is the
+	// shared dual-column clause (see accountFilterClause).
 	//
-	// account_id is the legacy VARCHAR(20) external-account identifier
-	// (e.g. a 12-digit AWS account number) written by older code paths.
-	// cloud_account_id is the UUID FK to cloud_accounts added in migration
-	// 000011 and written by all current purchase flows. The topbar Account
-	// chip sends the cloud_accounts.id UUID, so we match BOTH columns so
-	// that rows written by either path are included (issue #701).
-	//
-	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above.
+	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above and the
+	// account clause is parameter-bound (no user input interpolated).
+	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDs, []any{start, end})
 	query := fmt.Sprintf(`
 		SELECT date_trunc('%s', timestamp) AS bucket,
 		       service,
@@ -111,12 +139,12 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND ($3 = '' OR account_id = $3 OR cloud_account_id::text = $3)
+		  AND %s
 		GROUP BY bucket, service, provider
 		ORDER BY bucket ASC
-	`, unit)
+	`, unit, accountClause)
 
-	rows, err := c.db.Query(ctx, query, start, end, accountID)
+	rows, err := c.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query purchase_history: %w", err)
 	}
@@ -184,7 +212,7 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 // bucket.
 func (c *PostgresAnalyticsClient) QueryBreakdown(
 	ctx context.Context,
-	accountID string,
+	accountUUIDs, accountExternalIDs []string,
 	start, end time.Time,
 	dimension string,
 ) (map[string]BreakdownValue, error) {
@@ -193,10 +221,12 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 		return nil, err
 	}
 
-	// account_id / cloud_account_id dual-column match: see QueryHistory
-	// comment for rationale (issue #701).
+	// Dual-column account predicate: see accountFilterClause / QueryHistory for
+	// rationale (issue #701/#498/#866).
 	//
-	// #nosec G201 — `column` is allowlisted by dimensionToColumn above.
+	// #nosec G201 — `column` is allowlisted by dimensionToColumn above and the
+	// account clause is parameter-bound (no user input interpolated).
+	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDs, []any{start, end})
 	query := fmt.Sprintf(`
 		SELECT %s AS bucket,
 		       SUM(estimated_savings)::float8 AS savings,
@@ -205,12 +235,12 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND ($3 = '' OR account_id = $3 OR cloud_account_id::text = $3)
+		  AND %s
 		GROUP BY bucket
 		ORDER BY savings DESC
-	`, column)
+	`, column, accountClause)
 
-	rows, err := c.db.Query(ctx, query, start, end, accountID)
+	rows, err := c.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query breakdown: %w", err)
 	}

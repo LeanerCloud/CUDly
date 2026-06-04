@@ -143,7 +143,91 @@ func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, 
 	return h.requirePlanAccess(ctx, session, execution.PlanID)
 }
 
-// resolveAccountNamesByID fetches the complete account list once and returns
+// resolveAccountFilterIDs maps requested cloud_accounts UUIDs to the
+// (uuid, external_id) pairs needed for the dual-column purchase-history filter.
+// purchase_history rows carry either the UUID FK (cloud_account_id) or the
+// cloud-provider external number (account_id) and frequently only one of them,
+// so a UUID-only WHERE silently drops the external-only rows. This resolver
+// loads cloud_accounts once (reusing ListCloudAccounts, the same source as
+// resolveAccountNamesByID), then returns the UUIDs unchanged plus the set of
+// external ids belonging to the matched accounts.
+//
+// Only UUIDs that resolve to a known cloud_accounts row contribute an external
+// id, so a caller cannot inject an arbitrary external id (and the matched
+// account's (provider, external_id) is unique per cloud_accounts, so a reused
+// external number across providers can't leak the wrong rows). Unknown UUIDs
+// are still returned in the uuid set so the cloud_account_id half of the
+// predicate matches any rows that happen to carry them.
+//
+// Returns (uuids, nil) when uuids is empty or the account load fails — the
+// dual-column predicate then degrades to UUID-only matching, no worse than the
+// pre-fix behaviour.
+func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (resolvedUUIDs, externalIDs []string) {
+	if len(uuids) == 0 {
+		return uuids, nil
+	}
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return uuids, nil
+	}
+	externalByUUID := make(map[string]string, len(accounts))
+	for _, a := range accounts {
+		if a.ExternalID != "" {
+			externalByUUID[a.ID] = a.ExternalID
+		}
+	}
+	seen := make(map[string]struct{}, len(uuids))
+	for _, u := range uuids {
+		ext, ok := externalByUUID[u]
+		if !ok {
+			continue
+		}
+		if _, dup := seen[ext]; dup {
+			continue
+		}
+		seen[ext] = struct{}{}
+		externalIDs = append(externalIDs, ext)
+	}
+	return uuids, externalIDs
+}
+
+// resolveSingleAccountFilterIDs resolves a single account identifier (the
+// legacy singular `account_id` param, which the frontend populates with the
+// top-bar chip's cloud_accounts UUID) into the dual-column filter inputs:
+//
+//   - Known account UUID: returned in the uuid set, plus its external id (if
+//     the account has one) in the external set. Both columns are then matched.
+//   - Unknown value: treated as an opaque external account number (the pre-UUID
+//     call shape, e.g. a raw AWS account number) so legacy single-account
+//     callers keep working; it is NOT placed in the uuid set so a raw external
+//     number is never compared against cloud_account_id UUIDs.
+//
+// Empty input returns empty slices (no account filter). A cloud_accounts load
+// failure falls back to treating the value as an external id (no worse than the
+// pre-fix behaviour); per-record allowed_accounts scoping still applies
+// downstream.
+func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID string) (uuids, externalIDs []string) {
+	if accountID == "" {
+		return nil, nil
+	}
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, []string{accountID}
+	}
+	for _, a := range accounts {
+		if a.ID == accountID {
+			// Known UUID: match cloud_account_id by UUID and, when present,
+			// account_id by the resolved external number.
+			if a.ExternalID != "" {
+				return []string{accountID}, []string{a.ExternalID}
+			}
+			return []string{accountID}, nil
+		}
+	}
+	// Not a known UUID: treat the value as an external account number.
+	return nil, []string{accountID}
+}
+
 // a map from account identifier → display name. The map is keyed by BOTH
 // the internal UUID (CloudAccount.ID) and the cloud-provider external ID
 // (CloudAccount.ExternalID, e.g. an AWS account number or Azure subscription
@@ -159,7 +243,7 @@ func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string
 	if err != nil {
 		return map[string]string{}
 	}
-	// Allocate 2× capacity since each account contributes two keys.
+	// Allocate 2x capacity since each account contributes up to two keys.
 	nameByID := make(map[string]string, len(accounts)*2)
 	for _, a := range accounts {
 		nameByID[a.ID] = a.Name
