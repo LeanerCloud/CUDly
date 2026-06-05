@@ -64,6 +64,18 @@ func calculateNextExecutionDate(plan *config.PurchasePlan, now time.Time) *time.
 	return &nextDate
 }
 
+// mapCreatePlanStorageError converts a storage-layer error from createPlan into
+// the appropriate HTTP ClientError. If err is ErrNotFound it returns a 404
+// with notFoundMsg; otherwise it logs the supplied format string at ERROR level
+// and returns a 500 with genericMsg.
+func mapCreatePlanStorageError(err error, notFoundMsg, genericMsg, logFmt string, logArgs ...any) error {
+	if errors.Is(err, config.ErrNotFound) {
+		return NewClientError(http.StatusNotFound, notFoundMsg)
+	}
+	logging.Errorf(logFmt, logArgs...)
+	return NewClientError(http.StatusInternalServerError, genericMsg)
+}
+
 func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
 	// Require create:plans permission
 	if _, err := h.requirePermission(ctx, httpReq, "create", "plans"); err != nil {
@@ -93,12 +105,10 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	}
 
 	if err := h.config.CreatePurchasePlan(ctx, plan); err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, NewClientError(http.StatusNotFound, "plan not found")
-		}
-		logging.Errorf("createPlan: CreatePurchasePlan failed (provider=%s service=%s accounts=%d): %v",
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to create plan",
+			"createPlan: CreatePurchasePlan failed (provider=%s service=%s accounts=%d): %v",
 			req.Provider, req.Service, len(req.TargetAccounts), err)
-		return nil, NewClientError(http.StatusInternalServerError, "failed to create plan")
 	}
 
 	// Provider-match validation + plan_accounts insert. SetPlanAccounts is
@@ -119,12 +129,10 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	if err := h.config.SetPlanAccounts(ctx, plan.ID, req.TargetAccounts); err != nil {
 		rollbackPlan()
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, NewClientError(http.StatusNotFound, "account not found")
-		}
-		logging.Errorf("createPlan: SetPlanAccounts failed (plan=%s accounts=%d): %v",
+		return nil, mapCreatePlanStorageError(err,
+			"account not found", "failed to assign accounts to plan",
+			"createPlan: SetPlanAccounts failed (plan=%s accounts=%d): %v",
 			plan.ID, len(req.TargetAccounts), err)
-		return nil, NewClientError(http.StatusInternalServerError, "failed to assign accounts to plan")
 	}
 
 	return plan, nil
