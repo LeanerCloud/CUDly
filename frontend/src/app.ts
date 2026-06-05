@@ -191,6 +191,9 @@ export function setupEventListeners(): void {
   // Setup feedback link
   setupFeedbackLink();
 
+  // Mobile navigation drawer (hamburger button below 768px)
+  setupMobileNav();
+
   // Setup all button event listeners (replacing onclick handlers)
   setupButtonHandlers();
 
@@ -622,6 +625,92 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     executeBtn.disabled = false;
     executeBtn.textContent = 'Send for Approval';
   }
+}
+
+/**
+ * Wire the mobile navigation drawer (hamburger button + overlay + Escape).
+ *
+ * Activates below 768px (CSS hides the hamburger above that breakpoint).
+ *
+ * Open:  body.classList.add('sidebar-open')
+ *        hamburger aria-expanded="true"
+ *        sidebar aria-hidden="false"
+ *        Focus first focusable link in the sidebar
+ *
+ * Close: body.classList.remove('sidebar-open')
+ *        hamburger aria-expanded="false"
+ *        sidebar aria-hidden="true"
+ *        Return focus to the hamburger button
+ *
+ * Sidebar links also close the drawer (they navigate within the SPA).
+ */
+export function setupMobileNav(): void {
+  const hamburger = document.getElementById('hamburger-btn') as HTMLButtonElement | null;
+  const sidebar = document.getElementById('sidebar') as HTMLElement | null;
+  const overlay = document.getElementById('sidebar-overlay') as HTMLElement | null;
+  if (!hamburger || !sidebar) return;
+
+  function openDrawer(): void {
+    document.body.classList.add('sidebar-open');
+    hamburger!.setAttribute('aria-expanded', 'true');
+    sidebar!.setAttribute('aria-hidden', 'false');
+    if (overlay) overlay.setAttribute('aria-hidden', 'false');
+
+    // Focus the first focusable element in the sidebar
+    const firstFocusable = sidebar!.querySelector<HTMLElement>(
+      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    firstFocusable?.focus();
+  }
+
+  function closeDrawer(): void {
+    document.body.classList.remove('sidebar-open');
+    hamburger!.setAttribute('aria-expanded', 'false');
+    sidebar!.setAttribute('aria-hidden', 'true');
+    if (overlay) overlay.setAttribute('aria-hidden', 'true');
+    hamburger!.focus();
+  }
+
+  hamburger.addEventListener('click', () => {
+    const isOpen = document.body.classList.contains('sidebar-open');
+    if (isOpen) {
+      closeDrawer();
+    } else {
+      openDrawer();
+    }
+  });
+
+  // Overlay click closes the drawer
+  if (overlay) {
+    overlay.addEventListener('click', () => closeDrawer());
+  }
+
+  // Escape key closes the drawer
+  document.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && document.body.classList.contains('sidebar-open')) {
+      e.preventDefault();
+      closeDrawer();
+    }
+  });
+
+  // Clicking any sidebar link closes the drawer (SPA navigation)
+  sidebar.querySelectorAll<HTMLElement>('.tab-btn').forEach(link => {
+    link.addEventListener('click', (e: MouseEvent) => {
+      // Only close on unmodified left-click (same guard as tab switching above)
+      if (
+        e.button !== 0 ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.shiftKey ||
+        e.altKey
+      ) {
+        return;
+      }
+      if (document.body.classList.contains('sidebar-open')) {
+        closeDrawer();
+      }
+    });
+  });
 }
 
 /**

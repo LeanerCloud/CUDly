@@ -23,6 +23,15 @@
     <a href="#main-content" class="skip-to-main">Skip to main content</a>
     <div id="app" class="app-shell">
         <header class="app-topbar">
+            <!-- Mobile-only hamburger button. Toggles the sidebar drawer
+                 below 768px via .sidebar-open on <body>. Hidden on desktop
+                 via CSS. aria-controls points at the <aside id="sidebar">. -->
+            <button type="button" class="hamburger" id="hamburger-btn"
+                    aria-label="Open navigation menu"
+                    aria-controls="sidebar"
+                    aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
             <div class="app-topbar-brand">
                 <span class="app-logo-mark" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
@@ -38,8 +47,11 @@
                 <button id="logout-btn">Logout</button>
             </div>
         </header>
+        <!-- Overlay: covers content when sidebar drawer is open on mobile.
+             Clicking it closes the drawer. Hidden above 768px via CSS. -->
+        <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
         <div class="app-body">
-            <aside class="app-sidebar" aria-label="Primary navigation">
+            <aside class="app-sidebar" id="sidebar" aria-label="Primary navigation">
                 <button class="app-sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-expanded="true">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                 </button>
