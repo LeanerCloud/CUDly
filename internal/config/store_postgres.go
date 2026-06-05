@@ -82,7 +82,8 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		       COALESCE(purchase_delay_hours, 0),
 		       COALESCE(laddering_enabled, false),
 		       COALESCE(ladder_execution_enabled, false),
-		       offering_class
+		       offering_class,
+		       require_different_approver
 		FROM global_config
 		WHERE id = 1
 	`
@@ -115,6 +116,7 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		&config.LadderingEnabled,
 		&config.LadderExecutionEnabled,
 		&config.OfferingClass,
+		&config.RequireDifferentApprover,
 	)
 
 	if err != nil {
@@ -214,8 +216,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			auto_collect, collection_schedule, notification_days_before,
 			grace_period_days,
 			recommendations_cache_stale_hours, recommendations_lookback_days,
-			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class,
+			require_different_approver
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -240,6 +243,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			laddering_enabled = $21,
 			ladder_execution_enabled = $22,
 			offering_class = $23,
+			require_different_approver = $24,
 			updated_at = NOW()
 	`
 
@@ -307,6 +311,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		config.LadderingEnabled,
 		config.LadderExecutionEnabled,
 		offeringClass,
+		config.RequireDifferentApprover,
 	)
 
 	if err != nil {

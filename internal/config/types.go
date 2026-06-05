@@ -86,6 +86,14 @@ type GlobalConfig struct {
 	// instance type for the full term but are ~5% cheaper.
 	// Unknown values are rejected at purchase time with an explicit error.
 	OfferingClass string `json:"offering_class,omitempty" dynamodbav:"offering_class,omitempty"`
+
+	// RequireDifferentApprover enables 4-eyes approval mode (issue #1005).
+	// When true, the user who created a purchase execution cannot approve it
+	// themselves; a different person with approval rights must do so. This is
+	// a standard SOX / SOC2 segregation-of-duties control. Default: false.
+	// Admins who created an execution and need to approve it must disable this
+	// mode first (the admin wildcard is NOT exempt from the restriction).
+	RequireDifferentApprover bool `json:"require_different_approver" dynamodbav:"require_different_approver"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider
