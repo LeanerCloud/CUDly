@@ -430,10 +430,14 @@ func TestClient_PurchaseCommitment_TagsCarryRichDescriptors(t *testing.T) {
 		}
 		// Required new descriptors from #687 (the existing NodeType / Region /
 		// PurchaseDate / Tool / Purpose tags are covered by the existing
-		// TagsWithResolvedARN test).
+		// TagsWithResolvedARN test). Name tag carries the rich self-describing
+		// identifier so the node is findable in the AWS console without CUDly.
+		name := got["Name"]
 		return got["Count"] == "2" &&
 			got["Term"] == "3yr" &&
-			got["PaymentOption"] == "partial-upfront"
+			got["PaymentOption"] == "partial-upfront" &&
+			len(name) > 0 &&
+			name[:8] == "redshift"
 	})).Return(&redshift.CreateTagsOutput{}, nil)
 
 	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1141,7 +1145,7 @@ func TestFindOfferingID_PaginationCapFires(t *testing.T) {
 			}, nil).Once()
 	}
 
-	_, err := client.findOfferingID(context.Background(), rec)
+	_, err := client.findOfferingID(context.Background(), rec, "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "pagination cap reached")
@@ -1173,7 +1177,7 @@ func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec, "")
 
 	assert.Error(t, err, "unknown offering type must not return success")
 	assert.Empty(t, id)
@@ -1200,8 +1204,63 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), rec)
+	id, err := client.findOfferingID(context.Background(), rec, "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
+}
+
+// TestClient_tagReservedNode_NameTagPresent asserts that tagReservedNode (issue
+// #687) stamps a self-describing Name tag on the Redshift reserved node. The
+// Redshift purchase API has no customer-supplied node ID, so the Name tag is
+// the only way to identify the node in the AWS console without CUDly.
+func TestClient_tagReservedNode_NameTagPresent(t *testing.T) {
+	t.Parallel()
+	mockRS := &MockRedshiftClient{}
+	mockSTS := &MockRedshiftSTSClient{}
+	client := &Client{
+		client:    mockRS,
+		stsClient: mockSTS,
+		region:    "eu-central-1",
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.4xlarge",
+		Count:         1,
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Region:        "eu-central-1",
+	}
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("111222333444")}, nil)
+
+	var capturedTags []types.Tag
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		capturedTags = in.Tags
+		return true
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	err := client.tagReservedNode(context.Background(), "rn-tag-test", rec, "test-source", "")
+	assert.NoError(t, err)
+
+	tagMap := make(map[string]string, len(capturedTags))
+	for _, tag := range capturedTags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	name, ok := tagMap["Name"]
+	assert.True(t, ok, "Name tag must be present in CreateTags call")
+	assert.True(t, len(name) > 0, "Name tag must be non-empty")
+	assert.LessOrEqual(t, len(name), 60, "Name must fit the 60-char cap")
+	// Key segments that make the node self-describing without CUDly:
+	assert.Contains(t, name, "redshift", "Name must carry the service code")
+	assert.Contains(t, name, "eu-central-1", "Name must embed the region")
+	assert.Contains(t, name, "ra3-4xlarge", "Name must embed the SKU (dots->hyphens)")
+	assert.Contains(t, name, "1x", "Name must embed the count")
+	assert.Contains(t, name, "1yr", "Name must embed the term")
+
+	mockRS.AssertExpectations(t)
+	mockSTS.AssertExpectations(t)
 }

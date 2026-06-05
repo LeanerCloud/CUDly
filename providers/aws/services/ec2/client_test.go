@@ -669,3 +669,109 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
 }
+
+// TestClient_tagReservedInstance_NameTagPresent asserts that a purchase on the
+// no-token CLI path (issue #687) stamps a self-describing Name tag on the EC2
+// RI. EC2 PurchaseReservedInstancesOfferingInput has no customer-supplied name
+// field, so the Name tag is the only way to identify the reservation in the AWS
+// console without cross-referencing CUDly's purchase audit log.
+func TestClient_tagReservedInstance_NameTagPresent(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-west-2"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "m5.xlarge",
+		Region:        "us-west-2",
+		Count:         3,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	var capturedTags []types.Tag
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		capturedTags = in.Tags
+		return len(in.Resources) == 1 && in.Resources[0] == "ri-name-test"
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	err := client.tagReservedInstance(context.Background(), "ri-name-test", rec, "", "")
+	assert.NoError(t, err)
+
+	tagMap := make(map[string]string, len(capturedTags))
+	for _, tag := range capturedTags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	name, ok := tagMap["Name"]
+	assert.True(t, ok, "Name tag must be present in CreateTags call")
+	assert.True(t, len(name) > 0, "Name tag must be non-empty")
+	assert.LessOrEqual(t, len(name), 60, "Name must fit the 60-char AWS reservation-name cap")
+	// Key segments that make the RI self-describing without CUDly:
+	assert.Contains(t, name, "ec2", "Name must start with the service code")
+	assert.Contains(t, name, "us-west-2", "Name must embed the region")
+	assert.Contains(t, name, "m5-xlarge", "Name must embed the SKU (dots->hyphens)")
+	assert.Contains(t, name, "3x", "Name must embed the count")
+	assert.Contains(t, name, "1yr", "Name must embed the term")
+
+	mockEC2.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_NameTagInCreateTagsRequest asserts that an
+// end-to-end purchase on the no-token CLI path (issue #687) produces a
+// CreateTags call that includes a self-describing Name tag.
+func TestClient_PurchaseCommitment_NameTagInCreateTagsRequest(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "ap-southeast-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "r6g.large",
+		Region:        "ap-southeast-1",
+		Count:         2,
+		PaymentOption: "no-upfront",
+		Term:          "3yr",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	// No idempotency token -> skip DescribeReservedInstances guard
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{{
+				ReservedInstancesOfferingId: aws.String("off-name-e2e"),
+				InstanceType:                types.InstanceTypeR6gLarge,
+				Duration:                    aws.Int64(94608000),
+				OfferingType:                types.OfferingTypeValuesNoUpfront,
+				ProductDescription:          types.RIProductDescriptionLinuxUnix,
+				InstanceTenancy:             types.TenancyDefault,
+			}},
+		}, nil)
+
+	mockEC2.On("PurchaseReservedInstancesOffering", mock.Anything, mock.Anything).
+		Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+			ReservedInstancesId: aws.String("ri-name-e2e"),
+		}, nil)
+
+	var capturedName string
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == "Name" {
+				capturedName = aws.ToString(tag.Value)
+				return true
+			}
+		}
+		return false
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	assert.True(t, len(capturedName) > 0, "Name tag must be set on the CreateTags call")
+	assert.Contains(t, capturedName, "ec2", "service code must appear in Name: %q", capturedName)
+	assert.Contains(t, capturedName, "ap-southeast-1", "region must appear in Name: %q", capturedName)
+
+	mockEC2.AssertExpectations(t)
+}

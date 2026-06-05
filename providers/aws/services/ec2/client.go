@@ -230,10 +230,28 @@ func (c *Client) findRIByIdempotencyToken(ctx context.Context, token string) (st
 // since AWS sometimes needs a couple of seconds before the RI ID is visible
 // to CreateTags. Non-NotFound errors short-circuit immediately.
 func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec common.Recommendation, source, idempotencyToken string) error {
+	// EC2 PurchaseReservedInstancesOfferingInput has no customer-supplied name or
+	// ID field. A Name tag (issue #687) is the only way to make the RI
+	// self-describing in the AWS console without cross-referencing CUDly's DB.
+	// BuildReservationName produces the same rich {svc}-{region}-{sku}-{count}x-
+	// {term}-{paymt}-{ts}-{rand} format used by the other AWS service clients.
+	displayName := common.BuildReservationName(common.ReservationNameFields{
+		Service:      "ec2",
+		Region:       rec.Region,
+		ResourceType: rec.ResourceType,
+		Count:        rec.Count,
+		Term:         rec.Term,
+		Payment:      rec.PaymentOption,
+		Now:          time.Now(),
+	}, "ec2-reserved-")
 	tags := []types.Tag{
+		{Key: aws.String("Name"), Value: aws.String(displayName)},
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Instance Purchase")},
 		{Key: aws.String("ResourceType"), Value: aws.String(rec.ResourceType)},
 		{Key: aws.String("Region"), Value: aws.String(rec.Region)},
+		{Key: aws.String("Count"), Value: aws.String(fmt.Sprintf("%d", rec.Count))},
+		{Key: aws.String("Term"), Value: aws.String(rec.Term)},
+		{Key: aws.String("PaymentOption"), Value: aws.String(rec.PaymentOption)},
 		{Key: aws.String("PurchaseDate"), Value: aws.String(time.Now().Format("2006-01-02"))},
 		{Key: aws.String("Tool"), Value: aws.String("CUDly")},
 	}
