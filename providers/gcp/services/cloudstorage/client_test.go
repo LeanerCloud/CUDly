@@ -856,3 +856,102 @@ func TestSkuMatchesStorageClass_CaseInsensitive(t *testing.T) {
 	}
 	assert.True(t, skuMatchesStorageClass(sku, "standard", "us-central1"))
 }
+
+// TestCloudStorageClient_ConvertGCPRecommendation_PopulatesRecurringMonthlyCost verifies
+// that convertGCPRecommendation sets a non-nil RecurringMonthlyCost when the billing
+// service returns valid pricing. This is the regression test for issue #264: the
+// pre-fix state left RecurringMonthlyCost nil, causing the frontend to render "—".
+func TestCloudStorageClient_ConvertGCPRecommendation_PopulatesRecurringMonthlyCost(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Provide a billing mock that returns a non-zero on-demand price so that
+	// getStoragePricing succeeds and produces a positive CommitmentPrice.
+	mockBilling := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "Standard Storage in us-central1",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        26000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetBillingService(mockBilling)
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		PrimaryImpact: &recommenderpb.Impact{
+			Category: recommenderpb.Impact_COST,
+			Projection: &recommenderpb.Impact_CostProjection{
+				CostProjection: &recommenderpb.CostProjection{
+					Cost: &money.Money{
+						Units:        -100,
+						Nanos:        0,
+						CurrencyCode: "USD",
+					},
+				},
+			},
+		},
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{Resource: "projects/test/buckets/STANDARD"},
+					},
+				},
+			},
+		},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	require.NotNil(t, rec)
+	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
+	assert.Greater(t, *rec.RecurringMonthlyCost, float64(0))
+}
+
+// TestCloudStorageClient_ConvertGCPRecommendation_BillingFailure_RecurringMonthlyCostNil
+// verifies that convertGCPRecommendation leaves RecurringMonthlyCost nil (rather than
+// coercing to 0) when the billing service call fails, matching the sibling services'
+// non-fatal-failure contract.
+func TestCloudStorageClient_ConvertGCPRecommendation_BillingFailure_RecurringMonthlyCostNil(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockBilling := &MockBillingService{
+		err: errors.New("billing API unavailable"),
+	}
+	client.SetBillingService(mockBilling)
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{Resource: "projects/test/buckets/STANDARD"},
+					},
+				},
+			},
+		},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	require.NotNil(t, rec)
+	assert.Nil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must remain nil when billing lookup fails")
+}
