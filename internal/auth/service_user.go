@@ -271,14 +271,11 @@ func (s *Service) sendInviteEmail(ctx context.Context, user *User, inviteToken s
 	logging.Infof("User invited: id=%s, groups=%d, email_sent=%t", user.ID, len(user.GroupIDs), sent)
 }
 
-// UpdateUser updates user details (requires manage-users permission).
-//
-// actorUserID is the authenticated user performing the change (from the
-// session, never client-supplied). It is used to enforce the self-escalation
-// guard: a user may not add a group they are not already a member of unless
-// they hold the manage-users permission. Pass "" for trusted internal callers
-// (e.g. the stateless admin API key) that have already been authorised.
-func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, req UpdateUserRequest) (*User, error) {
+// loadUser fetches a user by ID, normalising a missing row (either pgx.ErrNoRows
+// or a nil user) into a uniform "user not found" error. Extracted so the mutating
+// service methods share one lookup-or-not-found path and stay under gocyclo's
+// complexity threshold.
+func (s *Service) loadUser(ctx context.Context, userID string) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -289,10 +286,26 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 	if user == nil {
 		return nil, fmt.Errorf("user not found")
 	}
+	return user, nil
+}
 
-	// Snapshot the prior membership before mutating so the guards below can
-	// reason about what is being added/removed.
+// UpdateUser updates user details (requires manage-users permission).
+//
+// actorUserID is the authenticated user performing the change (from the
+// session, never client-supplied). It is used to enforce the self-escalation
+// guard: a user may not add a group they are not already a member of unless
+// they hold the manage-users permission. Pass "" for trusted internal callers
+// (e.g. the stateless admin API key) that have already been authorised.
+func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, req UpdateUserRequest) (*User, error) {
+	user, err := s.loadUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Snapshot the prior membership/active state before mutating so the guards
+	// below can reason about what is being added/removed/deactivated.
 	priorGroups := append([]string(nil), user.GroupIDs...)
+	priorActive := user.Active
 
 	if err := applyUpdateUserRequest(user, req); err != nil {
 		return nil, err
@@ -302,6 +315,10 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 		if err := s.guardGroupChange(ctx, actorUserID, userID, priorGroups, req.GroupIDs); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := s.guardDeactivation(ctx, user, priorActive, req.Active); err != nil {
+		return nil, err
 	}
 
 	// Email is mutated through updateUserEmail rather than applyUpdateUserRequest
@@ -315,10 +332,36 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
+		// The deferred DB trigger (migration 000065) fires at commit time and
+		// can reject writes that the application-level soft check missed due to
+		// concurrent requests. Surface the trigger violation as ErrLastAdmin so
+		// callers receive the same sentinel regardless of which guard caught it.
+		if isLastAdminConstraintViolation(err) {
+			return nil, ErrLastAdmin
+		}
 		return nil, fmt.Errorf("failed to update user: %w", err)
 	}
 
 	return user, nil
+}
+
+// guardDeactivation rejects deactivating the last active Administrators-group
+// member, which would lock the deployment out of admin functionality, the same
+// hazard as removing the group. AdminExists and the 000065 trigger both count
+// only active members, so this soft check mirrors that invariant and rejects
+// early with a friendly 409. The deferred trigger is the race-free backstop
+// when concurrent requests slip past this read-then-write check. Extracted from
+// UpdateUser to keep that function under gocyclo's complexity threshold.
+//
+// user carries the post-applyUpdateUserRequest group membership; priorActive is
+// the active state before the update and reqActive the requested change (nil
+// when the request does not touch Active).
+func (s *Service) guardDeactivation(ctx context.Context, user *User, priorActive bool, reqActive *bool) error {
+	deactivating := priorActive && reqActive != nil && !*reqActive
+	if deactivating && containsGroup(user.GroupIDs, DefaultAdminGroupID) {
+		return s.checkLastAdminConstraint(ctx)
+	}
+	return nil
 }
 
 // guardGroupChange enforces the issue #907 invariants for a group-membership
@@ -355,10 +398,12 @@ func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserI
 	return nil
 }
 
-// checkLastAdminConstraint returns ErrLastAdmin if removing the
-// Administrators group from its current holder would leave the group with
-// zero members. Pulled out of guardGroupChange to keep that function under
-// the cyclomatic limit.
+// checkLastAdminConstraint returns ErrLastAdmin if removing or deactivating
+// the Administrators group's current sole holder would leave the group with
+// no other member to fall back on. Pulled out of guardGroupChange to keep that
+// function under the cyclomatic limit and reused by the deactivation guard.
+// This is a best-effort early reject; the 000065 deferred trigger is the
+// race-free backstop that also accounts for already-inactive members.
 func (s *Service) checkLastAdminConstraint(ctx context.Context) error {
 	count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
 	if err != nil {
@@ -404,15 +449,9 @@ func applyUpdateUserRequest(user *User, req UpdateUserRequest) error {
 // delete the last remaining Administrators-group member so the deployment can
 // never be locked out of admin functionality (issue #907).
 func (s *Service) DeleteUser(ctx context.Context, userID string) error {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
 		return err
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
 	}
 
 	if containsGroup(user.GroupIDs, DefaultAdminGroupID) {
@@ -430,7 +469,17 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 		logging.Warnf("Failed to delete user sessions: %v", err)
 	}
 
-	return s.store.DeleteUser(ctx, userID)
+	if err := s.store.DeleteUser(ctx, userID); err != nil {
+		// The deferred DB trigger (migration 000065) fires at commit time and
+		// can reject deletes that the application-level soft check missed due
+		// to concurrent requests. Surface as ErrLastAdmin so the handler maps
+		// it to the same 409 regardless of which guard caught it.
+		if isLastAdminConstraintViolation(err) {
+			return ErrLastAdmin
+		}
+		return err
+	}
+	return nil
 }
 
 // GetUser returns user info. Returns (nil, pgx.ErrNoRows) if the user does not exist.
