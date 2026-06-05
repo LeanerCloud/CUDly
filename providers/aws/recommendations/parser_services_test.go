@@ -507,15 +507,33 @@ func TestParseRedshiftDetails(t *testing.T) {
 
 func TestParseMemoryDBDetails(t *testing.T) {
 	client := &Client{}
-
-	rec := &common.Recommendation{}
 	details := &types.ReservationPurchaseRecommendationDetail{}
 
-	err := client.parseMemoryDBDetails(rec, details)
+	t.Run("empty ResourceType returns error", func(t *testing.T) {
+		rec := &common.Recommendation{}
+		err := client.parseMemoryDBDetails(rec, details)
+		require.Error(t, err, "should fail loudly when ResourceType is empty")
+		assert.Contains(t, err.Error(), "ResourceType")
+		assert.Nil(t, rec.Details, "Details should remain nil on error")
+	})
 
-	// parseMemoryDBDetails logs a warning and skips the recommendation
-	// (MemoryDB does not expose instance details in Cost Explorer)
-	require.NoError(t, err)
-	assert.Empty(t, rec.ResourceType, "ResourceType should not be set when MemoryDB details are unavailable")
-	assert.Nil(t, rec.Details, "Details should remain nil when MemoryDB details are unavailable")
+	t.Run("non-default instance type populates Details", func(t *testing.T) {
+		rec := &common.Recommendation{ResourceType: "db.r6g.large"}
+		err := client.parseMemoryDBDetails(rec, details)
+		require.NoError(t, err)
+		cacheDetails, ok := rec.Details.(*common.CacheDetails)
+		require.True(t, ok, "Details should be *common.CacheDetails")
+		assert.Equal(t, "db.r6g.large", cacheDetails.NodeType)
+		assert.Equal(t, "redis", cacheDetails.Engine)
+	})
+
+	t.Run("xlarge instance type populates Details", func(t *testing.T) {
+		rec := &common.Recommendation{ResourceType: "db.r6gd.xlarge"}
+		err := client.parseMemoryDBDetails(rec, details)
+		require.NoError(t, err)
+		cacheDetails, ok := rec.Details.(*common.CacheDetails)
+		require.True(t, ok, "Details should be *common.CacheDetails")
+		assert.Equal(t, "db.r6gd.xlarge", cacheDetails.NodeType)
+		assert.Equal(t, "redis", cacheDetails.Engine)
+	})
 }
