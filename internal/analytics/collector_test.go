@@ -120,7 +120,7 @@ func (m *mockAnalyticsStore) Close() error {
 // mockConfigStore implements config.StoreInterface for testing
 type mockConfigStore struct {
 	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
-	getAllPurchaseHistoryFunc           func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
+	getAllPurchaseHistoryFunc          func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
 	getActivePurchaseHistoryFunc       func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
 	getPurchaseHistoryByPurchaseIDFunc func(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error)
 	markPurchaseRevokedFunc            func(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
@@ -214,16 +214,10 @@ func (m *mockConfigStore) GetPurchaseHistory(ctx context.Context, accountID stri
 }
 
 func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error) {
-	if m.getAllPurchaseHistoryFunc != nil {
-		return m.getAllPurchaseHistoryFunc(ctx, limit)
-	}
 	return nil, nil
 }
 
 func (m *mockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
-	if m.getActivePurchaseHistoryFunc != nil {
-		return m.getActivePurchaseHistoryFunc(ctx, asOf)
-	}
 	return nil, nil
 }
 

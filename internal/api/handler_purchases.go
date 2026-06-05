@@ -486,26 +486,32 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	if token != "" {
-		actor, err := h.authorizeApprovalAction(ctx, req, execution)
-		if err != nil {
-			return nil, err
-		}
-		// Check for Gmail-style pre-fire delay (issue #291 wave-2).
-		globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
-		if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
-			return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor)
-		}
-		// ApproveExecution now runs the purchase synchronously inside the
-		// same call (issue #372). When it returns nil the AWS API call
-		// has already happened, so the response surfaces "completed"
-		// instead of the transient "approved" the old no-op flow returned.
-		if err := h.purchase.ApproveExecution(ctx, execID, token, actor); err != nil {
-			return nil, err
-		}
-		return map[string]string{"status": "completed"}, nil
+		return h.approveViaToken(ctx, req, execution, token)
 	}
 
 	return h.approvePurchaseViaSession(ctx, req, execution)
+}
+
+// approveViaToken handles the email-link approve branch of approvePurchase to keep
+// that function under the cyclomatic limit.
+func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, token string) (any, error) {
+	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+	if err != nil {
+		return nil, err
+	}
+	// Check for Gmail-style pre-fire delay (issue #291 wave-2).
+	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
+	if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor)
+	}
+	// ApproveExecution now runs the purchase synchronously inside the
+	// same call (issue #372). When it returns nil the AWS API call
+	// has already happened, so the response surfaces "completed"
+	// instead of the transient "approved" the old no-op flow returned.
+	if err := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor); err != nil {
+		return nil, err
+	}
+	return map[string]string{"status": "completed"}, nil
 }
 
 // approvePurchaseViaSession is the session-authed branch of approvePurchase.
@@ -655,6 +661,58 @@ func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *conf
 	return execution, nil
 }
 
+// buildScheduledEmailData constructs the email.NotificationData from the execution
+// and global config, pulled out of sendPurchaseScheduledEmail to keep that function
+// under the cyclomatic limit.
+func buildScheduledEmailData(dashboardURL string, execution *config.PurchaseExecution, globalCfg *config.GlobalConfig, actor string) email.NotificationData {
+	var windowClosesAt string
+	if execution.ScheduledExecutionAt != nil {
+		windowClosesAt = execution.ScheduledExecutionAt.UTC().Format("2006-01-02 15:04 UTC")
+	}
+
+	revokeURL := ""
+	if dashboardURL != "" {
+		revokeURL = dashboardURL + "/purchases#history?execution=" + execution.ExecutionID
+	}
+
+	// Build a minimal summaries slice from the stored recommendations.
+	var summaries []email.RecommendationSummary
+	for _, r := range execution.Recommendations {
+		summaries = append(summaries, email.RecommendationSummary{
+			Service:      r.Service,
+			ResourceType: r.ResourceType,
+			Region:       r.Region,
+			Count:        r.Count,
+			Term:         r.Term,
+			Payment:      r.Payment,
+			UpfrontCost:  r.UpfrontCost,
+		})
+	}
+
+	data := email.NotificationData{
+		DashboardURL:             dashboardURL,
+		ExecutionID:              execution.ExecutionID,
+		TotalUpfrontCost:         execution.TotalUpfrontCost,
+		TotalSavings:             execution.EstimatedSavings,
+		Recommendations:          summaries,
+		RevocationWindowClosesAt: windowClosesAt,
+		RevokeURL:                revokeURL,
+	}
+
+	// Use the global notification email as the recipient (same as approval).
+	var globalNotify string
+	if globalCfg.NotificationEmail != nil {
+		globalNotify = *globalCfg.NotificationEmail
+	}
+	if globalNotify != "" {
+		data.RecipientEmail = globalNotify
+	} else if actor != "" {
+		data.RecipientEmail = actor
+	}
+
+	return data
+}
+
 // sendPurchaseScheduledEmail fires the Gmail-style scheduled-delay notification
 // email immediately after scheduling. Best-effort: errors are logged and never
 // returned to the caller (the purchase state is already committed).
@@ -674,50 +732,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 		return
 	}
 
-	var windowClosesAt string
-	if execution.ScheduledExecutionAt != nil {
-		windowClosesAt = execution.ScheduledExecutionAt.UTC().Format("2006-01-02 15:04 UTC")
-	}
-
-	revokeURL := ""
-	if h.dashboardURL != "" {
-		revokeURL = h.dashboardURL + "/purchases#history?execution=" + execution.ExecutionID
-	}
-
-	// Build a minimal summaries slice from the stored recommendations.
-	var summaries []email.RecommendationSummary
-	for _, r := range execution.Recommendations {
-		summaries = append(summaries, email.RecommendationSummary{
-			Service:      r.Service,
-			ResourceType: r.ResourceType,
-			Region:       r.Region,
-			Count:        r.Count,
-			Term:         r.Term,
-			Payment:      r.Payment,
-			UpfrontCost:  r.UpfrontCost,
-		})
-	}
-
-	data := email.NotificationData{
-		DashboardURL:             h.dashboardURL,
-		ExecutionID:              execution.ExecutionID,
-		TotalUpfrontCost:         execution.TotalUpfrontCost,
-		TotalSavings:             execution.EstimatedSavings,
-		Recommendations:          summaries,
-		RevocationWindowClosesAt: windowClosesAt,
-		RevokeURL:                revokeURL,
-	}
-
-	// Use the global notification email as the recipient (same as approval).
-	var globalNotify string
-	if globalCfg.NotificationEmail != nil {
-		globalNotify = *globalCfg.NotificationEmail
-	}
-	if globalNotify != "" {
-		data.RecipientEmail = globalNotify
-	} else if actor != "" {
-		data.RecipientEmail = actor
-	}
+	data := buildScheduledEmailData(h.dashboardURL, execution, globalCfg, actor)
 
 	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, data); sendErr != nil {
 		logging.Errorf("sendPurchaseScheduledEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)

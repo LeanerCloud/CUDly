@@ -1294,6 +1294,30 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 	return scanExecutionRows(rows)
 }
 
+// applyNullTimesToExecution sets the nullable timestamp fields on exec from the
+// sql.NullTime wrappers, pulled out of scanExecutionRows to keep that function
+// under the cyclomatic limit.
+func applyNullTimesToExecution(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt sql.NullTime) {
+	if notifSent.Valid {
+		exec.NotificationSent = &notifSent.Time
+	}
+	if completedAt.Valid {
+		exec.CompletedAt = &completedAt.Time
+	}
+	if expiresAt.Valid {
+		exec.TTL = ttlFromTime(expiresAt.Time)
+	}
+	if tokenExpiresAt.Valid {
+		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
+	}
+	if executedAt.Valid {
+		exec.ExecutedAt = &executedAt.Time
+	}
+	if scheduledExecutionAt.Valid {
+		exec.ScheduledExecutionAt = &scheduledExecutionAt.Time
+	}
+}
+
 // scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
 // It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
 // query) so the scan logic lives in one place.
@@ -1356,36 +1380,12 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			return nil, fmt.Errorf("failed to unmarshal recommendations: %w", err)
 		}
 
-		applyExecutionNullableTimes(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt)
+		applyNullTimesToExecution(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt)
 
 		executions = append(executions, exec)
 	}
 
 	return executions, rows.Err()
-}
-
-// applyExecutionNullableTimes maps the nullable timestamp columns onto exec.
-// It pulls the per-field NULL handling out of scanExecutionRows to keep that
-// function under the cyclomatic limit.
-func applyExecutionNullableTimes(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt sql.NullTime) {
-	if notifSent.Valid {
-		exec.NotificationSent = &notifSent.Time
-	}
-	if completedAt.Valid {
-		exec.CompletedAt = &completedAt.Time
-	}
-	if expiresAt.Valid {
-		exec.TTL = ttlFromTime(expiresAt.Time)
-	}
-	if tokenExpiresAt.Valid {
-		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
-	}
-	if executedAt.Valid {
-		exec.ExecutedAt = &executedAt.Time
-	}
-	if scheduledExecutionAt.Valid {
-		exec.ScheduledExecutionAt = &scheduledExecutionAt.Time
-	}
 }
 
 // GetScheduledExecutionsDue returns purchase_executions with status='scheduled'

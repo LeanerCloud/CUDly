@@ -451,7 +451,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
@@ -506,7 +506,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
-		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -1882,7 +1882,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	}
 }

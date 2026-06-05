@@ -96,6 +96,13 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return h.revokeScheduledExecution(ctx, session, execution)
 	}
 
+	return h.loadAndRevokePurchaseHistory(ctx, session, purchaseID)
+}
+
+// loadAndRevokePurchaseHistory pulls the auth + idempotency-check + provider-dispatch
+// logic for the completed-purchase path out of revokePurchase to keep that function
+// under the cyclomatic limit.
+func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, session *Session, purchaseID string) (any, error) {
 	record, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
 	if err != nil {
 		return nil, fmt.Errorf("revoke: load purchase %s: %w", purchaseID, err)
