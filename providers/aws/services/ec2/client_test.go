@@ -844,3 +844,166 @@ func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
 	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
 	assert.Equal(t, types.Tenancy("default"), q.tenancy)
 }
+
+// --- RI Marketplace listing tests (issue #292) ---
+
+func TestClient_CreateMarketplaceListing_HappyPathMultiCount(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	// Capture the input so we can assert InstanceCount is the row's count, not 1.
+	mockEC2.On("CreateReservedInstancesListing", mock.Anything,
+		mock.MatchedBy(func(in *ec2.CreateReservedInstancesListingInput) bool {
+			return aws.ToInt32(in.InstanceCount) == 3 &&
+				aws.ToString(in.ReservedInstancesId) == "ri-multi" &&
+				len(in.PriceSchedules) == 1
+		})).
+		Return(&ec2.CreateReservedInstancesListingOutput{
+			ReservedInstancesListings: []types.ReservedInstancesListing{
+				{
+					ReservedInstancesListingId: aws.String("ril-abc"),
+					Status:                     types.ListingStatusActive,
+				},
+			},
+		}, nil)
+
+	res, err := client.CreateMarketplaceListing(context.Background(), MarketplaceListingRequest{
+		ReservedInstancesID: "ri-multi",
+		ClientToken:         "tok-1",
+		InstanceCount:       3,
+		PriceSchedule:       []MarketplacePriceTier{{Term: 12, Price: 100}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "ril-abc", res.ListingID)
+	assert.Equal(t, "active", res.State)
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_CreateMarketplaceListing_RejectsNonPositiveCount(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	_, err := client.CreateMarketplaceListing(context.Background(), MarketplaceListingRequest{
+		ReservedInstancesID: "ri-1",
+		ClientToken:         "tok",
+		InstanceCount:       0,
+		PriceSchedule:       []MarketplacePriceTier{{Term: 12, Price: 100}},
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "instance count must be a positive integer")
+	// No outbound call must have been made.
+	mockEC2.AssertNotCalled(t, "CreateReservedInstancesListing", mock.Anything, mock.Anything)
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_CreateMarketplaceListing_EmptyScheduleRejected(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	_, err := client.CreateMarketplaceListing(context.Background(), MarketplaceListingRequest{
+		ReservedInstancesID: "ri-1",
+		InstanceCount:       1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "price schedule must have at least one tier")
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_CreateMarketplaceListing_EmptyListingIDRejected(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	mockEC2.On("CreateReservedInstancesListing", mock.Anything, mock.Anything).
+		Return(&ec2.CreateReservedInstancesListingOutput{
+			ReservedInstancesListings: []types.ReservedInstancesListing{
+				{ReservedInstancesListingId: aws.String(""), Status: types.ListingStatusActive},
+			},
+		}, nil)
+
+	_, err := client.CreateMarketplaceListing(context.Background(), MarketplaceListingRequest{
+		ReservedInstancesID: "ri-1",
+		InstanceCount:       1,
+		PriceSchedule:       []MarketplacePriceTier{{Term: 12, Price: 100}},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty ID")
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_DescribeMarketplaceListing(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	mockEC2.On("DescribeReservedInstancesListings", mock.Anything,
+		mock.MatchedBy(func(in *ec2.DescribeReservedInstancesListingsInput) bool {
+			return aws.ToString(in.ReservedInstancesListingId) == "ril-xyz"
+		})).
+		Return(&ec2.DescribeReservedInstancesListingsOutput{
+			ReservedInstancesListings: []types.ReservedInstancesListing{
+				{ReservedInstancesListingId: aws.String("ril-xyz"), Status: types.ListingStatusClosed},
+			},
+		}, nil)
+
+	res, err := client.DescribeMarketplaceListing(context.Background(), "ril-xyz")
+	assert.NoError(t, err)
+	assert.Equal(t, "ril-xyz", res.ListingID)
+	assert.Equal(t, "closed", res.State)
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_DescribeMarketplaceListing_NotFound(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	mockEC2.On("DescribeReservedInstancesListings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesListingsOutput{}, nil)
+
+	_, err := client.DescribeMarketplaceListing(context.Background(), "ril-missing")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_CancelMarketplaceListing(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	mockEC2.On("CancelReservedInstancesListing", mock.Anything,
+		mock.MatchedBy(func(in *ec2.CancelReservedInstancesListingInput) bool {
+			return aws.ToString(in.ReservedInstancesListingId) == "ril-cancel"
+		})).
+		Return(&ec2.CancelReservedInstancesListingOutput{
+			ReservedInstancesListings: []types.ReservedInstancesListing{
+				{ReservedInstancesListingId: aws.String("ril-cancel"), Status: types.ListingStatusCancelled},
+			},
+		}, nil)
+
+	res, err := client.CancelMarketplaceListing(context.Background(), "ril-cancel")
+	assert.NoError(t, err)
+	assert.Equal(t, "ril-cancel", res.ListingID)
+	assert.Equal(t, "cancelled", res.State)
+	mockEC2.AssertExpectations(t)
+}
+
+func TestClient_CancelMarketplaceListing_APIError(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	mockEC2.On("CancelReservedInstancesListing", mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("boom"))
+
+	_, err := client.CancelMarketplaceListing(context.Background(), "ril-cancel")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "CancelReservedInstancesListing failed")
+	mockEC2.AssertExpectations(t)
+}
