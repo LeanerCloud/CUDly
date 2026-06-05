@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
-	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -146,43 +144,21 @@ func muteKey() []byte {
 // buildUnsubscribeURL constructs the one-click unsubscribe URL for the given
 // (email, scope) pair. Returns ("", "") when unsubscribeBaseURL is empty.
 func (s *Sender) buildUnsubscribeURL(email, scope string) (unsubURL, mailtoURL string) {
-	if s.unsubscribeBaseURL == "" {
-		return "", ""
-	}
-	token := common.DeriveMuteToken(muteKey(), email, scope)
-	q := url.Values{
-		"token": {token},
-		"email": {email},
-		"scope": {scope},
-	}
-	unsubURL = s.unsubscribeBaseURL + "/api/notifications/unsubscribe?" + q.Encode()
-	return unsubURL, ""
+	return unsubscribeURLFor(s.unsubscribeBaseURL, email, scope), ""
 }
 
 // listUnsubscribeHeaders returns the List-Unsubscribe and List-Unsubscribe-Post
 // header values for the given (email, scope) pair (RFC 8058).
 // Returns ("", "") when no base URL is configured.
 func (s *Sender) listUnsubscribeHeaders(email, scope string) (headerValue, postValue string) {
-	unsubURL, _ := s.buildUnsubscribeURL(email, scope)
-	if unsubURL == "" {
-		return "", ""
-	}
-	return "<" + unsubURL + ">", "List-Unsubscribe=One-Click"
+	return unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, email, scope)
 }
 
 // isMuted returns true when the given address is muted for this scope. When the
 // mute checker is nil or returns an error the address is treated as not muted so
 // a transient DB outage doesn't silently block approval emails.
 func (s *Sender) isMuted(ctx context.Context, email, scope string) bool {
-	if s.muteChecker == nil {
-		return false
-	}
-	muted, err := s.muteChecker.IsNotificationMuted(ctx, email, scope)
-	if err != nil {
-		logging.Warnf("email: mute check failed for scope=%s: %v", scope, err)
-		return false
-	}
-	return muted
+	return isRecipientMuted(ctx, s.muteChecker, email, scope)
 }
 
 // filterMutedAddresses returns a copy of addrs with any muted (for scope)
@@ -190,16 +166,7 @@ func (s *Sender) isMuted(ctx context.Context, email, scope string) bool {
 // store are treated as "not muted" (fail-open) so a DB hiccup does not
 // silently suppress approval emails.
 func (s *Sender) filterMutedAddresses(ctx context.Context, addrs []string, scope string) []string {
-	if s.muteChecker == nil || len(addrs) == 0 {
-		return addrs
-	}
-	out := make([]string, 0, len(addrs))
-	for _, addr := range addrs {
-		if !s.isMuted(ctx, addr, scope) {
-			out = append(out, addr)
-		}
-	}
-	return out
+	return filterMutedRecipients(ctx, s.muteChecker, addrs, scope)
 }
 
 // snsMaxSubjectLen is the maximum byte length SNS accepts for a Subject.
