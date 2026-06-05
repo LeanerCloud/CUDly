@@ -398,6 +398,8 @@ describe('Auth Module', () => {
           <button id="logout-btn">Logout</button>
         </div>
         <div class="admin-only hidden">Admin content</div>
+        <a class="requires-purchases" id="purchases-tab-btn">Purchases</a>
+        <a class="requires-purchases" id="inventory-tab-btn">Inventory &amp; Coverage</a>
       `;
     });
 
@@ -463,6 +465,63 @@ describe('Auth Module', () => {
       const adminElements = document.querySelectorAll<HTMLElement>('.admin-only');
       adminElements.forEach(el => {
         expect(el.classList.contains('visible')).toBe(false);
+      });
+    });
+
+    // issue #1000: requires-purchases nav gating
+    test('shows requires-purchases nav elements for a user with view:purchases', () => {
+      (state.getCurrentUser as jest.Mock).mockReturnValue({
+        id: 'user-1',
+        email: 'user@example.com',
+        groups: [],
+        effectivePermissions: [{ action: 'view', resource: 'purchases' }],
+      });
+
+      updateUserUI();
+
+      const els = document.querySelectorAll<HTMLElement>('.requires-purchases');
+      expect(els.length).toBeGreaterThan(0);
+      els.forEach(el => {
+        expect(el.classList.contains('visible')).toBe(true);
+      });
+    });
+
+    test('hides requires-purchases nav elements for a read-only user without view:purchases', () => {
+      (state.getCurrentUser as jest.Mock).mockReturnValue({
+        id: 'readonly-1',
+        email: 'readonly@example.com',
+        groups: [],
+        // READONLY_PERMS does not include view:purchases
+        effectivePermissions: [
+          { action: 'view', resource: 'recommendations' },
+          { action: 'view', resource: 'plans' },
+          { action: 'view', resource: 'history' },
+        ],
+      });
+
+      updateUserUI();
+
+      const els = document.querySelectorAll<HTMLElement>('.requires-purchases');
+      expect(els.length).toBeGreaterThan(0);
+      els.forEach(el => {
+        expect(el.classList.contains('visible')).toBe(false);
+      });
+    });
+
+    test('shows requires-purchases nav elements for an admin (admin:* covers view:purchases)', () => {
+      (state.getCurrentUser as jest.Mock).mockReturnValue({
+        id: 'admin-1',
+        email: 'admin@example.com',
+        groups: [ADMINISTRATORS_GROUP_ID],
+        effectivePermissions: [{ action: 'admin', resource: '*' }],
+      });
+
+      updateUserUI();
+
+      const els = document.querySelectorAll<HTMLElement>('.requires-purchases');
+      expect(els.length).toBeGreaterThan(0);
+      els.forEach(el => {
+        expect(el.classList.contains('visible')).toBe(true);
       });
     });
 

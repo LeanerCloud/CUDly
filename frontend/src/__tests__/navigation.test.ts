@@ -33,6 +33,10 @@ jest.mock('../riexchange', () => ({
 jest.mock('../auth', () => ({
   isAdmin: jest.fn().mockReturnValue(true),
 }));
+// Default: all users can view purchases. Individual tests override this.
+jest.mock('../permissions', () => ({
+  canAccess: jest.fn().mockReturnValue(true),
+}));
 // Mock inventory so navigation tests stay focused on routing/history and
 // don't pull in the real fetch/render machinery. switchInventorySubSection
 // must still resolve+return the sub-section (default-first) because
@@ -55,6 +59,8 @@ import { loadPlans } from '../plans';
 import { initHistoryDateRange, loadHistory } from '../history';
 import { loadGlobalSettings } from '../settings';
 import { loadAutomationSettings } from '../riexchange';
+import { canAccess } from '../permissions';
+import { loadInventory } from '../inventory';
 
 describe('Navigation Module', () => {
   beforeEach(() => {
@@ -252,6 +258,56 @@ describe('Navigation Module', () => {
       // Final state should have home active
       const dashboardBtn = document.querySelector('[data-tab="home"]');
       expect(dashboardBtn?.classList.contains('active')).toBe(true);
+    });
+
+    // issue #1000: users without view:purchases must not trigger API calls
+    // and must see the no-access placeholder instead of the real page.
+    describe('view:purchases gate', () => {
+      beforeEach(() => {
+        // Default mock returns true; override to false for these tests.
+        (canAccess as jest.Mock).mockReturnValue(false);
+      });
+
+      afterEach(() => {
+        // Restore default so other tests are unaffected.
+        (canAccess as jest.Mock).mockReturnValue(true);
+      });
+
+      test('purchases tab: does not fire loadHistory or initHistoryDateRange when user lacks view:purchases', () => {
+        switchTab('purchases');
+        expect(initHistoryDateRange).not.toHaveBeenCalled();
+        expect(loadHistory).not.toHaveBeenCalled();
+      });
+
+      test('purchases tab: renders no-access placeholder when user lacks view:purchases', () => {
+        switchTab('purchases');
+        const container = document.getElementById('purchases-tab');
+        expect(container?.textContent).toContain('You do not have access to this page');
+      });
+
+      test('inventory tab: does not fire loadInventory when user lacks view:purchases', () => {
+        switchTab('inventory');
+        expect(loadInventory).not.toHaveBeenCalled();
+      });
+
+      test('inventory tab: renders no-access placeholder when user lacks view:purchases', () => {
+        switchTab('inventory');
+        const container = document.getElementById('inventory-tab');
+        expect(container?.textContent).toContain('You do not have access to this page');
+      });
+
+      test('purchases tab: fires normally when user has view:purchases', () => {
+        (canAccess as jest.Mock).mockReturnValue(true);
+        switchTab('purchases');
+        expect(initHistoryDateRange).toHaveBeenCalled();
+        expect(loadHistory).toHaveBeenCalled();
+      });
+
+      test('inventory tab: fires normally when user has view:purchases', () => {
+        (canAccess as jest.Mock).mockReturnValue(true);
+        switchTab('inventory');
+        expect(loadInventory).toHaveBeenCalled();
+      });
     });
   });
 
