@@ -278,18 +278,31 @@ func archComponent(off OfferingOption, src RIInfo) float64 {
 }
 
 // isARMFamily returns true when the EC2 family name indicates a Graviton
-// (ARM) processor. The Graviton suffix is always "g" or a "g"-prefixed
-// qualifier ("gd", "gn", "g2"). Detection: strip the generation digit+
-// cluster from the family and check whether the remainder ends in "g".
+// (ARM) processor. Graviton families use exactly one of the suffixes "g",
+// "gd", or "gn" after the generation number. Detection:
+//  1. Exclude the "im" and "is" prefixes (Intel Dense Storage/Network
+//     families such as "im4gn" and "is4gen") whose names contain "g" but
+//     are x86-only -- they would otherwise be false-positives.
+//  2. Strip the leading prefix letters and the generation digits, then
+//     require an EXACT match against the known Graviton suffix set {"g",
+//     "gd", "gn"} -- not a prefix-contains check.
+//
 // Examples: "m6g"->ARM, "m6gd"->ARM, "m6gn"->ARM, "m7g"->ARM,
-// "m6i"->x86, "c5n"->x86, "r6a"->x86 (AMD), "hpc7g"->ARM.
+// "hpc7g"->ARM, "t4g"->ARM, "m6i"->x86, "c5n"->x86, "r6a"->x86 (AMD),
+// "g4dn"->x86 (NVIDIA GPU), "is4gen"->x86, "im4gn"->x86.
 func isARMFamily(family string) bool {
+	// "im" and "is" are Intel Dense Storage/Network prefixes; they are x86
+	// even though their names contain "g" characters.
+	prefix := familyPrefix(family)
+	if prefix == "im" || prefix == "is" {
+		return false
+	}
 	// Strip the leading prefix letters to get "generation+suffix".
 	genSuffix := strings.TrimLeft(family, "abcdefghijklmnopqrstuvwxyz")
 	// Strip leading digits (the generation number).
 	suffix := strings.TrimLeft(genSuffix, "0123456789")
-	// Graviton families have a suffix that starts with "g".
-	return strings.HasPrefix(suffix, "g")
+	// Only these exact suffixes indicate a Graviton (ARM) processor.
+	return suffix == "g" || suffix == "gd" || suffix == "gn"
 }
 
 // confidenceComponent maps SavingsAbs + RecommendationCount to a [0,1]
@@ -574,13 +587,17 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 		}
 		sort.Slice(filled, func(a, b int) bool {
 			// Higher composite score = better alternative. Tie-break by
-			// ascending EffectiveMonthlyCost so cheaper wins on equal scores.
+			// ascending EffectiveMonthlyCost, then by InstanceType
+			// lexicographically so the order is fully deterministic.
 			sa := compositeScore(filled[a], src)
 			sb := compositeScore(filled[b], src)
 			if sa != sb {
 				return sa > sb
 			}
-			return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost
+			if filled[a].EffectiveMonthlyCost != filled[b].EffectiveMonthlyCost {
+				return filled[a].EffectiveMonthlyCost < filled[b].EffectiveMonthlyCost
+			}
+			return filled[a].InstanceType < filled[b].InstanceType
 		})
 		recs[i].AlternativeTargets = filled
 	}

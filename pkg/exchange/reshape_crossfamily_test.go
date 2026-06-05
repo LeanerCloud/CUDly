@@ -598,17 +598,26 @@ func TestCompositeScore_ARMDetection(t *testing.T) {
 		family string
 		arm    bool
 	}{
+		// Graviton (ARM) families.
 		{"m6g", true},
 		{"m6gd", true},
 		{"m6gn", true},
 		{"m7g", true},
 		{"hpc7g", true},
 		{"t4g", true},
+		// x86 / AMD families -- must NOT be classified as ARM.
 		{"m6i", false},
 		{"c5n", false},
 		{"r6a", false}, // AMD, not ARM
 		{"m5", false},
 		{"r5d", false},
+		// Intel Dense Storage/Network families whose names contain "g"
+		// but are x86-only and were previously false-positives.
+		{"is4gen", false}, // Intel Dense Storage Gen 4, x86
+		{"im4gn", false},  // Intel Dense NVMe, x86
+		// NVIDIA GPU families (x86) whose name starts with "g".
+		{"g4dn", false},
+		{"g5", false},
 	}
 	for _, c := range cases {
 		t.Run(c.family, func(t *testing.T) {
@@ -617,6 +626,56 @@ func TestCompositeScore_ARMDetection(t *testing.T) {
 				"isARMFamily(%q) should be %v", c.family, c.arm)
 		})
 	}
+}
+
+// TestFillAlternativesFromRecs_DeterministicOrder verifies that two offerings
+// with identical composite scores AND identical EffectiveMonthlyCost are
+// always ordered by InstanceType lexicographically, ensuring a stable,
+// reproducible result regardless of the input slice order.
+func TestFillAlternativesFromRecs_DeterministicOrder(t *testing.T) {
+	t.Parallel()
+
+	// Both offerings are x86, same-prefix "m" (-> family gen bonus = 1),
+	// same EMC, same savings -> identical composite scores. Without the
+	// InstanceType tie-break the output order would be non-deterministic.
+	savings := 60.0
+	lookup := func(_ context.Context, _, _ string) ([]OfferingOption, error) {
+		// Deliberately provide offerings in reverse-lexical order so that
+		// the test fails if the tie-break is absent.
+		return []OfferingOption{
+			{
+				InstanceType: "m6i.xlarge", OfferingID: "off-m6i",
+				EffectiveMonthlyCost: 10, NormalizationFactor: 8, CurrencyCode: "USD",
+				SavingsAbs: &savings, RecommendationCount: 2,
+			},
+			{
+				InstanceType: "m6a.xlarge", OfferingID: "off-m6a",
+				EffectiveMonthlyCost: 10, NormalizationFactor: 8, CurrencyCode: "USD",
+				SavingsAbs: &savings, RecommendationCount: 2,
+			},
+		}, nil
+	}
+
+	recs := AnalyzeReshapingWithRecs(
+		context.Background(),
+		[]RIInfo{{
+			ID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, OfferingClass: "convertible",
+			NormalizationFactor: 8, MonthlyCost: 10, CurrencyCode: "USD",
+		}},
+		[]UtilizationInfo{{RIID: "ri-1", UtilizationPercent: 50}},
+		95,
+		"us-east-1", "USD",
+		lookup,
+	)
+	require.Len(t, recs, 1)
+	alts := recs[0].AlternativeTargets
+	require.Len(t, alts, 2, "both cross-family alternatives must survive eligibility gates")
+
+	// Lexicographic order: "m6a.xlarge" < "m6i.xlarge"
+	assert.Equal(t, "m6a.xlarge", alts[0].InstanceType,
+		"equal-score equal-EMC alternatives must be ordered lexicographically by InstanceType")
+	assert.Equal(t, "m6i.xlarge", alts[1].InstanceType,
+		"equal-score equal-EMC alternatives must be ordered lexicographically by InstanceType")
 }
 
 // TestAnalyzeReshapingWithRecs_CompositeScoreOrdersAlternatives is a
