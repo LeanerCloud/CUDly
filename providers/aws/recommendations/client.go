@@ -49,6 +49,10 @@ type Client struct {
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
 	// fan-out per scheduler tick).
 	skuCatalog skuCatalog
+
+	// recLookbackPeriod is forwarded to GetReservationPurchaseRecommendation
+	// as LookbackPeriodInDays. Defaults to "7d" when empty.
+	recLookbackPeriod string
 }
 
 // NewClient creates a new recommendations client
@@ -94,13 +98,20 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 // instanceTypeLookup returns the cached SKU entry for instanceType.
 // On the first call the catalogue is built by calling the pager factory.
 // ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue — the caller falls back to
+// the instance type was not in the catalogue -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
 		return instanceTypeSKUEntry{}, false
 	}
 	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
+}
+
+// SetRecLookbackPeriod configures the LookbackPeriodInDays used by
+// GetRecommendationsForService. Valid values: "7d", "30d", "60d".
+// An empty or unrecognised value falls back to "7d" at call time.
+func (c *Client) SetRecLookbackPeriod(period string) {
+	c.recLookbackPeriod = period
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
@@ -248,11 +259,15 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 				return nil, ctx.Err()
 			}
 			attempts++
+			lookback := c.recLookbackPeriod
+			if lookback == "" {
+				lookback = "7d"
+			}
 			params := common.RecommendationParams{
 				Service:        service,
 				PaymentOption:  payment,
 				Term:           term,
-				LookbackPeriod: "7d",
+				LookbackPeriod: lookback,
 				Region:         "",
 			}
 			recs, err := c.GetRecommendations(ctx, params)
