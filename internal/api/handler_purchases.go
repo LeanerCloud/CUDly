@@ -590,6 +590,16 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	if err != nil {
 		return nil, err
 	}
+	// 4-eyes mode (issue #1005): resolve the session again for identity
+	// comparison. On the email-token deep-link flow the user is logged in
+	// (the frontend forces a login before reaching this endpoint), so
+	// tryGetSession returns their session. Pure-email-client flows have no
+	// session; requireDifferentApprover returns 500 when mode is on and no
+	// session is available (fail-closed).
+	tokenSession := h.tryGetSession(ctx, req)
+	if err := h.requireDifferentApprover(ctx, tokenSession, execution); err != nil {
+		return nil, err
+	}
 	// Check for Gmail-style pre-fire delay (issue #291 wave-2).
 	// Token/email-link path: no authenticated session UUID is available, so the
 	// scheduled transition is recorded as system-initiated (transitioned_by = NULL).
@@ -673,6 +683,14 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	}
 
 	if err := h.authorizeSessionApprove(ctx, session, execution); err != nil {
+		return nil, err
+	}
+
+	// 4-eyes mode (issue #1005): enforce after RBAC so only users who already
+	// pass the approve-any / approve-own gate reach this check. The admin
+	// wildcard inside authorizeSessionApprove short-circuits RBAC but NOT this
+	// check; admins who created the row must disable the mode first.
+	if err := h.requireDifferentApprover(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
@@ -903,6 +921,53 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, data); sendErr != nil {
 		logging.Errorf("sendPurchaseScheduledEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
+}
+
+// requireDifferentApprover enforces the 4-eyes approval policy (issue #1005).
+// It is called on every approve path (session-authed and email-token) after
+// the standard RBAC gate. Returns nil when the policy allows the approval.
+//
+// Decision logic:
+//   - mode off (RequireDifferentApprover == false): always returns nil (default behaviour preserved).
+//   - session == nil AND mode on: returns 500 (fail-closed; we cannot determine
+//     identity without a session; the email-token path should always carry a
+//     session when mode is on because the deep-link flow forces a login).
+//   - session present AND execution.CreatedByUserID == nil: returns 403 with a
+//     targeted message explaining that the legacy row predates dual-control and
+//     an admin must disable 4-eyes mode to proceed.
+//   - session present AND session.UserID == *execution.CreatedByUserID: returns 403.
+//   - session present AND session.UserID != *execution.CreatedByUserID: returns nil.
+//
+// Admin wildcard is intentionally NOT exempt: an admin who created an execution
+// must disable the mode in Settings before approving their own row.
+func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	cfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
+	}
+	if cfg == nil || !cfg.RequireDifferentApprover {
+		return nil
+	}
+
+	// Mode is on.
+	if session == nil {
+		logging.Warnf("purchase[%s]: 4-eyes mode on but no session available; denying (fail-closed)", execution.ExecutionID)
+		return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
+	}
+
+	if execution.CreatedByUserID == nil {
+		logging.Warnf("purchase[%s]: 4-eyes mode on; NULL creator (legacy row) attempted by user %s, denied",
+			execution.ExecutionID, session.UserID)
+		return NewClientError(403, "approval declined: this execution predates the dual-control feature and has no recorded creator; an admin must disable 4-eyes mode to approve")
+	}
+
+	if session.UserID == *execution.CreatedByUserID {
+		logging.Warnf("purchase[%s]: 4-eyes mode on; creator %s attempted self-approval, denied",
+			execution.ExecutionID, session.UserID)
+		return NewClientError(403, "approval declined: 4-eyes mode requires a different approver than the requester")
+	}
+
+	return nil
 }
 
 // authorizeSessionExecuteDirect returns nil when the session is permitted to

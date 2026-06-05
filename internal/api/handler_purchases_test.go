@@ -297,9 +297,11 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	// approvePurchaseViaSession checks PurchaseDelayHours to decide whether
-	// to defer the SDK call (Gmail-style pre-fire delay, issue #291 wave-2).
-	// Delay=0 means immediate execute (the legacy path being tested here).
+	// approvePurchaseViaSession calls GetGlobalConfig twice: once inside
+	// requireDifferentApprover (mode off by default, issue #1005) and once to
+	// check PurchaseDelayHours for the Gmail-style pre-fire delay (issue #291
+	// wave-2). Delay=0 means immediate execute (the legacy path being tested
+	// here); RequireDifferentApprover's zero value is false.
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
@@ -347,7 +349,8 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	// approvePurchaseViaSession checks PurchaseDelayHours (issue #291 wave-2).
+	// approvePurchaseViaSession checks PurchaseDelayHours (issue #291 wave-2)
+	// and requireDifferentApprover's mode-off default (issue #1005).
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
@@ -558,6 +561,7 @@ func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "aws"}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
@@ -598,6 +602,7 @@ func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
 		CloudAccountID:  &accountID,
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
@@ -5265,4 +5270,193 @@ func TestRevokePurchase_POSTPerformsRevoke(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "revocation_requested", resultMap["status"])
 	mockStore.AssertExpectations(t)
+}
+
+// ─── requireDifferentApprover (issue #1005: 4-eyes approval mode) ─────────────
+
+// fourEyesExec is a minimal execution fixture for the requireDifferentApprover
+// tests. creatorID is nil for the legacy-NULL-creator variant.
+func fourEyesExec(creatorID *string) *config.PurchaseExecution {
+	return &config.PurchaseExecution{
+		ExecutionID:     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Status:          "pending",
+		CreatedByUserID: creatorID,
+	}
+}
+
+func fourEyesCfgOff() *config.GlobalConfig {
+	return &config.GlobalConfig{RequireDifferentApprover: false}
+}
+
+func fourEyesCfgOn() *config.GlobalConfig {
+	return &config.GlobalConfig{RequireDifferentApprover: true}
+}
+
+// TestRequireDifferentApprover_ModeOff_AllowsSameUser: with mode off (default),
+// the creator can self-approve regardless of any other setting.
+func TestRequireDifferentApprover_ModeOff_AllowsSameUser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creatorID := "user-1"
+	session := &Session{UserID: creatorID, Email: "u1@example.com"}
+	exec := fourEyesExec(&creatorID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, session, exec)
+	require.NoError(t, err, "mode off: creator self-approve must be allowed")
+}
+
+// TestRequireDifferentApprover_ModeOn_DeniesSameUser: with mode on, the creator
+// receives a 403 when attempting to approve their own execution even if they
+// hold approve-any permission.
+func TestRequireDifferentApprover_ModeOn_DeniesSameUser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creatorID := "user-1"
+	session := &Session{UserID: creatorID, Email: "u1@example.com"}
+	exec := fourEyesExec(&creatorID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, session, exec)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode")
+}
+
+// TestRequireDifferentApprover_ModeOn_AllowsDifferentUser: with mode on, a
+// different user with approve-own or approve-any must be allowed through.
+func TestRequireDifferentApprover_ModeOn_AllowsDifferentUser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creatorID := "user-creator"
+	approverID := "user-approver"
+	session := &Session{UserID: approverID, Email: "approver@example.com"}
+	exec := fourEyesExec(&creatorID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, session, exec)
+	require.NoError(t, err, "mode on: different user must be allowed")
+}
+
+// TestRequireDifferentApprover_ModeOn_DeniesAdminSelfApprove: even an admin who
+// created the row cannot self-approve under 4-eyes mode. The admin wildcard in
+// authorizeSessionApprove short-circuits RBAC but NOT this check.
+func TestRequireDifferentApprover_ModeOn_DeniesAdminSelfApprove(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	adminID := "admin-uuid"
+	session := &Session{UserID: adminID, Email: "admin@example.com"}
+	exec := fourEyesExec(&adminID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, session, exec)
+	require.Error(t, err, "mode on: admin self-approve must be denied")
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode")
+}
+
+// TestRequireDifferentApprover_ModeOn_NullCreatorDenied: a legacy row with a
+// NULL creator cannot satisfy the "different from creator" predicate. Must
+// return 403 with a message directing the admin to disable the mode.
+func TestRequireDifferentApprover_ModeOn_NullCreatorDenied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	session := &Session{UserID: "any-user", Email: "approver@example.com"}
+	exec := fourEyesExec(nil) // NULL creator
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, session, exec)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "predates the dual-control feature")
+}
+
+// TestRequireDifferentApprover_NilAuth_500: a nil session with mode on returns
+// a 500 (fail-closed). The session-authed path always has a session; nil
+// indicates an unexpected internal state.
+func TestRequireDifferentApprover_NilAuth_500(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	exec := fourEyesExec(strptr("some-creator"))
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+
+	handler := &Handler{config: mockConfig}
+	err := handler.requireDifferentApprover(ctx, nil, exec)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 500, ce.code)
+}
+
+// TestRequireDifferentApprover_EmailTokenPath_ModeOn: the email-token approve
+// route also enforces 4-eyes mode when the approver is identified via session.
+// Simulated by calling approvePurchase with a token AND a session that
+// identifies as the creator; mode on must produce a 403.
+func TestRequireDifferentApprover_EmailTokenPath_ModeOn(t *testing.T) {
+	ctx := context.Background()
+	creatorID := "creator-uuid"
+	execID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	contactEmail := "approver@example.com"
+	accountID := "acct-1"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:     execID,
+		ApprovalToken:   "email-tok",
+		Status:          "pending",
+		CreatedByUserID: &creatorID,
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: contactEmail}, nil
+	}
+
+	// Session identifies the user as the CREATOR via UserID.
+	creatorSession := &Session{UserID: creatorID, Email: contactEmail}
+	mockAuth := new(MockAuthService)
+	// Session exists but lacks approve-* permission, so the dispatch falls
+	// through to the token branch. The 4-eyes check then uses the session
+	// identity against CreatedByUserID and must deny.
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(creatorSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, creatorID, "approve-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, creatorID, "approve-own", "purchases").Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.approvePurchase(ctx, req, execID, "email-tok")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "4-eyes mode")
 }
