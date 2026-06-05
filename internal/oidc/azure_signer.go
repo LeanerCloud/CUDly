@@ -60,7 +60,10 @@ func NewAzureKeyVaultSignerFromClient(client AzureKeyVaultClient, keyName, keyVe
 }
 
 // Sign calls Key Vault's Sign operation with ES256, passing the raw
-// SHA-256 digest. Key Vault returns a DER-encoded ECDSA signature.
+// SHA-256 digest. Unlike AWS KMS and GCP Cloud KMS (which return DER),
+// Azure Key Vault's ES256 already returns the IEEE P1363 / RFC 7518
+// raw R || S signature (64 bytes for P-256), so it satisfies the
+// Signer.Sign contract directly and must NOT be DER-converted.
 func (s *AzureKeyVaultSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 	alg := azkeys.SignatureAlgorithmES256
 	resp, err := s.client.Sign(ctx, s.keyName, s.keyVersion, azkeys.SignParameters{
