@@ -426,6 +426,28 @@ const (
 	//   check. No default non-admin grant; add to a custom operator group.
 	ActionExecuteOwn = "execute-own"
 	ActionExecuteAny = "execute-any"
+	// ActionUpdateAny is the privileged escape that lets a holder manage
+	// (pause / resume / run / delete) a SCHEDULED purchase execution
+	// regardless of who created it (issue #950). It complements the base
+	// update:purchases verb every authenticated user already holds: that
+	// base verb authorises managing only your OWN scheduled purchases
+	// (created_by_user_id == session.UserID), while update-any drops the
+	// per-record ownership check.
+	//
+	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; update-any is
+	//     NOT in adminCarvedOuts, so admins manage every scheduled purchase.
+	//   * RoleUser — NO default grant. A standard user manages only the
+	//     scheduled purchases they created (base update:purchases + creator
+	//     match). Legacy rows with NULL created_by_user_id are out of reach
+	//     for non-admins (they hold neither update-any nor a creator match).
+	//   * Custom operator groups — add update-any:purchases to let a role
+	//     manage everyone's scheduled purchases without escalating to admin.
+	//
+	// There is no separate update-own verb: the existing update:purchases
+	// grant already plays that role, mirroring how cancel-own/approve-own
+	// gate History rows. The creator match is enforced in the handler
+	// (authorizeExecutionManagement), not in HasPermission.
+	ActionUpdateAny = "update-any"
 )
 
 // Predefined resources

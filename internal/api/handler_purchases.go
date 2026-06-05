@@ -188,7 +188,63 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 		Status:           exec.Status,
 		StepNumber:       exec.StepNumber,
 		TotalSteps:       plan.RampSchedule.TotalSteps,
+		CreatedByUserID:  exec.CreatedByUserID,
 	}
+}
+
+// authorizeExecutionManagement enforces creator-scope ownership on the
+// scheduled-purchase management handlers (pause / resume / run / delete),
+// closing the authz hole in issue #950 where any holder of update:purchases
+// could act on another user's scheduled purchase. It runs AFTER the
+// per-handler verb check (update / execute / delete) and the account-scope
+// check (requireExecutionAccess); those still apply unchanged.
+//
+// Gate logic (mirrors authorizeSessionCancel / authorizeSessionApprove):
+//   - stateless admin API key: always permitted (apiKeyAdminUserID sentinel).
+//   - update-any:purchases: permitted regardless of creator. Administrators-
+//     group users pass here because {admin, *} matches ActionUpdateAny
+//     (update-any is not in adminCarvedOuts).
+//   - otherwise: permitted only when the execution's CreatedByUserID is
+//     non-nil and equals a non-empty session.UserID (the caller created it).
+//     Legacy rows with a NULL creator are out of reach for non-update-any
+//     users, matching the cancel-own / approve-own / retry-own model.
+//   - any other case: 403 fail-closed. A nil auth component is a 500 per
+//     feedback_fail_closed_middleware.md.
+//
+// Only fetches the execution on the creator-match path: admin and update-any
+// callers are authorised without a store round-trip (and admin sessions have
+// unrestricted access, so requireExecutionAccess skipped the fetch too).
+func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Session, executionID string) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionUpdateAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("failed to get execution: %w", err)
+	}
+	if execution == nil {
+		return errNotFound
+	}
+
+	// Creator match: both IDs must be non-empty and equal. An empty-string
+	// collision (legacy NULL creator + missing session UserID) must not
+	// grant access.
+	if session.UserID == "" || execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot manage another user's scheduled purchase")
+	}
+	return nil
 }
 
 func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
@@ -201,6 +257,9 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
+		return nil, err
+	}
+	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -224,6 +283,9 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
+	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+		return nil, err
+	}
 
 	// Atomically transition from paused back to pending
 	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending"); err != nil {
@@ -243,6 +305,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
+		return nil, err
+	}
+	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -269,6 +334,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
+		return nil, err
+	}
+	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 

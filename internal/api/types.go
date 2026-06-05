@@ -649,6 +649,11 @@ type PlannedPurchase struct {
 	Status           string  `json:"status"`
 	StepNumber       int     `json:"step_number"`
 	TotalSteps       int     `json:"total_steps"`
+	// CreatedByUserID is the UUID of the user who created the scheduled
+	// purchase, mirroring PurchaseHistoryRecord.CreatedByUserID. The
+	// frontend gates the row action buttons on creator-scope ownership
+	// (issue #950); omitted for legacy rows with a NULL creator.
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 }
 
 // PlanRequest represents the API request format for creating/updating plans

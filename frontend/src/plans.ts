@@ -652,6 +652,26 @@ function rerenderPlannedPurchases(): void {
   renderPlannedPurchasesInternal();
 }
 
+// canManageScheduledPurchase returns true when the current session is
+// permitted to act on the given scheduled purchase's row buttons (issue #950).
+// UX gate only -- the backend authorizeExecutionManagement in
+// internal/api/handler_purchases.go remains the security boundary; a
+// false-positive here surfaces as a 403 toast on click rather than a
+// successful mutation.
+//
+// Heuristic (mirrors the creator-scope model on History rows):
+//   * admin (admin:* wildcard) or update-any:purchases -> manage anyone's row;
+//   * otherwise the row's created_by_user_id must match the current user;
+//   * legacy rows with a NULL created_by_user_id -> no buttons for non-
+//     privileged users (out of reach without update-any).
+function canManageScheduledPurchase(purchase: PlannedPurchase): boolean {
+  if (canAccess('admin', '*') || canAccess('update-any', 'purchases')) return true;
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  if (!purchase.created_by_user_id) return false;
+  return purchase.created_by_user_id === user.id;
+}
+
 /**
  * Render a single planned purchase row
  */
@@ -674,8 +694,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   // a click on each button would require. Readonly users see no buttons
   // (status badge only); user role sees Run/Pause/Resume/Edit but not
   // Disable; admins see everything.
-  const canManagePlan = canAccess('update', 'plans');
-  const canDisablePlan = canAccess('delete', 'plans');
+  //
+  // Issue #950: AND in creator-scope ownership. A non-creator who lacks
+  // update-any:purchases (a standard user looking at someone else's row)
+  // sees NO action buttons, mirroring the backend ownership gate. This is
+  // a UX gate; the backend authorizeExecutionManagement is the real
+  // boundary.
+  const isOwner = canManageScheduledPurchase(purchase);
+  const canManagePlan = canAccess('update', 'plans') && isOwner;
+  const canDisablePlan = canAccess('delete', 'plans') && isOwner;
 
   return `
     <tr class="planned-purchase-row ${statusClass}">

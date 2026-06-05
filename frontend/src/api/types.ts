@@ -370,6 +370,11 @@ export interface PlannedPurchase {
   status: 'pending' | 'paused' | 'running' | 'completed' | 'failed';
   step_number: number;
   total_steps: number;
+  // created_by_user_id is the UUID of the user who scheduled the purchase.
+  // The row action buttons are gated on creator-scope ownership (issue #950):
+  // a non-creator without update-any:purchases sees no actionable buttons.
+  // Omitted (undefined) for legacy rows with a NULL creator.
+  created_by_user_id?: string;
 }
 
 // User Management Types

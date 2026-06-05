@@ -3317,3 +3317,143 @@ func TestHandler_authorizeSessionExecuteDirect_NilAuth(t *testing.T) {
 	require.True(t, ok, "expected a clientError")
 	assert.Equal(t, 500, ce.code)
 }
+
+// --- Issue #950: creator-scope ownership gate on scheduled-purchase mgmt ---
+//
+// These tests replicate the QA scenario in issue #950: a Standard user with
+// update:purchases (and account access) must NOT be able to pause/resume/
+// cancel a scheduled purchase created by ANOTHER user. They drive the real
+// handlers end-to-end (ValidateSession -> requirePermission -> account scope
+// -> authorizeExecutionManagement -> transition) and FAIL against the pre-fix
+// handler, which honoured the request because only update:purchases was
+// checked.
+
+const ownExecID = "12121212-1212-1212-1212-121212121212"
+const ownUserA = "aaaa1111-1111-1111-1111-111111111111" // creator of P1
+const ownUserB = "bbbb2222-2222-2222-2222-222222222222" // creator of P2
+
+// buildManageHandler wires a non-admin "user-token" session for userID with
+// account access (empty allowed_accounts -> all accessible) and the given
+// update-any grant. The stored execution is created by creatorID.
+func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, *MockConfigStore, *MockAuthService) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "user-token").Return(&Session{UserID: userID}, nil)
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update", "purchases").Return(true, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "execute", "purchases").Return(true, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "delete", "purchases").Return(true, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update-any", "purchases").Return(hasUpdateAny, nil).Maybe()
+	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
+
+	creator := creatorID
+	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, ownExecID).Return(exec, nil)
+
+	return &Handler{config: mockConfig, auth: mockAuth}, mockConfig, mockAuth
+}
+
+func manageReq() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer user-token"},
+	}
+}
+
+// TestHandler_pausePlannedPurchase_NonOwner_Rejected is the core #950
+// regression: user A pauses a scheduled purchase created by user B -> 403,
+// and the status transition never runs.
+func TestHandler_pausePlannedPurchase_NonOwner_Rejected(t *testing.T) {
+	handler, mockConfig, mockAuth := buildManageHandler(ownUserA, ownUserB, false)
+
+	_, err := handler.pausePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.message, "another user's scheduled purchase")
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestHandler_resumePlannedPurchase_NonOwner_Rejected(t *testing.T) {
+	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, false)
+
+	_, err := handler.resumePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandler_deletePlannedPurchase_NonOwner_Rejected(t *testing.T) {
+	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, false)
+
+	_, err := handler.deletePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandler_runPlannedPurchase_NonOwner_Rejected(t *testing.T) {
+	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, false)
+
+	_, err := handler.runPlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	mockConfig.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandler_pausePlannedPurchase_Owner_Allowed: user A manages their OWN P1.
+func TestHandler_pausePlannedPurchase_Owner_Allowed(t *testing.T) {
+	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserA, false)
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, ownExecID, []string{"pending", "running"}, "paused").
+		Return(&config.PurchaseExecution{ExecutionID: ownExecID, Status: "paused"}, nil)
+
+	res, err := handler.pausePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.NoError(t, err)
+	assert.Equal(t, "paused", res.Status)
+	mockConfig.AssertCalled(t, "TransitionExecutionStatus", mock.Anything, ownExecID, []string{"pending", "running"}, "paused")
+}
+
+// TestHandler_pausePlannedPurchase_UpdateAny_AllowsAny: a privileged user with
+// update-any:purchases manages P2 created by user B.
+func TestHandler_pausePlannedPurchase_UpdateAny_AllowsAny(t *testing.T) {
+	handler, mockConfig, _ := buildManageHandler(ownUserA, ownUserB, true)
+	mockConfig.On("TransitionExecutionStatus", mock.Anything, ownExecID, []string{"pending", "running"}, "paused").
+		Return(&config.PurchaseExecution{ExecutionID: ownExecID, Status: "paused"}, nil)
+
+	res, err := handler.pausePlannedPurchase(context.Background(), manageReq(), ownExecID)
+	require.NoError(t, err)
+	assert.Equal(t, "paused", res.Status)
+}
+
+// TestHandler_authorizeExecutionManagement_NilAuth: fail-closed 500.
+func TestHandler_authorizeExecutionManagement_NilAuth(t *testing.T) {
+	handler := &Handler{auth: nil}
+	err := handler.authorizeExecutionManagement(context.Background(), &Session{UserID: ownUserA}, ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 500, ce.code)
+}
+
+// TestHandler_authorizeExecutionManagement_LegacyNullCreator: a legacy row
+// with a NULL creator is unreachable for a non-update-any user.
+func TestHandler_authorizeExecutionManagement_LegacyNullCreator(t *testing.T) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("HasPermissionAPI", mock.Anything, ownUserA, "update-any", "purchases").Return(false, nil)
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("GetExecutionByID", mock.Anything, ownExecID).
+		Return(&config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: nil}, nil)
+	handler := &Handler{config: mockConfig, auth: mockAuth}
+
+	err := handler.authorizeExecutionManagement(context.Background(), &Session{UserID: ownUserA}, ownExecID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+}
