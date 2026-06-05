@@ -27,9 +27,9 @@ func TestHandler_isPublicEndpoint(t *testing.T) {
 		{"/api/history", false},
 		// /version is a public endpoint but must be exact-matched only.
 		{"/version", true},
-		{"/version-evil", false},    // prefix overlap must not bypass auth
-		{"/versionXYZ", false},      // prefix overlap must not bypass auth
-		{"/api/register", true},     // POST /api/register (exact)
+		{"/version-evil", false},      // prefix overlap must not bypass auth
+		{"/versionXYZ", false},        // prefix overlap must not bypass auth
+		{"/api/register", true},       // POST /api/register (exact)
 		{"/api/registrations", false}, // must not match via prefix
 	}
 
