@@ -4,7 +4,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -62,6 +64,18 @@ func calculateNextExecutionDate(plan *config.PurchasePlan, now time.Time) *time.
 	return &nextDate
 }
 
+// mapCreatePlanStorageError converts a storage-layer error from createPlan into
+// the appropriate HTTP ClientError. If err is ErrNotFound it returns a 404
+// with notFoundMsg; otherwise it logs the supplied format string at ERROR level
+// and returns a 500 with genericMsg.
+func mapCreatePlanStorageError(err error, notFoundMsg, genericMsg, logFmt string, logArgs ...any) error {
+	if errors.Is(err, config.ErrNotFound) {
+		return NewClientError(http.StatusNotFound, notFoundMsg)
+	}
+	logging.Errorf(logFmt, logArgs...)
+	return NewClientError(http.StatusInternalServerError, genericMsg)
+}
+
 func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
 	// Require create:plans permission
 	if _, err := h.requirePermission(ctx, httpReq, "create", "plans"); err != nil {
@@ -91,34 +105,34 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	}
 
 	if err := h.config.CreatePurchasePlan(ctx, plan); err != nil {
-		return nil, err
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to create plan",
+			"createPlan: CreatePurchasePlan failed (provider=%s service=%s accounts=%d): %v",
+			req.Provider, req.Service, len(req.TargetAccounts), err)
 	}
 
 	// Provider-match validation + plan_accounts insert. SetPlanAccounts is
 	// transactional internally, but the plan-row insert above is not part of
 	// that tx. If either step here fails we roll the plan row back so the
 	// invariant "every purchase_plans row has at least one plan_accounts
-	// row" holds end-to-end — otherwise a validation failure would leave a
-	// fresh universal plan behind, which is exactly the bug class we're
-	// eliminating.
-	//
-	// rollbackPlan undoes the partial CreatePurchasePlan insert. If the
-	// rollback delete itself errors (DB blip, row already gone, etc.), log
-	// at WARN with the plan ID so an operator can clean up manually — we
-	// still surface the original cause to the caller so the user-facing
-	// error is unchanged.
+	// row" holds end-to-end.
 	rollbackPlan := func() {
 		if delErr := h.config.DeletePurchasePlan(ctx, plan.ID); delErr != nil {
 			logging.Warnf("createPlan rollback: failed to delete partial plan %s: %v (manual cleanup may be required)", plan.ID, delErr)
 		}
 	}
+
 	if err := h.validatePlanAccountProviders(ctx, plan.ID, req.TargetAccounts); err != nil {
 		rollbackPlan()
 		return nil, err
 	}
+
 	if err := h.config.SetPlanAccounts(ctx, plan.ID, req.TargetAccounts); err != nil {
 		rollbackPlan()
-		return nil, fmt.Errorf("accounts: %w", err)
+		return nil, mapCreatePlanStorageError(err,
+			"account not found", "failed to assign accounts to plan",
+			"createPlan: SetPlanAccounts failed (plan=%s accounts=%d): %v",
+			plan.ID, len(req.TargetAccounts), err)
 	}
 
 	return plan, nil
