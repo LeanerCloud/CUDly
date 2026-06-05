@@ -73,6 +73,9 @@ func NewGCPKMSSignerFromClient(client GCPKMSClient, keyResource string) *GCPKMSS
 // Sign calls AsymmetricSign with the SHA-256 digest. The caller must
 // have already hashed the signing input; the digest is forwarded
 // as-is. The key must be configured as EC_SIGN_P256_SHA256 in GCP KMS.
+// GCP Cloud KMS returns a DER/ASN.1-encoded ECDSA signature, which is
+// converted to the RFC 7518 section 3.4 raw R || S form required by
+// ES256 JWS signatures (the Signer.Sign contract).
 func (s *GCPKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 	crc := int64(crc32.Checksum(digest, crc32.MakeTable(crc32.Castagnoli)))
 	req := &kmspb.AsymmetricSignRequest{
@@ -86,7 +89,7 @@ func (s *GCPKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: gcp kms AsymmetricSign: %w", err)
 	}
-	return resp.Signature, nil
+	return derToRawECDSASignature(resp.Signature)
 }
 
 // PublicKey fetches the public half of the KMS key once and caches it.

@@ -6,9 +6,54 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
 )
+
+// assertRawES256JWS verifies that jws is a compact JWS whose signature
+// segment is the RFC 7518 section 3.4 raw R || S form (exactly 64 bytes
+// for P-256) and that it verifies against pub. It checks the signature
+// three independent ways so the test fails on the pre-fix DER-emitting
+// code: (1) the decoded signature is exactly 64 bytes; (2) the R || S
+// split verifies via ecdsa.Verify; (3) a real JOSE/JWT ES256 parser
+// (golang-jwt) accepts the token, proving real OIDC consumers like
+// Azure AD would too.
+func assertRawES256JWS(t *testing.T, jws string, pub *ecdsa.PublicKey) {
+	t.Helper()
+
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWS parts, got %d", len(parts))
+	}
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	// (1) Raw R || S is exactly 64 bytes for P-256. DER signatures are
+	// ~70-72 bytes and start with 0x30, so this rejects the pre-fix output.
+	if len(sig) != 64 {
+		t.Fatalf("JWS signature is %d bytes, want 64-byte raw R||S (RFC 7518 ES256); first byte 0x%02x", len(sig), sig[0])
+	}
+
+	// (2) Split R || S and verify with the public key over the signing input.
+	r := new(big.Int).SetBytes(sig[:32])
+	s := new(big.Int).SetBytes(sig[32:])
+	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if !ecdsa.Verify(pub, digest[:], r, s) {
+		t.Errorf("raw R||S ECDSA signature verify failed")
+	}
+
+	// (3) A real JOSE/JWT ES256 parser must accept the token.
+	if _, err := jwt.Parse(jws, func(*jwt.Token) (any, error) {
+		return pub, nil
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation()); err != nil {
+		t.Errorf("golang-jwt ES256 parse/verify failed: %v", err)
+	}
+}
 
 func TestLocalSignerMintAndVerify(t *testing.T) {
 	ctx := context.Background()
@@ -68,11 +113,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Errorf("iss mismatch: %v vs %v", decoded["iss"], claims["iss"])
 	}
 
-	// Verify the ECDSA signature end-to-end with the signer's public key.
-	sigBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		t.Fatalf("decode signature: %v", err)
-	}
+	// Verify the JWS signature end-to-end. The signature MUST be the
+	// RFC 7518 section 3.4 raw R || S form (64 bytes for P-256), not DER.
 	rawPub, err := signer.PublicKey(ctx)
 	if err != nil {
 		t.Fatalf("public key: %v", err)
@@ -81,11 +123,7 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 	if !ok {
 		t.Fatalf("public key is not *ecdsa.PublicKey, got %T", rawPub)
 	}
-	signingInput := parts[0] + "." + parts[1]
-	digest := sha256.Sum256([]byte(signingInput))
-	if !ecdsa.VerifyASN1(ecPub, digest[:], sigBytes) {
-		t.Errorf("ECDSA signature verify failed")
-	}
+	assertRawES256JWS(t, jws, ecPub)
 }
 
 func TestBuildJWKS(t *testing.T) {
