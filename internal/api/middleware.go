@@ -126,17 +126,24 @@ func (h *Handler) principalFromUserAPIKey(ctx context.Context, apiKey string) *P
 	if userRaw == nil {
 		return nil
 	}
-	p := &Principal{Kind: PrincipalUserAPIKey, Role: "user"}
 	// userRaw is returned as any from the interface. Extract fields
 	// via a locally-scoped interface to avoid an import cycle.
-	if uf, ok := userRaw.(interface {
+	// If the assertion fails (unexpected concrete type) we deny rather than
+	// returning a partially-populated Principal: fail closed.
+	uf, ok := userRaw.(interface {
 		GetID() string
 		GetEmail() string
 		GetRole() string
-	}); ok {
-		p.UserID = uf.GetID()
-		p.Email = uf.GetEmail()
-		p.Role = uf.GetRole()
+	})
+	if !ok {
+		logging.Debugf("User API key: userRaw does not implement expected interface (%T); denying", userRaw)
+		return nil
+	}
+	p := &Principal{
+		Kind:   PrincipalUserAPIKey,
+		UserID: uf.GetID(),
+		Email:  uf.GetEmail(),
+		Role:   uf.GetRole(),
 	}
 	return p
 }
