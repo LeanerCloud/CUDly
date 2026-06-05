@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="format-detection" content="telephone=no">
     <!-- Content Security Policy: Restrict resource loading to prevent XSS.
          frame-ancestors is intentionally omitted here because browsers ignore
          it in <meta>; it is delivered via the response header from
@@ -348,7 +349,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address">
+                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email">
                                 </div>
                             </div>
                             <div class="setting-row">
@@ -386,7 +387,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30">
+                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
                                 </div>
                             </div>
                             <div class="setting-row">
@@ -395,7 +396,7 @@
                                     <span class="info-icon">&#9432;<span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1">
+                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*">
                                 </div>
                             </div>
                         </fieldset>
@@ -444,7 +445,7 @@
                                 <label for="setting-default-coverage">Target Coverage (%)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100">
+                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*">
                             </div>
                         </div>
                     </fieldset>
@@ -475,7 +476,7 @@
                                 <label for="setting-grace-aws"><span class="provider-badge aws">AWS</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1">
+                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -483,7 +484,7 @@
                                 <label for="setting-grace-azure"><span class="provider-badge azure">Azure</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1">
+                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -491,7 +492,7 @@
                                 <label for="setting-grace-gcp"><span class="provider-badge gcp">GCP</span> grace period (days)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1">
+                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
                             </div>
                         </div>
                     </fieldset>
@@ -539,7 +540,7 @@
                                 <p class="service-default-hint">EC2, Fargate, Lambda — most flexible</p>
                                 <label>Term: <select id="aws-savings-plans-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-compute-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -547,7 +548,7 @@
                                 <p class="service-default-hint">EC2 only, region-locked — deepest discount</p>
                                 <label>Term: <select id="aws-savings-plans-ec2instance-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-ec2instance-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -555,7 +556,7 @@
                                 <p class="service-default-hint">SageMaker training/inference</p>
                                 <label>Term: <select id="aws-savings-plans-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-sagemaker-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -563,7 +564,7 @@
                                 <p class="service-default-hint">Reserved for future AWS Database Savings Plans (currently not GA; defaults stored for forward-compatibility)</p>
                                 <label>Term: <select id="aws-savings-plans-database-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-database-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80"></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
                             </div>
                         </div>
@@ -836,7 +837,7 @@
                                 </select>
                             </label>
                         </div>
-                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100"></label>
+                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*"></label>
                     </div>
 
                     <div class="form-section">
@@ -866,8 +867,8 @@
                         </div>
                         <div id="custom-ramp-config" class="hidden">
                             <div class="form-row">
-                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100"></label>
-                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365"></label>
+                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365" inputmode="numeric" pattern="[0-9]*"></label>
                             </div>
                         </div>
                     </div>
@@ -892,7 +893,7 @@
                                 <span class="info-icon">&#9432;<span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="plan-notify-days" value="3" min="1" max="30">
+                                <input type="number" id="plan-notify-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
                             </div>
                         </div>
                         <div class="setting-row">
@@ -1142,7 +1143,7 @@
                         </select>
                     </label>
                     <label>Coverage (%):
-                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)">
+                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)" inputmode="numeric" pattern="[0-9]*">
                     </label>
 
                     <p class="help-text" id="override-form-error" role="alert"></p>
