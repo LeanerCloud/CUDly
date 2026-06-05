@@ -166,10 +166,19 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		})
 	}
 
+	// List every RI in the row: a row of N Standard RIs must list all N, not a
+	// single unit (issue #292 multi-count fix). Floor at 1 for legacy rows that
+	// somehow recorded a non-positive count so a valid Standard RI still lists.
+	instanceCount := int32(row.Count)
+	if instanceCount < 1 {
+		instanceCount = 1
+	}
+
 	result, err := ec2Client.CreateMarketplaceListing(ctx, ec2svc.MarketplaceListingRequest{
 		ReservedInstancesID: purchaseID,
 		ClientToken:         uuid.New().String(),
 		PriceSchedule:       awsSchedule,
+		InstanceCount:       instanceCount,
 	})
 	if err != nil {
 		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed: %v", purchaseID, err)
