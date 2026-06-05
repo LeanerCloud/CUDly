@@ -1172,10 +1172,12 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
 	if err != nil {
-		return nil, fmt.Errorf("execution not found: %w", err)
+		// Map any DB-level "not found" error to 404 so callers cannot infer
+		// whether a UUID exists by observing a 500 vs a 404 (issue #431).
+		return nil, NewClientError(404, "execution not found")
 	}
 	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
+		return nil, NewClientError(404, "execution not found")
 	}
 
 	// Scope: reject if the execution's plan isn't accessible to the session.
