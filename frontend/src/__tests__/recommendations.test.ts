@@ -1393,12 +1393,21 @@ describe('Recommendations Module', () => {
     });
 
     test('shows purchase summary', async () => {
+      // Use a non-admin session so the approval-required note renders instead
+      // of the execute-mode toggle (issue #923 carve-out: execute-any/own is
+      // gated on isAdmin(), which requires the Administrators group; a regular
+      // user without group membership sees the approval-required note).
+      // Restore the default admin mock after this test so sibling tests are
+      // unaffected; the outer beforeEach only calls clearAllMocks() which does
+      // not reset return values.
+      (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-reg', email: 'user@example.com', groups: [] });
       const recommendations = [
         { id: 'rec-2', provider: 'aws' as const, service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 5, term: 1, savings: 100, upfront_cost: 500 },
         { id: 'rec-3', provider: 'aws' as const, service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 2, term: 1, savings: 200, upfront_cost: 1000 }
       ];
 
       await openPurchaseModal(recommendations);
+      (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
 
       const details = document.getElementById('purchase-details');
       // Issue #320: the modal now renders a full breakdown table with column
@@ -1433,6 +1442,26 @@ describe('Recommendations Module', () => {
     // wording so a regression that reverts to the misleading "Execute
     // Purchase" framing fails this suite.
     describe('approval-required messaging (issue #288)', () => {
+      beforeEach(() => {
+        // These tests exercise the approval-required path that renders the
+        // explanatory note. After issue #923 / PR #924, the execute-mode
+        // toggle renders only for sessions with execute-any:purchases or
+        // execute-own:purchases (both gated on isAdmin()). Using a regular
+        // user here ensures the approval-required note is rendered and the
+        // execute-mode toggle is absent, which is what the assertions below
+        // expect. The admin execute-mode toggle path is covered in
+        // execute-mode-toggle.test.ts.
+        (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-reg', email: 'user@example.com', groups: [] });
+      });
+
+      afterEach(() => {
+        // Restore the default admin mock so tests in sibling describe blocks
+        // are not affected by this scope's non-admin override. The outer
+        // beforeEach only calls clearAllMocks() which does not reset return
+        // values, so we must restore explicitly.
+        (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u-admin', email: 'admin@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
+      });
+
       const baseRec = {
         id: 'rec-288',
         provider: 'aws' as const,
