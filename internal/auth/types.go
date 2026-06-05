@@ -462,10 +462,17 @@ const (
 	// Default grants:
 	//   * RoleAdmin   -- implicit via {ActionAdmin, ResourceAll}.
 	//   * RoleUser    -- DefaultUserPermissions() adds revoke-own:purchases.
-	//     Allows revoking completed purchases whose created_by_user_id
-	//     matches the session user. Legacy rows with NULL creator are out of
-	//     reach for non-admins via this verb; admins still revoke them via
-	//     revoke-any.
+	//     "Own" is currently enforced at ACCOUNT scope, not creator scope:
+	//     a user may revoke a completed purchase in any cloud account they
+	//     are allowed to access (the check in
+	//     api.checkRevokeOwnAccountAccess via GetAllowedAccountsAPI), because
+	//     purchase_history rows pre-date created_by_user_id and have no
+	//     reliable per-creator attribution. Rows with no account association
+	//     (CloudAccountID NULL) are out of reach for non-admins (fail-closed);
+	//     admins still revoke them via revoke-any.
+	//     NOTE: whether revoke-own should instead be creator-scoped is a
+	//     product decision tracked in issue #950; do not tighten this to
+	//     created_by_user_id without resolving that issue first.
 	//   * RoleReadOnly -- neither verb.
 	//
 	// revoke-any has no default non-admin grant; the constant exists so

@@ -159,7 +159,8 @@ func (h *Handler) authorizeSessionRevoke(ctx context.Context, session *Session, 
 func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string, record *config.PurchaseHistoryRecord) error {
 	// Purchase history rows pre-date created_by_user_id; ownership is via
 	// account access (same model as the per-account-perms middleware used
-	// elsewhere in the history view).
+	// elsewhere in the history view). Whether revoke-own should be tightened
+	// to creator scope instead is a product decision tracked in issue #950.
 	// Fail closed for revoke-own: if the purchase has no account association
 	// we cannot verify ownership, so deny rather than allow an unscoped revoke.
 	if record.CloudAccountID == nil || *record.CloudAccountID == "" {
