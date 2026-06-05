@@ -135,6 +135,14 @@ type PurchasePlan struct {
 	NextExecutionDate      *time.Time               `json:"next_execution_date,omitempty" dynamodbav:"next_execution_date,omitempty"`
 	LastExecutionDate      *time.Time               `json:"last_execution_date,omitempty" dynamodbav:"last_execution_date,omitempty"`
 	LastNotificationSent   *time.Time               `json:"last_notification_sent,omitempty" dynamodbav:"last_notification_sent,omitempty"`
+	// Unassigned is true when the plan has zero rows in plan_accounts.
+	// This can happen for legacy plans created before target_accounts was
+	// required (issue #743). Such plans are invisible when an account filter
+	// is active because the normal JOIN excludes them; ListPurchasePlans
+	// surfaces them alongside filtered results so operators can find and
+	// re-scope them. The field is omitted (false) in the no-filter case
+	// where all plans are returned unconditionally.
+	Unassigned bool `json:"unassigned,omitempty" dynamodbav:"unassigned,omitempty"`
 }
 
 // RampSchedule defines how purchases are spread over time

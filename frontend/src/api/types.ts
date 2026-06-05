@@ -191,6 +191,10 @@ export interface Plan {
   updated_at: string;
   next_execution_date?: string;
   last_execution_date?: string;
+  // unassigned is true for legacy plans that have zero plan_accounts rows.
+  // Such plans are surfaced under an "Unassigned" section in the Plans UI
+  // so operators can find and re-scope them (issue #973).
+  unassigned?: boolean;
 }
 
 export interface CreatePlanRequest {

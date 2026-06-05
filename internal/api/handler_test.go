@@ -1341,6 +1341,69 @@ func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	assert.Equal(t, 500, resp.StatusCode)
 }
 
+// TestHandler_HandleRequest_ListPlans_UnassignedFlagged is the regression
+// guard for issue #973: a plan with zero plan_accounts rows (legacy
+// "universal" plan) must appear in the response flagged as unassigned=true
+// when an account filter is active. Before the fix such plans were silently
+// dropped by the INNER JOIN on plan_accounts.
+func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	// Simulate the store returning one assigned plan and one zero-account
+	// (unassigned) legacy plan.
+	assigned := config.PurchasePlan{ID: "11111111-1111-1111-1111-111111111111", Name: "Assigned Plan", Unassigned: false}
+	legacy := config.PurchasePlan{ID: "22222222-2222-2222-2222-222222222222", Name: "Legacy Plan", Unassigned: true}
+	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return([]config.PurchasePlan{assigned, legacy}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"X-API-Key":     "test-key",
+			"Authorization": "Bearer test-token",
+		},
+		QueryStringParameters: map[string]string{
+			"account_ids": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/plans",
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	var body PlansResponse
+	require.NoError(t, json.Unmarshal([]byte(resp.Body), &body))
+	require.Len(t, body.Plans, 2)
+
+	// Find plans by ID to avoid order dependence.
+	plansByID := make(map[string]config.PurchasePlan, 2)
+	for _, p := range body.Plans {
+		plansByID[p.ID] = p
+	}
+
+	// Assigned plan must not carry the unassigned flag.
+	ap, ok := plansByID["11111111-1111-1111-1111-111111111111"]
+	require.True(t, ok, "assigned plan missing from response")
+	assert.False(t, ap.Unassigned, "assigned plan must have unassigned=false")
+
+	// Legacy zero-account plan must carry the unassigned flag.
+	lp, ok := plansByID["22222222-2222-2222-2222-222222222222"]
+	require.True(t, ok, "legacy unassigned plan missing from response")
+	assert.True(t, lp.Unassigned, "zero-account plan must have unassigned=true")
+}
+
 // Test for updateConfig error case - invalid JSON returns 500 (not 400)
 func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
