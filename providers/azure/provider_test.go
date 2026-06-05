@@ -411,8 +411,8 @@ func TestAzureProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 	}{
 		{common.ServiceCompute},
 		{common.ServiceRelationalDB},
-		{common.ServiceCache},
 		{common.ServiceNoSQL},
+		{common.ServiceCache},
 		{common.ServiceMemoryDB},
 		{common.ServiceSavingsPlans},
 		{common.ServiceSearch},
@@ -1159,8 +1159,8 @@ func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
 		services := []common.ServiceType{
 			common.ServiceCompute,
 			common.ServiceRelationalDB,
-			common.ServiceCache,
 			common.ServiceNoSQL,
+			common.ServiceCache,
 			common.ServiceMemoryDB,
 			common.ServiceSavingsPlans,
 			common.ServiceSearch,

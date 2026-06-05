@@ -103,7 +103,7 @@ func (c *SearchClient) SetSearchServicesPager(pager SearchServicesPager) {
 
 // GetServiceType returns the service type
 func (c *SearchClient) GetServiceType() common.ServiceType {
-	return common.ServiceOther
+	return common.ServiceSearch
 }
 
 // GetRegion returns the region
@@ -243,7 +243,7 @@ func (c *SearchClient) convertSearchReservation(detail *armconsumption.Reservati
 		Provider:       common.ProviderAzure,
 		Account:        c.subscriptionID,
 		CommitmentType: common.CommitmentReservedInstance,
-		Service:        common.ServiceOther,
+		Service:        common.ServiceSearch,
 		Region:         c.region,
 		State:          "active",
 	}
@@ -589,7 +589,7 @@ func (c *SearchClient) convertAzureSearchRecommendation(ctx context.Context, azu
 
 	rec := &common.Recommendation{
 		Provider:       common.ProviderAzure,
-		Service:        common.ServiceOther,
+		Service:        common.ServiceSearch,
 		Account:        c.subscriptionID,
 		CommitmentType: common.CommitmentReservedInstance,
 		Timestamp:      time.Now(),
