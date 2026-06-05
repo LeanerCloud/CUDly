@@ -353,7 +353,7 @@ func TestService_DeleteUser(t *testing.T) {
 
 	t.Run("maps DB trigger violation to ErrLastAdmin", func(t *testing.T) {
 		// Verifies that DeleteUser surfaces ErrLastAdmin when the deferred DB
-		// trigger (migration 000058) fires because a concurrent request already
+		// trigger (migration 000065) fires because a concurrent request already
 		// removed the other admin between the soft check and the DELETE. The
 		// soft check saw count >= 2 and passed, but the trigger rejects the
 		// commit. We simulate this by having the store return the raw pgconn
@@ -389,7 +389,7 @@ func TestService_DeleteUser(t *testing.T) {
 // TOCTOU race described in issue #919. Two goroutines simultaneously attempt
 // to delete the last two members of the Administrators group. Both pass the
 // soft CountGroupMembers check (each sees count == 2). The DB-level deferred
-// trigger (migration 000058) rejects one of the commits. We simulate the race
+// trigger (migration 000065) rejects one of the commits. We simulate the race
 // by running both DeleteUser calls concurrently and configuring the mock so
 // that the second DELETE returns the trigger violation error.
 //
@@ -458,7 +458,7 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 // TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins is the deactivation
 // analogue of the delete race in issue #919 / CR #921. Two goroutines
 // simultaneously deactivate the last two active admins. Both read count == 2
-// and pass the soft check. The 000058 deferred trigger now counts only *active*
+// and pass the soft check. The 000065 deferred trigger now counts only *active*
 // members and serializes via an advisory xact lock, so exactly one commit is
 // rejected. We simulate the DB outcome by having the second UpdateUser return
 // the trigger violation, and assert the invariant: never zero active admins.

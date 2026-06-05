@@ -162,7 +162,7 @@ func isEmailDuplicateError(err error) bool {
 }
 
 // isLastAdminConstraintViolation reports whether err is the deferred trigger
-// exception from migration 000058 (trg_min_one_admin). The trigger uses
+// exception from migration 000065 (trg_min_one_admin). The trigger uses
 // RAISE EXCEPTION with a message prefixed by "last_admin_constraint_violation"
 // and PostgreSQL error code P0001 (raise_exception). Detecting by message
 // prefix rather than code alone avoids false positives from other user-raised
