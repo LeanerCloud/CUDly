@@ -628,6 +628,46 @@ describe('Recommendations Module', () => {
       expect(list?.innerHTML).toContain('us-east-1');
     });
 
+    // #219 end-to-end render regression. Feeds the REAL API shape the fixed
+    // backend now emits: top-level vcpu/memory_gb (decoded from the nested
+    // ComputeDetails by buildRecommendationsResponse). Asserts the Capacity
+    // cell renders "8 vCPU / 32 GB" for a sized compute rec and "—" for a rec
+    // with neither field. Pre-fix, the backend never emitted these top-level
+    // fields, so the cell rendered "—" for every row in production while the
+    // formatCapacity unit tests stayed green on injected values the API never
+    // produced — this test ties the rendered cell to the real response shape.
+    test('renders Capacity cell from top-level vcpu/memory_gb (#219)', async () => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [
+          { id: 'rec-cap', provider: 'aws', service: 'ec2',
+            resource_type: 'm5.2xlarge', region: 'us-east-1',
+            count: 1, term: 1, savings: 100, upfront_cost: 500,
+            vcpu: 8, memory_gb: 32 },
+          { id: 'rec-nocap', provider: 'aws', service: 'rds',
+            resource_type: 'db.t3.medium', region: 'us-east-1',
+            count: 1, term: 1, savings: 50, upfront_cost: 200 },
+        ],
+        regions: ['us-east-1'],
+      });
+
+      await loadRecommendations();
+
+      const list = document.getElementById('recommendations-list');
+      // The capacity column is the cell immediately after resource_type.
+      const capCell = (recId: string): string | undefined => {
+        const checkbox = list?.querySelector<HTMLElement>(`input[data-rec-id="${recId}"]`);
+        const row = checkbox?.closest('tr');
+        const cells = Array.from(row?.querySelectorAll('td') ?? []);
+        const rtIdx = cells.findIndex((td) => td.textContent?.includes(recId === 'rec-cap' ? 'm5.2xlarge' : 'db.t3.medium'));
+        return cells[rtIdx + 1]?.textContent ?? undefined;
+      };
+
+      expect(capCell('rec-cap')).toBe('8 vCPU / 32 GB');
+      // Rec with no vcpu/memory_gb renders the em-dash placeholder, not "0".
+      expect(capCell('rec-nocap')).toBe('—');
+    });
+
     test('shows empty-state message when no recommendations', async () => {
       // Issue #700: zero rows now render an empty <tbody> with a hint cell
       // rather than replacing the entire table with a <p>. The <thead> stays

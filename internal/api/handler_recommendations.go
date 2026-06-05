@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -121,12 +122,23 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 func buildRecommendationsResponse(recommendations []config.RecommendationRecord) *RecommendationsResponse {
 	regionSet := make(map[string]struct{})
 	var totalSavings, totalUpfront float64
-	for _, rec := range recommendations {
+	for i := range recommendations {
+		rec := &recommendations[i]
 		totalSavings += rec.Savings
 		totalUpfront += rec.UpfrontCost
 		if rec.Region != "" {
 			regionSet[rec.Region] = struct{}{}
 		}
+		// Surface the compute size (VCPU / MemoryGB) at the top level so
+		// the frontend Capacity column can render it without parsing the
+		// opaque Details blob. The canonical values live in the typed
+		// ComputeDetails nested inside Details; decode them here (the api
+		// layer may import pkg/common, config may not) and stamp the
+		// pointers when this is a compute rec with a known size. Non-compute
+		// recs, legacy rows with empty Details, and decode failures all
+		// leave the pointers nil, so JSON omits them and the frontend
+		// renders "—".
+		stampComputeCapacity(rec)
 	}
 
 	regions := make([]string, 0, len(regionSet))
@@ -149,6 +161,40 @@ func buildRecommendationsResponse(recommendations []config.RecommendationRecord)
 		},
 		Regions: regions,
 	}
+}
+
+// stampComputeCapacity decodes a recommendation's opaque Details blob and,
+// when it is a ComputeDetails carrying a known instance size (VCPU > 0 &&
+// MemoryGB > 0), stamps the top-level VCPU / MemoryGB pointers the frontend
+// Capacity column reads (#219). For non-compute services, legacy rows with an
+// empty Details, unknown sizes (0), or a decode error it leaves the pointers
+// nil so the JSON omits them and the column renders "—" rather than a
+// misleading "0 vCPU / 0 GB".
+//
+// VCPU and MemoryGB must both be present for the pair to be emitted: the
+// frontend's formatCapacity treats a missing half as "absent" and renders a
+// dash, so emitting one without the other would be inconsistent.
+func stampComputeCapacity(rec *config.RecommendationRecord) {
+	details, err := common.DecodeServiceDetailsFor(rec.Service, rec.Details)
+	if err != nil || details == nil {
+		// Decode error or no typed Details for this service: leave the
+		// capacity fields absent. A malformed Details blob must not break
+		// the listing; the rest of the row is still valid.
+		return
+	}
+	compute, ok := details.(*common.ComputeDetails)
+	if !ok || compute == nil {
+		return
+	}
+	if compute.VCPU <= 0 || compute.MemoryGB <= 0 {
+		// Unknown size (converter didn't wire a catalogue lookup): keep
+		// both absent so the frontend renders "—".
+		return
+	}
+	vcpu := compute.VCPU
+	mem := compute.MemoryGB
+	rec.VCPU = &vcpu
+	rec.MemoryGB = &mem
 }
 
 // getRecommendationsFreshness returns the cache-freshness state (last

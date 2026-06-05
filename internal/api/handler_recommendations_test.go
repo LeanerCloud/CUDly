@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -351,6 +353,104 @@ func TestGetRecommendations_AccountIDFilter(t *testing.T) {
 			}
 			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
 		})
+	}
+}
+
+// TestBuildRecommendationsResponse_CapacityFields is the #219 regression
+// test. It replicates the REAL API shape: VCPU/MemoryGB live nested inside
+// the opaque Details blob (a marshalled common.ComputeDetails), exactly as the
+// scheduler persists them via common.MarshalServiceDetails — there are NO
+// top-level vcpu/memory_gb fields on the stored record. The pre-fix code never
+// decoded Details, so it emitted no top-level vcpu/memory_gb and every
+// Capacity cell rendered "—" in production. This asserts the response now
+// carries the decoded values at the top level (where the frontend reads them)
+// for a compute rec, and omits them for non-compute / unknown-size / empty
+// recs so the cell renders "—" rather than a misleading "0 vCPU / 0 GB".
+func TestBuildRecommendationsResponse_CapacityFields(t *testing.T) {
+	// computeDetails marshals a ComputeDetails the same way the scheduler
+	// does, so the test feeds the exact Details JSON shape the API stores.
+	computeDetails := func(vcpu int, memGB float64) json.RawMessage {
+		raw, err := common.MarshalServiceDetails(&common.ComputeDetails{
+			InstanceType: "m5.2xlarge",
+			Platform:     "linux",
+			Tenancy:      "default",
+			VCPU:         vcpu,
+			MemoryGB:     memGB,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, raw, "marshalled compute details must not be empty")
+		return raw
+	}
+
+	recs := []config.RecommendationRecord{
+		{
+			ID:      "rec-compute",
+			Service: "ec2",
+			Region:  "us-east-1",
+			Details: computeDetails(8, 32),
+		},
+		{
+			// Compute rec whose converter didn't resolve a size: VCPU/MemoryGB
+			// stay at the zero value → fields omitted → cell renders "—".
+			ID:      "rec-compute-unknown-size",
+			Service: "ec2",
+			Region:  "us-east-1",
+			Details: computeDetails(0, 0),
+		},
+		{
+			// Non-compute service (RDS): no VCPU/MemoryGB to surface.
+			ID:      "rec-database",
+			Service: "rds",
+			Region:  "us-east-1",
+			Details: json.RawMessage(`{"instance_class":"db.r5.large","engine":"postgres"}`),
+		},
+		{
+			// Legacy / pre-#453 row with an empty Details blob.
+			ID:      "rec-legacy-empty",
+			Service: "ec2",
+			Region:  "us-east-1",
+		},
+	}
+
+	resp := buildRecommendationsResponse(recs)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Recommendations, 4)
+
+	byID := make(map[string]config.RecommendationRecord, len(resp.Recommendations))
+	for _, r := range resp.Recommendations {
+		byID[r.ID] = r
+	}
+
+	// Compute rec with a known size → top-level vcpu=8, memory_gb=32.
+	compute := byID["rec-compute"]
+	require.NotNil(t, compute.VCPU, "compute rec must carry top-level vcpu")
+	require.NotNil(t, compute.MemoryGB, "compute rec must carry top-level memory_gb")
+	assert.Equal(t, 8, *compute.VCPU)
+	assert.Equal(t, float64(32), *compute.MemoryGB)
+
+	// The serialised JSON must expose them at the TOP LEVEL (not nested under
+	// details) — this is the exact contract the frontend reads.
+	blob, err := json.Marshal(compute)
+	require.NoError(t, err)
+	var top map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(blob, &top))
+	assert.JSONEq(t, "8", string(top["vcpu"]))
+	assert.JSONEq(t, "32", string(top["memory_gb"]))
+
+	// Unknown size, non-compute service, and legacy-empty all omit the fields.
+	for _, id := range []string{"rec-compute-unknown-size", "rec-database", "rec-legacy-empty"} {
+		r := byID[id]
+		assert.Nil(t, r.VCPU, "%s must not carry vcpu", id)
+		assert.Nil(t, r.MemoryGB, "%s must not carry memory_gb", id)
+
+		b, err := json.Marshal(r)
+		require.NoError(t, err)
+		var m map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(b, &m))
+		_, hasVCPU := m["vcpu"]
+		_, hasMem := m["memory_gb"]
+		assert.False(t, hasVCPU, "%s JSON must omit vcpu", id)
+		assert.False(t, hasMem, "%s JSON must omit memory_gb", id)
 	}
 }
 
