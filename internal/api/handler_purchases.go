@@ -93,7 +93,15 @@ func buildSuppressions(recs []config.RecommendationRecord, executionID string, c
 var plannedListStatuses = []string{"pending", "notified", "paused"}
 
 func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PlannedPurchasesResponse, error) {
-	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	// This endpoint backs the Plans page's "Scheduled (Planned) Purchases"
+	// list, which is plan-scheduled data, not purchase-execution data. Gate on
+	// view:plans (mirroring listPlans) so Read-Only users, who hold view:plans
+	// but not view:purchases (see auth.DefaultReadOnlyPermissions), can see it.
+	// Per-plan account scoping is still enforced below via isPlanAllowedCached,
+	// and the pause/resume/run/delete mutations keep their stronger
+	// update/execute/delete:purchases gates, so this does not let Read-Only
+	// users manage planned purchases.
+	session, err := h.requirePermission(ctx, req, "view", "plans")
 	if err != nil {
 		return nil, err
 	}
