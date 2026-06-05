@@ -758,23 +758,38 @@ export function renderSavingsByService(
   ]);
 
   // Per-service totals used for sort and empty-state detection.
-  type SvcEntry = { svc: string; current: number; minRec: number; maxRec: number };
+  type SvcEntry = {
+    svc: string;
+    current: number;
+    minRec: number;
+    maxRec: number;
+    lowestOption: number;
+    upside: number;
+    visibleTotal: number;
+  };
   const entries: SvcEntry[] = Array.from(allServices).map(svc => {
     const s = stats.get(svc);
     const current = byService[svc]?.current_savings ?? 0;
+    const minRec = s?.min ?? 0;
+    const maxRec = s?.max ?? 0;
+    const lowestOption = Math.max(0, minRec - current);
+    const upside = Math.max(0, maxRec - minRec);
     return {
       svc,
       current,
-      minRec: s?.min ?? 0,
-      maxRec: s?.max ?? 0,
+      minRec,
+      maxRec,
+      lowestOption,
+      upside,
+      visibleTotal: current + lowestOption + upside,
     };
   });
 
   // Keep only services with some positive value in any layer.
-  const positive = entries.filter(e => (e.current + e.maxRec) > 0);
+  const positive = entries.filter(e => e.visibleTotal > 0);
 
-  // Sort by (current + max potential) desc so the most-valuable bar is leftmost.
-  positive.sort((a, b) => (b.current + b.maxRec) - (a.current + a.maxRec));
+  // Sort by visible total desc so the most-valuable bar is leftmost.
+  positive.sort((a, b) => b.visibleTotal - a.visibleTotal);
 
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
@@ -815,7 +830,7 @@ export function renderSavingsByService(
   // Layer 3 (top): Upside -- the spread between cheapest and most-aggressive option.
   const upsideData = visible.map(e => Math.max(0, e.maxRec - e.minRec));
 
-  const totalSavings = positive.reduce((acc, e) => acc + e.current + e.maxRec, 0);
+  const totalSavings = positive.reduce((acc, e) => acc + e.visibleTotal, 0);
 
   // Colour palette: one base colour per service, then derive lighter/darker shades.
   const bgColors = visible.map((_, i) => SERVICE_BAR_COLORS[i % SERVICE_BAR_COLORS.length] ?? '#1a73e8');
@@ -879,7 +894,7 @@ export function renderSavingsByService(
               const minRec = s?.min ?? 0;
               const lowestOption = Math.max(0, minRec - current);
               const upside = Math.max(0, maxRec - minRec);
-              const total = current + maxRec;
+              const total = current + lowestOption + upside;
               const pct = totalSavings > 0 ? ((total / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
                 `Service: ${svc}`,

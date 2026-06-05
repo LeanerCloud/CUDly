@@ -1511,12 +1511,12 @@ describe('Dashboard Module', () => {
         expect(upsideDs?.data[0]).toBe(0);
       });
 
-      test('services are sorted by (current + max potential) descending', () => {
+      test('services are sorted by visible total (current + lowestOption + upside) descending', () => {
         buildDOM();
-        // ec2: current=0, max rec=200 -> total=200
-        // rds: current=150, max rec=500 -> total=650
-        // lambda: current=0, max rec=50 -> total=50
-        // Expected order: rds (650), ec2 (200), lambda (50).
+        // ec2: current=0, minRec=200, maxRec=200 -> lowestOption=200, upside=0, visibleTotal=200
+        // rds: current=150, minRec=500, maxRec=500 -> lowestOption=350, upside=0, visibleTotal=500
+        // lambda: current=0, minRec=50, maxRec=50 -> lowestOption=50, upside=0, visibleTotal=50
+        // Expected order: rds (500), ec2 (200), lambda (50).
         renderSavingsByService(
           [rec('ec2', 200), rec('rds', 500), rec('lambda', 50)],
           { rds: { potential_savings: 500, current_savings: 150 } },
