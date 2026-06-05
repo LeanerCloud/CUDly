@@ -191,22 +191,31 @@ func (c *Client) parseRedshiftDetails(_ context.Context, rec *common.Recommendat
 
 // parseMemoryDBDetails extracts MemoryDB-specific details.
 //
-// Cost Explorer does not populate InstanceDetails for MemoryDB reserved nodes:
-// the MemoryDB-specific sub-struct does not exist in the AWS SDK's
-// ReservationPurchaseRecommendationDetail, so the instance type must come from
-// rec.ResourceType, which the upstream caller should have populated from the
-// recommendation summary fields before dispatching here.
+// Cost Explorer exposes MemoryDB reserved-node offerings via
+// details.InstanceDetails.MemoryDBInstanceDetails (NodeType, Region), the same
+// shape ElastiCache and Redshift use. The node type comes from that struct, not
+// from a hardcoded default, so we never substitute a wrong instance type.
 //
-// If rec.ResourceType is empty, the function returns an error so the
-// recommendation is skipped loudly (logged by parseRecommendations) rather
-// than silently substituting a wrong default instance type.
-func (c *Client) parseMemoryDBDetails(_ context.Context, rec *common.Recommendation, _ *types.ReservationPurchaseRecommendationDetail) error {
-	if rec.ResourceType == "" {
-		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering - Cost Explorer did not populate instance details")
+// If the MemoryDB sub-struct or its NodeType is absent, the function returns an
+// error so the recommendation is skipped loudly (logged by parseRecommendations)
+// rather than silently guessing an offering.
+func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+	if details == nil || details.InstanceDetails == nil || details.InstanceDetails.MemoryDBInstanceDetails == nil {
+		return fmt.Errorf("MemoryDB instance details not found; cannot determine offering - Cost Explorer did not populate instance details")
+	}
+
+	mdbDetails := details.InstanceDetails.MemoryDBInstanceDetails
+	if mdbDetails.NodeType == nil || *mdbDetails.NodeType == "" {
+		return fmt.Errorf("MemoryDB recommendation has no NodeType; cannot determine offering")
+	}
+
+	rec.ResourceType = *mdbDetails.NodeType
+	if mdbDetails.Region != nil {
+		rec.Region = normalizeRegionName(*mdbDetails.Region)
 	}
 	rec.Details = &common.CacheDetails{
 		Engine:   "redis",
-		NodeType: rec.ResourceType,
+		NodeType: *mdbDetails.NodeType,
 	}
 	return nil
 }

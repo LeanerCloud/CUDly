@@ -508,30 +508,63 @@ func TestParseRedshiftDetails(t *testing.T) {
 
 func TestParseMemoryDBDetails(t *testing.T) {
 	client := &Client{}
-	details := &types.ReservationPurchaseRecommendationDetail{}
 
-	t.Run("empty ResourceType returns error", func(t *testing.T) {
+	t.Run("missing MemoryDB instance details returns error", func(t *testing.T) {
 		rec := &common.Recommendation{}
-		err := client.parseMemoryDBDetails(context.Background(), rec, details)
-		require.Error(t, err, "should fail loudly when ResourceType is empty")
-		assert.Contains(t, err.Error(), "ResourceType")
+		err := client.parseMemoryDBDetails(rec, &types.ReservationPurchaseRecommendationDetail{})
+		require.Error(t, err, "should fail loudly when MemoryDB instance details are absent")
+		assert.Contains(t, err.Error(), "instance details not found")
+		assert.Nil(t, rec.Details, "Details should remain nil on error")
+		assert.Empty(t, rec.ResourceType, "ResourceType should remain empty on error")
+	})
+
+	t.Run("nil NodeType returns error", func(t *testing.T) {
+		rec := &common.Recommendation{}
+		details := &types.ReservationPurchaseRecommendationDetail{
+			InstanceDetails: &types.InstanceDetails{
+				MemoryDBInstanceDetails: &types.MemoryDBInstanceDetails{
+					Region: aws.String("US East (N. Virginia)"),
+				},
+			},
+		}
+		err := client.parseMemoryDBDetails(rec, details)
+		require.Error(t, err, "should fail loudly when NodeType is absent")
+		assert.Contains(t, err.Error(), "NodeType")
 		assert.Nil(t, rec.Details, "Details should remain nil on error")
 	})
 
-	t.Run("non-default instance type populates Details", func(t *testing.T) {
-		rec := &common.Recommendation{ResourceType: "db.r6g.large"}
-		err := client.parseMemoryDBDetails(context.Background(), rec, details)
+	t.Run("populates Details, ResourceType and Region from CE node type", func(t *testing.T) {
+		rec := &common.Recommendation{}
+		details := &types.ReservationPurchaseRecommendationDetail{
+			InstanceDetails: &types.InstanceDetails{
+				MemoryDBInstanceDetails: &types.MemoryDBInstanceDetails{
+					NodeType: aws.String("db.r6g.large"),
+					Region:   aws.String("US East (N. Virginia)"),
+				},
+			},
+		}
+		err := client.parseMemoryDBDetails(rec, details)
 		require.NoError(t, err)
+		assert.Equal(t, "db.r6g.large", rec.ResourceType)
+		assert.Equal(t, "us-east-1", rec.Region)
 		cacheDetails, ok := rec.Details.(*common.CacheDetails)
 		require.True(t, ok, "Details should be *common.CacheDetails")
 		assert.Equal(t, "db.r6g.large", cacheDetails.NodeType)
 		assert.Equal(t, "redis", cacheDetails.Engine)
 	})
 
-	t.Run("xlarge instance type populates Details", func(t *testing.T) {
-		rec := &common.Recommendation{ResourceType: "db.r6gd.xlarge"}
-		err := client.parseMemoryDBDetails(context.Background(), rec, details)
+	t.Run("xlarge node type populates Details", func(t *testing.T) {
+		rec := &common.Recommendation{}
+		details := &types.ReservationPurchaseRecommendationDetail{
+			InstanceDetails: &types.InstanceDetails{
+				MemoryDBInstanceDetails: &types.MemoryDBInstanceDetails{
+					NodeType: aws.String("db.r6gd.xlarge"),
+				},
+			},
+		}
+		err := client.parseMemoryDBDetails(rec, details)
 		require.NoError(t, err)
+		assert.Equal(t, "db.r6gd.xlarge", rec.ResourceType)
 		cacheDetails, ok := rec.Details.(*common.CacheDetails)
 		require.True(t, ok, "Details should be *common.CacheDetails")
 		assert.Equal(t, "db.r6gd.xlarge", cacheDetails.NodeType)
