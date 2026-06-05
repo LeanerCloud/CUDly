@@ -16,7 +16,7 @@ import {
 import { showError, showSuccess } from './utils';
 import { confirmDialog } from '../confirmDialog';
 import { applyFilters } from './filters';
-import { renderUsers, renderUserStats } from './userList';
+import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
 import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
 
@@ -90,6 +90,7 @@ export async function loadUsers(): Promise<void> {
     renderUsers(filteredUsers);
     renderGroups(groups);
     renderUserStats();
+    populateBulkGroupSelect();
 
     const matrixContainer = document.getElementById('permission-matrix');
     if (matrixContainer) {

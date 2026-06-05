@@ -328,7 +328,7 @@ function setupUserTableListeners(): void {
 }
 
 /**
- * Update bulk actions bar
+ * Update bulk actions bar visibility and selection count.
  */
 export function updateBulkActionsBar(): void {
   const bulkBar = document.getElementById('bulk-actions-bar');
@@ -342,5 +342,21 @@ export function updateBulkActionsBar(): void {
     bulkBar.classList.remove('hidden');
     const countEl = document.getElementById('selected-count');
     if (countEl) countEl.textContent = selectedCount.toString();
+  }
+}
+
+/**
+ * Populate the #bulk-group-select dropdown with the currently loaded groups.
+ * Called by loadUsers after groups are refreshed so the options stay in sync.
+ */
+export function populateBulkGroupSelect(): void {
+  const select = document.getElementById('bulk-group-select') as HTMLSelectElement | null;
+  if (!select) return;
+  while (select.options.length > 1) select.remove(1);
+  for (const group of availableGroups) {
+    const opt = document.createElement('option');
+    opt.value = group.id;
+    opt.textContent = group.name;
+    select.add(opt);
   }
 }
