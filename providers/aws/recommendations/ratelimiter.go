@@ -75,8 +75,7 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 
 	// Add jitter (up to 20% of delay). Math/rand is intentional: jitter only
 	// needs uniform distribution, not cryptographic randomness.
-	jitter := time.Duration(float64(delay) * 0.2 * rand.Float64()) // #nosec G404
-	delay += jitter
+	delay += computeJitter(delay, rand.Float64()) // #nosec G404
 
 	select {
 	case <-time.After(delay):
@@ -84,6 +83,13 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// computeJitter returns the jitter component to add to a backoff delay.
+// r is a uniform random value in [0, 1); jitter is up to 20% of delay.
+// Extracted as a pure function so it can be unit-tested without sleeping.
+func computeJitter(delay time.Duration, r float64) time.Duration {
+	return time.Duration(float64(delay) * 0.2 * r)
 }
 
 // ShouldRetry checks if we should retry based on error type and retry count.
