@@ -1496,6 +1496,98 @@ func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get purchase plans")
 }
 
+// TestHandler_getPlannedPurchases_ReadOnlyCanView is the issue #999 regression
+// guard. The Plans page loads its "Scheduled (Planned) Purchases" list via this
+// handler. A Read-Only user holds view:plans but NOT view:purchases (see
+// auth.DefaultReadOnlyPermissions), so when the handler gated on view:purchases
+// the page failed with "permission denied: requires view on purchases" and
+// showed no plans. The handler must gate on view:plans instead.
+//
+// Pre-fix this test FAILS: the view:purchases gate returns 403 and the store is
+// never reached. Post-fix it PASSES: the view:plans gate lets the read through
+// and the planned purchase is returned.
+func TestHandler_getPlannedPurchases_ReadOnlyCanView(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	readOnlySession := &Session{
+		UserID: "viewer-1",
+		Email:  "readonly@example.com",
+	}
+
+	scheduledDate := time.Now().AddDate(0, 0, 7)
+	executions := []config.PurchaseExecution{
+		{
+			ExecutionID:      "11111111-1111-1111-1111-111111111111",
+			PlanID:           "11111111-1111-1111-1111-111111111111",
+			Status:           "pending",
+			ScheduledDate:    scheduledDate,
+			StepNumber:       1,
+			EstimatedSavings: 100.0,
+			TotalUpfrontCost: 500.0,
+		},
+	}
+	plans := []config.PurchasePlan{
+		{
+			ID:   "11111111-1111-1111-1111-111111111111",
+			Name: "Test Plan",
+			Services: map[string]config.ServiceConfig{
+				"aws/rds": {Provider: "aws", Service: "rds", Term: 3, Payment: "no-upfront"},
+			},
+			RampSchedule: config.RampSchedule{TotalSteps: 5},
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "readonly-token").Return(readOnlySession, nil)
+	// Read-Only grants: view:plans yes, view:purchases no. The handler must
+	// consult view:plans (the fix) and never view:purchases.
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "plans").Return(true, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(false, nil).Maybe()
+	// Unrestricted accounts so per-plan scoping short-circuits without GetPlanAccounts.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string(nil), nil)
+	mockStore.On("GetPlannedExecutions", ctx,
+		[]string{"pending", "notified", "paused"}, config.MaxListLimit).Return(executions, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer readonly-token"},
+	}
+
+	result, err := handler.getPlannedPurchases(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.Purchases, 1)
+	assert.Equal(t, "11111111-1111-1111-1111-111111111111", result.Purchases[0].PlanID)
+	mockAuth.AssertExpectations(t)
+	mockStore.AssertExpectations(t)
+}
+
+// TestHandler_getPlannedPurchases_ReadOnlyCannotManage guards the other side of
+// the #999 fix: relaxing the VIEW gate to view:plans must not let a Read-Only
+// user MANAGE planned purchases. Pausing still requires update:purchases, which
+// Read-Only lacks, so the mutation must 403 and never touch the store.
+func TestHandler_getPlannedPurchases_ReadOnlyCannotManage(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	mockAuth.On("ValidateSession", ctx, "readonly-token").Return(&Session{UserID: "viewer-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "update", "purchases").Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer readonly-token"},
+	}
+
+	_, err := handler.pausePlannedPurchase(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permission denied")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
+	mockAuth.AssertExpectations(t)
+}
+
 // Tests for getPurchaseDetails
 
 func TestHandler_getPurchaseDetails_Success(t *testing.T) {
