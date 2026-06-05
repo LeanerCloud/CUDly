@@ -1,4 +1,53 @@
 /* Responsive styles: Media queries */
+
+/* ---------------------------------------------------------------------------
+ * Mobile navigation drawer (below 768px)
+ *
+ * Pattern: hamburger button in topbar toggles .sidebar-open on <body>.
+ * - .app-sidebar slides in from the left with a CSS transition.
+ * - .sidebar-overlay fades in to dim the content behind the drawer.
+ * - Body scroll is locked while the drawer is open.
+ * - The hamburger button itself is hidden above the breakpoint.
+ * - aria-expanded / aria-hidden toggled from app.ts:setupMobileNav().
+ * ------------------------------------------------------------------------- */
+
+/* Hamburger button — mobile only */
+.hamburger {
+    display: none; /* hidden above breakpoint */
+    background: transparent;
+    border: none;
+    color: var(--cudly-primary-fg);
+    padding: var(--cudly-sp-2);
+    margin-right: var(--cudly-sp-2);
+    cursor: pointer;
+    border-radius: var(--cudly-r-md);
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.hamburger:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.8);
+    outline-offset: 2px;
+}
+
+/* Overlay that dims the content behind the open sidebar drawer */
+.sidebar-overlay {
+    display: none; /* hidden above breakpoint */
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 99;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+}
+
+/* Body scroll lock while drawer is open */
+body.sidebar-open {
+    overflow: hidden;
+}
+
 @media (max-width: 768px) {
     header {
         flex-direction: column;
@@ -59,6 +108,56 @@
 
     .plan-details {
         grid-template-columns: 1fr 1fr;
+    }
+
+    /* Topbar: show hamburger, wrap filter chips to prevent overflow */
+    .hamburger {
+        display: inline-flex;
+    }
+
+    .app-topbar-filters {
+        flex-wrap: wrap;
+        row-gap: var(--cudly-sp-2);
+    }
+
+    /* Sidebar: off-screen by default; slides in when .sidebar-open is on <body> */
+    .app-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100%;
+        z-index: 100;
+        /* Override the 900px icon-only collapse for mobile — full labels when open */
+        width: var(--cudly-sidebar-w);
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        /* Ensure the sidebar is rendered above the overlay */
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Restore labels hidden by the 900px collapse rule */
+    .app-sidebar .sidebar-label {
+        display: inline;
+    }
+
+    /* Hide the desktop collapse toggle inside the drawer — it is not
+       needed on mobile where the overlay / Escape / link-click close it. */
+    .app-sidebar-toggle {
+        display: none;
+    }
+
+    /* Overlay: visible on mobile, pointer events active only when open */
+    .sidebar-overlay {
+        display: block;
+    }
+
+    body.sidebar-open .sidebar-overlay {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    body.sidebar-open .app-sidebar {
+        transform: translateX(0);
     }
 }
 
