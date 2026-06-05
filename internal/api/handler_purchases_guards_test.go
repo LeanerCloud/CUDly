@@ -54,31 +54,39 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		{"valid azure monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" }), false},
 		// Legacy AWS-style tokens on Azure are normalized to Azure-canonical before validation.
 		{"azure accepts legacy all-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "azure"; r.Payment = "all-upfront"
+			r.Provider = "azure"
+			r.Payment = "all-upfront"
 		}), false},
 		{"azure accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "azure"; r.Payment = "no-upfront"
+			r.Provider = "azure"
+			r.Payment = "no-upfront"
 		}), false},
 		{"azure accepts legacy partial-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "azure"; r.Payment = "partial-upfront"
+			r.Provider = "azure"
+			r.Payment = "partial-upfront"
 		}), false},
 		{"azure rejects unknown token", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "azure"; r.Payment = "foo"
+			r.Provider = "azure"
+			r.Payment = "foo"
 		}), true},
 		// --- GCP canonical set (monthly-only) ---
 		{"valid gcp monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" }), false},
 		// Legacy tokens on GCP are all normalized to monthly.
 		{"gcp accepts legacy upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "gcp"; r.Payment = "upfront"
+			r.Provider = "gcp"
+			r.Payment = "upfront"
 		}), false},
 		{"gcp accepts legacy all-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "gcp"; r.Payment = "all-upfront"
+			r.Provider = "gcp"
+			r.Payment = "all-upfront"
 		}), false},
 		{"gcp accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "gcp"; r.Payment = "no-upfront"
+			r.Provider = "gcp"
+			r.Payment = "no-upfront"
 		}), false},
 		{"gcp rejects unknown token", mutate(func(r *config.RecommendationRecord) {
-			r.Provider = "gcp"; r.Payment = "foo"
+			r.Provider = "gcp"
+			r.Payment = "foo"
 		}), true},
 		// --- General ---
 		{"payment case-insensitive", mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" }), false},
