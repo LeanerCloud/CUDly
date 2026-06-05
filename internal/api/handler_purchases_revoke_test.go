@@ -116,6 +116,8 @@ func TestRevokePurchase_PurchaseNotFound(t *testing.T) {
 
 	adminSess := revokeAdminSession()
 	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, "pid-1").Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, "pid-1").Return((*config.PurchaseHistoryRecord)(nil), nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -143,6 +145,8 @@ func TestRevokePurchase_AlreadyRevoked(t *testing.T) {
 	r := armReservationRecord()
 	r.RevokedAt = &revokedAt
 	r.RevokedVia = "direct-api"
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -169,6 +173,8 @@ func TestRevokePurchase_AWSReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "aws"
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -194,6 +200,8 @@ func TestRevokePurchase_GCPReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "gcp"
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -219,6 +227,8 @@ func TestRevokePurchase_AzureOutsideWindow(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Timestamp = time.Now().UTC().Add(-8 * 24 * time.Hour) // 8 days ago -- window closed
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -266,14 +276,13 @@ func TestRevokePurchase_AzureCalcRefundClientError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
 	calcClient := &stubCalcRefundClient{err: errors.New("400: RefundPolicyViolated")}
 	returnClient := &stubReturnClient{}
 
-	h := &Handler{config: mockStore, auth: mockAuth}
+	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -285,7 +294,6 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	sessID := "session-1"
@@ -301,7 +309,7 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 	returnClient := &stubReturnClient{err: errors.New("500: InternalServerError")}
 
 	r := armReservationRecord()
-	h := &Handler{config: mockStore, auth: mockAuth}
+	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz")
 	require.Error(t, err)
 	// 500 is not a client error -- expect wrapped error, not ClientError.
@@ -332,6 +340,8 @@ func TestRevokePurchase_UsesStampedWindow(t *testing.T) {
 	// ...but the stamped window already closed an hour ago.
 	closed := time.Now().UTC().Add(-1 * time.Hour)
 	r.RevocationWindowClosesAt = &closed
+	// Pre-check: not a scheduled execution.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -527,4 +537,214 @@ func TestAuthorizeSessionRevoke_RevokeOwn_NilAccountID(t *testing.T) {
 	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "cannot verify ownership")
+}
+
+// --- Gmail-style pre-fire delay tests (issue #291 wave-2) ---
+
+// scheduledExecution returns a PurchaseExecution in status=scheduled with
+// ScheduledExecutionAt in the future (within the revocation window).
+func scheduledExecution(executionID string, createdByUserID string) *config.PurchaseExecution {
+	future := time.Now().UTC().Add(47 * time.Hour)
+	ex := &config.PurchaseExecution{
+		ExecutionID:          executionID,
+		Status:               "scheduled",
+		ScheduledExecutionAt: &future,
+	}
+	if createdByUserID != "" {
+		ex.CreatedByUserID = &createdByUserID
+	}
+	return ex
+}
+
+// TestRevokePurchase_ScheduledExecution_AdminFreeCancel verifies that revoking
+// a scheduled execution as admin transitions it to cancelled without any
+// provider SDK call (no MarkPurchaseRevoked expected).
+func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-sched-1"
+	adminSess := revokeAdminSession()
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+	exec := scheduledExecution(execID, "")
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// CancelExecutionAtomic and DeleteSuppressionsByExecutionTx use mock defaults
+	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"cancelled"/nil).
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.NoError(t, err)
+	m, ok := result.(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "cancelled", m["status"])
+	assert.Contains(t, m["message"], "No cloud API call")
+}
+
+// TestRevokePurchase_ScheduledExecution_WindowExpired verifies that revoking a
+// scheduled execution whose ScheduledExecutionAt is in the past returns 410.
+func TestRevokePurchase_ScheduledExecution_WindowExpired(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-expired-1"
+	adminSess := revokeAdminSession()
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+
+	past := time.Now().UTC().Add(-1 * time.Minute)
+	exec := &config.PurchaseExecution{
+		ExecutionID:          execID,
+		Status:               "scheduled",
+		ScheduledExecutionAt: &past,
+	}
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 410, ce.code)
+	assert.Contains(t, ce.message, "revocation window has closed")
+}
+
+// TestRevokePurchase_ScheduledExecution_CASRace verifies that a concurrent
+// scheduler tick that fires the execution between our window-check SELECT and
+// the CancelExecutionAtomic UPDATE is surfaced as a 410 (not a 500).
+func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-race-1"
+	adminSess := revokeAdminSession()
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+	exec := scheduledExecution(execID, "")
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// Simulate the scheduler transitioning the row to "approved" between our
+	// window-check and the CAS update (zero rows matched -> "approved").
+	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+		Return(false, "approved", nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 410, ce.code)
+	assert.Contains(t, ce.message, "revocation window has closed")
+}
+
+// TestRevokePurchase_ScheduledExecution_RevokeOwnCreator verifies that
+// revoke-own is satisfied when the execution's CreatedByUserID matches the
+// session user.
+func TestRevokePurchase_ScheduledExecution_RevokeOwnCreator(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-own-1"
+	userID := "user-abc"
+	sess := &Session{UserID: userID, Email: "owner@example.com"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(sess, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "revoke-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "revoke-own", "purchases").Return(true, nil)
+
+	exec := scheduledExecution(execID, userID)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.NoError(t, err)
+	m, ok := result.(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "cancelled", m["status"])
+}
+
+// TestRevokePurchase_ScheduledExecution_RevokeOwnWrongCreator verifies that
+// revoke-own is denied when the execution belongs to a different user.
+func TestRevokePurchase_ScheduledExecution_RevokeOwnWrongCreator(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-notmine-1"
+	userID := "user-requester"
+	otherUser := "user-owner"
+	sess := &Session{UserID: userID, Email: "requester@example.com"}
+	mockAuth.On("ValidateSession", ctx, "tok").Return(sess, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "revoke-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userID, "revoke-own", "purchases").Return(true, nil)
+
+	exec := scheduledExecution(execID, otherUser)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.message, "cannot revoke another user")
+}
+
+// TestAuthorizeSessionRevokeExecution_Admin verifies the admin short-circuit.
+func TestAuthorizeSessionRevokeExecution_Admin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	h := &Handler{auth: mockAuth}
+	adminSess := &Session{UserID: apiKeyAdminUserID}
+	exec := &config.PurchaseExecution{ExecutionID: "e-1"}
+	err := h.authorizeSessionRevokeExecution(ctx, adminSess, exec)
+	require.NoError(t, err)
+}
+
+// TestAuthorizeSessionRevokeExecution_NilCreatorDenied verifies fail-closed
+// behaviour: a revoke-own caller with no CreatedByUserID on the execution is
+// denied.
+func TestAuthorizeSessionRevokeExecution_NilCreatorDenied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-any", "purchases").Return(false, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "u-1", "revoke-own", "purchases").Return(true, nil)
+
+	h := &Handler{auth: mockAuth}
+	sess := &Session{UserID: "u-1"}
+	exec := &config.PurchaseExecution{ExecutionID: "e-1", CreatedByUserID: nil}
+	err := h.authorizeSessionRevokeExecution(ctx, sess, exec)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.message, "cannot revoke another user")
 }

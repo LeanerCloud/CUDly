@@ -90,6 +90,11 @@ func (n *NopSender) SendPurchaseApprovalRequest(_ context.Context, _ Notificatio
 	return nil
 }
 
+func (n *NopSender) SendPurchaseScheduledNotification(_ context.Context, _ NotificationData) error {
+	logging.Debugf("email/nop: SendPurchaseScheduledNotification suppressed")
+	return nil
+}
+
 func (n *NopSender) SendRegistrationReceivedNotification(_ context.Context, _ RegistrationNotificationData) error {
 	logging.Debugf("email/nop: SendRegistrationReceivedNotification suppressed")
 	return nil

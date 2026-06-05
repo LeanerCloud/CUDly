@@ -33,6 +33,10 @@ type PurchaseManagerInterface interface {
 	// via the existing TransitionExecutionStatus CAS. Wired into the
 	// "reap_stuck_purchases" scheduled task. See issue #678.
 	ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
+	// FireScheduledDelayedPurchases fires purchase_executions in status=scheduled
+	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
+	// issue #291 wave-2). Called on the "fire_scheduled_purchases" scheduler tick.
+	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
 }
 
 // AnalyticsStoreInterface defines the methods required for analytics storage.

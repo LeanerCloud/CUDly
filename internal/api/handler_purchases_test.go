@@ -296,6 +296,10 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// approvePurchaseViaSession checks PurchaseDelayHours to decide whether
+	// to defer the SDK call (Gmail-style pre-fire delay, issue #291 wave-2).
+	// Delay=0 means immediate execute (the legacy path being tested here).
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
@@ -342,6 +346,8 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// approvePurchaseViaSession checks PurchaseDelayHours (issue #291 wave-2).
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)

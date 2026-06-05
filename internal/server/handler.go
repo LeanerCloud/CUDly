@@ -41,6 +41,11 @@ const (
 	// network hang) that leave rows orphaned in an in-flight state.
 	// See internal/purchase/reaper.go + issue #678.
 	TaskReapStuckPurchases ScheduledTaskType = "reap_stuck_purchases"
+	// TaskFireScheduledPurchases fires purchase_executions in status=scheduled
+	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
+	// issue #291 wave-2). Wires the "fire_scheduled_purchases" event action
+	// to purchase.Manager.FireScheduledDelayedPurchases.
+	TaskFireScheduledPurchases ScheduledTaskType = "fire_scheduled_purchases"
 )
 
 // HandleScheduledTask processes a scheduled task by type.
@@ -88,6 +93,8 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		return app.handleRIExchangeReshape(ctx)
 	case TaskReapStuckPurchases:
 		return app.handleReapStuckPurchases(ctx)
+	case TaskFireScheduledPurchases:
+		return app.handleFireScheduledPurchases(ctx)
 	default:
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
@@ -204,6 +211,22 @@ func (app *Application) handleReapStuckPurchases(ctx context.Context) (*purchase
 	return result, nil
 }
 
+// handleFireScheduledPurchases fires purchase_executions in status=scheduled
+// whose scheduled_execution_at is in the past. Part of the Gmail-style pre-fire
+// delay feature (issue #291 wave-2): approve defers the cloud SDK call; this
+// tick fires the SDK call when the window expires.
+func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purchase.FireResult, error) {
+	log.Println("Firing scheduled delayed purchases...")
+	result, err := app.Purchase.FireScheduledDelayedPurchases(ctx)
+	if err != nil {
+		log.Printf("Failed to fire scheduled purchases: %v", err)
+		return nil, err
+	}
+	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d errored=%d",
+		result.Found, result.Fired, result.RaceLost, result.Errored)
+	return result, nil
+}
+
 // handleRefreshAnalytics refreshes materialized views and analytics data
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
@@ -280,6 +303,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 		return TaskRIExchangeReshape, nil
 	case "reap_stuck_purchases":
 		return TaskReapStuckPurchases, nil
+	case "fire_scheduled_purchases":
+		return TaskFireScheduledPurchases, nil
 	default:
 		return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
 	}

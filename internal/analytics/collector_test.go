@@ -119,9 +119,11 @@ func (m *mockAnalyticsStore) Close() error {
 
 // mockConfigStore implements config.StoreInterface for testing
 type mockConfigStore struct {
-	getPurchaseHistoryFunc       func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
-	getAllPurchaseHistoryFunc    func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
-	getActivePurchaseHistoryFunc func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
+	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
+	getAllPurchaseHistoryFunc           func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
+	getActivePurchaseHistoryFunc       func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
+	getPurchaseHistoryByPurchaseIDFunc func(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error)
+	markPurchaseRevokedFunc            func(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
 }
 
 func (m *mockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -229,12 +231,22 @@ func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	return nil, nil
 }
 
-func (m *mockConfigStore) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+func (m *mockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error) {
+	if m.getPurchaseHistoryByPurchaseIDFunc != nil {
+		return m.getPurchaseHistoryByPurchaseIDFunc(ctx, purchaseID)
+	}
 	return nil, nil
 }
 
-func (m *mockConfigStore) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
+func (m *mockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error {
+	if m.markPurchaseRevokedFunc != nil {
+		return m.markPurchaseRevokedFunc(ctx, purchaseID, revokedAt, revokedVia, supportCaseID)
+	}
 	return nil
+}
+
+func (m *mockConfigStore) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
+	return nil, nil
 }
 
 func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {

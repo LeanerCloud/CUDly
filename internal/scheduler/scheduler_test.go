@@ -497,6 +497,10 @@ func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region s
 	return m.Called(ctx, region, lookbackDays, payload, fetchedAt).Error(0)
 }
 
+func (m *MockConfigStore) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 // MockEmailSender is a mock implementation of email.Sender
 type MockEmailSender struct {
 	mock.Mock
@@ -565,6 +569,9 @@ func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
+func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
 func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }
@@ -591,6 +598,10 @@ func (m *MockPurchaseManager) SendUpcomingPurchaseNotifications(ctx context.Cont
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*purchase.NotificationResult), args.Error(1)
+}
+
+func (m *MockPurchaseManager) FireScheduledDelayedPurchases(_ context.Context) (*purchase.FireResult, error) {
+	return &purchase.FireResult{}, nil
 }
 
 func TestSchedulerConfig(t *testing.T) {

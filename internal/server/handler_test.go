@@ -113,6 +113,26 @@ func TestHandleScheduledTask(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:     "fire_scheduled_purchases success",
+			taskType: TaskFireScheduledPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FireScheduledDelayedPurchasesFunc = func(ctx context.Context) (*purchase.FireResult, error) {
+					return &purchase.FireResult{Found: 1, Fired: 1}, nil
+				}
+			},
+			expectError: false,
+		},
+		{
+			name:     "fire_scheduled_purchases propagates error",
+			taskType: TaskFireScheduledPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FireScheduledDelayedPurchasesFunc = func(ctx context.Context) (*purchase.FireResult, error) {
+					return nil, errors.New("db down")
+				}
+			},
+			expectError: true,
+		},
+		{
 			name:        "unknown task type",
 			taskType:    ScheduledTaskType("unknown"),
 			setupMocks:  func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {},

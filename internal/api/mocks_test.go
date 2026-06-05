@@ -57,6 +57,13 @@ type MockConfigStore struct {
 }
 
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
+	// Default: return an empty config (PurchaseDelayHours=0 = immediate execute)
+	// when no explicit expectation is registered. Tests that care about
+	// PurchaseDelayHours or other global config fields register their own
+	// .On("GetGlobalConfig", ctx).Return(...) expectation.
+	if !m.isExpected("GetGlobalConfig") {
+		return &config.GlobalConfig{}, nil
+	}
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -285,6 +292,14 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 
 func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx, statuses, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

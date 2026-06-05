@@ -56,6 +56,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
+		"purchase_delay_hours",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -65,6 +66,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		true, "daily", 3,
 		"{}",
 		24, 7,
+		0,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -104,6 +106,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
+		"purchase_delay_hours",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -114,6 +117,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			true, "daily", 3,
 			graceJSON,
 			24, 7,
+			0,
 		}
 	}
 
@@ -437,6 +441,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -447,6 +452,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -485,6 +491,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -499,6 +506,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -549,7 +557,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
-		"idempotency_key",
+		"idempotency_key", "scheduled_execution_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -560,6 +568,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	// Regexp matcher: only matches if the issued SELECT projects idempotency_key.
 	mock.ExpectQuery("idempotency_key").
@@ -1874,6 +1883,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	}
 }
 
@@ -1887,6 +1897,7 @@ func stuckExecCols() []string {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 }
 

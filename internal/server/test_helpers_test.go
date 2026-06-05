@@ -299,3 +299,7 @@ func (m *mockConfigStoreForHealth) GetPurchaseHistoryByPurchaseID(_ context.Cont
 func (m *mockConfigStoreForHealth) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
 	return nil
 }
+
+func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}

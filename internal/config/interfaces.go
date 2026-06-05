@@ -93,6 +93,14 @@ type StoreInterface interface {
 	// ASC), capped at MaxListLimit per sweep.
 	ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]PurchaseExecution, error)
 
+	// GetScheduledExecutionsDue returns purchase_executions with
+	// status='scheduled' whose scheduled_execution_at is in the past
+	// (scheduled_execution_at <= NOW()). Used by the Gmail-style pre-fire
+	// delay scheduler tick (issue #291 wave-2) to find rows ready to fire.
+	// Oldest-due-first (ORDER BY scheduled_execution_at ASC), capped at
+	// MaxListLimit per sweep.
+	GetScheduledExecutionsDue(ctx context.Context) ([]PurchaseExecution, error)
+
 	// Purchase history
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error
 	GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error)

@@ -212,4 +212,25 @@ describe('History inline Revoke button (issue #290)', () => {
 
     expect(revokeIds()).toEqual([]);
   });
+
+  // Regression guard: legacy rows written before the status column existed have
+  // status='' (empty string). canRevokeCompletedRow must treat blank status the
+  // same as "completed" so these rows remain revocable for Azure.
+  test('shows Revoke for a legacy blank-status Azure row with a future revocation window', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          status: '',
+          provider: 'azure',
+          purchase_id: 'commit-legacy-blank-status',
+          revocation_window_closes_at: FUTURE,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toContain('commit-legacy-blank-status');
+  });
 });

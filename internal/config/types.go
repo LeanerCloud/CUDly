@@ -53,6 +53,14 @@ type GlobalConfig struct {
 	// internally); this setting applies to AWS only.
 	// Default: 7.
 	RecommendationsLookbackDays int `json:"recommendations_lookback_days" db:"recommendations_lookback_days"`
+
+	// PurchaseDelayHours is the Gmail-style pre-fire delay (issue #291 wave-2).
+	// When > 0, approving a purchase defers the actual cloud SDK call by this
+	// many hours. The user receives a "scheduled, revoke before X" email
+	// immediately after approval and may cancel at $0 until the window closes.
+	// 0 means immediate-execute (backward compat). Valid range: [0, 168].
+	// Default: 48.
+	PurchaseDelayHours int `json:"purchase_delay_hours" db:"purchase_delay_hours"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider
@@ -81,6 +89,33 @@ const DefaultRecommendationsLookbackDays = 7
 // ValidRecommendationsLookbackDays lists the AWS Cost Explorer
 // LookbackPeriodInDays enum values. Other values are rejected.
 var ValidRecommendationsLookbackDays = []int{7, 30, 60}
+
+// DefaultPurchaseDelayHours is the default Gmail-style pre-fire delay.
+// 48 hours gives most users a working-day window to spot and cancel
+// an approval they didn't intend.
+const DefaultPurchaseDelayHours = 48
+
+// MaxPurchaseDelayHours is the ceiling for PurchaseDelayHours. One week
+// is long enough for any reasonable review cycle; longer delays make the
+// UX confusing and the scheduler overhead non-trivial.
+const MaxPurchaseDelayHours = 168
+
+// GetPurchaseDelay returns the pre-fire delay as a time.Duration. Nil
+// receiver returns the default. Values outside [0, MaxPurchaseDelayHours]
+// are clamped so a rogue DB write cannot break the scheduler.
+func (g *GlobalConfig) GetPurchaseDelay() time.Duration {
+	if g == nil {
+		return time.Duration(DefaultPurchaseDelayHours) * time.Hour
+	}
+	h := g.PurchaseDelayHours
+	if h < 0 {
+		h = 0
+	}
+	if h > MaxPurchaseDelayHours {
+		h = MaxPurchaseDelayHours
+	}
+	return time.Duration(h) * time.Hour
+}
 
 // GracePeriodFor returns the effective grace-period window (in days)
 // for the given provider slug ("aws", "azure", "gcp"). Returns the
@@ -298,18 +333,25 @@ type PurchaseExecution struct {
 	// migration 000066 — the derivation falls back to ExecutionID for those
 	// (identical to the pre-fix behaviour for a single un-retried execution).
 	IdempotencyKey string `json:"idempotency_key,omitempty" dynamodbav:"idempotency_key,omitempty"`
+	// ScheduledExecutionAt is set by the Gmail-style pre-fire delay path
+	// (issue #291 wave-2) when an approve defers the cloud SDK call. The
+	// scheduler fires the actual SDK call when this timestamp is in the past.
+	// NULL on every immediate-execute row. Migration 000065.
+	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
 // IsCancelable reports whether an execution may still be cancelled. Only the
-// pre-purchase states ("pending"/"notified") qualify: once a row reaches
-// "approved" or "running" the AWS commitment is being or has been created, so
-// cancelling would leave the DB and the cloud out of sync; "cancelled",
-// "completed", "failed", "expired", and "paused" are likewise non-cancelable.
+// pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
+// reaches "approved" or "running" the AWS commitment is being or has been
+// created, so cancelling would leave the DB and the cloud out of sync;
+// "cancelled", "completed", "failed", "expired", and "paused" are likewise
+// non-cancelable. The "scheduled" state is cancellable because the cloud SDK
+// has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
 // and the session-authed cancelPurchaseViaSession) call this single predicate
 // so the policy can never drift between them (issue #645).
 func (e *PurchaseExecution) IsCancelable() bool {
-	return e.Status == "pending" || e.Status == "notified"
+	return e.Status == "pending" || e.Status == "notified" || e.Status == "scheduled"
 }
 
 // RecommendationRecord stores a recommendation with purchase status

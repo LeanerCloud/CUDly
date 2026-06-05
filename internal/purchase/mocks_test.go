@@ -336,6 +336,14 @@ func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []st
 	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
 }
 
+func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
 func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)
@@ -684,6 +692,9 @@ func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
+}
+func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
 }
 func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil

@@ -46,6 +46,7 @@ type MockPurchaseManager struct {
 	ApproveAndExecuteFunc                 func(ctx context.Context, execID, actor string) error
 	CancelExecutionFunc                   func(ctx context.Context, execID, token, actor string) error
 	ReapStuckExecutionsFunc               func(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
+	FireScheduledDelayedPurchasesFunc     func(ctx context.Context) (*purchase.FireResult, error)
 }
 
 func (m *MockPurchaseManager) ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error) {
@@ -95,4 +96,11 @@ func (m *MockPurchaseManager) ReapStuckExecutions(ctx context.Context, reapAfter
 		return m.ReapStuckExecutionsFunc(ctx, reapAfter)
 	}
 	return &purchase.ReapResult{}, nil
+}
+
+func (m *MockPurchaseManager) FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error) {
+	if m.FireScheduledDelayedPurchasesFunc != nil {
+		return m.FireScheduledDelayedPurchasesFunc(ctx)
+	}
+	return &purchase.FireResult{}, nil
 }

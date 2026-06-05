@@ -30,6 +30,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/jackc/pgx/v5"
 )
 
 // AzureRevocationWindowDays is the number of days after purchase within which
@@ -64,6 +65,12 @@ type revokePurchaseResult struct {
 // Authorization: session required + revoke-own:purchases (or revoke-any for
 // admins). The handler is fail-closed: if the auth service is nil the request
 // is rejected with 403.
+//
+// Gmail-style pre-fire delay (issue #291 wave-2): when the ID resolves to a
+// purchase_execution in status="scheduled" (cloud SDK not yet called), the
+// execution is cancelled at zero cost and control returns immediately — no
+// provider SDK call is made. This path handles AWS, GCP, and Azure uniformly
+// since nothing has been committed to any cloud yet.
 func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
 	if purchaseID == "" {
 		return nil, NewClientError(400, "purchase_id is required")
@@ -78,6 +85,15 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+
+	// Gmail-style pre-fire delay: if the ID resolves to a scheduled execution
+	// (cloud SDK not yet called), revoke it for free at the execution layer.
+	// Only try this when the store call returns a row (err == nil); a non-nil
+	// error here just means "not found as an execution" and we fall through to
+	// the purchase_history lookup below.
+	if execution, execErr := h.config.GetExecutionByID(ctx, purchaseID); execErr == nil && execution != nil && execution.Status == "scheduled" {
+		return h.revokeScheduledExecution(ctx, session, execution)
 	}
 
 	record, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
@@ -102,6 +118,103 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 	}
 
 	return h.dispatchProviderRevoke(ctx, record)
+}
+
+// revokeScheduledExecution cancels a Gmail-style pre-fire delayed execution
+// that is still in the "scheduled" state (i.e. the cloud SDK has not been
+// called yet). This is a free cancel: no provider SDK call is made.
+//
+// The method enforces revoke-any/revoke-own RBAC (same permissions as the
+// completed-purchase revoke path), then atomically transitions the execution
+// to "cancelled" and removes its purchase_suppressions.
+//
+// Returns 410 Gone when the execution window has already closed (the scheduler
+// has fired the SDK call and the execution is no longer in "scheduled" state
+// — if our CAS misses, that is the natural result and the caller retries via
+// the GetPurchaseHistoryByPurchaseID path that follows in revokePurchase).
+func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session, execution *config.PurchaseExecution) (any, error) {
+	// Window-expiry check: if ScheduledExecutionAt is in the past the
+	// scheduler may have already fired the SDK call. Return 410 so the
+	// frontend can redirect to the completed-purchase revoke flow.
+	if execution.ScheduledExecutionAt != nil && time.Now().UTC().After(execution.ScheduledExecutionAt.UTC()) {
+		return nil, NewClientError(410, "revocation window has closed; the purchase may have already executed")
+	}
+
+	if err := h.authorizeSessionRevokeExecution(ctx, session, execution); err != nil {
+		return nil, err
+	}
+
+	// Atomically transition from scheduled -> cancelled and remove suppressions.
+	var cancelledBy *string
+	if session.Email != "" {
+		e := session.Email
+		cancelledBy = &e
+	}
+	var cancelled bool
+	var currentStatus string
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		cancelled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		if err != nil {
+			return err
+		}
+		if !cancelled {
+			return nil
+		}
+		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
+	}); err != nil {
+		return nil, fmt.Errorf("cancel scheduled execution %s: %w", execution.ExecutionID, err)
+	}
+	if !cancelled {
+		// A concurrent scheduler tick transitioned the row away from "scheduled"
+		// between our SELECT and the CAS UPDATE — the window closed. Return 410
+		// so the client knows to switch to the completed-purchase revoke path.
+		return nil, NewClientError(410, fmt.Sprintf(
+			"revocation window has closed: execution %s was already transitioned to %q", execution.ExecutionID, currentStatus,
+		))
+	}
+
+	logging.Infof("revokeScheduledExecution: execution_id=%s cancelled before SDK call (free cancel)", execution.ExecutionID)
+
+	return map[string]string{
+		"status":  "cancelled",
+		"message": "Purchase cancelled. No cloud API call was made; no cost incurred.",
+	}, nil
+}
+
+// authorizeSessionRevokeExecution enforces the revoke-any / revoke-own RBAC
+// matrix for scheduled executions (pre-SDK-call state). Mirrors
+// authorizeSessionRevoke for completed purchases but operates on a
+// PurchaseExecution (which has CreatedByUserID) rather than a
+// PurchaseHistoryRecord (which has CloudAccountID).
+func (h *Handler) authorizeSessionRevokeExecution(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasAny {
+		return nil
+	}
+
+	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeOwn, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !hasOwn {
+		return NewClientError(403, "permission denied: requires revoke-any or revoke-own on purchases")
+	}
+
+	// revoke-own: the execution must have been created by this user.
+	// NULL CreatedByUserID means a non-human or legacy creator — deny rather
+	// than allow an unscoped revoke (fail-closed).
+	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		return NewClientError(403, "permission denied: cannot revoke another user's scheduled purchase")
+	}
+	return nil
 }
 
 // dispatchProviderRevoke routes a revocation request to the correct
