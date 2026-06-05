@@ -1641,9 +1641,9 @@ func TestHandler_getPurchaseDetails_NotFound_IsClientError(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	const missingID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 	// Simulate the DB returning a generic error (as pgx does on a missing row).
