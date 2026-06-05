@@ -46,6 +46,12 @@ jest.mock('../recommendations', () => ({
   clearPurchaseModalRecommendations: jest.fn(),
   getFanOutBuckets: jest.fn(),
   clearFanOutBuckets: jest.fn(),
+  // app.ts calls getExecuteMode() and clearExecuteMode() in
+  // handleExecutePurchase (issue #289 / PR #924 carve-out).
+  // Default getExecuteMode to '' (approval path) so existing toast tests
+  // that don't exercise the direct-execute path are unaffected.
+  getExecuteMode: jest.fn().mockReturnValue(''),
+  clearExecuteMode: jest.fn(),
 }));
 
 jest.mock('../plans', () => ({

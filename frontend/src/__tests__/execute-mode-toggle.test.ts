@@ -56,11 +56,21 @@ jest.mock('../toast', () => ({
 }));
 
 import * as state from '../state';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
 
+// 'admin' represents a fully-capable admin: Administrators + Purchaser group
+// membership (mirrors the auto-migration that adds existing admins to the
+// Purchaser group on first deploy of issue #923). Both groups are needed:
+// ADMINISTRATORS_GROUP_ID for isAdmin() (gates execute-any/execute-own), and
+// PURCHASER_GROUP_ID for isPurchaser() (gates the carved-out execute:purchases
+// / approve-any:purchases / retry-any:purchases verbs from issue #923).
+// 'user' and 'readonly' have no group memberships and thus no execute access.
 type UserRole = 'admin' | 'user' | 'readonly';
 const mockUser = (role: UserRole | null) => {
   (state.getCurrentUser as jest.Mock).mockReturnValue(
-    role === null ? null : { id: 'u', email: 'u@example.com', role },
+    role === null
+      ? null
+      : { id: 'u', email: 'u@example.com', groups: role === 'admin' ? [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID] : [] },
   );
 };
 
