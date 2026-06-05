@@ -232,6 +232,24 @@ func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
 	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
+// decorateSenderWithMute wires per-recipient mute suppression and the
+// List-Unsubscribe base URL into the concrete SES (*email.Sender) or SMTP
+// (*email.SMTPSender) sender. Other implementations (e.g. the no-op sender used
+// when EMAIL_ENABLED=false) are returned unchanged. configStore satisfies
+// email.MuteChecker via its IsNotificationMuted method. dashboardURL is the
+// already-trimmed dashboard base URL; an empty value disables the
+// List-Unsubscribe header (the mute checker is still wired in).
+func decorateSenderWithMute(sender email.SenderInterface, mc email.MuteChecker, dashboardURL string) email.SenderInterface {
+	switch s := sender.(type) {
+	case *email.Sender:
+		return s.WithMuteChecker(mc).WithUnsubscribeBaseURL(dashboardURL)
+	case *email.SMTPSender:
+		return s.WithMuteChecker(mc).WithUnsubscribeBaseURL(dashboardURL)
+	default:
+		return sender
+	}
+}
+
 // LoadApplicationConfig reads all configuration from environment variables.
 func LoadApplicationConfig() ApplicationConfig {
 	version := os.Getenv("VERSION")
@@ -530,6 +548,12 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize email sender: %w", err)
 	}
+	// Wire per-recipient mute suppression + List-Unsubscribe into the production
+	// sender. Without this the mute-aware send logic in the email package is dead
+	// code (the bare sender has a nil mute checker and no unsubscribe base URL).
+	// The dashboard base URL is sourced from the same DASHBOARD_URL the email
+	// templates already use, trimmed of a trailing slash to match resolveOIDCIssuerURL.
+	emailSender = decorateSenderWithMute(emailSender, configStore, strings.TrimRight(cfg.DashboardURL, "/"))
 
 	// Initialize AWS config for STS client
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
