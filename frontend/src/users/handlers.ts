@@ -11,6 +11,7 @@ import { availableGroups } from './state';
 import { handleUserSearch, handleFilterChange, clearFilters, updateGroupFilterDropdown } from './filters';
 import { openCreateUserModal, closeUserModal, saveUser } from './userModals';
 import { bulkDeleteUsers, bulkAddToGroup } from './userActions';
+import { populateBulkGroupSelect } from './userList';
 
 /**
  * Setup event handlers for user management
@@ -83,6 +84,21 @@ export function setupUserHandlers(): void {
     });
   }
 
-  // Populate group filter dropdown
+  // Bulk group select dropdown (replaces the prompt on the production toolbar)
+  const bulkGroupSelect = document.getElementById('bulk-group-select') as HTMLSelectElement | null;
+  if (bulkGroupSelect) {
+    bulkGroupSelect.addEventListener('change', () => {
+      const groupId = bulkGroupSelect.value;
+      if (groupId) {
+        void bulkAddToGroup(groupId).then(() => {
+          // Reset to placeholder after the operation completes
+          bulkGroupSelect.value = '';
+        });
+      }
+    });
+  }
+
+  // Populate both group dropdowns
   updateGroupFilterDropdown();
+  populateBulkGroupSelect();
 }

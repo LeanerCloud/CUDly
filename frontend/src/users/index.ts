@@ -18,7 +18,7 @@ export { formatRelativeTime, escapeHtml, showError, showSuccess } from './utils'
 export { applyFilters, handleUserSearch, handleFilterChange, clearFilters, updateGroupFilterDropdown } from './filters';
 
 // Re-export user list rendering
-export { renderUsers, renderUserStats, updateBulkActionsBar } from './userList';
+export { renderUsers, renderUserStats, updateBulkActionsBar, populateBulkGroupSelect } from './userList';
 
 // Re-export user modals
 export { openCreateUserModal, openEditUserModal, closeUserModal, saveUser } from './userModals';

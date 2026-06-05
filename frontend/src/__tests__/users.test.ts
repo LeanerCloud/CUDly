@@ -2069,3 +2069,159 @@ describe('users module integration', () => {
     expect(bar?.classList.contains('hidden')).toBe(false);
   });
 });
+
+// ============================================================================
+// BULK TOOLBAR TESTS (issue #974)
+// ============================================================================
+describe('users bulk-actions toolbar', () => {
+  const mockGroups = [
+    { id: 'admins', name: 'Admins', permissions: [], description: '', allowed_accounts: [] },
+    { id: 'developers', name: 'Developers', permissions: [], description: '', allowed_accounts: [] },
+  ];
+
+  function buildToolbarDom(): void {
+    document.body.innerHTML = `
+      <form id="user-form"></form>
+      <input type="text" id="user-search" />
+      <select id="user-role-filter"><option value="">All</option></select>
+      <select id="user-mfa-filter"><option value="">All</option></select>
+      <select id="user-group-filter"><option value="">All Groups</option></select>
+      <button id="clear-filters-btn">Clear</button>
+      <div id="users-list"></div>
+      <div id="user-stats"></div>
+      <div id="bulk-actions-bar" class="hidden">
+        <span id="selected-count">0</span>
+        <button id="bulk-delete-btn">Delete selected</button>
+        <select id="bulk-group-select">
+          <option value="">Add to group...</option>
+        </select>
+      </div>
+    `;
+  }
+
+  beforeEach(() => {
+    buildToolbarDom();
+    userState.setAllUsers([]);
+    userState.setFilteredUsers([]);
+    userState.setAvailableGroups(mockGroups as any);
+    userState.clearSelectedUserIds();
+    jest.clearAllMocks();
+  });
+
+  describe('toolbar visibility', () => {
+    it('should be hidden when no users are selected', () => {
+      userList.updateBulkActionsBar();
+
+      const bar = document.getElementById('bulk-actions-bar');
+      expect(bar?.classList.contains('hidden')).toBe(true);
+    });
+
+    it('should be visible with correct count when one user is selected', () => {
+      userState.addSelectedUserId('user-1');
+
+      userList.updateBulkActionsBar();
+
+      const bar = document.getElementById('bulk-actions-bar');
+      expect(bar?.classList.contains('hidden')).toBe(false);
+      const count = document.getElementById('selected-count');
+      expect(count?.textContent).toBe('1');
+    });
+
+    it('should be visible with correct count when multiple users are selected', () => {
+      userState.addSelectedUserId('user-1');
+      userState.addSelectedUserId('user-2');
+      userState.addSelectedUserId('user-3');
+
+      userList.updateBulkActionsBar();
+
+      const bar = document.getElementById('bulk-actions-bar');
+      expect(bar?.classList.contains('hidden')).toBe(false);
+      const count = document.getElementById('selected-count');
+      expect(count?.textContent).toBe('3');
+    });
+
+    it('should become hidden again after all rows are unchecked', () => {
+      userState.addSelectedUserId('user-1');
+      userList.updateBulkActionsBar();
+
+      const barBefore = document.getElementById('bulk-actions-bar');
+      expect(barBefore?.classList.contains('hidden')).toBe(false);
+
+      userState.clearSelectedUserIds();
+      userList.updateBulkActionsBar();
+
+      const barAfter = document.getElementById('bulk-actions-bar');
+      expect(barAfter?.classList.contains('hidden')).toBe(true);
+    });
+  });
+
+  describe('bulk-delete-btn', () => {
+    it('should call bulkDeleteUsers when clicked via setupUserHandlers', async () => {
+      const mockUser = { id: '1', email: 'u@t.com', role: 'user', groups: [], mfa_enabled: false };
+      userState.setAllUsers([mockUser] as any);
+      userState.addSelectedUserId('1');
+
+      (api.deleteUser as jest.Mock).mockResolvedValue({});
+      (api.listUsers as jest.Mock).mockResolvedValue({ users: [] });
+      (api.listGroups as jest.Mock).mockResolvedValue({ groups: [] });
+
+      userHandlers.setupUserHandlers();
+
+      const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+      bulkDeleteBtn?.click();
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(api.deleteUser).toHaveBeenCalledWith('1');
+    });
+  });
+
+  describe('bulk-group-select', () => {
+    it('should populate with available groups', () => {
+      userList.populateBulkGroupSelect();
+
+      const select = document.getElementById('bulk-group-select') as HTMLSelectElement;
+      // placeholder + 2 groups
+      expect(select.options.length).toBe(3);
+      expect(select.options[1]?.value).toBe('admins');
+      expect(select.options[1]?.text).toBe('Admins');
+      expect(select.options[2]?.value).toBe('developers');
+      expect(select.options[2]?.text).toBe('Developers');
+    });
+
+    it('should call bulkAddToGroup with selected group id on change via setupUserHandlers', async () => {
+      const mockUser = { id: '1', email: 'test@test.com', role: 'user', groups: [], mfa_enabled: false };
+      userState.setAllUsers([mockUser] as any);
+      userState.addSelectedUserId('1');
+
+      (api.updateUser as jest.Mock).mockResolvedValue({});
+      (api.listUsers as jest.Mock).mockResolvedValue({ users: [mockUser] });
+      (api.listGroups as jest.Mock).mockResolvedValue({ groups: mockGroups });
+
+      userHandlers.setupUserHandlers();
+
+      const select = document.getElementById('bulk-group-select') as HTMLSelectElement;
+      select.value = 'admins';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(api.updateUser).toHaveBeenCalledWith('1', { groups: ['admins'] });
+    });
+
+    it('should not call bulkAddToGroup when placeholder is selected', async () => {
+      userState.addSelectedUserId('1');
+      (api.updateUser as jest.Mock).mockResolvedValue({});
+
+      userHandlers.setupUserHandlers();
+
+      const select = document.getElementById('bulk-group-select') as HTMLSelectElement;
+      select.value = '';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(api.updateUser).not.toHaveBeenCalled();
+    });
+  });
+});
