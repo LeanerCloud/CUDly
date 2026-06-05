@@ -435,7 +435,10 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     expect(rows[1]!.textContent).toContain('100.0%');
   });
 
-  test('renders "No usage detected" for providers with null services', async () => {
+  test('renders "No usage detected" for providers with null services when no chip is active', async () => {
+    // No chip active: genuinely no usage -> original message.
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
     (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
       providers: [
         makeProviderSection('aws', null, null),
@@ -450,6 +453,47 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     const empties = container.querySelectorAll('.empty');
     expect(empties.length).toBe(3);
     expect(empties[0]!.textContent).toContain('AWS');
+    expect(empties[0]!.textContent).toMatch(/no usage detected/i);
+  });
+
+  test('renders filter-aware empty state when provider chip is active and services are empty', async () => {
+    // Provider chip set -> chip filtered all rows; message must not claim "No usage detected".
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('gcp');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('gcp', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const empty = container.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toContain('GCP');
+    expect(empty!.textContent).toMatch(/selected account\/filter/i);
+    expect(empty!.textContent).not.toMatch(/no usage detected/i);
+  });
+
+  test('renders filter-aware empty state when account chip is active and services are empty', async () => {
+    // Account chip set (single account) -> message must reference selected filter.
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-99']);
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [
+        makeProviderSection('aws', null, null),
+      ],
+    });
+
+    await loadCoverageBreakdown();
+
+    const container = document.getElementById('coverage-providers')!;
+    const empty = container.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toContain('AWS');
+    expect(empty!.textContent).toMatch(/selected account\/filter/i);
+    expect(empty!.textContent).not.toMatch(/no usage detected/i);
   });
 
   test('renders N/A for null coverage_pct (no usage signal on that service)', async () => {
