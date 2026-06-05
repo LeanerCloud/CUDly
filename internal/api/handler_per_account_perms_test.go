@@ -363,7 +363,10 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	start := now.Add(-7 * 24 * time.Hour)
 
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryHistory", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything).
+	// permsAccA is a known account UUID (no external id in the fixture), so it
+	// is matched on cloud_account_id only — the uuid set carries it, externals
+	// is nil.
+	mockClient.On("QueryHistory", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything).
 		Return([]HistoryDataPoint{}, &HistorySummary{}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -384,7 +387,7 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	require.NoError(t, err, "scoped user must be able to query analytics for account-A")
 	require.NotNil(t, result)
 	// Confirm the analytics backend was reached — not short-circuited.
-	mockClient.AssertCalled(t, "QueryHistory", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── 5. GET /history/breakdown ───────────────────────────────────────────────
@@ -400,7 +403,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 		"ec2": {PurchaseCount: 3, TotalSavings: 150.0},
 	}
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything).
+	mockClient.On("QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedData, nil)
 
 	mockStore := new(MockConfigStore)
@@ -420,7 +423,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err, "scoped user must be able to query breakdown for account-A")
 	require.NotNil(t, result)
-	mockClient.AssertCalled(t, "QueryBreakdown", ctx, permsAccA, mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected mirrors the
@@ -492,8 +495,14 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// Guard against future code paths that resolve service configs before filtering:
 	// stub rds so an unexpected GetServiceConfig call doesn't panic the test.
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
-	// calculateCommitmentMetrics calls GetAllPurchaseHistory when no account filter is set.
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	// Issue #956: a restricted session with no explicit account filter scopes the
+	// commitment metrics to its allowed_accounts (permsAccA), so the handler calls
+	// GetPurchaseHistoryFiltered scoped to account A — NOT GetAllPurchaseHistory.
+	// permsAccA has no ExternalID, so only the UUID half of the filter is set.
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
+		AccountIDs: []string{permsAccA},
+		Limit:      1000,
+	}).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -512,6 +521,57 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 		"dashboard must count only account-A recommendations for a scoped user")
 	assert.Equal(t, 100.0, result.PotentialMonthlySavings,
 		"dashboard savings must reflect only account-A (100); account-B savings (200) must not leak")
+	// Issue #956 regression: the all-accounts fast path must NOT be taken for a
+	// restricted session, or commitment KPIs would leak other accounts' data.
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
+}
+
+// TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts is
+// the issue #956 regression: a restricted session with no explicit account
+// filter must see commitment KPIs (ActiveCommitments / CommittedMonthly)
+// derived only from its allowed account's purchase history. Before the fix the
+// handler fell through to GetAllPurchaseHistory, so a scoped user saw every
+// account's commitments. Here the store is asked for account A only, and the
+// account-B commitment never reaches the KPIs.
+func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(t *testing.T) {
+	ctx := context.Background()
+
+	mockSched := new(MockScheduler)
+	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+
+	purchaseTime := time.Now().AddDate(0, -2, 0) // active 1-year commitment
+	// Only account A's purchase history is returned by the scoped query; the
+	// account-B row (200/mo) is filtered out at the store and must not appear.
+	accountARows := []config.PurchaseHistoryRecord{
+		{CloudAccountID: permsPtr(permsAccA), Timestamp: purchaseTime, Term: 1, Service: "ec2", EstimatedSavings: 100.0},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
+		AccountIDs: []string{permsAccA},
+		Limit:      1000,
+	}).Return(accountARows, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return permsAccountList(), nil
+	}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{
+		auth:      scopedAuthMock(ctx),
+		scheduler: mockSched,
+		config:    mockStore,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, scopedReq(), map[string]string{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, 1, result.ActiveCommitments,
+		"only account-A's commitment may be counted for a scoped session")
+	assert.Equal(t, 100.0, result.CommittedMonthly,
+		"account-B commitment (200) must not leak into a scoped session's KPIs")
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
 }
 
 // ─── 7. POST /purchases/execute ──────────────────────────────────────────────

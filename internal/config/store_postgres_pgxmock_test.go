@@ -515,10 +515,12 @@ func purchaseHistoryRow(now time.Time, provider, acct string) []interface{} {
 }
 
 // TestPGXMock_GetPurchaseHistoryFiltered_AllFilters asserts the SQL emitted
-// when every filter is set: WHERE provider = $1 AND cloud_account_id =
-// ANY($2) AND timestamp >= $3 AND timestamp <= $4, ORDER BY timestamp DESC,
-// LIMIT $5. Each filter's positional argument is bound in declaration order
-// (provider, accountIDs, start, end, limit).
+// when every filter is set: WHERE provider = $1 AND (cloud_account_id =
+// ANY($2) OR (provider = $3 AND account_id = ANY($4))) AND timestamp >= $5 AND
+// timestamp <= $6, ORDER BY timestamp DESC, LIMIT $7. The account predicate is
+// dual-column with a provider-scoped external-id half so a row carrying only one
+// identifier is still matched without leaking across providers (issue
+// #701/#498/#866 + provider-coupling).
 func TestPGXMock_GetPurchaseHistoryFiltered_AllFilters(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -530,21 +532,108 @@ func TestPGXMock_GetPurchaseHistoryFiltered_AllFilters(t *testing.T) {
 
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, timestamp, provider, service, region.*FROM purchase_history WHERE provider = \$1 AND cloud_account_id = ANY\(\$2\) AND timestamp >= \$3 AND timestamp <= \$4.*ORDER BY timestamp DESC.*LIMIT \$5`,
-	).WithArgs("aws", []string{"acct-uuid-1"}, start, end, 50).WillReturnRows(rows)
+		`SELECT account_id, purchase_id, timestamp, provider, service, region.*FROM purchase_history WHERE provider = \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) AND timestamp >= \$5 AND timestamp <= \$6.*ORDER BY timestamp DESC.*LIMIT \$7`,
+	).WithArgs("aws", []string{"acct-uuid-1"}, "aws", []string{"111122223333"}, start, end, 50).WillReturnRows(rows)
 
-	records, err := store.GetPurchaseHistoryFiltered(ctx, "aws", []string{"acct-uuid-1"}, &start, &end, 50)
+	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
+		Provider:              "aws",
+		AccountIDs:            []string{"acct-uuid-1"},
+		ExternalIDsByProvider: map[string][]string{"aws": {"111122223333"}},
+		Start:                 &start,
+		End:                   &end,
+		Limit:                 50,
+	})
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, "aws", records[0].Provider)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestPGXMock_GetPurchaseHistoryFiltered_ExternalIDOnly is the keystone
+// regression test for issue #701/#498/#866: a UUID-known account whose
+// purchase_history rows carry cloud_account_id IS NULL + a populated
+// account_id (external number) MUST still be returned when its UUID is
+// requested. The handler resolves the UUID to its external id and passes BOTH;
+// the dual-column predicate then matches via account_id. Before the fix the
+// store filtered cloud_account_id only, so the row was silently dropped and the
+// user saw "No purchase history yet" for that account.
+func TestPGXMock_GetPurchaseHistoryFiltered_ExternalIDOnly(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	// The matched row has account_id="999988887777" and cloud_account_id NULL
+	// (purchaseHistoryRow already writes a NULL cloud_account_id).
+	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "999988887777")...)
+	mock.ExpectQuery(
+		`FROM purchase_history WHERE \(cloud_account_id = ANY\(\$1\) OR \(provider = \$2 AND account_id = ANY\(\$3\)\)\).*ORDER BY timestamp DESC.*LIMIT \$4`,
+	).WithArgs([]string{"acct-uuid-B"}, "aws", []string{"999988887777"}, 100).WillReturnRows(rows)
+
+	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
+		AccountIDs:            []string{"acct-uuid-B"},
+		ExternalIDsByProvider: map[string][]string{"aws": {"999988887777"}},
+		Limit:                 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 1, "external-id-only row must be returned when its account is requested")
+	assert.Equal(t, "999988887777", records[0].AccountID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPurchaseHistoryFiltered_MultiProviderExternalIDs asserts that
+// when external ids are grouped across two providers, the predicate emits one
+// provider-gated OR branch per provider (sorted) so an external id only matches
+// rows of its own provider. This is the SQL-side guarantee that a reused
+// external number (aws/123 vs azure/123) cannot leak across providers (issue
+// #956 CR finding #1). Providers are emitted in sorted order: aws before azure.
+func TestPGXMock_GetPurchaseHistoryFiltered_MultiProviderExternalIDs(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "123")...)
+	mock.ExpectQuery(
+		`FROM purchase_history WHERE \(\(provider = \$1 AND account_id = ANY\(\$2\)\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\).*ORDER BY timestamp DESC.*LIMIT \$5`,
+	).WithArgs("aws", []string{"123"}, "azure", []string{"123"}, 100).WillReturnRows(rows)
+
+	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
+		ExternalIDsByProvider: map[string][]string{"aws": {"123"}, "azure": {"123"}},
+		Limit:                 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPurchaseHistoryFiltered_UUIDOnly asserts a UUID-only account
+// filter (no resolvable external id) emits just the cloud_account_id half of
+// the predicate, bound to the UUID set.
+func TestPGXMock_GetPurchaseHistoryFiltered_UUIDOnly(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
+	mock.ExpectQuery(
+		`FROM purchase_history WHERE \(cloud_account_id = ANY\(\$1\)\).*ORDER BY timestamp DESC.*LIMIT \$2`,
+	).WithArgs([]string{"acct-uuid-1"}, 100).WillReturnRows(rows)
+
+	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
+		AccountIDs: []string{"acct-uuid-1"},
+		Limit:      100,
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestPGXMock_GetPurchaseHistoryFiltered_NoFilters asserts that an
-// all-defaults call (empty provider, nil accountIDs, nil dates) emits a
-// WHERE-less query identical in shape to GetAllPurchaseHistory. This is
-// what proves the handler's fast-path call into the legacy methods stays a
-// valid alternative — the filtered variant degrades gracefully.
+// all-defaults call (empty filter) emits a WHERE-less query identical in shape
+// to GetAllPurchaseHistory. This proves the filtered variant degrades
+// gracefully when no fields are set.
 func TestPGXMock_GetPurchaseHistoryFiltered_NoFilters(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -556,17 +645,16 @@ func TestPGXMock_GetPurchaseHistoryFiltered_NoFilters(t *testing.T) {
 	mock.ExpectQuery(`SELECT.*FROM purchase_history\s+ORDER BY timestamp DESC.*LIMIT \$1`).
 		WithArgs(100).WillReturnRows(rows)
 
-	records, err := store.GetPurchaseHistoryFiltered(ctx, "", nil, nil, nil, 100)
+	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{Limit: 100})
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestPGXMock_GetPurchaseHistoryFiltered_PartialFilters asserts that
-// supplying only a subset of filters (here: provider + start, no
-// accountIDs, no end) emits exactly two AND clauses and binds the right
-// positional arguments. Guards against an off-by-one in the placeholder
-// counter (the bug shape mirroring buildRecommendationFilter's add helper).
+// supplying only a subset of filters (here: provider + start, no account ids,
+// no end) emits exactly two AND clauses and binds the right positional
+// arguments. Guards against an off-by-one in the placeholder counter.
 func TestPGXMock_GetPurchaseHistoryFiltered_PartialFilters(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -580,7 +668,11 @@ func TestPGXMock_GetPurchaseHistoryFiltered_PartialFilters(t *testing.T) {
 		`FROM purchase_history WHERE provider = \$1 AND timestamp >= \$2.*ORDER BY timestamp DESC.*LIMIT \$3`,
 	).WithArgs("azure", start, 25).WillReturnRows(rows)
 
-	_, err := store.GetPurchaseHistoryFiltered(ctx, "azure", nil, &start, nil, 25)
+	_, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
+		Provider: "azure",
+		Start:    &start,
+		Limit:    25,
+	})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -599,7 +691,7 @@ func TestPGXMock_GetPurchaseHistoryFiltered_LimitClamp(t *testing.T) {
 	mock.ExpectQuery(`FROM purchase_history\s+ORDER BY timestamp DESC.*LIMIT \$1`).
 		WithArgs(DefaultListLimit).WillReturnRows(rows)
 
-	_, err := store.GetPurchaseHistoryFiltered(ctx, "", nil, nil, nil, -5)
+	_, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{Limit: -5})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 
@@ -610,7 +702,7 @@ func TestPGXMock_GetPurchaseHistoryFiltered_LimitClamp(t *testing.T) {
 	mock2.ExpectQuery(`FROM purchase_history\s+ORDER BY timestamp DESC.*LIMIT \$1`).
 		WithArgs(MaxListLimit).WillReturnRows(rows2)
 
-	_, err = store2.GetPurchaseHistoryFiltered(ctx, "", nil, nil, nil, MaxListLimit+1)
+	_, err = store2.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{Limit: MaxListLimit + 1})
 	require.NoError(t, err)
 	assert.NoError(t, mock2.ExpectationsWereMet())
 }

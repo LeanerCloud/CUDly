@@ -468,6 +468,41 @@ type RIUtilizationCacheEntry struct {
 	FetchedAt    time.Time
 }
 
+// PurchaseHistoryFilter is the filter set consumed by
+// StoreInterface.GetPurchaseHistoryFiltered. Each field is optional; a
+// zero-valued filter selects all rows (same plan-shape as
+// GetAllPurchaseHistory). See the implementation docstring for the per-field
+// semantics and the dual-column account predicate.
+type PurchaseHistoryFilter struct {
+	// Provider matches purchase_history.provider exactly. Empty skips the clause.
+	Provider string
+	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
+	// UUID FK) with ANY($). Empty/nil skips this half of the account predicate.
+	AccountIDs []string
+	// ExternalIDsByProvider matches purchase_history.account_id (the
+	// cloud-provider external account number) scoped per provider. The caller
+	// resolves AccountIDs to their (provider, external_id) pairs and groups the
+	// external ids by provider, so the predicate matches each external id only
+	// against rows of its own provider:
+	//
+	//	(provider = $p AND account_id = ANY($extsForP))
+	//
+	// This keeps the (provider, external_id) pairing intact so a filter for
+	// aws/123 never pulls azure/123 rows that reuse the same external number.
+	// The "" provider key means "provider unknown" (legacy raw external number)
+	// and matches account_id without a provider gate. Empty/nil skips this half
+	// of the account predicate.
+	ExternalIDsByProvider map[string][]string
+	// Start/End bound purchase_history.timestamp. nil for both skips the clause;
+	// nil for either leaves that side open (caller owns any range cap, see
+	// api.MaxHistoryDateRangeDays).
+	Start *time.Time
+	End   *time.Time
+	// Limit caps the row count; clamped to [1, MaxListLimit] with a
+	// DefaultListLimit fallback when <= 0.
+	Limit int
+}
+
 // PurchaseHistoryRecord is the response-layer representation for rows on the
 // /api/history page. DB-backed rows always describe *completed* purchases; the
 // handler additionally synthesises rows for pending executions so users can

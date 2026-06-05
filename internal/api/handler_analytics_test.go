@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -17,8 +18,8 @@ type MockAnalyticsClient struct {
 	mock.Mock
 }
 
-func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountID string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
-	args := m.Called(ctx, accountID, start, end, interval)
+func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, interval)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}
@@ -29,12 +30,39 @@ func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountID string
 	return args.Get(0).([]HistoryDataPoint), summary, args.Error(2)
 }
 
-func (m *MockAnalyticsClient) QueryBreakdown(ctx context.Context, accountID string, start, end time.Time, dimension string) (map[string]BreakdownValue, error) {
-	args := m.Called(ctx, accountID, start, end, dimension)
+func (m *MockAnalyticsClient) QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, dimension string) (map[string]BreakdownValue, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, dimension)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(map[string]BreakdownValue), args.Error(1)
+}
+
+// TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount is the analytics
+// keystone (issue #701/#498/#866): selecting an account by its cloud_accounts
+// UUID resolves to (UUID, external_id) and both reach QueryHistory so rows that
+// carry only the external account_id (cloud_account_id NULL) are aggregated.
+func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
+	ctx := context.Background()
+	accountUUID := "bbbbbbbb-1111-2222-3333-444444444444"
+	accountExternal := "999988887777"
+
+	mockClient := new(MockAnalyticsClient)
+	mockClient.On("QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly").
+		Return([]HistoryDataPoint{{TotalSavings: 50.0, PurchaseCount: 1}}, &HistorySummary{TotalPurchases: 1}, nil)
+
+	mockStore := new(MockConfigStore)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: accountUUID, Name: "Account B", Provider: "aws", ExternalID: accountExternal}}, nil
+	}
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: mockStore}
+
+	result, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"account_id": accountUUID})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly")
 }
 
 // MockAnalyticsCollector is a mock implementation of AnalyticsCollectorInterface
@@ -72,10 +100,13 @@ func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 	}
 	summary := &HistorySummary{TotalPurchases: 8, TotalMonthlySavings: 190.0}
 
-	mockClient.On("QueryHistory", ctx, "account-123", mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
+	// "account-123" is not a known UUID, so resolveSingleAccountFilterIDs
+	// treats it as an external account number: QueryHistory is called with no
+	// UUIDs and account-123 as the external id.
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string{"": {"account-123"}}, mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{
 		"account_id": "account-123",
@@ -107,17 +138,18 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 	mockClient := new(MockAnalyticsClient)
 
 	dataPoints := []HistoryDataPoint{}
-	mockClient.On("QueryHistory", ctx, "", mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
+	// Empty account_id: resolver returns no UUIDs and no external ids.
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{} // No interval specified
 
 	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.NoError(t, err)
 
-	mockClient.AssertCalled(t, "QueryHistory", ctx, "", mock.Anything, mock.Anything, "hourly")
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly")
 }
 
 func TestHandler_getHistoryAnalytics_InvalidDateRange(t *testing.T) {
@@ -140,10 +172,10 @@ func TestHandler_getHistoryAnalytics_QueryError(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
 
-	mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("query failed"))
+	mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("query failed"))
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{}
 
@@ -185,10 +217,10 @@ func TestHandler_getHistoryBreakdown_Success(t *testing.T) {
 		"lambda": {PurchaseCount: 5, TotalSavings: 100.0},
 	}
 
-	mockClient.On("QueryBreakdown", ctx, "account-123", mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
+	mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string{"": {"account-123"}}, mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{
 		"account_id": "account-123",
@@ -220,17 +252,17 @@ func TestHandler_getHistoryBreakdown_DefaultDimension(t *testing.T) {
 	mockClient := new(MockAnalyticsClient)
 
 	breakdownData := map[string]BreakdownValue{}
-	mockClient.On("QueryBreakdown", ctx, "", mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
+	mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service").Return(breakdownData, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{} // No dimension specified
 
 	_, err := handler.getHistoryBreakdown(ctx, req, params)
 	require.NoError(t, err)
 
-	mockClient.AssertCalled(t, "QueryBreakdown", ctx, "", mock.Anything, mock.Anything, "service")
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service")
 }
 
 func TestHandler_getHistoryBreakdown_InvalidDateRange(t *testing.T) {
@@ -253,10 +285,10 @@ func TestHandler_getHistoryBreakdown_QueryError(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
 
-	mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("breakdown failed"))
+	mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("breakdown failed"))
 
 	mockAuth, req := adminAnalyticsReq(ctx)
-	handler := &Handler{auth: mockAuth, analyticsClient: mockClient}
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 	params := map[string]string{}
 

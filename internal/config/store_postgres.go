@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1391,20 +1392,98 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// appendAccountPredicate pulls the dual-column account-predicate arg-building
+// branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
+//
+// Either input alone is sufficient: a UUID-only filter still matches
+// NULL-cloud_account_id rows via the resolved external IDs, and an
+// external-only filter matches UUID-only rows once the caller resolves them.
+// Both empty returns conds/args unchanged (no account clause -> all accounts).
+//
+// The external-id half is grouped per provider so each external number is only
+// compared against rows of its own provider:
+//
+//	(cloud_account_id = ANY($u)
+//	   OR (provider = $p1 AND account_id = ANY($e1))
+//	   OR (provider = $p2 AND account_id = ANY($e2)))
+//
+// This preserves the (provider, external_id) pairing so a filter for aws/123
+// never matches azure/123 rows. The "" provider key (legacy raw external
+// number, unknown provider) matches account_id with no provider gate. Providers
+// are sorted for deterministic SQL. The OR is wrapped in parentheses so it
+// composes with the surrounding AND chain.
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) {
+	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
+		return conds, args
+	}
+	var ors []string
+	if len(accountIDs) > 0 {
+		args = append(args, accountIDs)
+		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
+	}
+	for _, provider := range sortedProviderKeys(externalIDsByProvider) {
+		exts := externalIDsByProvider[provider]
+		if len(exts) == 0 {
+			continue
+		}
+		if provider == "" {
+			args = append(args, exts)
+			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+			continue
+		}
+		args = append(args, provider)
+		providerArg := len(args)
+		args = append(args, exts)
+		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
+	}
+	if len(ors) == 0 {
+		return conds, args
+	}
+	conds = append(conds, "("+strings.Join(ors, " OR ")+")")
+	return conds, args
+}
+
+// sortedProviderKeys returns the map keys in ascending order so the generated
+// SQL (and its bind-arg ordering) is deterministic across calls and testable.
+func sortedProviderKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the
-// supplied filter set, newest-first, capped at limit. See the StoreInterface
-// docstring for the per-filter semantics. Each WHERE clause is appended
-// only when its filter is populated, so callers that pass an empty
-// providerFilter / nil accountIDs / nil dates get the same plan-shape as
-// GetAllPurchaseHistory. Implementation mirrors buildRecommendationFilter
+// supplied filter set, newest-first, capped at filter.Limit. See the
+// StoreInterface docstring and PurchaseHistoryFilter for the per-field
+// semantics. Each WHERE clause is appended only when its field is populated,
+// so an empty filter gets the same plan-shape as GetAllPurchaseHistory.
+// Implementation mirrors buildRecommendationFilter
 // (store_postgres_recommendations.go).
+//
+// The account predicate matches BOTH identifier columns:
+//
+//	(cloud_account_id = ANY($uuids)
+//	   OR (provider = $p AND account_id = ANY($extsForP)) OR ...)
+//
+// purchase_history carries two account identifiers and either may be the only
+// one populated on a given row: cloud_account_id (the cloud_accounts UUID FK,
+// added in migration 000011 with no backfill, so NULL on every direct-execute /
+// ambient / pre-000011 row) and account_id (the cloud-provider external number,
+// e.g. an AWS account number, always populated). The top-bar Account chip emits
+// the UUID, so a UUID-only predicate silently dropped every NULL-cloud_account_id
+// row (issue #701/#498) while an external-only predicate dropped every row that
+// only has the UUID (issue #866). Matching both columns includes rows written by
+// either path. The caller resolves the requested UUIDs to their (provider,
+// external_id) pairs scoped to the user's accessible accounts and groups the
+// external ids by provider, so the external-id half stays provider-scoped and a
+// reused external number (aws/123 vs azure/123) cannot leak the wrong rows.
 func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	ctx context.Context,
-	providerFilter string,
-	accountIDs []string,
-	start, end *time.Time,
-	limit int,
+	filter PurchaseHistoryFilter,
 ) ([]PurchaseHistoryRecord, error) {
+	limit := filter.Limit
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
@@ -1420,19 +1499,15 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
 		args = append(args, val)
 	}
-	if providerFilter != "" {
-		add("provider = $%d", providerFilter)
+	if filter.Provider != "" {
+		add("provider = $%d", filter.Provider)
 	}
-	if len(accountIDs) > 0 {
-		// NULL cloud_account_id rows are excluded once a list is supplied,
-		// same as buildRecommendationFilter (issue #211 semantics).
-		add("cloud_account_id = ANY($%d)", accountIDs)
+	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
+	if filter.Start != nil {
+		add("timestamp >= $%d", *filter.Start)
 	}
-	if start != nil {
-		add("timestamp >= $%d", *start)
-	}
-	if end != nil {
-		add("timestamp <= $%d", *end)
+	if filter.End != nil {
+		add("timestamp <= $%d", *filter.End)
 	}
 
 	where := ""

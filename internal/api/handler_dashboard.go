@@ -22,9 +22,24 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	legacyAccountID, cloudAccountUUIDs, err := resolveDashboardAccountScope(params)
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveDashboardAccountScope(ctx, params)
 	if err != nil {
 		return nil, err
+	}
+
+	// Issue #956 (CR): when the session is account-restricted and no explicit
+	// account filter was supplied, scope the commitment metrics to the session's
+	// allowed_accounts instead of falling through to all-accounts history. The
+	// recommendations half is already gated by filterDashboardRecommendations;
+	// without this the commitment KPIs (ActiveCommitments / CommittedMonthly /
+	// CurrentCoverage / YTDSavings) would leak other accounts' data to a scoped
+	// user. Unrestricted / admin sessions resolve to an empty scope and keep the
+	// all-accounts behaviour.
+	if len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
+		accountUUIDs, accountExternalIDsByProvider, err = h.resolveAllowedAccountScope(ctx, session)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
@@ -51,7 +66,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, legacyAccountID, cloudAccountUUIDs)
+	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, accountUUIDs, accountExternalIDsByProvider)
 
 	// Populate CurrentSavings on each per-service bucket so the Home page
 	// chart can render the green "Current Savings" bars with real data.
@@ -75,36 +90,73 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	}, nil
 }
 
-// resolveDashboardAccountScope parses the account filter params and returns
-// the two disjoint representations used by commitment-metrics fetching:
+// resolveDashboardAccountScope parses the account filter params and resolves
+// them to the dual-column purchase-history filter inputs: the cloud_accounts
+// UUIDs and their cloud-provider external account numbers.
+// Both are needed because purchase_history rows carry either identifier
+// independently and the top-bar chip emits the UUID, so matching only
+// cloud_account_id dropped every NULL-cloud_account_id row (issue #701/#498).
 //
-//   - legacyAccountID: the singular `account_id` param (cloud-provider account
-//     number, e.g. "123456789012"), passed as-is to GetPurchaseHistory when
-//     no UUID-based filter is present. Empty string means "no legacy filter".
+//   - account_ids (plural, UUIDs): resolved to UUID + external ids via
+//     resolveAccountFilterIDs. Takes precedence over the legacy singular param.
+//   - account_id (singular legacy): a top-bar chip UUID for current callers or a
+//     raw external number for pre-UUID callers; resolved via
+//     resolveSingleAccountFilterIDs.
 //
-//   - cloudAccountUUIDs: UUIDs from the `account_ids` param, matched against
-//     purchase_history.cloud_account_id via GetPurchaseHistoryFiltered. Non-nil
-//     (even if empty) when `account_ids` was present and valid.
-//
-// Exactly one of legacyAccountID or cloudAccountUUIDs is meaningful per call:
-// when account_ids is supplied, legacyAccountID is set to "" so the caller
-// uses the UUID path; when only account_id is supplied, cloudAccountUUIDs is
-// nil so the caller uses the legacy path; when neither is supplied, both are
-// zero-valued and the caller fetches all history.
-func resolveDashboardAccountScope(params map[string]string) (legacyAccountID string, cloudAccountUUIDs []string, err error) {
-	uuids, parseErr := parseAccountIDs(params["account_ids"])
+// Both return values are nil when neither param is supplied, so the caller
+// fetches across all accounts (or, for a restricted session, scopes to the
+// session's allowed_accounts — see resolveAllowedAccountScope).
+func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[string]string) (uuids []string, externalIDsByProvider map[string][]string, err error) {
+	parsedUUIDs, parseErr := parseAccountIDs(params["account_ids"])
 	if parseErr != nil {
-		return "", nil, NewClientError(400, parseErr.Error())
+		return nil, nil, NewClientError(400, parseErr.Error())
 	}
 
-	if len(uuids) > 0 {
+	if len(parsedUUIDs) > 0 {
 		// UUID-based multi-account filter — takes precedence over legacy param.
-		return "", uuids, nil
+		uuids, externalIDsByProvider = h.resolveAccountFilterIDs(ctx, parsedUUIDs)
+		return uuids, externalIDsByProvider, nil
 	}
 
-	// No UUID filter: fall back to the legacy singular cloud-provider account
-	// number. Empty string means "fetch all accounts" (no filter).
-	return params["account_id"], nil, nil
+	// No plural UUID filter: fall back to the legacy singular param.
+	uuids, externalIDsByProvider = h.resolveSingleAccountFilterIDs(ctx, params["account_id"])
+	return uuids, externalIDsByProvider, nil
+}
+
+// resolveAllowedAccountScope resolves a restricted session's allowed_accounts
+// into the dual-column purchase-history filter inputs so dashboard commitment
+// metrics never include accounts the session can't access (issue #956). It lists
+// the cloud accounts, keeps those the session matches via auth.MatchesAccount,
+// and resolves their UUIDs through resolveAccountFilterIDs (same code path as an
+// explicit filter).
+//
+// Returns (nil, nil, nil) for unrestricted / admin sessions so the caller keeps
+// the all-accounts behaviour. A restricted session that matches no account
+// resolves to a non-nil-but-empty UUID set (a sentinel that selects no rows),
+// so a scoped user with zero accessible accounts sees zeroed KPIs rather than
+// everyone's data.
+func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Session) (uuids []string, externalIDsByProvider map[string][]string, err error) {
+	allowed, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return nil, nil, nil
+	}
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list cloud accounts: %w", err)
+	}
+	// Non-nil empty slice: a sentinel meaning "scoped to zero accounts" so the
+	// dual-column predicate matches no rows (never falls back to all-accounts).
+	allowedUUIDs := []string{}
+	for _, a := range accounts {
+		if auth.MatchesAccount(allowed, a.ID, a.Name) {
+			allowedUUIDs = append(allowedUUIDs, a.ID)
+		}
+	}
+	uuids, externalIDsByProvider = h.resolveAccountFilterIDs(ctx, allowedUUIDs)
+	return uuids, externalIDsByProvider, nil
 }
 
 // filterDashboardRecommendations applies the session's allowed_accounts filter
@@ -453,15 +505,55 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 	return byService
 }
 
-// calculateCommitmentMetrics aggregates active-commitment counts and monthly
-// savings from purchase history. The fetch strategy depends on the filter:
+// fetchCommitmentPurchases loads the purchase_history rows that calculateCommitmentMetrics
+// aggregates, applying the pre-resolved account scope. Extracted to keep the
+// parent under the cyclomatic limit (mirrors the appendAccountPredicate /
+// accountMatchesFilters pattern). Returns ok=false on a store error or an
+// explicit zero-account scope so the caller emits zeroed KPIs without querying.
 //
-//   - cloudAccountUUIDs non-empty: GetPurchaseHistoryFiltered scoped to those
-//     cloud_account_id UUIDs (multi-account UUID filter from `account_ids`).
-//   - legacyAccountID non-empty: GetPurchaseHistory filtered by account_id
-//     (cloud-provider account number, e.g. "123456789012"; legacy single-account
-//     filter from the `account_id` param).
-//   - both empty: GetAllPurchaseHistory (no account filter).
+//   - non-nil but empty accountUUIDs (no external groups): explicit "scoped to
+//     zero accounts" sentinel (a restricted session whose allowed_accounts match
+//     nothing). Returns (nil, false) WITHOUT querying so a scoped user never sees
+//     all-accounts data (issue #956). A nil/empty filter sent to the store would
+//     match every row (no WHERE clause), so this must short-circuit.
+//   - either accountUUIDs or accountExternalIDsByProvider non-empty:
+//     GetPurchaseHistoryFiltered with the dual-column predicate.
+//   - both nil: GetAllPurchaseHistory (no account filter — unrestricted session).
+func (h *Handler) fetchCommitmentPurchases(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
+	const fetchLimit = 1000
+
+	if accountUUIDs != nil && len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
+		return nil, false
+	}
+
+	var (
+		purchases []config.PurchaseHistoryRecord
+		err       error
+	)
+	if len(accountUUIDs) > 0 || len(accountExternalIDsByProvider) > 0 {
+		// Account filter: dual-column match so NULL-cloud_account_id rows are
+		// counted via their external id.
+		purchases, err = h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
+			AccountIDs:            accountUUIDs,
+			ExternalIDsByProvider: accountExternalIDsByProvider,
+			Limit:                 fetchLimit,
+		})
+	} else {
+		// No account filter: fetch across all accounts.
+		purchases, err = h.config.GetAllPurchaseHistory(ctx, fetchLimit)
+	}
+	if err != nil {
+		// Log error but don't fail the dashboard request.
+		return nil, false
+	}
+	return purchases, true
+}
+
+// calculateCommitmentMetrics aggregates active-commitment counts and monthly
+// savings from purchase history. The account scope arrives pre-resolved as the
+// dual-column filter inputs (see resolveDashboardAccountScope); the
+// scope-to-query mapping (including the zero-account short-circuit for issue
+// #956) lives in fetchCommitmentPurchases.
 //
 // EstimatedSavings on purchase_history rows is always written in monthly units
 // (populated from PurchaseExecution.EstimatedSavings which derives from
@@ -472,28 +564,9 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 // EstimatedSavings, derived from aggregateActiveCommitmentsPerService so both
 // this KPI path (committedMonthly) and the per-service chart use exactly the
 // same gate.
-func (h *Handler) calculateCommitmentMetrics(ctx context.Context, legacyAccountID string, cloudAccountUUIDs []string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
-	const fetchLimit = 1000
-
-	var (
-		purchases []config.PurchaseHistoryRecord
-		err       error
-	)
-
-	switch {
-	case len(cloudAccountUUIDs) > 0:
-		// Multi-account UUID filter: match purchase_history.cloud_account_id.
-		purchases, err = h.config.GetPurchaseHistoryFiltered(ctx, "", cloudAccountUUIDs, nil, nil, fetchLimit)
-	case legacyAccountID != "":
-		// Legacy single-account filter: match purchase_history.account_id.
-		purchases, err = h.config.GetPurchaseHistory(ctx, legacyAccountID, fetchLimit)
-	default:
-		// No account filter: fetch across all accounts.
-		purchases, err = h.config.GetAllPurchaseHistory(ctx, fetchLimit)
-	}
-
-	if err != nil {
-		// Log error but don't fail the dashboard request.
+func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
+	purchases, ok := h.fetchCommitmentPurchases(ctx, accountUUIDs, accountExternalIDsByProvider)
+	if !ok {
 		return 0, 0, 0, nil
 	}
 

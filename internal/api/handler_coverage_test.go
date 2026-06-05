@@ -599,7 +599,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	t.Run("getHistoryAnalyticsHandler", func(t *testing.T) {
 		mockAuth, req := adminAnalyticsReq(ctx)
 		mockClient := new(MockAnalyticsClient)
-		mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
+		mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
 
 		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
@@ -612,7 +612,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	t.Run("getHistoryBreakdownHandler", func(t *testing.T) {
 		mockAuth, req := adminAnalyticsReq(ctx)
 		mockClient := new(MockAnalyticsClient)
-		mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(map[string]BreakdownValue{}, nil)
+		mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(map[string]BreakdownValue{}, nil)
 
 		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
