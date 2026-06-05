@@ -2029,3 +2029,63 @@ func TestValidatePlanAccountProviders_AccountNotFound_Still404(t *testing.T) {
 	assert.Equal(t, 404, ce.code)
 	assert.Contains(t, ce.Error(), missingAcct, "404 must still reference the missing account ID")
 }
+
+// TestGetPlanForAccountProviderValidation_GetPlanDBError_NoPIILeak is a
+// regression test for the sibling leak left unfixed by PR #969: the
+// GetPurchasePlan DB-error branch inside getPlanForAccountProviderValidation
+// wrapped the raw DB error via fmt.Errorf (a non-ClientError), so the router's
+// logging.Errorf("API error: %v") emitted the raw DB error string (issue #965).
+//
+// Asserts: (1) a 500 ClientError is returned, (2) neither the returned error
+// message nor the emitted log contains the raw DB error string, and (3) a
+// store-level ErrNotFound still maps to 404 (ErrNotFound is not a DB leak risk
+// but the mapping must survive the refactor).
+func TestGetPlanForAccountProviderValidation_GetPlanDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const rawDBErr = "pq: SSL connection has been closed unexpectedly by host db-plans-99.example.com"
+
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return nil, errors.New(rawDBErr)
+	}
+	handler := &Handler{config: store}
+
+	logBuf := captureDefaultLog(t)
+
+	err := handler.validatePlanAccountProviders(ctx, planID209, []string{awsAcct209})
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error from GetPurchasePlan must be mapped to a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code, "a DB error fetching the plan is a server-side fault")
+
+	// The user-facing message must not contain the raw DB error string.
+	assert.NotContains(t, ce.Error(), rawDBErr, "500 message must not leak the raw DB error string")
+	// planID209 is the caller-supplied plan UUID; we do not echo it back in the 500 generic message.
+	assert.NotContains(t, ce.Error(), planID209, "500 message must not echo the plan UUID")
+
+	// The structured log line emitted by mapCreatePlanStorageError must not
+	// contain the raw DB error string (it logs only a static format string).
+	logged := logBuf.String()
+	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965)")
+}
+
+// TestGetPlanForAccountProviderValidation_PlanNotFound_Still404 guards that the
+// no-PII-leak fix for GetPurchasePlan did not regress the ErrNotFound mapping:
+// a store-level ErrNotFound must still return a 404 ClientError.
+func TestGetPlanForAccountProviderValidation_PlanNotFound_Still404(t *testing.T) {
+	ctx := context.Background()
+
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return nil, config.ErrNotFound
+	}
+	handler := &Handler{config: store}
+
+	err := handler.validatePlanAccountProviders(ctx, planID209, []string{awsAcct209})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "ErrNotFound from GetPurchasePlan must map to a ClientError")
+	assert.Equal(t, 404, ce.code, "ErrNotFound must map to 404")
+}
