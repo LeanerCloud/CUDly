@@ -1,8 +1,8 @@
 package api
 
 // TestOpenAPI403OnPermissionGatedRoutes is a regression guard that enforces
-// the invariant documented in issue #476: every route whose handler calls
-// h.requirePermission(...) must declare a '403' response in openapi.yaml.
+// the invariant documented in issue #476: every route whose handler can emit
+// a 403 must declare a '403' response in openapi.yaml.
 //
 // Design rationale:
 //   - The test reads the live openapi.yaml from the package directory (same
@@ -11,17 +11,24 @@ package api
 //     each route, then reads the wrapper body to extract which h.* function
 //     it delegates to.
 //   - It then reads handler_*.go source files and checks whether the
-//     h.* function body calls requirePermission.
+//     h.* function body contains any of the known 403-gating call patterns
+//     (requirePermission, requireAdmin, authorizeSession*, NewClientError(403).
 //   - For every such route it asserts that the spec operation declares '403'.
 //
 // The test is intentionally source-reading so it catches new routes the
-// moment a developer wires them in router.go with a handler that calls
-// requirePermission, without requiring a separate test-doubles update.
+// moment a developer wires them in router.go with a handler that calls one
+// of the 403-gating helpers, without requiring a separate test-doubles update.
 //
-// False-positive risk: functions that call requirePermission only through a
-// helper (not directly) will not be detected by the simple grep. Given the
-// current codebase convention (every permission check goes through
-// requirePermission at the outer handler boundary), this is acceptable.
+// Known 403-gating patterns:
+//   - requirePermission: RBAC check via HasPermissionAPI; returns 403 on deny.
+//   - requireAdmin: admin-only gate (middleware.go); returns 403 for non-admins.
+//   - authorizeSessionApprove / authorizeSessionCancel: per-execution RBAC
+//     helpers in handler_purchases.go; return 403 on deny.
+//   - NewClientError(403,: direct 403 emission (e.g. CSRF failure).
+//
+// False-positive risk: functions that reach a 403-gating call only through a
+// two-hop helper not in this list will not be detected. Given the current
+// codebase conventions this is acceptable; add patterns as new helpers appear.
 
 import (
 	"bufio"
@@ -197,15 +204,28 @@ func parseRouterEntries(routerPath string) ([]routeHandlerEntry, error) {
 	return entries, nil
 }
 
-// handlerFuncCallsRequirePermission returns true if any handler_*.go file in
-// srcDir contains a function whose name is fnName and whose body calls
-// requirePermission.
-func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
-	pattern := filepath.Join(srcDir, "handler_*.go")
-	files, err := filepath.Glob(pattern)
+// forbidden403Patterns is the set of call substrings whose presence in a
+// handler body indicates the handler can emit a 403 Forbidden response.
+// Keep this list in sync with the actual 403-gating helpers in the package.
+var forbidden403Patterns = []string{
+	"requirePermission",      // RBAC check via HasPermissionAPI (handler.go)
+	"requireAdmin",           // admin-only gate (middleware.go)
+	"authorizeSessionApprove", // approve RBAC matrix (handler_purchases.go)
+	"authorizeSessionCancel",  // cancel RBAC matrix (handler_purchases.go)
+	"NewClientError(403,",    // direct 403 emission (e.g. CSRF failure)
+}
+
+// handlerFuncEmits403 returns true if any handler_*.go file in srcDir
+// contains a function whose name is fnName and whose body contains at least
+// one of the known 403-gating call patterns (see forbidden403Patterns).
+// Also searches middleware.go to cover helpers like requireAdmin.
+func handlerFuncEmits403(srcDir, fnName string) (bool, error) {
+	handlerFiles, err := filepath.Glob(filepath.Join(srcDir, "handler_*.go"))
 	if err != nil {
 		return false, err
 	}
+	// Include middleware.go so requireAdmin and similar helpers are reachable.
+	files := append(handlerFiles, filepath.Join(srcDir, "middleware.go"))
 
 	// Match the exact function name as declared on *Handler.
 	reFunc := regexp.MustCompile(`^func \(h \*Handler\) (\w+)\(`)
@@ -213,6 +233,9 @@ func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
 	for _, fpath := range files {
 		f, err := os.Open(fpath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return false, err
 		}
 
@@ -230,9 +253,11 @@ func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
 
 			if inTarget {
 				braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-				if strings.Contains(line, "requirePermission") {
-					f.Close()
-					return true, nil
+				for _, pattern := range forbidden403Patterns {
+					if strings.Contains(line, pattern) {
+						f.Close()
+						return true, nil
+					}
 				}
 				if braceDepth < 0 {
 					inTarget = false
@@ -307,13 +332,13 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 			continue
 		}
 
-		// Check if the delegate handler calls requirePermission.
-		callsPerm, err := handlerFuncCallsRequirePermission(pkgDir, entry.delegateFnName)
+		// Check if the delegate handler can emit a 403 response.
+		emits403, err := handlerFuncEmits403(pkgDir, entry.delegateFnName)
 		if err != nil {
 			t.Logf("warning: could not check handler %s: %v", entry.delegateFnName, err)
 			continue
 		}
-		if !callsPerm {
+		if !emits403 {
 			continue
 		}
 
@@ -331,7 +356,7 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 			}
 			if !has403 {
 				failures = append(failures, fmt.Sprintf(
-					"wrapper=%s delegate=%s (exact=%q prefix=%q suffix=%q method=%q) -> spec op %q calls requirePermission but '403' is missing from responses",
+					"wrapper=%s delegate=%s (exact=%q prefix=%q suffix=%q method=%q) -> spec op %q can emit 403 but '403' is missing from responses",
 					entry.wrapperName, entry.delegateFnName,
 					entry.exactPath, entry.pathPrefix, entry.pathSuffix, entry.method,
 					key,
@@ -341,7 +366,7 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 	}
 
 	assert.Empty(t, failures,
-		"The following spec operations are missing '403' even though their handlers call requirePermission:\n%s",
+		"The following spec operations are missing '403' even though their handlers can emit 403:\n%s",
 		strings.Join(failures, "\n"),
 	)
 }

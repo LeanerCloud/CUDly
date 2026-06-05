@@ -488,6 +488,10 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/purchases/cancel/{id}:
     parameters:
@@ -514,6 +518,10 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ---- Planned Purchases --------------------------------------------------
   /api/purchases/planned:
@@ -748,6 +756,8 @@ paths:
                 $ref: '#/components/schemas/StatusMessageResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ---- Auth ---------------------------------------------------------------
   /api/auth/login:
