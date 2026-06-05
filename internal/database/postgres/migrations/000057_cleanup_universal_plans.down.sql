@@ -1,0 +1,13 @@
+-- 000057 down: intentional no-op.
+--
+-- The up migration deletes purchase_plans rows that had no plan_accounts
+-- entry (universal plans).  Deleted rows cannot be recovered by a SQL
+-- migration because the data is gone.  To restore a deleted plan, operators
+-- must replay from a database backup taken before the up migration ran.
+--
+-- Rolling back the migration version without restoring the data would leave
+-- the schema_migrations table claiming version 56 while the deleted rows are
+-- still absent -- the rollback cannot make the DB consistent with pre-57
+-- state anyway.  A no-op .down.sql makes this explicit rather than hiding it
+-- behind a silent empty file.
+SELECT 1; -- no-op: data cannot be reconstructed from SQL alone
