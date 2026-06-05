@@ -797,6 +797,59 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 	})
 }
 
+// TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered proves that a panic
+// inside the fire-and-forget UpdateLastUsed goroutine is caught by the
+// recover() added in issue #672. Without the recover(), the panic would crash
+// the entire test binary (an unrecovered goroutine panic terminates the
+// process). The test uses a channel -- closed by the mock Run callback just
+// before panicking -- to wait for goroutine execution without time.Sleep.
+func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
+	ctx := context.Background()
+
+	apiKey := "test-api-key-panic-123"
+	hash := sha256.Sum256([]byte(apiKey))
+	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	user := &User{
+		ID:     "user-panic",
+		Email:  "panic@example.com",
+		Active: true,
+	}
+	apiKeyRecord := &UserAPIKey{
+		ID:       "key-panic",
+		UserID:   "user-panic",
+		KeyHash:  keyHash,
+		IsActive: true,
+	}
+
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
+	mockStore.On("GetUserByID", mock.Anything, "user-panic").Return(user, nil)
+
+	// done is closed by the Run callback immediately before panicking so the
+	// test can wait for goroutine execution without time.Sleep.
+	done := make(chan struct{})
+	mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-panic").
+		Run(func(args mock.Arguments) {
+			close(done)
+			panic("injected panic for #672 regression test")
+		}).
+		Return(nil)
+
+	resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
+	require.NoError(t, err)
+	require.Equal(t, apiKeyRecord, resultKey)
+	require.Equal(t, user, resultUser)
+
+	// Block until the goroutine has executed (and panicked + recovered).
+	// Reaching this line means the process survived -- recover() caught the panic.
+	<-done
+
+	mockStore.AssertExpectations(t)
+}
+
 func TestService_validateAPIKeyPermissions(t *testing.T) {
 	ctx := context.Background()
 
