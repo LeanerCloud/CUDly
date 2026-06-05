@@ -1541,10 +1541,16 @@ export function openOverrideModal(
   overridePaymentOptionsController?.abort();
   overridePaymentOptionsController = new AbortController();
   syncOverridePaymentOptions(provider);
-  const onChange = () => syncOverridePaymentOptions(provider);
+  // After payment options update, re-evaluate bulk conflict gating (issue #119).
+  const onChange = () => {
+    syncOverridePaymentOptions(provider);
+    syncBulkServiceConflicts(provider);
+  };
   select?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
   const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
   termSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+  const paymentSel = document.getElementById('override-payment') as HTMLSelectElement | null;
+  paymentSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
 
   // Wire the bulk-mode toggle (issue #119). AbortController cleans it up on close.
   bulkToggle?.addEventListener(
@@ -1619,6 +1625,63 @@ function applyOverrideBulkMode(
 
   // In bulk mode start with submit disabled until at least one box is checked.
   if (submitBtn) submitBtn.disabled = true;
+
+  // Apply conflict gating for the current term/payment selection immediately
+  // after the list is built, so checkboxes are already disabled if the chosen
+  // combo is invalid for a service before the user interacts (issue #119).
+  syncBulkServiceConflicts(overrideModalContext?.provider ?? '');
+}
+
+/**
+ * Disable (and annotate) bulk-service checkboxes whose service does not
+ * support the currently selected (term, payment) combo.  Re-enables them
+ * if the combo becomes valid again.  Mirrors the single-select path that
+ * uses syncOverridePaymentOptions / isValidCombination.  Issue #119.
+ *
+ * Only acts when both term and payment are explicitly set; when either is
+ * blank ("Inherit") every checkbox stays enabled because no hard restriction
+ * can be evaluated.
+ */
+function syncBulkServiceConflicts(provider: string): void {
+  const termRaw = (document.getElementById('override-term') as HTMLSelectElement | null)?.value ?? '';
+  const paymentRaw = (document.getElementById('override-payment') as HTMLSelectElement | null)?.value ?? '';
+
+  const listDiv = document.getElementById('override-bulk-services-list');
+  if (!listDiv) return;
+
+  const checkboxes = listDiv.querySelectorAll<HTMLInputElement>('input[name="bulk-service"]');
+  if (checkboxes.length === 0) return;
+
+  // When term or payment is unset ("Inherit"), no restriction can be evaluated.
+  const term = termRaw !== '' ? parseInt(termRaw, 10) : NaN;
+  const payment = paymentRaw;
+  const canEvaluate = payment !== '' && Number.isFinite(term) && term > 0;
+
+  for (const cb of checkboxes) {
+    const service = cb.value;
+    const label = cb.closest('label');
+    if (canEvaluate && !isValidCombination(provider, service, term, payment)) {
+      cb.disabled = true;
+      cb.checked  = false;
+      if (label) {
+        label.title = `${provider}/${service} does not support ${term}-year ${payment}`;
+        label.classList.add('bulk-service-checkbox-label--conflict');
+      }
+    } else {
+      cb.disabled = false;
+      if (label) {
+        label.title = '';
+        label.classList.remove('bulk-service-checkbox-label--conflict');
+      }
+    }
+  }
+
+  // Re-evaluate submit-button state after disabling/enabling checkboxes.
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) {
+    const anyChecked = listDiv.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+    submitBtn.disabled = !anyChecked;
+  }
 }
 
 // syncOverridePaymentOptions filters the override-payment <select> down to

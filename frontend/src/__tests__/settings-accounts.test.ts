@@ -2069,4 +2069,69 @@ describe('Bulk override modal (issue #119)', () => {
     const singleRow = document.getElementById('override-single-service-row') as HTMLElement;
     expect(singleRow.classList.contains('hidden')).toBe(false);
   });
+
+  // Preventive conflict gating (issue #119): selecting an incompatible
+  // term/payment combo must disable the conflicting service checkbox BEFORE
+  // the user hits Save, so the all-or-nothing submit block is unreachable in
+  // normal use.  The only AWS hard restriction is rds + 3yr + no-upfront.
+  test('selecting 3yr/no-upfront disables rds checkbox and API is never called', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+    (api.saveAccountServiceOverride as jest.Mock).mockResolvedValue({});
+
+    const { bulkList, form } = await openBulkModal();
+
+    // Check rds first so it is "selected" before the conflict appears.
+    const rdsCb = bulkList.querySelector<HTMLInputElement>('input[value="rds"]');
+    expect(rdsCb).not.toBeNull();
+    rdsCb!.checked = true;
+    rdsCb!.dispatchEvent(new Event('change'));
+    expect(rdsCb!.disabled).toBe(false);
+
+    // Set term = 3, then payment = no-upfront (the invalid combo for rds).
+    const termSel = document.getElementById('override-term') as HTMLSelectElement;
+    termSel.value = '3';
+    termSel.dispatchEvent(new Event('change'));
+
+    const paymentSel = document.getElementById('override-payment') as HTMLSelectElement;
+    paymentSel.value = 'no-upfront';
+    paymentSel.dispatchEvent(new Event('change'));
+
+    // rds must now be disabled and unchecked.
+    expect(rdsCb!.disabled).toBe(true);
+    expect(rdsCb!.checked).toBe(false);
+
+    // A service with no restriction (e.g. ec2) stays enabled.
+    const ec2Cb = bulkList.querySelector<HTMLInputElement>('input[value="ec2"]');
+    expect(ec2Cb!.disabled).toBe(false);
+
+    // Attempting to submit with rds disabled (nothing checked) must not call
+    // the API and must show an inline error.
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
+  });
+
+  test('switching back to a compatible combo re-enables the rds checkbox', async () => {
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    const { bulkList } = await openBulkModal();
+
+    // Trigger the invalid combo.
+    const termSel = document.getElementById('override-term') as HTMLSelectElement;
+    termSel.value = '3';
+    termSel.dispatchEvent(new Event('change'));
+    const paymentSel = document.getElementById('override-payment') as HTMLSelectElement;
+    paymentSel.value = 'no-upfront';
+    paymentSel.dispatchEvent(new Event('change'));
+
+    const rdsCb = bulkList.querySelector<HTMLInputElement>('input[value="rds"]');
+    expect(rdsCb!.disabled).toBe(true);
+
+    // Switch payment to a valid combo (partial-upfront).
+    paymentSel.value = 'partial-upfront';
+    paymentSel.dispatchEvent(new Event('change'));
+
+    // rds should be re-enabled.
+    expect(rdsCb!.disabled).toBe(false);
+  });
 });
