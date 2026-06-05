@@ -11,11 +11,19 @@ import {
   availableGroups,
   addSelectedUserId,
   removeSelectedUserId,
-  clearSelectedUserIds
+  clearSelectedUserIds,
+  setAllUsers,
 } from './state';
 import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
-import { openEditUserModal, deleteUser, loadUsers } from './userActions';
+import { openEditUserModal, deleteUser } from './userActions';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+
+/**
+ * Single AbortController for the document-level group-assign-checkbox
+ * change listener. Replaced on every renderUsers() call so only one
+ * listener is ever active, preventing duplicate toasts (issue #998).
+ */
+let groupAssignListenerCtrl: AbortController | null = null;
 
 /**
  * Render user statistics
@@ -200,6 +208,11 @@ function renderUserExpandPanel(user: APIUser): string {
 
 /**
  * Toggle a group membership for a user inline (no modal).
+ *
+ * After a successful API call, patch state in-memory and refresh only the
+ * affected expand panel rather than re-rendering the whole table. This
+ * prevents the panel from collapsing on every toggle (issue #998) and
+ * keeps the user in context for subsequent group changes.
  */
 async function toggleUserGroup(userId: string, groupId: string, checked: boolean): Promise<void> {
   const user = allUsers.find(u => u.id === userId);
@@ -214,14 +227,36 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
 
   try {
     await api.updateUser(userId, { groups: next });
+
+    // Patch the user in-memory so subsequent renders and effectivePermissions
+    // calculations reflect the change without a full round-trip re-render.
+    const updatedUser: APIUser = { ...user, groups: next };
+    setAllUsers(allUsers.map(u => (u.id === userId ? updatedUser : u)));
+
+    // Re-render the expand panel in place so the checkboxes and permissions
+    // summary stay current without collapsing the row or re-rendering the
+    // whole table (which would tear down all open panels).
+    const panel = document.querySelector<HTMLElement>(
+      `.user-expand-panel[data-user-id="${userId}"]`,
+    );
+    // eslint-disable-next-line no-unsanitized/property
+    if (panel) panel.innerHTML = renderUserExpandPanel(updatedUser);
+
+    // Refresh the group-badge cell in the main row so it reflects the new
+    // membership without a full re-render.
+    const groupsCell = document.querySelector<HTMLElement>(
+      `tr.user-row[data-user-id="${userId}"] .groups-cell`,
+    );
+    if (groupsCell) {
+      groupsCell.innerHTML = updatedUser.groups.length > 0
+        ? updatedUser.groups.map(g => `<span class="badge badge-group">${escapeHtml(groupName(g))}</span>`).join(' ')
+        : '<span class="text-muted">No groups</span>';
+    }
+
     // Surface inline-save confirmation so users know the toggle stuck.
-    // Addresses the audit's "unclear if edits persist on collapse"
-    // concern by showing a toast instead of requiring an explicit
-    // Save/Cancel flow.
     showSuccess(checked
       ? `Added ${user.email} to "${groupLabel}"`
       : `Removed ${user.email} from "${groupLabel}"`);
-    await loadUsers();
   } catch (error) {
     const err = error as Error;
     console.error('Failed to update user groups:', err);
@@ -317,6 +352,12 @@ function setupUserTableListeners(): void {
   });
 
   // Inline group assignment checkboxes inside the expand panel.
+  // Use AbortController so only one listener is ever registered on document,
+  // regardless of how many times renderUsers() is called. Without this,
+  // every render stacks another listener and triggers multiple toasts per
+  // toggle (issue #998).
+  groupAssignListenerCtrl?.abort();
+  groupAssignListenerCtrl = new AbortController();
   document.addEventListener('change', (e) => {
     const target = e.target as HTMLElement;
     if (!target.classList.contains('group-assign-checkbox')) return;
@@ -324,7 +365,7 @@ function setupUserTableListeners(): void {
     const groupId = target.dataset.groupId;
     if (!userId || !groupId) return;
     void toggleUserGroup(userId, groupId, (target as HTMLInputElement).checked);
-  });
+  }, { signal: groupAssignListenerCtrl.signal });
 }
 
 /**
