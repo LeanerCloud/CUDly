@@ -54,7 +54,9 @@ func NewAWSKMSSignerFromClient(client AWSKMSClient, keyID string) *AWSKMSSigner 
 }
 
 // Sign calls kms:Sign with the raw SHA-256 digest and the signing
-// algorithm ECDSA_SHA_256, which matches what ES256 JWS signatures expect.
+// algorithm ECDSA_SHA_256. AWS KMS returns a DER/ASN.1-encoded ECDSA
+// signature, which is converted to the RFC 7518 section 3.4 raw R || S
+// form required by ES256 JWS signatures (the Signer.Sign contract).
 func (s *AWSKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 	out, err := s.client.Sign(ctx, &kms.SignInput{
 		KeyId:            &s.keyID,
@@ -65,7 +67,7 @@ func (s *AWSKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: kms:Sign: %w", err)
 	}
-	return out.Signature, nil
+	return derToRawECDSASignature(out.Signature)
 }
 
 // PublicKey fetches the public half of the KMS key once and caches it.

@@ -5,19 +5,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 )
 
-var base64RawURL = base64.RawURLEncoding
-
 // fakeKMSClient is a minimal AWSKMSClient backed by an in-process P-256
 // ECDSA key. It lets TestAWSKMSSigner exercise the Signer contract without
-// touching real AWS.
+// touching real AWS. Like real AWS KMS, it returns a DER/ASN.1 signature.
 type fakeKMSClient struct {
 	key *ecdsa.PrivateKey
 }
@@ -75,44 +71,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	// Verify header asserts ES256 algorithm.
-	parts := splitJWS(t, jws)
-	// Verify using the underlying EC pub half.
-	signingInput := parts[0] + "." + parts[1]
-	digest := sha256.Sum256([]byte(signingInput))
-	if !ecdsa.VerifyASN1(ecPub, digest[:], decodeB64(t, parts[2])) {
-		t.Errorf("ECDSA signature verify failed")
-	}
-}
-
-// helpers -- unit tests only, kept private
-func splitJWS(t *testing.T, jws string) [3]string {
-	t.Helper()
-	var out [3]string
-	last := 0
-	idx := 0
-	for i := 0; i < len(jws); i++ {
-		if jws[i] == '.' {
-			if idx >= 3 {
-				t.Fatalf("too many dots in JWS: %q", jws)
-			}
-			out[idx] = jws[last:i]
-			idx++
-			last = i + 1
-		}
-	}
-	if idx != 2 {
-		t.Fatalf("expected 2 dots in JWS, got %d: %q", idx, jws)
-	}
-	out[2] = jws[last:]
-	return out
-}
-
-func decodeB64(t *testing.T, s string) []byte {
-	t.Helper()
-	b, err := base64RawURL.DecodeString(s)
-	if err != nil {
-		t.Fatalf("b64 decode: %v", err)
-	}
-	return b
+	// The AWS KMS fake returns DER (ecdsa.SignASN1); the signer must
+	// convert it to the RFC 7518 raw R||S form before Mint encodes it.
+	assertRawES256JWS(t, jws, ecPub)
 }

@@ -25,19 +25,33 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 )
+
+// p256SigComponentLen is the fixed byte length of each of the R and S
+// components of a P-256 (ES256) signature. RFC 7518 section 3.4 requires
+// the JWS signature to be the concatenation R || S, each left-padded to
+// the curve's octet length (ceil(256/8) = 32 bytes), so the full JWS
+// signature is exactly 64 bytes.
+const p256SigComponentLen = 32
 
 // Signer abstracts ECDSA (ES256) signing over a SHA-256 digest.
 // Implementations delegate the actual private-key operation to a cloud
 // KMS so CUDly never handles the private key material.
 type Signer interface {
-	// Sign returns the DER-encoded ECDSA signature over digest (the
-	// SHA-256 digest of the signing input). The caller is responsible for
-	// hashing the input; this matches what AWS KMS, Azure Key Vault, and
-	// GCP Cloud KMS all expect when using EC-based keys.
+	// Sign returns the raw fixed-length ECDSA signature over digest in the
+	// RFC 7518 section 3.4 JWS form: the R || S concatenation, each
+	// component left-padded to 32 bytes (64 bytes total for P-256). The
+	// caller is responsible for hashing the input. Backends whose KMS
+	// returns DER/ASN.1 (AWS, GCP, and the in-process LocalSigner) MUST
+	// convert via derToRawECDSASignature before returning; Azure Key Vault
+	// already returns this raw form and passes it through unchanged. This
+	// lets Mint base64url-encode the result directly into the JWS without
+	// any per-backend special-casing.
 	Sign(ctx context.Context, digest []byte) ([]byte, error)
 
 	// PublicKey returns the public key corresponding to the signer.
@@ -57,9 +71,43 @@ type Signer interface {
 // identity credential's client_assertion.
 const Algorithm = "ES256"
 
+// derToRawECDSASignature converts a DER/ASN.1-encoded ECDSA signature
+// (an ASN.1 SEQUENCE of two INTEGERs R and S, as returned by AWS KMS,
+// GCP Cloud KMS, and crypto/ecdsa.SignASN1) into the RFC 7518 section
+// 3.4 raw form: R || S, each left-padded with leading zeros to
+// p256SigComponentLen bytes. The result is exactly 2*p256SigComponentLen
+// (64) bytes for P-256. It returns an error if the input is not a valid
+// two-INTEGER SEQUENCE or if R/S exceed the component length.
+func derToRawECDSASignature(der []byte) ([]byte, error) {
+	var sig struct {
+		R, S *big.Int
+	}
+	rest, err := asn1.Unmarshal(der, &sig)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: parse DER ecdsa signature: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("oidc: trailing bytes after DER ecdsa signature")
+	}
+	if sig.R == nil || sig.S == nil || sig.R.Sign() <= 0 || sig.S.Sign() <= 0 {
+		return nil, fmt.Errorf("oidc: DER ecdsa signature has non-positive R or S")
+	}
+	rb := sig.R.Bytes()
+	sb := sig.S.Bytes()
+	if len(rb) > p256SigComponentLen || len(sb) > p256SigComponentLen {
+		return nil, fmt.Errorf("oidc: ecdsa signature component exceeds %d bytes (R=%d S=%d); not a P-256 signature", p256SigComponentLen, len(rb), len(sb))
+	}
+	raw := make([]byte, 2*p256SigComponentLen)
+	copy(raw[p256SigComponentLen-len(rb):p256SigComponentLen], rb)
+	copy(raw[2*p256SigComponentLen-len(sb):], sb)
+	return raw, nil
+}
+
 // Mint produces a compact JWS signed by the given Signer. claims is
 // serialized as the JWT payload; the header is constructed from the
-// Signer's key id plus the ES256 algorithm.
+// Signer's key id plus the ES256 algorithm. The Signer.Sign contract
+// returns the raw R || S signature (RFC 7518 section 3.4), so Mint
+// base64url-encodes it directly into the JWS signature segment.
 func Mint(ctx context.Context, signer Signer, claims map[string]any) (string, error) {
 	kid, err := signer.KeyID(ctx)
 	if err != nil {
@@ -89,6 +137,13 @@ func Mint(ctx context.Context, signer Signer, claims map[string]any) (string, er
 	if err != nil {
 		return "", fmt.Errorf("oidc: sign jwt: %w", err)
 	}
+	// Enforce the Signer.Sign contract: a conforming ES256 backend returns
+	// the 64-byte raw R || S signature. Reject anything else (e.g. a DER
+	// blob that slipped through) rather than emitting a JWS that real OIDC
+	// consumers like Azure AD would reject.
+	if len(signature) != 2*p256SigComponentLen {
+		return "", fmt.Errorf("oidc: signer returned %d-byte signature, want %d-byte raw R||S (RFC 7518 ES256)", len(signature), 2*p256SigComponentLen)
+	}
 
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
@@ -117,11 +172,16 @@ func NewLocalSigner() (*LocalSigner, error) {
 	return &LocalSigner{key: key, kid: kid}, nil
 }
 
-// Sign signs digest with the test ECDSA P-256 key. Returns a DER-encoded
-// ASN.1 signature (the format returned by cloud KMS ECDSA operations and
-// accepted by ecdsa.VerifyASN1).
+// Sign signs digest with the test ECDSA P-256 key. crypto/ecdsa.SignASN1
+// produces a DER/ASN.1 signature (the same format cloud KMS ECDSA
+// operations return), which is converted to the RFC 7518 raw R || S form
+// to satisfy the Signer.Sign contract.
 func (s *LocalSigner) Sign(_ context.Context, digest []byte) ([]byte, error) {
-	return ecdsa.SignASN1(rand.Reader, s.key, digest)
+	der, err := ecdsa.SignASN1(rand.Reader, s.key, digest)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: local ecdsa sign: %w", err)
+	}
+	return derToRawECDSASignature(der)
 }
 
 // PublicKey returns the test key's public half.
