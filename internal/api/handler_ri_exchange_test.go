@@ -808,6 +808,173 @@ func TestListExchangeableAzureRIs_SubscriptionIDPassedToFactory(t *testing.T) {
 	assert.Equal(t, "sub-abc", capturedSubID)
 }
 
+// --- Azure credential-resolution path tests (issue #871) ---
+//
+// These tests exercise the production path of buildAzureExchangeClient, which
+// was previously hardcoded to azidentity.NewDefaultAzureCredential. The fix
+// routes through the project's per-subscription resolver so Lambda (which has
+// no ambient Azure identity) stops 500ing.
+//
+// No real Azure calls are made: the MockConfigStore.GetCloudAccountByExternalID
+// override supplies a fake CloudAccount, and the azureExchangeFactory is NOT
+// wired — the test exercises the real buildAzureExchangeClient production path.
+// The credential store returns nil from LoadRaw, which causes
+// ResolveAzureTokenCredentialWithOpts to fail when the account uses client_secret
+// mode (expected: we assert the error rather than a 500). For the graceful-empty
+// path (no account registered) we assert a clean empty response.
+
+// TestListExchangeableAzureRIs_NoAzureAccountRegistered verifies that when no
+// Azure CloudAccount is registered for the requested subscription, the handler
+// returns an empty reservations list (graceful empty state) rather than a 500.
+// This is the fix for issue #871: Lambda has no ambient Azure identity so the
+// old DefaultAzureCredential call failed, producing an opaque 500.
+func TestListExchangeableAzureRIs_NoAzureAccountRegistered(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	// GetCloudAccountByExternalID returns (nil, nil) — no account for this sub.
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider, "provider must be azure")
+		require.Equal(t, "sub-not-registered", externalID)
+		return nil, nil
+	}
+
+	h := &Handler{
+		auth:   &mockAuthForExchange{},
+		config: mockStore,
+		// azureExchangeFactory is intentionally NOT set so the production
+		// buildAzureExchangeClient path runs (verifying it handles nil account).
+	}
+
+	res, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"subscription_id": "sub-not-registered"},
+	})
+	require.NoError(t, err, "missing Azure account must produce empty state, not an error")
+	resp, ok := res.(*ExchangeableAzureRIsResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Reservations, "no Azure account registered must return empty reservation list")
+}
+
+// TestListExchangeableAzureRIs_EmptySubscriptionNoAccounts verifies the graceful
+// empty state when subscription_id is omitted and no Azure accounts are registered.
+func TestListExchangeableAzureRIs_EmptySubscriptionNoAccounts(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	// GetCloudAccountByExternalID with empty externalID also returns (nil, nil).
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		return nil, nil
+	}
+
+	h := &Handler{
+		auth:   &mockAuthForExchange{},
+		config: mockStore,
+	}
+
+	res, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		// No subscription_id parameter.
+	})
+	require.NoError(t, err, "no Azure accounts + no subscription_id must return empty state")
+	resp, ok := res.(*ExchangeableAzureRIsResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Reservations)
+}
+
+// TestListExchangeableAzureRIs_AccountLookupError verifies that a DB error from
+// GetCloudAccountByExternalID surfaces as an error (which maps to 500) rather
+// than silently falling through. A DB outage is a server-side fault, not a
+// client mistake, so 5xx is the correct classification.
+func TestListExchangeableAzureRIs_AccountLookupError(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, _ string) (*config.CloudAccount, error) {
+		return nil, fmt.Errorf("database connection lost")
+	}
+
+	h := &Handler{
+		auth:   &mockAuthForExchange{},
+		config: mockStore,
+	}
+
+	_, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"subscription_id": "sub-db-error"},
+	})
+	require.Error(t, err, "DB lookup failure must propagate as an error")
+	// Must NOT be a 4xx ClientError: DB failures are server-side faults.
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "DB lookup failure must not be classified as a client (4xx) error")
+	assert.Contains(t, err.Error(), "database connection lost")
+}
+
+// TestListExchangeableAzureRIs_CredentialResolutionError verifies that when a
+// CloudAccount IS registered but credential resolution fails (e.g. missing stored
+// secret), the error propagates as a server-side error. This guards against the
+// regression where a misconfigured account silently returned an empty list
+// instead of surfacing the configuration problem to the operator.
+func TestListExchangeableAzureRIs_CredentialResolutionError(t *testing.T) {
+	const subID = "sub-cred-error"
+	mockStore := &MockConfigStore{}
+	// Account exists but uses client_secret mode with no stored secret.
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		require.Equal(t, "azure", provider)
+		require.Equal(t, subID, externalID)
+		return &config.CloudAccount{
+			ID:                  "acct-uuid-001",
+			Provider:            "azure",
+			ExternalID:          subID,
+			AzureSubscriptionID: subID,
+			AzureTenantID:       "tenant-001",
+			AzureClientID:       "client-001",
+			AzureAuthMode:       "client_secret",
+			Enabled:             true,
+		}, nil
+	}
+
+	// credStore.LoadRaw returns nil (no secret stored) which causes
+	// ResolveAzureTokenCredentialWithOpts to return an error.
+	h := &Handler{
+		auth:      &mockAuthForExchange{},
+		config:    mockStore,
+		credStore: &MockCredentialStore{}, // LoadRaw always returns (nil, nil)
+	}
+
+	_, err := h.listExchangeableAzureRIs(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"subscription_id": subID},
+	})
+	require.Error(t, err, "missing credential must produce an error, not a silent empty state")
+	// The error must be server-side (not a 4xx ClientError).
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "credential resolution failure must not be classified as a client (4xx) error")
+}
+
+// TestBuildAzureExchangeClient_UsesResolver verifies that buildAzureExchangeClient
+// calls GetCloudAccountByExternalID with the correct (provider, subscriptionID) pair,
+// confirming the production path no longer uses DefaultAzureCredential. The subscription
+// ID from the request must flow through to the lookup without being altered.
+func TestBuildAzureExchangeClient_UsesResolver(t *testing.T) {
+	const subID = "sub-resolver-test"
+	var capturedProvider, capturedExtID string
+
+	mockStore := &MockConfigStore{}
+	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		capturedProvider = provider
+		capturedExtID = externalID
+		// Return nil to short-circuit credential resolution (graceful empty path).
+		return nil, nil
+	}
+
+	h := &Handler{
+		config: mockStore,
+		// No azureExchangeFactory: production path runs.
+	}
+
+	client, err := h.buildAzureExchangeClient(context.Background(), subID)
+	require.NoError(t, err)
+	assert.Nil(t, client, "nil account must yield nil client (graceful empty path)")
+	assert.Equal(t, "azure", capturedProvider, "lookup must use provider=azure")
+	assert.Equal(t, subID, capturedExtID, "lookup must use the subscription ID from the request")
+}
+
 // mockAuthForExchange is a minimal auth mock that returns an admin session.
 type mockAuthForExchange struct{}
 
