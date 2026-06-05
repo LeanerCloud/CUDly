@@ -1030,6 +1030,16 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(401, "sign in or use the revocation link from the notification email")
 	}
 
+	// One-click limitation (issue #291): the email link carries a token, but
+	// authorizeApprovalAction derives the actor from the *session*
+	// (tryResolveActorEmail), not from the token's bound contact email. A
+	// recipient who clicks the link while logged out therefore gets a 401 and
+	// must sign in with the matching contact email first. This intentionally
+	// matches the existing approve/cancel email-link behaviour -- we do not
+	// widen the authz model here. True tokenless one-click (deriving the actor
+	// from a single-use, contact-bound token) is deferred to the sibling
+	// "AWS RI/SP revocation" work, which adds a dedicated revocation token.
+	//
 	// Token-authed path: validate the token (reusing the approval token for
 	// this iteration) and confirm the caller is the authorised contact email.
 	actor, err := h.authorizeApprovalAction(ctx, req, execution)
@@ -2120,7 +2130,7 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 		if err := h.authorizeSessionExecuteDirect(ctx, session, creatorID); err != nil {
 			return nil, err
 		}
-		return h.directExecutePurchase(ctx, execution, session)
+		return h.directExecutePurchase(ctx, req, execution, session)
 	}
 
 	// Send approval email synchronously so the response can surface the
@@ -2182,7 +2192,11 @@ func buildApprovalPendingResponse(
 //     synchronously. ApproveAndExecute already stamps ApprovedBy; we pass
 //     the session email as the actor so the approved_by column also records
 //     who direct-executed.
-//  3. Return a "completed" status to the caller.
+//  3. Send the best-effort post-execution notification email (issue #291).
+//     This is the only email the direct-execute flow emits -- no approval
+//     email precedes it -- so it is the path where the executed-notification
+//     matters most.
+//  4. Return a "completed" status to the caller.
 //
 // The audit fields are best-effort if ApproveAndExecute's SavePurchaseExecution
 // races with our pre-call stamp -- but in practice ApproveAndExecute calls
@@ -2191,7 +2205,7 @@ func buildApprovalPendingResponse(
 // TransitionExecutionStatus. The critical audit invariant is that a non-nil
 // executed_by_user_id always co-occurs with a non-nil pre_approval_skip_reason,
 // and both are set atomically in the same SavePurchaseExecution call here.
-func (h *Handler) directExecutePurchase(ctx context.Context, execution *config.PurchaseExecution, session *Session) (any, error) {
+func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, session *Session) (any, error) {
 	t0 := time.Now()
 	executionID := execution.ExecutionID
 	logging.Infof("purchase[%s]: directExecutePurchase entry (auth=session)", executionID)
@@ -2222,6 +2236,15 @@ func (h *Handler) directExecutePurchase(ctx context.Context, execution *config.P
 	}
 
 	logging.Infof("purchase[%s]: directExecutePurchase completed in %s", executionID, time.Since(t0))
+	// Best-effort post-execution notification email (issue #291). The
+	// direct-execute path sends no approval email (the whole point is to skip
+	// the approval round-trip), so this is the only notification the recipients
+	// receive -- making the executed-notification the most valuable here.
+	// Mirrors the approve-path call sites (see approvePurchase and
+	// approvePurchaseViaSession); recipient resolution and the nil-notifier
+	// guard live inside sendPurchaseExecutedEmail. session.Email is the actor
+	// who direct-executed, matching the actor passed to ApproveAndExecute above.
+	h.sendPurchaseExecutedEmail(ctx, req, execution, session.Email)
 	return map[string]any{
 		"execution_id":         executionID,
 		"status":               "completed",
