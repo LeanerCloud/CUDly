@@ -210,6 +210,7 @@ export {
 // Re-export accounts functions and types
 export type {
   CloudAccount,
+  AccountSummary,
   CloudAccountRequest,
   AccountListFilters,
   AccountCredentialsRequest,
@@ -222,6 +223,7 @@ export type {
 
 export {
   listAccounts,
+  listAccountsMinimal,
   createAccount,
   createSelfAccount,
   getAccount,

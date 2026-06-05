@@ -204,7 +204,13 @@ describe('Recommendations action-box permission gating (issue #365)', () => {
     const actionBox = document.getElementById('recommendations-action-box')!;
     const banners = actionBox.querySelectorAll('.info-banner');
     expect(banners.length).toBe(1);
-    expect(banners[0]?.textContent).toContain('You can view but not execute purchases');
+    expect(banners[0]?.textContent).toContain('not execute purchases directly');
+    // Row 550: must not imply the user can't plan, and must use the real nav
+    // name ("Admin", not "Settings"), and must not claim non-admins can
+    // self-serve in Admin → Users.
+    expect(banners[0]?.textContent).toContain('Admin → Users');
+    expect(banners[0]?.textContent).not.toContain('Settings → Users');
+    expect(banners[0]?.textContent).toContain('view and plan');
   });
 
   test('custom (non-seeded) group with explicit execute:purchases shows Purchase + no banner (CR #924 F3/F4)', async () => {

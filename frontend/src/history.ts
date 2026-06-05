@@ -609,8 +609,8 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     banner.className = 'info-banner';
     banner.setAttribute('role', 'note');
     banner.textContent =
-      'You can view but not execute purchases. ' +
-      'Ask an admin to add you to the Purchaser group, or add yourself in Settings → Users.';
+      'You can view and plan, but not execute purchases directly. ' +
+      'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
     container.parentElement?.insertBefore(banner, container);
   } else if (existingBanner && hasAnyCarvedOut) {
     existingBanner.remove();

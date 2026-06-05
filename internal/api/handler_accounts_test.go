@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -93,6 +94,155 @@ func TestListAccounts_ReturnsEmptySlice(t *testing.T) {
 	require.NoError(t, err)
 
 	got := result.([]config.CloudAccount)
+	assert.NotNil(t, got)
+	assert.Len(t, got, 0)
+}
+
+// --- listAccountsMinimal (GET /api/accounts/list) ---
+//
+// Authz contract for issues #949/#951: the minimal endpoint is gated on
+// view:recommendations (held by Standard / Read-Only users) NOT view:accounts,
+// so a Standard user can populate the global filter dropdown + plan-target
+// prefill. The response must carry only id/name/external_id/provider — never the
+// credential/config metadata the full GET /api/accounts response carries.
+
+// standardUserSession models a Standard-group user (view:recommendations, no
+// view:accounts).
+func standardUserSession() *Session {
+	return &Session{
+		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		Email:  "standard@example.com",
+	}
+}
+
+// setupStandardUserAuth stubs ValidateSession + a single HasPermissionAPI verb
+// for the Standard user. It deliberately does NOT grant view:accounts so a test
+// can assert the full listAccounts handler 403s while the minimal one succeeds.
+func setupStandardUserAuth(ctx context.Context, mockAuth *MockAuthService, verb, resource string, allow bool, allowed []string) {
+	session := standardUserSession()
+	mockAuth.On("ValidateSession", ctx, "standard-token").Return(session, nil)
+	mockAuth.On("HasPermissionAPI", ctx, session.UserID, verb, resource).Return(allow, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, session.UserID).Return(allowed, nil).Maybe()
+}
+
+func standardRequest(body string) *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer standard-token"},
+		Body:    body,
+	}
+}
+
+// A Standard user holding view:recommendations gets the minimal list, and the
+// projection contains none of the sensitive credential/config fields.
+func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
+
+	full := sampleAccount()
+	full.AWSAuthMode = "role_arn"
+	full.AWSRoleARN = "arn:aws:iam::123456789012:role/CUDly"
+	full.AWSExternalID = "super-secret-external-id-1234"
+	full.AzureSubscriptionID = "11111111-2222-3333-4444-555555555555"
+	full.GCPClientEmail = "svc@project.iam.gserviceaccount.com"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		listResult:      []config.CloudAccount{full},
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	require.NoError(t, err)
+
+	got := result.([]AccountSummary)
+	require.Len(t, got, 1)
+	assert.Equal(t, full.ID, got[0].ID)
+	assert.Equal(t, full.Name, got[0].Name)
+	assert.Equal(t, full.ExternalID, got[0].ExternalID)
+	assert.Equal(t, full.Provider, got[0].Provider)
+
+	// Defence-in-depth: the JSON-serialized summary must not leak any sensitive
+	// field, even by accident (e.g. a future struct-embedding refactor).
+	blob, marshalErr := json.Marshal(got)
+	require.NoError(t, marshalErr)
+	for _, secret := range []string{
+		"role_arn", "aws_external_id", "azure_subscription_id",
+		"gcp_client_email", "aws_auth_mode", "credentials_configured",
+		"CUDly", "super-secret-external-id-1234",
+	} {
+		assert.NotContains(t, string(blob), secret, "minimal projection must not leak %q", secret)
+	}
+}
+
+// The full GET /api/accounts (view:accounts) 403s for the same Standard user —
+// proving the minimal endpoint is the correct least-privilege path, not a
+// redundant copy of an already-reachable one.
+func TestListAccounts_StandardUserDenied_403(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupStandardUserAuth(ctx, mockAuth, "view", "accounts", false, nil)
+
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+	result, err := handler.listAccounts(ctx, standardRequest(""))
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+}
+
+// A Standard user lacking view:recommendations is denied the minimal endpoint
+// too (it is gated, not public).
+func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", false, nil)
+
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+}
+
+// allowed_accounts scoping applies to the minimal endpoint: a restricted user
+// only sees their entitled rows.
+func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"Production"})
+
+	prod := sampleAccount()
+	prod.Name = "Production"
+	staging := sampleAccount()
+	staging.ID = outOfScopeID
+	staging.Name = "Staging"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		listResult:      []config.CloudAccount{prod, staging},
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	require.NoError(t, err)
+	got := result.([]AccountSummary)
+	require.Len(t, got, 1)
+	assert.Equal(t, "Production", got[0].Name)
+}
+
+// Empty store returns a non-nil empty slice (JSON `[]`, not `null`) so the
+// frontend's `.map` is always safe.
+func TestListAccountsMinimal_ReturnsEmptySlice(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
+
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	require.NoError(t, err)
+	got := result.([]AccountSummary)
 	assert.NotNil(t, got)
 	assert.Len(t, got, 0)
 }

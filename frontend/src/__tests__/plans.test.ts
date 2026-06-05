@@ -20,6 +20,10 @@ jest.mock('../api', () => ({
   listPlanAccounts: jest.fn().mockResolvedValue([]),
   setPlanAccounts: jest.fn().mockResolvedValue(undefined),
   listAccounts: jest.fn().mockResolvedValue([]),
+  // #949/#951: plan-account search + commitment-target prefill now use the
+  // minimal-disclosure list (view:recommendations) so Standard / Read-Only
+  // users get a populated list instead of a 403 from the view:accounts paths.
+  listAccountsMinimal: jest.fn().mockResolvedValue([]),
   getAccount: jest.fn().mockResolvedValue(null)
 }));
 
@@ -1157,14 +1161,25 @@ describe('Plans Module', () => {
       expect(modal?.classList.contains('hidden')).toBe(true);
     });
 
-    test('shows error on save failure', async () => {
+    test('shows error toast and keeps the modal open on save failure (#949)', async () => {
+      // Issue #949 symptom: a failed create-plan left the modal open with NO
+      // feedback. Guard both halves: the error toast surfaces AND the modal
+      // stays open (so the user can retry) — never a silent no-op.
       (api.createPlan as jest.Mock).mockRejectedValue(new Error('Save failed'));
       console.error = jest.fn();
+
+      const modal = document.getElementById('plan-modal');
+      modal?.classList.remove('hidden');
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await savePlan(event);
 
-      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to save plan: Save failed' }));
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'error',
+        message: 'Failed to save plan: Save failed',
+      }));
+      // Modal must NOT be closed when the save errors.
+      expect(modal?.classList.contains('hidden')).toBe(false);
     });
 
     test('uses weekly-25pct ramp schedule', async () => {
@@ -1387,12 +1402,15 @@ describe('Plans Module', () => {
         );
       });
 
-      test('fetches account by cloud_account_id to prefill chip', async () => {
-        (api.getAccount as jest.Mock).mockResolvedValueOnce({
-          id: 'acct-uuid-123',
-          name: 'Prod AWS',
-          external_id: '123456789012',
-        });
+      test('fetches account via minimal list by cloud_account_id to prefill chip (#949/#951)', async () => {
+        // The prefill now resolves the target from the minimal-disclosure list
+        // (view:recommendations) so it works for Standard / Read-Only users —
+        // the old per-id GET /api/accounts/:id (view:accounts) 403'd for them,
+        // leaving the target empty and making Save Plan silently no-op.
+        (api.listAccountsMinimal as jest.Mock).mockResolvedValueOnce([
+          { id: 'other-acct', name: 'Other', external_id: '999', provider: 'aws' },
+          { id: 'acct-uuid-123', name: 'Prod AWS', external_id: '123456789012', provider: 'aws' },
+        ]);
 
         openCreatePlanModal([fixture]);
 
@@ -1400,15 +1418,15 @@ describe('Plans Module', () => {
         await Promise.resolve();
         await Promise.resolve();
 
-        expect(api.getAccount).toHaveBeenCalledWith('acct-uuid-123');
+        expect(api.listAccountsMinimal).toHaveBeenCalled();
         const chips = document.getElementById('plan-accounts-selected');
         expect(chips?.textContent).toContain('Prod AWS');
         const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
         expect(hiddenIds).toContain('acct-uuid-123');
       });
 
-      test('does not throw and leaves account section empty when getAccount fails', async () => {
-        (api.getAccount as jest.Mock).mockRejectedValueOnce(new Error('network error'));
+      test('does not throw and leaves account section empty when minimal list fails', async () => {
+        (api.listAccountsMinimal as jest.Mock).mockRejectedValueOnce(new Error('network error'));
 
         openCreatePlanModal([fixture]);
 
@@ -1420,27 +1438,42 @@ describe('Plans Module', () => {
         expect(hiddenIds).toBe('');
       });
 
+      test('leaves account section empty when cloud_account_id is not in the minimal list', async () => {
+        // Defensive: the target account isn't visible to this user (scoped out
+        // by allowed_accounts). No chip should be added; the user can search.
+        (api.listAccountsMinimal as jest.Mock).mockResolvedValueOnce([
+          { id: 'some-other-acct', name: 'Other', external_id: '999', provider: 'aws' },
+        ]);
+
+        openCreatePlanModal([fixture]);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
+        expect(hiddenIds).toBe('');
+      });
+
       test('skips prefill when no cloud_account_id present', async () => {
         const noAccount: api.Recommendation = { ...fixture, cloud_account_id: undefined };
         openCreatePlanModal([noAccount]);
 
         await Promise.resolve();
 
-        expect(api.getAccount).not.toHaveBeenCalled();
+        expect(api.listAccountsMinimal).not.toHaveBeenCalled();
       });
 
-      test('discards stale getAccount result when modal is reopened before promise resolves', async () => {
-        // Simulate a slow first getAccount call that resolves after the modal
+      test('discards stale minimal-list result when modal is reopened before promise resolves', async () => {
+        // Simulate a slow first list call that resolves after the modal
         // is closed and a new modal session starts (the race condition fixed
         // by the planModalSession guard — #770 CR Major).
-        let resolveFirstCall!: (value: api.CloudAccount) => void;
-        const firstCallPromise = new Promise<api.CloudAccount>(resolve => {
+        let resolveFirstCall!: (value: Array<{ id: string; name: string; external_id: string; provider: string }>) => void;
+        const firstCallPromise = new Promise<Array<{ id: string; name: string; external_id: string; provider: string }>>(resolve => {
           resolveFirstCall = resolve;
         });
 
-        (api.getAccount as jest.Mock)
+        (api.listAccountsMinimal as jest.Mock)
           .mockReturnValueOnce(firstCallPromise) // first open: hangs
-          .mockResolvedValueOnce(null);          // second open: no account
+          .mockResolvedValueOnce([]);            // second open: no accounts
 
         // First modal open with cloud_account_id
         openCreatePlanModal([fixture]);
@@ -1451,7 +1484,7 @@ describe('Plans Module', () => {
         openCreatePlanModal([noAccount]);
 
         // Now resolve the stale first promise — should be discarded
-        resolveFirstCall({ id: 'acct-uuid-123', name: 'Prod AWS', external_id: '123456789012' } as api.CloudAccount);
+        resolveFirstCall([{ id: 'acct-uuid-123', name: 'Prod AWS', external_id: '123456789012', provider: 'aws' }]);
         await Promise.resolve();
         await Promise.resolve();
 
@@ -1478,18 +1511,16 @@ describe('Plans Module', () => {
         });
 
         test('prefills the account chip when all commitments share one account', async () => {
-          (api.getAccount as jest.Mock).mockResolvedValueOnce({
-            id: 'acct-uuid-123',
-            name: 'Prod AWS',
-            external_id: '123456789012',
-          });
+          (api.listAccountsMinimal as jest.Mock).mockResolvedValueOnce([
+            { id: 'acct-uuid-123', name: 'Prod AWS', external_id: '123456789012', provider: 'aws' },
+          ]);
           const second: api.Recommendation = { ...fixture, id: 'rec-771', region: 'us-west-2' };
           openCreatePlanModal([fixture, second]);
 
           await Promise.resolve();
           await Promise.resolve();
 
-          expect(api.getAccount).toHaveBeenCalledWith('acct-uuid-123');
+          expect(api.listAccountsMinimal).toHaveBeenCalled();
           const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
           expect(hiddenIds).toContain('acct-uuid-123');
         });
@@ -1501,9 +1532,9 @@ describe('Plans Module', () => {
           await Promise.resolve();
 
           // Config still prefills from the homogeneous fields, but the account
-          // is ambiguous so no chip is fetched.
+          // is ambiguous so no list lookup happens.
           expect((document.getElementById('plan-service') as HTMLSelectElement).value).toBe('ec2');
-          expect(api.getAccount).not.toHaveBeenCalled();
+          expect(api.listAccountsMinimal).not.toHaveBeenCalled();
           const hiddenIds = (document.getElementById('plan-account-ids') as HTMLInputElement).value;
           expect(hiddenIds).toBe('');
         });
@@ -2445,8 +2476,8 @@ describe('Plans Module', () => {
       jest.useRealTimers();
     });
 
-    test('account search passes the current plan provider to listAccounts', async () => {
-      (api.listAccounts as jest.Mock).mockResolvedValue([]);
+    test('account search passes the current plan provider to listAccountsMinimal (#949/#951)', async () => {
+      (api.listAccountsMinimal as jest.Mock).mockResolvedValue([]);
 
       // openNewPlanModal calls form.reset() synchronously, resetting the provider
       // select back to its first option ('aws'). Wire up the modal first, then
@@ -2470,13 +2501,15 @@ describe('Plans Module', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(api.listAccounts).toHaveBeenCalledWith(
+      // Search uses the minimal-disclosure endpoint so it works for Standard /
+      // Read-Only users (view:recommendations), not the view:accounts list.
+      expect(api.listAccountsMinimal).toHaveBeenCalledWith(
         expect.objectContaining({ search: 'my-azure', provider: 'azure' })
       );
     });
 
     test('account search passes aws provider when plan provider is aws', async () => {
-      (api.listAccounts as jest.Mock).mockResolvedValue([]);
+      (api.listAccountsMinimal as jest.Mock).mockResolvedValue([]);
 
       openNewPlanModal();
       await Promise.resolve();
@@ -2490,7 +2523,7 @@ describe('Plans Module', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(api.listAccounts).toHaveBeenCalledWith(
+      expect(api.listAccountsMinimal).toHaveBeenCalledWith(
         expect.objectContaining({ provider: 'aws' })
       );
     });

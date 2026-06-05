@@ -89,6 +89,21 @@ func TestRouterDispatch_DeleteAccount_RoutesCorrectly(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestRouterDispatch_AccountsList_RoutesToMinimalHandler verifies that
+// GET /api/accounts/list reaches listAccountsMinimal and is NOT swallowed by
+// the generic "/api/accounts/" GET prefix route (getAccount), which would treat
+// "list" as a :id and reject it with a 400 invalid-UUID error. A successful
+// (non-error) result proves the more-specific exact-path route won. (#949/#951)
+func TestRouterDispatch_AccountsList_RoutesToMinimalHandler(t *testing.T) {
+	ctx := context.Background()
+	r := setupRouterForDispatch(ctx)
+
+	req, method, path := routerReq("GET", "/api/accounts/list", "")
+	result, err := r.Route(ctx, method, path, req)
+	require.NoError(t, err, "expected listAccountsMinimal to handle /api/accounts/list, not getAccount's UUID validation")
+	assert.NotNil(t, result)
+}
+
 // ── Plan ↔ Account association routes ───────────────────────────────────────
 
 // TestRouterDispatch_PlanAccountsRoute_RequiresCorrectOrdering verifies that

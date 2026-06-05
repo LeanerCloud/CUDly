@@ -95,7 +95,10 @@ async function populateAccountOptions(provider: string): Promise<void> {
       provider && provider !== '' && provider !== 'all'
         ? { provider: provider as 'aws' | 'azure' | 'gcp' }
         : undefined;
-    const accounts = await api.listAccounts(filter);
+    // Use the minimal-disclosure endpoint (view:recommendations) so the
+    // dropdown populates for Standard / Read-Only users too — the full
+    // GET /api/accounts (view:accounts) 403s for them. See issues #949/#951.
+    const accounts = await api.listAccountsMinimal(filter);
     // Discard if a newer request has already started.
     if (gen !== _accountRequestGen) return;
     const options: ChipSelectOption[] = [

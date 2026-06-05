@@ -127,6 +127,67 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	return accounts, nil
 }
 
+// AccountSummary is the minimal-disclosure projection of a cloud account used
+// by the global topbar filter and the create-plan-from-commitment target
+// prefill (issues #949, #951). It deliberately omits every credential/config
+// field (role ARNs, subscription IDs, client emails, auth modes, bastion IDs,
+// the self-account marker) so the endpoint can be gated on a low read verb that
+// Standard / Read-Only users already hold, without leaking sensitive account
+// configuration. The full CloudAccount object stays behind GET /api/accounts
+// (view:accounts, admin-grade).
+type AccountSummary struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ExternalID string `json:"external_id"`
+	Provider   string `json:"provider"`
+}
+
+// listAccountsMinimal handles GET /api/accounts/list.
+//
+// Returns the minimal AccountSummary projection scoped by the session's
+// allowed_accounts list. Gated on view:recommendations (held by both the
+// Standard Users and Read-Only Users groups) rather than view:accounts, so the
+// account dropdown in the global filter and the plan-target prefill work for
+// non-admin users without exposing the credential/config metadata carried by
+// the full GET /api/accounts response. See issues #949 / #951.
+func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
+	session, err := h.requirePermission(ctx, req, "view", "recommendations")
+	if err != nil {
+		return nil, err
+	}
+
+	filter := buildAccountFilter(req.QueryStringParameters)
+
+	accounts, err := h.config.ListCloudAccounts(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+
+	allowedAccounts, err := h.getAllowedAccounts(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	unrestricted := auth.IsUnrestrictedAccess(allowedAccounts)
+
+	// Build the minimal projection in place, applying allowed_accounts scoping
+	// during the copy so a restricted user only ever sees their entitled rows.
+	summaries := make([]AccountSummary, 0, len(accounts))
+	for i := range accounts {
+		acct := &accounts[i]
+		if !unrestricted && !auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
+			continue
+		}
+		summaries = append(summaries, AccountSummary{
+			ID:         acct.ID,
+			Name:       acct.Name,
+			ExternalID: acct.ExternalID,
+			Provider:   acct.Provider,
+		})
+	}
+
+	return summaries, nil
+}
+
 // markSelfAccount sets IsSelf=true on the account matching the source identity.
 func (h *Handler) markSelfAccount(ctx context.Context, accounts []config.CloudAccount) {
 	si := h.resolveSourceIdentity(ctx)

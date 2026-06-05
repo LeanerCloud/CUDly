@@ -106,6 +106,35 @@ export interface AccountServiceOverrideRequest {
   exclude_types?: string[];
 }
 
+/**
+ * Minimal-disclosure account projection returned by GET /api/accounts/list.
+ * Carries only the fields the global topbar filter and the create-plan target
+ * prefill need; it deliberately omits every credential/config field so the
+ * endpoint can be served to Standard / Read-Only users (gated on
+ * view:recommendations rather than the admin-grade view:accounts). See issues
+ * #949 / #951.
+ */
+export interface AccountSummary {
+  id: string;
+  name: string;
+  external_id: string;
+  provider: Provider;
+}
+
+/**
+ * Fetch the minimal account list available to any user who can view
+ * recommendations. Used by the global filter dropdown and the plan modal so
+ * non-admin users get a populated account list without the 403 they'd hit on
+ * the full GET /api/accounts endpoint.
+ */
+export async function listAccountsMinimal(filters?: AccountListFilters): Promise<AccountSummary[]> {
+  const params = new URLSearchParams();
+  if (filters?.provider) params.set('provider', filters.provider);
+  if (filters?.search) params.set('search', filters.search);
+  const qs = params.toString();
+  return apiRequest<AccountSummary[]>(`/accounts/list${qs ? `?${qs}` : ''}`);
+}
+
 export async function listAccounts(filters?: AccountListFilters): Promise<CloudAccount[]> {
   const params = new URLSearchParams();
   if (filters?.provider) params.set('provider', filters.provider);

@@ -3,6 +3,7 @@
  */
 import {
   listAccounts,
+  listAccountsMinimal,
   createAccount,
   getAccount,
   updateAccount,
@@ -80,6 +81,38 @@ describe('Accounts API Module', () => {
       await listAccounts({ provider: 'aws', search: 'prod', enabled: true });
 
       expect(apiRequest).toHaveBeenCalledWith('/accounts?provider=aws&enabled=true&search=prod');
+    });
+  });
+
+  // #949/#951: minimal-disclosure list available to Standard / Read-Only users.
+  describe('listAccountsMinimal', () => {
+    const mockSummary = { id: 'acc-1', name: 'Test', external_id: '123', provider: 'aws' as const };
+
+    test('calls apiRequest with /accounts/list and no query string when no filters', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue([mockSummary]);
+
+      const result = await listAccountsMinimal();
+
+      expect(apiRequest).toHaveBeenCalledWith('/accounts/list');
+      expect(result).toEqual([mockSummary]);
+    });
+
+    test('passes provider and search filters in the query string', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue([]);
+
+      await listAccountsMinimal({ provider: 'aws', search: 'prod' });
+
+      expect(apiRequest).toHaveBeenCalledWith('/accounts/list?provider=aws&search=prod');
+    });
+
+    // The minimal endpoint intentionally does NOT support the enabled filter
+    // (it's a read-only projection for filter/prefill), so enabled is ignored.
+    test('ignores the enabled filter (not part of the minimal projection)', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue([]);
+
+      await listAccountsMinimal({ enabled: false });
+
+      expect(apiRequest).toHaveBeenCalledWith('/accounts/list');
     });
   });
 
