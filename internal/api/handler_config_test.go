@@ -19,7 +19,6 @@ func TestHandler_getConfig(t *testing.T) {
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
-		Role:   "admin",
 	}
 
 	globalCfg := &config.GlobalConfig{
@@ -33,6 +32,7 @@ func TestHandler_getConfig(t *testing.T) {
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("ListServiceConfigs", ctx).Return(serviceConfigs, nil)
 
@@ -371,14 +371,15 @@ func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
 
-	adminSession := &Session{Role: "admin", UserID: "admin-user"}
-	userSession := &Session{Role: "user", UserID: "regular-user"}
+	adminSession := &Session{UserID: "admin-user"}
+	userSession := &Session{UserID: "regular-user"}
 
 	globalCfg := &config.GlobalConfig{EnabledProviders: []string{"aws"}}
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", mock.Anything, "admin-user", mock.Anything, mock.Anything).Return(true, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -388,11 +389,10 @@ func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 		}
 		result, err := handler.getConfig(ctx, req)
 		require.NoError(t, err)
-		// SourceIdentity is set (may be a zero-value struct for the test
-		// env that lacks AWS credentials, but the field is non-nil for admin).
-		// We verify that a non-admin result is nil below, which is the key
-		// security invariant.
-		_ = result.SourceIdentity // may be nil or non-nil depending on cloud env
+		// resolveSourceIdentity always returns a non-nil struct (best-effort,
+		// returns an empty struct on failure). The key invariant is that admin
+		// sessions receive the field and non-admin sessions do not.
+		require.NotNil(t, result.SourceIdentity)
 	})
 
 	t.Run("regression #407: non-admin does not receive SourceIdentity", func(t *testing.T) {
