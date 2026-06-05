@@ -139,24 +139,28 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 		return false
 	}
 
-	// Auth endpoints that don't have a session yet are exempt unconditionally.
-	// Prefix matching is safe for these /api/auth/* paths because no admin
-	// sub-paths share those prefixes.
-	csrfExemptAlwaysPrefix := []string{
-		"/api/auth/login",
+	// Auth endpoints that don't have a session yet are exempt.
+	//
+	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
+	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
+	// validateSecurity() short-circuits before requiresCSRFValidation() is
+	// reached on the token-only (email-link) path. For the session-authed path
+	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
+	// directly inside those functions -- a blanket middleware exemption would
+	// leave session-authenticated POSTs to these endpoints unprotected (CSRF).
+	//
+	// Similarly, /api/ri-exchange/approve/ and /api/ri-exchange/reject/ are
+	// AuthPublic and therefore exempted by isPublicEndpoint(), not here.
+	//
+	// All exemptions use exact-match to prevent a path like
+	// /api/register-malicious from bypassing CSRF via accidental prefix overlap.
+	// This mirrors the exact-match approach in isPublicEndpoint().
+	switch path {
+	case "/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-	}
-	for _, exempt := range csrfExemptAlwaysPrefix {
-		if strings.HasPrefix(path, exempt) {
-			return false
-		}
-	}
-	// Exact match for the public self-registration endpoint (issue #1017).
-	// HasPrefix would also exempt /api/registrations/<id>/approve|reject|delete,
-	// which are AuthAdmin state-changing routes that MUST be CSRF-protected.
-	if path == "/api/register" {
+		"/api/register": // POST /api/register (public registration, no session)
 		return false
 	}
 
