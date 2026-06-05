@@ -472,32 +472,21 @@ func parseAccountIDs(raw string) ([]string, error) {
 	return ids, nil
 }
 
-// purchasePaymentWhitelist maps a concrete provider to the set of payment
-// options that provider's purchase path accepts. AWS RIs/SPs support the
-// three classic upfront tiers; Azure/GCP reservations additionally accept
-// the "upfront"/"monthly" spellings their SDK clients switch on (see
-// providers/{azure,gcp}/services/*/client.go). Any value outside the set
-// for the rec's provider is rejected at the API boundary so a malformed
-// Payment never reaches the cloud SDK with a silent default substituted
-// (issue #643).
-var purchasePaymentWhitelist = map[string]map[string]bool{
-	"aws": {
-		"all-upfront":     true,
-		"partial-upfront": true,
-		"no-upfront":      true,
-	},
-	"azure": {
-		"all-upfront": true,
-		"upfront":     true,
-		"no-upfront":  true,
-		"monthly":     true,
-	},
-	"gcp": {
-		"all-upfront": true,
-		"upfront":     true,
-		"no-upfront":  true,
-		"monthly":     true,
-	},
+// purchasePaymentSet returns the provider-canonical set of accepted payment
+// option tokens for the given (already-lowercased) provider. It derives the
+// set from config.ValidPaymentOptionsByProvider so that this boundary and the
+// plan-validator share a single source of truth and cannot drift (issue #717).
+// Returns nil when provider is unknown.
+func purchasePaymentSet(provider string) map[string]bool {
+	opts, ok := config.ValidPaymentOptionsByProvider[provider]
+	if !ok {
+		return nil
+	}
+	set := make(map[string]bool, len(opts))
+	for _, o := range opts {
+		set[o] = true
+	}
+	return set
 }
 
 // purchaseTermWhitelist maps a concrete provider to the set of commitment
@@ -515,11 +504,20 @@ var purchaseTermWhitelist = map[string]map[int]bool{
 // query-time validateProvider (which permits ""/"all"), the execute path
 // requires a concrete provider because each rec triggers a real provider
 // call. idx is the rec's position in the request slice, surfaced in the
-// error so the caller can point at the offending row. Closes issue #643.
+// error so the caller can point at the offending row. Closes issues #643,
+// #717.
+//
+// Payment-option handling follows the same two-step approach as the
+// plan-validator in internal/config/validation.go:
+//  1. NormalizePaymentOption coerces any legacy AWS-style token onto the
+//     provider-canonical spelling (e.g. "all-upfront" on Azure -> "upfront").
+//  2. The provider-canonical set (from config.ValidPaymentOptionsByProvider)
+//     rejects anything that has no canonical mapping, with an error that
+//     names the provider and lists the accepted tokens.
 func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) error {
 	provider := strings.ToLower(strings.TrimSpace(rec.Provider))
-	payments, providerOK := purchasePaymentWhitelist[provider]
-	if !providerOK {
+	payments := purchasePaymentSet(provider)
+	if payments == nil {
 		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid provider %q: must be one of aws, azure, gcp", idx, rec.Provider))
 	}
 	rec.Provider = provider
@@ -534,8 +532,18 @@ func validatePurchaseRecommendation(rec *config.RecommendationRecord, idx int) e
 		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid term %d for provider %s: must be 1 or 3", idx, rec.Term, provider))
 	}
 	payment := strings.ToLower(strings.TrimSpace(rec.Payment))
+	// Coerce any legacy/cross-provider alias before the whitelist check so
+	// that callers using old AWS-style tokens are transparently redirected to
+	// the canonical token for the target provider.
+	if normalized, ok := config.NormalizePaymentOption(provider, payment); ok {
+		payment = normalized
+	}
 	if !payments[payment] {
-		return NewClientError(400, fmt.Sprintf("recommendation %d has invalid payment %q for provider %s", idx, rec.Payment, provider))
+		return NewClientError(400, fmt.Sprintf(
+			"invalid payment option for %s service: %q (valid for %s: %s)",
+			provider, rec.Payment, provider,
+			strings.Join(config.ValidPaymentOptionsByProvider[provider], ", "),
+		))
 	}
 	rec.Payment = payment
 	return nil
