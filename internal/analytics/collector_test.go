@@ -214,10 +214,16 @@ func (m *mockConfigStore) GetPurchaseHistory(ctx context.Context, accountID stri
 }
 
 func (m *mockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error) {
+	if m.getAllPurchaseHistoryFunc != nil {
+		return m.getAllPurchaseHistoryFunc(ctx, limit)
+	}
 	return nil, nil
 }
 
 func (m *mockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+	if m.getActivePurchaseHistoryFunc != nil {
+		return m.getActivePurchaseHistoryFunc(ctx, asOf)
+	}
 	return nil, nil
 }
 
