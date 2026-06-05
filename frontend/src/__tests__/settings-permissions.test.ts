@@ -1,5 +1,5 @@
 /**
- * Settings page permission gating for issue #365 and issue #870.
+ * Settings page permission gating for issue #365, issue #870, and issue #979.
  *
  * The /admin/general + /admin/purchasing sub-tabs are reachable for
  * every signed-in role (only /admin/accounts and /admin/users are
@@ -9,8 +9,14 @@
  * Issue #870: the Purchasing Policies panel (#purchasing-panel) is a
  * sibling <section> outside #global-settings-form. The viewer role must
  * see all its inputs as disabled and both Save/Reset buttons hidden.
+ *
+ * Issue #979: when GET /api/config returns 403 (permission denied), the
+ * error banner must NOT be shown; the section stays hidden and the page
+ * degrades gracefully. Non-permission failures (network, 5xx) still
+ * surface the error banner.
  */
-import { loadGlobalSettings } from '../settings';
+import { loadGlobalSettings, resetConfigCache } from '../settings';
+import * as api from '../api';
 
 jest.mock('../api', () => ({
   getConfig: jest.fn().mockResolvedValue({
@@ -267,5 +273,80 @@ describe('Purchasing Policies panel permission gating (issue #870)', () => {
     expect(save.hidden).toBe(true);
     const graceGcp = document.getElementById('setting-grace-gcp') as HTMLInputElement;
     expect(graceGcp.disabled).toBe(true);
+  });
+});
+
+/**
+ * Issue #979: graceful degradation when GET /api/config returns a
+ * permission-denied error for non-admin users on the Purchasing policies page.
+ */
+describe('Settings config load: graceful degradation on permission errors (issue #979)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDom();
+    resetConfigCache();
+  });
+
+  function makePermissionError(status: number, message: string): Error & { status: number } {
+    const err = new Error(message) as Error & { status: number };
+    err.status = status;
+    return err;
+  }
+
+  test('403 permission-denied error hides loading, keeps form hidden, shows no error banner', async () => {
+    (api.getConfig as jest.Mock).mockRejectedValueOnce(
+      makePermissionError(403, 'permission denied: requires view on config'),
+    );
+
+    await loadGlobalSettings();
+
+    const loadingEl = document.getElementById('settings-loading');
+    const formEl = document.getElementById('global-settings-form');
+    const errorEl = document.getElementById('settings-error');
+
+    // Loading spinner must be hidden (not spinning forever)
+    expect(loadingEl?.classList.contains('hidden')).toBe(true);
+    // Form stays hidden; no partial render
+    expect(formEl?.classList.contains('hidden')).toBe(true);
+    // No error banner shown
+    expect(errorEl?.classList.contains('hidden')).toBe(true);
+  });
+
+  test('403 error with message not starting with "permission denied" still shows error banner', async () => {
+    // A 403 for a different reason (e.g. IP block) should still surface
+    (api.getConfig as jest.Mock).mockRejectedValueOnce(
+      makePermissionError(403, 'access blocked by IP policy'),
+    );
+
+    await loadGlobalSettings();
+
+    const errorEl = document.getElementById('settings-error');
+    // Banner is shown for non-permission-denied 403s
+    expect(errorEl?.classList.contains('hidden')).toBe(false);
+    expect(errorEl?.textContent).toContain('access blocked by IP policy');
+  });
+
+  test('500 server error still shows the error banner', async () => {
+    (api.getConfig as jest.Mock).mockRejectedValueOnce(
+      makePermissionError(500, 'internal server error'),
+    );
+
+    await loadGlobalSettings();
+
+    const errorEl = document.getElementById('settings-error');
+    expect(errorEl?.classList.contains('hidden')).toBe(false);
+    expect(errorEl?.textContent).toContain('internal server error');
+  });
+
+  test('network error still shows the error banner', async () => {
+    (api.getConfig as jest.Mock).mockRejectedValueOnce(
+      new Error('Failed to fetch'),
+    );
+
+    await loadGlobalSettings();
+
+    const errorEl = document.getElementById('settings-error');
+    expect(errorEl?.classList.contains('hidden')).toBe(false);
+    expect(errorEl?.textContent).toContain('Failed to fetch');
   });
 });

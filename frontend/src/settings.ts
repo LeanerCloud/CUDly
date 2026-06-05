@@ -2975,6 +2975,19 @@ export async function loadGlobalSettings(): Promise<void> {
 
     cachedSourceCloud = data.source_cloud ?? 'aws';
   } catch (error) {
+    // Issue #979: when the backend returns 403 with a "permission denied"
+    // message the non-admin user already has restricted visibility
+    // (Exchange Automation etc. are hidden). Silently hide the section
+    // so the page degrades gracefully instead of showing a red banner.
+    // All other failures (network errors, 5xx, or unrelated 403s) still
+    // surface the banner.
+    const isPermissionDenied =
+      (error as { status?: number }).status === 403 &&
+      (error instanceof Error && error.message.startsWith('permission denied'));
+    if (isPermissionDenied) {
+      if (loadingEl) loadingEl.classList.add('hidden');
+      return;
+    }
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');
     if (errorEl) {
