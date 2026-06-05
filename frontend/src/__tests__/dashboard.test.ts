@@ -1391,25 +1391,38 @@ describe('Dashboard Module', () => {
         expect(chartData.data.labels).toContain('rds');
       });
 
-      test('bar floor dataset uses min potential, upside dataset uses (max - min)', () => {
+      test('three stacked datasets: Current/Committed (bottom), Lowest option, Upside (top)', () => {
         buildDOM();
-        // ec2: two recs with savings 100 and 400 -> floor=100, upside=300.
+        // ec2: min rec=100, max rec=400, current=0 -> lowestOption=100, upside=300.
         renderSavingsByService([
           rec('ec2', 100, 1, 'no_upfront'),
           rec('ec2', 400, 3, 'all_upfront'),
         ]);
         const chartCtor = Chart as unknown as jest.Mock;
         const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
-        const datasets = (lastCall?.[1] as { data: { datasets: { label: string; data: number[] }[] } }).data.datasets;
-        const floorDs = datasets.find((d) => d.label === 'Min potential');
-        const rangeDs = datasets.find((d) => d.label === 'Upside');
-        expect(floorDs?.data[0]).toBe(100);   // min potential savings
-        expect(rangeDs?.data[0]).toBe(300);   // max - min
+        const datasets = (lastCall?.[1] as { data: { datasets: { label: string; data: number[]; stack: string }[] } }).data.datasets;
+        const currentDs = datasets.find((d) => d.label === 'Current / Committed');
+        const lowestDs = datasets.find((d) => d.label === 'Lowest option');
+        const upsideDs = datasets.find((d) => d.label === 'Upside');
+        // All three datasets must be present and in the same stack.
+        expect(currentDs).toBeDefined();
+        expect(lowestDs).toBeDefined();
+        expect(upsideDs).toBeDefined();
+        expect(currentDs?.stack).toBe('savings');
+        expect(lowestDs?.stack).toBe('savings');
+        expect(upsideDs?.stack).toBe('savings');
+        // Values: current=0 (no byService supplied), lowestOption=100-0=100, upside=400-100=300.
+        expect(currentDs?.data[0]).toBe(0);
+        expect(lowestDs?.data[0]).toBe(100);
+        expect(upsideDs?.data[0]).toBe(300);
       });
 
-      // Issue #908: merged chart draws a current-savings underlay per service.
-      test('renders a current (committed) dataset from byService.current_savings', () => {
+      // Issue #908: merged chart draws a current-savings bottom layer per service.
+      test('renders Current / Committed layer from byService.current_savings', () => {
         buildDOM();
+        // current=250, min rec=100, max rec=400
+        // lowestOption = max(0, 100-250) = 0 (committed already exceeds min rec)
+        // upside = max(0, 400-100) = 300
         renderSavingsByService(
           [rec('ec2', 100, 1, 'no_upfront'), rec('ec2', 400, 3, 'all_upfront')],
           { ec2: { potential_savings: 400, current_savings: 250 } },
@@ -1417,16 +1430,32 @@ describe('Dashboard Module', () => {
         const chartCtor = Chart as unknown as jest.Mock;
         const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
         const datasets = (lastCall?.[1] as {
-          data: { datasets: { label: string; data: number[]; backgroundColor: string[]; stack: string }[] };
+          data: { datasets: { label: string; data: number[]; stack: string }[] };
         }).data.datasets;
-        const currentDs = datasets.find((d) => d.label === 'Current (committed)');
+        const currentDs = datasets.find((d) => d.label === 'Current / Committed');
         expect(currentDs).toBeDefined();
         expect(currentDs?.data[0]).toBe(250);
-        // Current bar lives in its own stack so it sits beside the potential range.
-        expect(currentDs?.stack).toBe('current');
+        // Current layer is in the unified savings stack.
+        expect(currentDs?.stack).toBe('savings');
       });
 
-      test('current underlay uses a DARKER variant of each service potential hue', () => {
+      test('Lowest option clamps to 0 when committed savings exceed min rec', () => {
+        buildDOM();
+        // current=300, min rec=100 -> lowestOption = max(0, 100-300) = 0
+        renderSavingsByService(
+          [rec('ec2', 100, 1, 'no_upfront'), rec('ec2', 400, 3, 'all_upfront')],
+          { ec2: { potential_savings: 400, current_savings: 300 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string; data: number[] }[] };
+        }).data.datasets;
+        const lowestDs = datasets.find((d) => d.label === 'Lowest option');
+        expect(lowestDs?.data[0]).toBe(0);
+      });
+
+      test('current underlay uses a DARKER variant of each service base hue', () => {
         buildDOM();
         renderSavingsByService(
           [rec('ec2', 500)],
@@ -1437,16 +1466,16 @@ describe('Dashboard Module', () => {
         const datasets = (lastCall?.[1] as {
           data: { datasets: { label: string; backgroundColor: string[] }[] };
         }).data.datasets;
-        const floorColor = datasets.find((d) => d.label === 'Min potential')?.backgroundColor[0] as string;
-        const currentColor = datasets.find((d) => d.label === 'Current (committed)')?.backgroundColor[0] as string;
-        // The current colour is the darkened form of the floor (potential) colour.
-        expect(currentColor).toBe(darkenHexColor(floorColor));
+        const lowestOptionColor = datasets.find((d) => d.label === 'Lowest option')?.backgroundColor[0] as string;
+        const currentColor = datasets.find((d) => d.label === 'Current / Committed')?.backgroundColor[0] as string;
+        // The current colour is the darkened form of the base (lowest-option) colour.
+        expect(currentColor).toBe(darkenHexColor(lowestOptionColor));
         // And it is genuinely darker: each channel sum is lower.
         const sum = (hex: string): number => { const c = parseHexColor(hex); return c.r + c.g + c.b; };
-        expect(sum(currentColor)).toBeLessThan(sum(floorColor));
+        expect(sum(currentColor)).toBeLessThan(sum(lowestOptionColor));
       });
 
-      test('current bar defaults to 0 for a service absent from byService', () => {
+      test('current layer defaults to 0 for a service absent from byService', () => {
         buildDOM();
         renderSavingsByService([rec('rds', 300)], {}); // no rds entry
         const chartCtor = Chart as unknown as jest.Mock;
@@ -1454,18 +1483,44 @@ describe('Dashboard Module', () => {
         const datasets = (lastCall?.[1] as {
           data: { datasets: { label: string; data: number[] }[] };
         }).data.datasets;
-        const currentDs = datasets.find((d) => d.label === 'Current (committed)');
+        const currentDs = datasets.find((d) => d.label === 'Current / Committed');
         expect(currentDs?.data[0]).toBe(0);
       });
 
-      test('services are sorted by max potential savings descending', () => {
+      test('service present in byService but absent from recs renders Current-only bar', () => {
         buildDOM();
-        // ec2: max=200, rds: max=500, lambda: max=50 -- expected order: rds, ec2, lambda.
-        renderSavingsByService([
-          rec('ec2', 200),
-          rec('rds', 500),
-          rec('lambda', 50),
-        ]);
+        // No recs for 'lambda'; only byService entry -> single Current band, no Lowest/Upside.
+        renderSavingsByService(
+          [],
+          { lambda: { potential_savings: 0, current_savings: 120 } },
+        );
+        const canvas = document.getElementById('savings-by-service-chart');
+        expect(canvas?.classList.contains('hidden')).toBe(false);
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const labels = (lastCall?.[1] as { data: { labels: string[] } }).data.labels;
+        expect(labels).toContain('lambda');
+        const datasets = (lastCall?.[1] as {
+          data: { datasets: { label: string; data: number[] }[] };
+        }).data.datasets;
+        const currentDs = datasets.find((d) => d.label === 'Current / Committed');
+        const lowestDs = datasets.find((d) => d.label === 'Lowest option');
+        const upsideDs = datasets.find((d) => d.label === 'Upside');
+        expect(currentDs?.data[0]).toBe(120);
+        expect(lowestDs?.data[0]).toBe(0);
+        expect(upsideDs?.data[0]).toBe(0);
+      });
+
+      test('services are sorted by (current + max potential) descending', () => {
+        buildDOM();
+        // ec2: current=0, max rec=200 -> total=200
+        // rds: current=150, max rec=500 -> total=650
+        // lambda: current=0, max rec=50 -> total=50
+        // Expected order: rds (650), ec2 (200), lambda (50).
+        renderSavingsByService(
+          [rec('ec2', 200), rec('rds', 500), rec('lambda', 50)],
+          { rds: { potential_savings: 500, current_savings: 150 } },
+        );
         const chartCtor = Chart as unknown as jest.Mock;
         const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
         const labels = (lastCall?.[1] as { data: { labels: string[] } }).data.labels;
@@ -1586,10 +1641,13 @@ describe('Dashboard Module', () => {
           (chartCtor.mock.calls[chartCtor.mock.calls.length - 1]?.[1] as { data: { labels: string[] } }).data;
         expect(lastChartData().labels).toEqual(['ec2']);
 
-        // Filter changes -> new recs -> second load must re-render with rds.
+        // Filter changes -> new recs -> second load must re-render. rds appears
+        // from the new recs (total=220); ec2 still appears from byService
+        // current_savings=90 even without a rec in this load. rds sorts first.
         (api.getRecommendations as jest.Mock).mockResolvedValue([rec('rds', 220)]);
         await loadDashboard();
-        expect(lastChartData().labels).toEqual(['rds']);
+        expect(lastChartData().labels).toContain('rds');
+        expect(lastChartData().labels[0]).toBe('rds');
       });
     });
 

@@ -710,26 +710,26 @@ export function computeServiceStatsFromRecs(
 /**
  * Render the single merged per-service savings chart (issues #769 + #908).
  *
- * Each service category shows two grouped bars:
- *   - Potential range (stacked): "Min potential" (solid hue) + "Upside"
- *     (same hue at 35% opacity, = max - min), derived from the
- *     recommendations list via computeServiceStatsFromRecs.
- *   - Current (committed) savings (single bar) in a DARKER shade of the
- *     same per-service hue, sourced from the dashboard summary's
- *     by_service[svc].current_savings (now populated by the backend, #908).
- *     This reads as the already-realized savings sitting beneath the
- *     potential range of the same colour family.
+ * Each service bar is a single stack with three layers (bottom to top):
+ *   1. Current / Committed (darkest shade): already-realized savings from
+ *      active commitments, sourced from by_service[svc].current_savings.
+ *   2. Lowest option (solid mid-shade): the lowest available recommendation
+ *      option minus what is already committed, i.e. max(0, min(rec.savings) -
+ *      current). Together with the Current layer this represents the floor.
+ *   3. Upside (lightest / 35% opacity): max(rec.savings) - min(rec.savings),
+ *      the variability between the cheapest and most-aggressive option.
  *
- * This replaces the old standalone grouped "Potential Savings by Service"
- * chart (renderSavingsChart) which has been removed; the current-vs-potential
- * comparison now lives entirely in this one range chart.
+ * Services are sorted by (current + max potential) descending so the bar
+ * with the most total visible value is leftmost. Services present in
+ * byService but absent from recs still appear with only the Current band
+ * (no further upside surfaced). Services present in recs but absent from
+ * byService default to current = 0 (no committed savings yet).
  *
- * Services are sorted by max potential savings descending; the top
- * SAVINGS_BY_SERVICE_MAX are shown. When truncated, the section heading notes
- * "+N more".
+ * The top SAVINGS_BY_SERVICE_MAX services are shown; the heading notes
+ * "+N more" when truncated.
  *
- * Empty state: when no recommendations have positive savings, the canvas is
- * hidden and the empty-state paragraph is shown.
+ * Empty state: shown when no bar (across all three layers) has any positive
+ * value.
  */
 export function renderSavingsByService(
   recs: readonly LocalRecommendation[],
@@ -750,9 +750,31 @@ export function renderSavingsByService(
   const stats = computeServiceStatsFromRecs(recs);
   const heading = section?.querySelector('h3');
 
-  // Filter to services with positive savings, then sort by max desc.
-  const positive = Array.from(stats.entries()).filter(([, s]) => s.max > 0);
-  positive.sort((a, b) => b[1].max - a[1].max);
+  // Build the union of services from both recs and byService. Services in
+  // byService-only (commitment exists, no new rec) still show a Current band.
+  const allServices = new Set<string>([
+    ...stats.keys(),
+    ...Object.keys(byService),
+  ]);
+
+  // Per-service totals used for sort and empty-state detection.
+  type SvcEntry = { svc: string; current: number; minRec: number; maxRec: number };
+  const entries: SvcEntry[] = Array.from(allServices).map(svc => {
+    const s = stats.get(svc);
+    const current = byService[svc]?.current_savings ?? 0;
+    return {
+      svc,
+      current,
+      minRec: s?.min ?? 0,
+      maxRec: s?.max ?? 0,
+    };
+  });
+
+  // Keep only services with some positive value in any layer.
+  const positive = entries.filter(e => (e.current + e.maxRec) > 0);
+
+  // Sort by (current + max potential) desc so the most-valuable bar is leftmost.
+  positive.sort((a, b) => (b.current + b.maxRec) - (a.current + a.maxRec));
 
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
@@ -780,26 +802,35 @@ export function renderSavingsByService(
       : 'Potential savings range per service';
   }
 
-  const labels = visible.map(([svc]) => svc);
-  const floorData = visible.map(([, s]) => s.min);
-  const rangeData = visible.map(([, s]) => s.max - s.min);
-  // Current (committed) savings per service from the summary's by_service map.
-  // Defaults to 0 for services the summary doesn't carry (the bar collapses,
-  // which is the correct "nothing committed yet" visual).
-  const currentData = visible.map(([svc]) => byService[svc]?.current_savings ?? 0);
-  const totalSavings = Array.from(stats.values()).reduce((acc, s) => acc + s.max, 0);
+  const labels = visible.map(e => e.svc);
 
-  // Assign a colour per service (cycles if more than palette length).
+  // Layer 1 (bottom): Current / Committed savings.
+  const currentData = visible.map(e => e.current);
+
+  // Layer 2: Lowest option -- the gap between the cheapest rec and the already-
+  // committed amount. Clamped to 0 to avoid negative segments when commitments
+  // exceed the current lowest-option savings figure.
+  const lowestOptionData = visible.map(e => Math.max(0, e.minRec - e.current));
+
+  // Layer 3 (top): Upside -- the spread between cheapest and most-aggressive option.
+  const upsideData = visible.map(e => Math.max(0, e.maxRec - e.minRec));
+
+  const totalSavings = positive.reduce((acc, e) => acc + e.current + e.maxRec, 0);
+
+  // Colour palette: one base colour per service, then derive lighter/darker shades.
   const bgColors = visible.map((_, i) => SERVICE_BAR_COLORS[i % SERVICE_BAR_COLORS.length] ?? '#1a73e8');
-  const rangeColors = bgColors.map(c => {
-    // Convert solid hex to rgba at 0.35 opacity for the range segment.
+
+  // Current / Committed: darkest shade (30% darker than base).
+  const currentColors = bgColors.map(c => darkenHexColor(c));
+
+  // Lowest option: the base (solid) colour.
+  const lowestOptionColors = bgColors;
+
+  // Upside: same hue at 35% opacity for the variability band.
+  const upsideColors = bgColors.map(c => {
     const { r, g, b } = parseHexColor(c);
     return `rgba(${r},${g},${b},0.35)`;
   });
-  // Current-savings bar uses a darker variant of the same hue, derived
-  // programmatically (not hardcoded per service) so the "already-realized"
-  // bar always matches its service's colour family (#908).
-  const currentColors = bgColors.map(c => darkenHexColor(c));
 
   savingsByServiceChart = new Chart(canvas, {
     type: 'bar',
@@ -807,25 +838,25 @@ export function renderSavingsByService(
       labels,
       datasets: [
         {
-          label: 'Min potential',
-          data: floorData,
-          backgroundColor: bgColors,
+          label: 'Current / Committed',
+          data: currentData,
+          backgroundColor: currentColors,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
-          stack: 'potential',
+          stack: 'savings',
+        },
+        {
+          label: 'Lowest option',
+          data: lowestOptionData,
+          backgroundColor: lowestOptionColors,
+          borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 },
+          stack: 'savings',
         },
         {
           label: 'Upside',
-          data: rangeData,
-          backgroundColor: rangeColors,
+          data: upsideData,
+          backgroundColor: upsideColors,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
-          stack: 'potential',
-        },
-        {
-          label: 'Current (committed)',
-          data: currentData,
-          backgroundColor: currentColors,
-          borderRadius: 4,
-          stack: 'current',
+          stack: 'savings',
         },
       ],
     },
@@ -843,23 +874,22 @@ export function renderSavingsByService(
             label: (ctx) => {
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
-              if (!s) return '';
-              // The current-savings dataset gets a focused, single-line
-              // tooltip; the range datasets share the full breakdown.
-              if (ctx.dataset.stack === 'current') {
-                const current = byService[svc]?.current_savings ?? 0;
-                return `Current (committed): $${current.toLocaleString()}`;
-              }
-              const pct = totalSavings > 0 ? ((s.max / totalSavings) * 100).toFixed(1) : '0.0';
+              const current = byService[svc]?.current_savings ?? 0;
+              const maxRec = s?.max ?? 0;
+              const minRec = s?.min ?? 0;
+              const lowestOption = Math.max(0, minRec - current);
+              const upside = Math.max(0, maxRec - minRec);
+              const total = current + maxRec;
+              const pct = totalSavings > 0 ? ((total / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
                 `Service: ${svc}`,
-                `Min potential: $${s.min.toLocaleString()}`,
-                `Max potential: $${s.max.toLocaleString()}`,
-                `Options: ${s.count}`,
-                `% of total: ${pct}%`,
+                `Total: $${total.toLocaleString()} (${pct}% of all services)`,
+                `Current / Committed: $${current.toLocaleString()}`,
+                `Lowest option: $${lowestOption.toLocaleString()}`,
+                `Upside: $${upside.toLocaleString()}`,
               ];
-              if (s.minLabel) lines.push(`Min option: ${s.minLabel}`);
-              if (s.maxLabel) lines.push(`Max option: ${s.maxLabel}`);
+              if (s?.minLabel) lines.push(`Min option: ${s.minLabel}`);
+              if (s?.maxLabel) lines.push(`Max option: ${s.maxLabel}`);
               return lines;
             },
           },
