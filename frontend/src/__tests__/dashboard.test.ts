@@ -575,6 +575,53 @@ describe('Dashboard Module', () => {
       expect(savingsCard?.textContent).not.toContain('$700');
     });
 
+    // #978: Current Coverage KPI must render with exactly 1 decimal place so it
+    // cannot overflow the tile box at narrower screen widths.
+    test('#978: Current Coverage KPI rounds to 1 decimal place', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0,
+        total_recommendations: 3,
+        active_commitments: 2,
+        committed_monthly: 100,
+        // A long-fractional value that previously overflowed the tile box.
+        current_coverage: 72.3456789012,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const coverageTile = document.querySelector('[data-kpi="coverage"]');
+      const valueEl = coverageTile?.querySelector('.kpi-tile-value');
+      // Must display exactly 1 decimal place (e.g. "72.3%"), not the raw float.
+      expect(valueEl?.textContent).toBe('72.3%');
+      // The raw long-decimal form must not appear.
+      expect(valueEl?.textContent).not.toContain('72.3456');
+    });
+
+    // Integer coverage values must still format cleanly with one decimal place.
+    test('#978: integer Current Coverage KPI renders with one decimal place', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0,
+        total_recommendations: 1,
+        active_commitments: 1,
+        committed_monthly: 50,
+        current_coverage: 70,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const coverageTile = document.querySelector('[data-kpi="coverage"]');
+      const valueEl = coverageTile?.querySelector('.kpi-tile-value');
+      expect(valueEl?.textContent).toBe('70.0%');
+    });
+
     // #293: If getRecommendations rejects, other cards still render.
     test('failure-isolation: rec fetch failure leaves other cards rendered (#293)', async () => {
       (api.getRecommendations as jest.Mock).mockRejectedValue(new Error('Network error'));
