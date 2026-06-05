@@ -41,6 +41,11 @@ on:
       image_uri:
         required: false
         type: string
+    secrets:
+      ADMIN_EMAIL:
+        required: true
+      TF_BACKEND_AWS:
+        required: true
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}

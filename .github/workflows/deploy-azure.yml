@@ -45,6 +45,17 @@ on:
       environment:
         required: true
         type: string
+    secrets:
+      ADMIN_EMAIL:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      TF_BACKEND_AZURE:
+        required: true
 
 env:
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
