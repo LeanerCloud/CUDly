@@ -941,6 +941,11 @@ type MarketplaceListingRequest struct {
 	// required. Each entry specifies how many months the price applies and the
 	// list price per unit.
 	PriceSchedule []MarketplacePriceTier
+	// InstanceCount is the number of Reserved Instances to list. A purchase
+	// row of N RIs must list all N; this mirrors purchase_history.count. Values
+	// <= 0 are rejected before the outbound call so a misconfigured caller can
+	// never silently list a single RI from a multi-count row.
+	InstanceCount int32
 }
 
 // MarketplacePriceTier represents one tier of the AWS RI Marketplace price
@@ -976,6 +981,9 @@ func (c *Client) CreateMarketplaceListing(ctx context.Context, req MarketplaceLi
 	if req.ReservedInstancesID == "" {
 		return MarketplaceListingResult{}, fmt.Errorf("reserved instances ID is required")
 	}
+	if req.InstanceCount <= 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("instance count must be a positive integer, got %d", req.InstanceCount)
+	}
 
 	awsSchedule := make([]types.PriceScheduleSpecification, 0, len(req.PriceSchedule))
 	for _, tier := range req.PriceSchedule {
@@ -990,7 +998,7 @@ func (c *Client) CreateMarketplaceListing(ctx context.Context, req MarketplaceLi
 	input := &ec2.CreateReservedInstancesListingInput{
 		ReservedInstancesId: aws.String(req.ReservedInstancesID),
 		ClientToken:         aws.String(req.ClientToken),
-		InstanceCount:       aws.Int32(1),
+		InstanceCount:       aws.Int32(req.InstanceCount),
 		PriceSchedules:      awsSchedule,
 	}
 
