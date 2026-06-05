@@ -80,10 +80,22 @@ module.exports = (env, argv) => {
       ],
       splitChunks: {
         cacheGroups: {
+          // qrcode is only used during MFA enrollment (dynamic import).
+          // Give it its own async chunk so it never lands in vendors.js.
+          qrcode: {
+            test: /[\\/]node_modules[\\/]qrcode[\\/]/,
+            name: 'qrcode',
+            chunks: 'async',
+            priority: 20,
+            enforce: true
+          },
           vendor: {
             test: /[\\/]node_modules[\\/]/,
             name: 'vendors',
-            chunks: 'all'
+            // 'initial' means only synchronously-imported packages go here;
+            // async-only deps (e.g. qrcode) stay in their own lazy chunks.
+            chunks: 'initial',
+            priority: 10
           }
         }
       }
