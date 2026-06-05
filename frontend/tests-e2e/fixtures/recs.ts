@@ -17,10 +17,11 @@
  * on the returned `calls` array so tests can assert on URLs and POST bodies
  * without leaning on `expect.assertions`-style counts.
  *
- * The fixture is intentionally stateless across tests — each test calls
+ * The fixture is intentionally stateless across tests - each test calls
  * `mockApi(page)` for a fresh `{ calls }` record. Tests are free to
  * post-hoc override individual routes with their own `page.route` calls
- * (which take precedence over the catch-all installed here).
+ * (which take precedence over the catch-all installed here, because Playwright
+ * executes handlers in reverse-registration order).
  */
 
 import type { Page, Route } from '@playwright/test';
@@ -50,12 +51,14 @@ export interface SmokeRec {
 }
 
 /**
- * 19 rows — chosen so:
+ * 19 rows - chosen so:
  *   - `Provider = AWS` narrows to 11.
  *   - `Service = ec2` narrows to 6.
  *   - `Monthly Savings > 100` narrows to 9 (savings in {150, 250, 1200}).
- *   - `Monthly Savings 50..200` narrows to 9 (savings in {50, 100, 150}).
- *   - `Monthly Savings 5, 50..200, >1000` narrows to 11 (adds the {10, 1200}).
+ *   - `Monthly Savings 50..200` narrows to 13 (inclusive range; savings in
+ *     {50, 100, 150}).
+ *   - `Monthly Savings 5, 50..200, >1000` narrows to 14 (adds row r04 with
+ *     savings=1200 to the 50..200 set; the literal "5" matches no rows).
  *   - Two different terms (1y, 3y) present in any single-provider slice so
  *     multi-term selections produce >1 fan-out bucket on Purchase.
  */
@@ -148,7 +151,18 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     });
   };
 
-  // Public info — admin already exists, login modal does not appear.
+  // Catch-all for any /api/* not covered by specific handlers below.
+  // Registered FIRST so specific handlers (registered after this) take
+  // precedence: Playwright executes handlers in reverse-registration order,
+  // so the last-registered handler wins for any URL that matches multiple
+  // patterns. Registering the catch-all first ensures it only fires for
+  // truly unmatched requests.
+  await page.route('**/api/**', async (route) => {
+    record(route);
+    await jsonRoute(route, {}, 404);
+  });
+
+  // Public info - admin already exists, login modal does not appear.
   await page.route('**/api/public-info', async (route) => {
     record(route);
     await jsonRoute(route, {
@@ -270,13 +284,6 @@ export async function mockApi(page: Page): Promise<MockHandle> {
       confidence_bucket: 'low',
       provenance_note: '',
     });
-  });
-
-  // Catch-all for any /api/* not covered above — fail fast on tests' first
-  // unexpected call so we notice when the SPA adds a new dependency.
-  await page.route('**/api/**', async (route) => {
-    record(route);
-    await jsonRoute(route, {}, 404);
   });
 
   return {
