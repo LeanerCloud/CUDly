@@ -268,8 +268,8 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   // When no recommendations and no commitments exist, "100% coverage" is
   // misleading — nothing is being tracked. Show a dash instead.
   const nothingTracked = !data.total_recommendations && !data.active_commitments;
-  const coverageValue = nothingTracked ? '—' : `${data.current_coverage || 0}%`;
-  const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${data.target_coverage || 80}%`;
+  const coverageValue = nothingTracked ? '—' : `${(data.current_coverage || 0).toFixed(1)}%`;
+  const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${(data.target_coverage || 80).toFixed(1)}%`;
 
   // Render KPI tiles via DOM construction (textContent / appendChild)
   // rather than an innerHTML template literal, per the issue #340 plan's

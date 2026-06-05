@@ -1643,6 +1643,10 @@ func TestHandler_getPurchaseDetails_NotFound_IsClientError(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// getPurchaseDetails gates on requirePermission(view, purchases) before
+	// the GetExecutionByID lookup this test targets. Confer admin via the auth
+	// mock (the Session struct carries no role field; admin is resolved through
+	// HasPermissionAPI) so the handler reaches the not-found branch.
 	mockAuth.grantAdmin()
 
 	const missingID = "dddddddd-dddd-dddd-dddd-dddddddddddd"

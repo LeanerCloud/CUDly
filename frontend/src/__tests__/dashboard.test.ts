@@ -177,6 +177,26 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('YTD Savings');
     });
 
+    test('formats fractional current_coverage with one decimal (not raw float)', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 0,
+        total_recommendations: 1,
+        active_commitments: 1,
+        committed_monthly: 100,
+        current_coverage: 0.14648736342042862,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summary = document.getElementById('summary');
+      expect(summary?.innerHTML).toContain('0.1%');
+      expect(summary?.innerHTML).not.toContain('0.14648736342042862');
+    });
+
     test('renders the merged per-service savings chart', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
