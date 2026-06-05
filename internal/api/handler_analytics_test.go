@@ -433,4 +433,37 @@ func TestParseDateRange(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "start date must be before end date")
 	})
+
+	// Regression #414: unbounded date ranges caused full-table scans (DoS).
+	// The cap is 366 days; anything larger must be rejected with 400.
+	t.Run("regression #414: range exceeding 366 days is rejected", func(t *testing.T) {
+		startStr := "1970-01-01T00:00:00Z"
+		endStr := "2100-12-31T00:00:00Z"
+
+		_, _, err := parseDateRange(startStr, endStr)
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "oversized range must return a ClientError")
+		assert.Equal(t, 400, ce.code)
+		assert.Contains(t, err.Error(), "366")
+	})
+
+	t.Run("range of exactly 366 days is accepted", func(t *testing.T) {
+		startStr := "2024-01-01T00:00:00Z"
+		endStr := "2024-12-31T00:00:00Z" // 365 days later (2024 is a leap year, 366 days total)
+
+		_, _, err := parseDateRange(startStr, endStr)
+		require.NoError(t, err)
+	})
+
+	t.Run("range of 367 days is rejected", func(t *testing.T) {
+		startStr := "2024-01-01T00:00:00Z"
+		endStr := "2025-01-02T00:00:00Z" // 366 days + 1 day over
+
+		_, _, err := parseDateRange(startStr, endStr)
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "range of 367 days must return a ClientError")
+		assert.Equal(t, 400, ce.code)
+	})
 }

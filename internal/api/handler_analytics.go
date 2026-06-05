@@ -208,9 +208,17 @@ func parseDateRange(startStr, endStr string) (time.Time, time.Time, error) {
 		}
 	}
 
-	// Validate range
+	// Validate range order.
 	if start.After(end) {
 		return time.Time{}, time.Time{}, fmt.Errorf("start date must be before end date")
+	}
+
+	// Cap the range to at most 366 days to prevent full-table-scan DoS via
+	// start=1970-01-01&end=2100-12-31 (issue #414).
+	const maxRangeDays = 366
+	if end.Sub(start) > maxRangeDays*24*time.Hour {
+		return time.Time{}, time.Time{}, NewClientError(400,
+			fmt.Sprintf("date range too large: maximum allowed range is %d days", maxRangeDays))
 	}
 
 	return start, end, nil
