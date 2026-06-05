@@ -1415,6 +1415,12 @@ describe('Dashboard Module', () => {
         expect(currentDs?.data[0]).toBe(0);
         expect(lowestDs?.data[0]).toBe(100);
         expect(upsideDs?.data[0]).toBe(300);
+        // Tooltip Total must equal the sum of the three visible bar layers (0+100+300=400).
+        const tooltipLabel = (lastCall?.[1] as {
+          options: { plugins: { tooltip: { callbacks: { label: (ctx: { label: string }) => string[] } } } };
+        }).options.plugins.tooltip.callbacks.label({ label: 'ec2' });
+        const totalLine = tooltipLabel.find((l) => l.startsWith('Total:'));
+        expect(totalLine).toMatch(/\$400/);
       });
 
       // Issue #908: merged chart draws a current-savings bottom layer per service.
