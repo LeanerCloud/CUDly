@@ -263,6 +263,58 @@ func TestGlobalConfig_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// Issue #694: OfferingClass validation on PUT
+		{
+			name: "offering_class empty is valid (defaults to convertible)",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "offering_class convertible is valid",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "convertible",
+			},
+			wantErr: false,
+		},
+		{
+			name: "offering_class standard is valid",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "standard",
+			},
+			wantErr: false,
+		},
+		{
+			name: "offering_class wrong case is rejected",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "Convertible",
+			},
+			wantErr: true,
+			errMsg:  "invalid offering_class",
+		},
+		{
+			name: "offering_class STANDARD is rejected (case-sensitive)",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "STANDARD",
+			},
+			wantErr: true,
+			errMsg:  "invalid offering_class",
+		},
+		{
+			name: "offering_class unknown value is rejected",
+			config: GlobalConfig{
+				DefaultTerm:   3,
+				OfferingClass: "premium",
+			},
+			wantErr: true,
+			errMsg:  "invalid offering_class",
+		},
 	}
 
 	for _, tt := range tests {

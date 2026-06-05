@@ -35,6 +35,19 @@ func (m *MockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, 
 	return args.Get(0).(*ec2.DescribeReservedInstancesOfferingsOutput), args.Error(1)
 }
 
+// lastDescribeOfferingsInput captures the most recent
+// DescribeReservedInstancesOfferings params for assertion in integration tests.
+// Only used in tests that set this field explicitly; nil means uncaptured.
+type capturingMockEC2Client struct {
+	MockEC2Client
+	LastDescribeOfferingsInput *ec2.DescribeReservedInstancesOfferingsInput
+}
+
+func (m *capturingMockEC2Client) DescribeReservedInstancesOfferings(ctx context.Context, params *ec2.DescribeReservedInstancesOfferingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOfferingsOutput, error) {
+	m.LastDescribeOfferingsInput = params
+	return m.MockEC2Client.DescribeReservedInstancesOfferings(ctx, params, optFns...)
+}
+
 func (m *MockEC2Client) DescribeReservedInstances(ctx context.Context, params *ec2.DescribeReservedInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesOutput, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
@@ -884,4 +897,80 @@ func TestDescribeInputFromQuery_OfferingClass(t *testing.T) {
 		inp := describeInputFromQuery(q, nil)
 		assert.Equal(t, types.OfferingClassTypeStandard, inp.OfferingClass)
 	})
+}
+
+// TestFindOfferingID_OfferingClassReachesSDKCall is the integration test for
+// issue #694: it verifies that the offeringClassStr argument passed to
+// findOfferingID is wired all the way through to the OfferingClass field on
+// the outbound DescribeReservedInstancesOfferings SDK call. The test fails if
+// the wiring regresses (e.g. the field is dropped or hardcoded).
+func TestFindOfferingID_OfferingClassReachesSDKCall(t *testing.T) {
+	t.Parallel()
+
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	offeringOutput := &ec2.DescribeReservedInstancesOfferingsOutput{
+		ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+			{
+				ReservedInstancesOfferingId: aws.String("offering-std-123"),
+				InstanceType:                types.InstanceTypeM5Large,
+				OfferingType:                types.OfferingTypeValuesAllUpfront,
+			},
+		},
+	}
+
+	tests := []struct {
+		name              string
+		offeringClassStr  string
+		wantOfferingClass types.OfferingClassType
+	}{
+		{
+			name:              "empty string defaults to convertible",
+			offeringClassStr:  "",
+			wantOfferingClass: types.OfferingClassTypeConvertible,
+		},
+		{
+			name:              "convertible explicit reaches SDK as convertible",
+			offeringClassStr:  "convertible",
+			wantOfferingClass: types.OfferingClassTypeConvertible,
+		},
+		{
+			name:              "standard reaches SDK as standard",
+			offeringClassStr:  "standard",
+			wantOfferingClass: types.OfferingClassTypeStandard,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			inner := &MockEC2Client{}
+			inner.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+				Return(offeringOutput, nil).Once()
+
+			cap := &capturingMockEC2Client{MockEC2Client: *inner}
+			client := &Client{client: cap, region: "us-east-1"}
+
+			id, err := client.findOfferingID(context.Background(), rec, "", tc.offeringClassStr)
+			assert.NoError(t, err)
+			assert.Equal(t, "offering-std-123", id)
+
+			if assert.NotNil(t, cap.LastDescribeOfferingsInput, "DescribeReservedInstancesOfferings must have been called") {
+				assert.Equal(t, tc.wantOfferingClass, cap.LastDescribeOfferingsInput.OfferingClass,
+					"OfferingClass on the SDK call must match the configured value")
+			}
+			inner.AssertExpectations(t)
+		})
+	}
 }
