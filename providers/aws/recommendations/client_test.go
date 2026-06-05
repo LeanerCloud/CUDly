@@ -917,3 +917,37 @@ func TestMergeServiceResults_AllFailIsError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
+
+// TestSetRecLookbackPeriod_ReachesGetReservationPurchaseRecommendation asserts
+// that SetRecLookbackPeriod propagates the chosen period into the
+// LookbackPeriodInDays field of every GetReservationPurchaseRecommendation
+// call issued by GetRecommendationsForService (refs #360). This test is
+// intentionally discriminating: it would fail if recLookbackPeriod were
+// ignored and the hardcoded "7d" default were sent instead.
+func TestSetRecLookbackPeriod_ReachesGetReservationPurchaseRecommendation(t *testing.T) {
+	cases := []struct {
+		period   string
+		wantEnum types.LookbackPeriodInDays
+	}{
+		{"7d", types.LookbackPeriodInDaysSevenDays},
+		{"30d", types.LookbackPeriodInDaysThirtyDays},
+		{"60d", types.LookbackPeriodInDaysSixtyDays},
+	}
+	for _, tc := range cases {
+		t.Run(tc.period, func(t *testing.T) {
+			mock := &mockCostExplorerAPI{
+				riRecommendations: &costexplorer.GetReservationPurchaseRecommendationOutput{},
+			}
+			client := NewClientWithAPI(mock, "us-east-1")
+			client.SetRecLookbackPeriod(tc.period)
+
+			_, err := client.GetRecommendationsForService(context.Background(), common.ServiceEC2)
+			require.NoError(t, err)
+			require.NotEmpty(t, mock.riCalls, "GetReservationPurchaseRecommendation must have been called")
+			for i, call := range mock.riCalls {
+				assert.Equal(t, tc.wantEnum, call.LookbackPeriodInDays,
+					"call[%d]: LookbackPeriodInDays must match --rec-lookback-period=%s", i, tc.period)
+			}
+		})
+	}
+}
