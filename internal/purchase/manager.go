@@ -185,31 +185,66 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	return execErr
 }
 
-// allRecsAWS reports whether every recommendation in the execution targets AWS.
-// Empty provider ("") is treated as AWS because pre-multi-cloud rows predate the
-// provider field and are all AWS. An execution with no recommendations returns
-// false so it falls through to the safe-fail path (nothing to re-drive anyway).
+// allRecsSafeToRedrive reports whether every recommendation in the execution
+// can be safely re-driven without risking a double-purchase. A re-drive is safe
+// when the underlying provider purchase API is idempotent under the
+// DeriveIdempotencyToken(exec.ExecutionID, i) scheme used by execution.go.
 //
-// Azure and GCP recs are excluded: Azure re-drive idempotency is blocked by issue
-// #721 (#639), and GCP commitments are currently flagged unsupported (#640). Only
-// call executeAndFinalize on an execution when this predicate returns true AND the
-// execution has a non-empty ExecutionID (needed for DeriveIdempotencyToken).
-func allRecsAWS(exec *config.PurchaseExecution) bool {
+// Safe providers / services (issue #639):
+//   - AWS (all services): tag-guard or ClientToken deduplication (#636/#638).
+//   - Azure reservations (compute, relational-db, cache, nosql, memorydb,
+//     search, data-warehouse): DoIdempotentPurchaseTwoStep performs a
+//     tag-based lookup before purchasing (#729 / #721).
+//   - GCP compute (CUDs): server-side RequestId + deterministic name from
+//     the token (#654).
+//
+// NOT safe - safe-fail path preserved:
+//   - Azure savings-plans: the OrderAlias API uses time.Now().UnixNano() as
+//     the alias name; there is no server-side idempotency key and no
+//     tag-based lookup implemented yet. Re-driving would create a duplicate
+//     savings plan.
+//
+// Empty provider ("") is treated as AWS (pre-multi-cloud legacy rows).
+// An execution with no recommendations returns false so it falls through to the
+// safe-fail path (nothing to re-drive anyway).
+func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	if len(exec.Recommendations) == 0 {
 		return false
 	}
 	for _, rec := range exec.Recommendations {
-		if rec.Provider != "" && rec.Provider != "aws" {
+		if !recIsSafeToRedrive(rec) {
 			return false
 		}
 	}
 	return true
 }
 
-// claimAndRedrive atomically claims a stranded AWS-only execution (by
-// transitioning its status from "approved" to "running") and then re-drives it
-// via executeAndFinalize. It is extracted from RecoverStrandedApprovals to keep
-// that function's cyclomatic complexity within the gocyclo:10 limit.
+// recIsSafeToRedrive reports whether a single recommendation can be safely
+// re-driven. Extracted from allRecsSafeToRedrive to keep that function under
+// the gocyclo budget and to make per-rec exclusions explicit.
+func recIsSafeToRedrive(rec config.RecommendationRecord) bool {
+	switch rec.Provider {
+	case "", "aws":
+		// Empty provider is legacy AWS. All AWS services honour IdempotencyToken.
+		return true
+	case "azure":
+		// Azure savings-plans uses a timestamp-based alias name and has no
+		// server-side idempotency key, so a re-drive would create a duplicate.
+		// All other Azure services use DoIdempotentPurchaseTwoStep (#729).
+		return rec.Service != "savingsplans" && rec.Service != "savings-plans"
+	case "gcp":
+		// GCP compute CUDs use RequestId + deterministic name from the token (#654).
+		return true
+	default:
+		// Unknown provider: refuse to re-drive rather than risk a double-buy.
+		return false
+	}
+}
+
+// claimAndRedrive atomically claims a stranded execution (by transitioning its
+// status from "approved" to "running") and then re-drives it via
+// executeAndFinalize. It is extracted from RecoverStrandedApprovals to keep that
+// function's cyclomatic complexity within the gocyclo:10 limit.
 //
 // Returns (true, nil) when the claim was won and the re-drive completed (row is
 // now in a terminal state). A re-drive error is not fatal -- executeAndFinalize
@@ -237,7 +272,7 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 	// Update the local struct to reflect the committed DB state so
 	// finalizeExecution starts from "running" rather than "approved".
 	exec.Status = claimed.Status
-	logging.Infof("Recovering stranded AWS-only execution %s via idempotent re-drive (issue #632)", exec.ExecutionID)
+	logging.Infof("Recovering stranded execution %s via idempotent re-drive (issue #639)", exec.ExecutionID)
 	if driveErr := m.executeAndFinalize(ctx, exec); driveErr != nil {
 		logging.Errorf("Re-drive of stranded execution %s failed: %v", exec.ExecutionID, driveErr)
 		// Persistence failures (ErrAuditLoss) are non-benign: the row was CAS-ed
@@ -318,23 +353,27 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 }
 
 // RecoverStrandedApprovals finds executions stuck in the "approved" status past
-// staleApprovedThreshold and either re-drives them idempotently (AWS-only
-// executions with a durable ExecutionID) or drives them into a terminal "failed"
-// state (mixed/Azure/GCP or legacy rows without a stable ExecutionID).
+// staleApprovedThreshold and either re-drives them idempotently (executions
+// where every rec is safe to re-drive and the row has a durable ExecutionID)
+// or drives them into a terminal "failed" state (rows with unsafe recs or
+// without a stable ExecutionID).
 //
-// AWS-only path (issue #632 Option 5): all AWS executors derive a deterministic
-// per-rec idempotency token via common.DeriveIdempotencyToken(exec.ExecutionID, i)
-// at purchase time (execution.go:428). Re-driving with the same ExecutionID
-// produces the same token, so AWS dedupes the second call and no double-purchase
-// occurs. The row transitions from "approved" directly to "completed" (or
-// "failed"/"partially_completed" on a genuine error), bypassing the manual Retry
-// step required by the old safe-fail path.
+// Idempotent re-drive path (issue #639): all AWS, Azure reservations, and GCP
+// compute service clients derive or look up a deterministic idempotency key
+// from DeriveIdempotencyToken(exec.ExecutionID, i). Re-driving with the same
+// ExecutionID produces the same token, so the cloud provider dedupes the second
+// call and no double-purchase occurs. The row transitions directly to "completed"
+// (or "failed"/"partially_completed" on a genuine error), bypassing the manual
+// Retry step required by the old safe-fail path. See allRecsSafeToRedrive for
+// which provider/service combinations are eligible.
 //
-// Safe-fail path (mixed/Azure/GCP/legacy): Azure two-step idempotency is blocked
-// by issue #721; GCP is flagged unsupported (#640). Executions without a stable
-// ExecutionID cannot derive tokens safely. These fall through to the original
-// behaviour: the row is atomically transitioned to "failed" so it surfaces in
-// History and can be Retry-ed by an operator after confirming the cloud-side state.
+// Safe-fail path: Azure savings-plans recs are excluded because the OrderAlias
+// API uses a timestamp-based alias name with no idempotency key. Executions
+// without a stable ExecutionID (legacy rows) also fall through because
+// DeriveIdempotencyToken("", i) would produce the same token set for every
+// such row. These fall through to the original behaviour: the row is atomically
+// transitioned to "failed" so it surfaces in History and can be Retry-ed by
+// an operator after confirming the cloud-side state.
 //
 // The transition in the safe-fail path is atomic: TransitionExecutionStatus only
 // flips rows still in "approved", so if the original run finally completes between
@@ -350,12 +389,12 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	for i := range stranded {
 		exec := &stranded[i]
 
-		// AWS-only re-drive path (issue #632 Option 5): all AWS executors honour
+		// Idempotent re-drive path (issue #639): all recs honour
 		// opts.IdempotencyToken via DeriveIdempotencyToken(exec.ExecutionID, i),
-		// so a second call with the same ExecutionID is a safe no-op on the AWS
-		// side. The ExecutionID must be non-empty to derive a unique token; an
-		// empty ID would map every legacy row to the same token set.
-		if allRecsAWS(exec) && exec.ExecutionID != "" {
+		// so a second call with the same ExecutionID is a safe no-op on the
+		// provider side. The ExecutionID must be non-empty to derive a unique
+		// token; an empty ID would map every legacy row to the same token set.
+		if allRecsSafeToRedrive(exec) && exec.ExecutionID != "" {
 			counted, driveErr := m.claimAndRedrive(ctx, exec)
 			if driveErr != nil {
 				return recovered, driveErr

@@ -319,12 +319,13 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 }
 
 // TestManager_RecoverStrandedApprovals_FailsStrandedRow is the regression test
-// for issue #632 safe-fail path: an Azure execution flipped to "approved" whose
-// synchronous purchase run was interrupted before it finalized must NOT stay
-// permanently "approved". Azure re-drive idempotency is blocked by issue #721, so
-// the recovery sweep drives the row into a terminal "failed" state with a clear
-// error and does NOT re-run the purchase (no provider/service-client calls),
-// eliminating any double-purchase risk for non-AWS providers.
+// for issue #632 safe-fail path: an Azure Savings Plans execution flipped to
+// "approved" whose synchronous purchase run was interrupted before it finalized
+// must NOT stay permanently "approved". Azure Savings Plans re-drive is unsafe
+// because the OrderAlias API uses a timestamp-based alias name with no server-side
+// idempotency key (#639), so the recovery sweep drives the row into a terminal
+// "failed" state with a clear error and does NOT re-run the purchase (no
+// provider/service-client calls), eliminating double-purchase risk.
 func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -336,8 +337,8 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 		PlanID:      "plan-456",
 		Status:      "approved",
 		Recommendations: []config.RecommendationRecord{
-			// Azure provider: falls through to safe-fail path (issue #721 blocks re-drive).
-			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 500.0, Selected: true, Purchased: false},
+			// Azure Savings Plans: safe-fail path because OrderAlias has no idempotency key.
+			{Provider: "azure", Service: "savingsplans", ResourceType: "Compute", Region: "eastus", Count: 1, UpfrontCost: 500.0, Selected: true, Purchased: false},
 		},
 	}
 	failedRow := stranded
@@ -366,7 +367,7 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	assert.Equal(t, 1, recovered)
 
 	require.NotNil(t, saved)
-	assert.Equal(t, "failed", saved.Status, "stranded Azure row must become terminally failed, never stay approved")
+	assert.Equal(t, "failed", saved.Status, "stranded Azure Savings Plans row must become terminally failed, never stay approved")
 	assert.NotEmpty(t, saved.Error, "the failed row must carry a clear, operator-readable error")
 	assert.Contains(t, saved.Error, "interrupted")
 	assert.False(t, saved.Recommendations[0].Purchased, "recovery must not mark anything purchased")
@@ -494,22 +495,187 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
 }
 
-// TestManager_RecoverStrandedApprovals_MixedAWSAzureSafeFails verifies that a
-// stranded execution containing both AWS and Azure recommendations falls through
-// to the safe-fail path rather than being re-driven. Azure re-drive idempotency
-// is blocked by issue #721; a mixed execution must never be auto-re-driven.
-func TestManager_RecoverStrandedApprovals_MixedAWSAzureSafeFails(t *testing.T) {
+// TestManager_RecoverStrandedApprovals_AzureReservationRedrives verifies that a
+// stranded Azure reservation execution (compute, database, cache, etc.) is
+// re-driven via executeAndFinalize rather than failed. All Azure reservation
+// service clients call DoIdempotentPurchaseTwoStep with opts.IdempotencyToken
+// (PR #729 / issue #721), so a re-drive with the same ExecutionID is a safe
+// no-op on the Azure side (#639).
+func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-azure-res-stranded",
+		PlanID:      "plan-azure-res",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "azure", Service: "compute", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 300.0, Selected: true, Purchased: false},
+		},
+	}
+	runningRow := stranded
+	runningRow.Status = "running"
+
+	plan := &config.PurchasePlan{
+		ID:   "plan-azure-res",
+		Name: "Azure Reservation Plan",
+		RampSchedule: config.RampSchedule{
+			CurrentStep: 0,
+			TotalSteps:  2,
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// CAS claim: approved -> running before re-drive.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running").
+		Return(&runningRow, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-azure-res").Return(plan, nil).Twice()
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	var saved *config.PurchaseExecution
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
+		Return(nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+		Success:      true,
+		CommitmentID: "azure-res-idempotent-order-id",
+	}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, recovered, "Azure reservation strand must be counted as recovered after re-drive")
+
+	require.NotNil(t, saved)
+	assert.Equal(t, "completed", saved.Status, "successfully re-driven Azure reservation must be completed, not failed")
+
+	// Provider was reached: re-drive called PurchaseCommitment exactly once.
+	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
+	// CAS claim (approved -> running) was called; "failed" transition was not.
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
+}
+
+// TestManager_RecoverStrandedApprovals_GCPRedrives verifies that a stranded GCP
+// compute execution is re-driven via executeAndFinalize rather than failed. The GCP
+// compute client uses server-side RequestId + deterministic name from the
+// IdempotencyToken (#654), so a re-drive with the same ExecutionID is a safe no-op
+// on the GCP side (#639).
+func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockServiceClient := new(MockServiceClient)
+
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
+
+	stranded := config.PurchaseExecution{
+		ExecutionID: "exec-gcp-stranded",
+		PlanID:      "plan-gcp",
+		Status:      "approved",
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "gcp", Service: "compute", ResourceType: "n2-standard-4", Region: "us-central1", Count: 2, UpfrontCost: 150.0, Selected: true, Purchased: false},
+		},
+	}
+	runningRow := stranded
+	runningRow.Status = "running"
+
+	plan := &config.PurchasePlan{
+		ID:   "plan-gcp",
+		Name: "GCP CUD Plan",
+		RampSchedule: config.RampSchedule{
+			CurrentStep: 0,
+			TotalSteps:  2,
+		},
+	}
+
+	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
+		Return([]config.PurchaseExecution{stranded}, nil)
+	// CAS claim: approved -> running before re-drive.
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running").
+		Return(&runningRow, nil)
+	mockStore.On("GetPurchasePlan", ctx, "plan-gcp").Return(plan, nil).Twice()
+	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	var saved *config.PurchaseExecution
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
+		Return(nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "us-central1").Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+		Success:      true,
+		CommitmentID: "cud-idempotent-gcp",
+	}, nil)
+
+	manager := &Manager{
+		config:          mockStore,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		dashboardURL:    "https://dashboard.example.com",
+	}
+
+	recovered, err := manager.RecoverStrandedApprovals(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, recovered, "GCP strand must be counted as recovered after re-drive")
+
+	require.NotNil(t, saved)
+	assert.Equal(t, "completed", saved.Status, "successfully re-driven GCP execution must be completed, not failed")
+
+	// Provider was reached: re-drive called PurchaseCommitment exactly once.
+	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
+	// CAS claim (approved -> running) was called; "failed" transition was not.
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
+}
+
+// TestManager_RecoverStrandedApprovals_MixedAWSAzureSPSafeFails verifies that a
+// stranded execution containing AWS and Azure Savings Plans recommendations falls
+// through to the safe-fail path rather than being re-driven. Azure Savings Plans
+// uses a timestamp-based alias name with no idempotency key, so a mixed execution
+// that includes at least one savings-plans rec must never be auto-re-driven.
+func TestManager_RecoverStrandedApprovals_MixedAWSAzureSPSafeFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
 
 	stranded := config.PurchaseExecution{
-		ExecutionID: "exec-mixed",
-		PlanID:      "plan-mixed",
+		ExecutionID: "exec-mixed-sp",
+		PlanID:      "plan-mixed-sp",
 		Status:      "approved",
 		Recommendations: []config.RecommendationRecord{
 			{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, UpfrontCost: 100.0, Selected: true},
-			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 100.0, Selected: true},
+			// Azure Savings Plans: not safe for re-drive; entire execution falls to safe-fail.
+			{Provider: "azure", Service: "savingsplans", ResourceType: "Compute", Region: "eastus", Count: 1, UpfrontCost: 100.0, Selected: true},
 		},
 	}
 	failedRow := stranded
@@ -517,7 +683,7 @@ func TestManager_RecoverStrandedApprovals_MixedAWSAzureSafeFails(t *testing.T) {
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-mixed", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-mixed-sp", []string{"approved"}, "failed").
 		Return(&failedRow, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
@@ -531,25 +697,27 @@ func TestManager_RecoverStrandedApprovals_MixedAWSAzureSafeFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, recovered)
 
-	// No provider call: mixed execution falls through to safe-fail, not re-driven.
+	// No provider call: execution with savings-plans rec falls through to safe-fail.
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertExpectations(t)
 }
 
-// TestManager_RecoverStrandedApprovals_PureAzureSafeFails verifies that a stranded
-// execution whose every recommendation targets Azure falls through to the safe-fail
-// path and is never re-driven (issue #721 guard against future regression).
-func TestManager_RecoverStrandedApprovals_PureAzureSafeFails(t *testing.T) {
+// TestManager_RecoverStrandedApprovals_AzureSavingsPlansSafeFails verifies that a
+// stranded execution whose every recommendation targets Azure Savings Plans falls
+// through to the safe-fail path and is never re-driven. The OrderAlias API uses
+// a timestamp-based alias name with no server-side idempotency key, so re-driving
+// would create a duplicate savings plan (#639).
+func TestManager_RecoverStrandedApprovals_AzureSavingsPlansSafeFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
 
 	stranded := config.PurchaseExecution{
-		ExecutionID: "exec-azure",
-		PlanID:      "plan-azure",
+		ExecutionID: "exec-azure-sp",
+		PlanID:      "plan-azure-sp",
 		Status:      "approved",
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 2, UpfrontCost: 400.0, Selected: true},
+			{Provider: "azure", Service: "savingsplans", ResourceType: "Compute", Region: "eastus", Count: 2, UpfrontCost: 400.0, Selected: true},
 		},
 	}
 	failedRow := stranded
@@ -557,7 +725,7 @@ func TestManager_RecoverStrandedApprovals_PureAzureSafeFails(t *testing.T) {
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-sp", []string{"approved"}, "failed").
 		Return(&failedRow, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
@@ -571,7 +739,7 @@ func TestManager_RecoverStrandedApprovals_PureAzureSafeFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, recovered)
 
-	// Safe-fail: Azure-only execution must never reach the provider.
+	// Safe-fail: Azure Savings Plans execution must never reach the provider.
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertExpectations(t)
 }
@@ -664,8 +832,8 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign(t *testin
 		ExecutionID: "exec-vanished",
 		Status:      "approved",
 		Recommendations: []config.RecommendationRecord{
-			// Azure provider falls through to safe-fail path.
-			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
+			// Azure Savings Plans falls through to safe-fail path (no idempotency key).
+			{Provider: "azure", Service: "savingsplans", ResourceType: "Compute", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
 		},
 	}
 
@@ -707,8 +875,8 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrExecutionNotInExpectedStat
 		ExecutionID: "exec-already-transitioned",
 		Status:      "approved",
 		Recommendations: []config.RecommendationRecord{
-			// Azure provider routes to safe-fail (not claimAndRedrive).
-			{Provider: "azure", Service: "reservations", ResourceType: "Standard_D4s_v3", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
+			// Azure Savings Plans routes to safe-fail (no idempotency key for re-drive).
+			{Provider: "azure", Service: "savingsplans", ResourceType: "Compute", Region: "eastus", Count: 1, UpfrontCost: 400.0, Selected: true},
 		},
 	}
 
