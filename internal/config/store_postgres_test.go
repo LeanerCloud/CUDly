@@ -265,7 +265,7 @@ func TestPostgresStore_PurchasePlans(t *testing.T) {
 		}
 
 		// List all plans
-		retrieved, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
+		retrieved, err := store.ListPurchasePlans(ctx, config.PurchasePlanFilter{})
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(retrieved), 2)
 	})
@@ -351,7 +351,7 @@ func TestPostgresStore_PurchaseHistory(t *testing.T) {
 			Term:             3,
 			Payment:          "all-upfront",
 			UpfrontCost:      2250.00,
-			MonthlyCost:      pf(0),
+			MonthlyCost:      func() *float64 { v := 0.0; return &v }(),
 			EstimatedSavings: 450.00,
 			// PlanID intentionally left empty since it needs to be a valid UUID
 			PlanName: "Test Plan",
