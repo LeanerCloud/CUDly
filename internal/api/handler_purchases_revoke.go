@@ -35,7 +35,9 @@ import (
 // AzureRevocationWindowDays is the number of days after purchase within which
 // Azure reservations are eligible for a return (refund). Per Azure docs:
 // https://learn.microsoft.com/azure/cost-management-billing/reservations/exchange-and-refund-azure-reservations
-const AzureRevocationWindowDays = 7
+// Aliases config.AzureRevocationWindowDays so the purchase-write path and this
+// endpoint share a single source of truth for the window length.
+const AzureRevocationWindowDays = config.AzureRevocationWindowDays
 
 // azureReturnClient is the narrow interface over armreservations.ReturnClient
 // used by the revoke handler. Extracted for test injection.
@@ -178,7 +180,13 @@ func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string
 // reservation ID are parsed from the purchase_id ARM resource path stored at
 // purchase time.
 func (h *Handler) revokeAzurePurchase(ctx context.Context, record *config.PurchaseHistoryRecord) (any, error) {
+	// Prefer the window stamped on the row at purchase time (single source of
+	// truth, issue #290). Fall back to recomputing from Timestamp for legacy
+	// rows written before the column was populated, so they remain revocable.
 	windowClosesAt := record.Timestamp.AddDate(0, 0, AzureRevocationWindowDays)
+	if record.RevocationWindowClosesAt != nil {
+		windowClosesAt = *record.RevocationWindowClosesAt
+	}
 	if time.Now().UTC().After(windowClosesAt) {
 		return nil, NewClientError(422, fmt.Sprintf(
 			"Azure reservation return window closed at %s (%d days after purchase)",
@@ -220,6 +228,15 @@ func (h *Handler) callAzureReturn(
 	record *config.PurchaseHistoryRecord,
 	orderID, reservationID string,
 ) (any, error) {
+	// Guard against an order-only ARM path (no /reservations/{id} segment),
+	// which parseAzureReservationIDs returns with an empty reservationID.
+	// Submitting a Return for an empty reservation would either fail opaquely
+	// or, worse, be misinterpreted by the API; reject it up front so the
+	// caller gets a clear, actionable error instead.
+	if orderID == "" || reservationID == "" {
+		return nil, NewClientError(422, "cannot determine Azure reservation ID from purchase record; contact Azure Support to request a refund")
+	}
+
 	// Step 1: CalculateRefund to obtain a sessionId required by the Return API.
 	quantity := int32(record.Count) //nolint:gosec // Count > 0 validated at purchase
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{

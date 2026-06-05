@@ -309,6 +309,61 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 	assert.False(t, isClient, "server-side Azure errors should not be wrapped as 4xx ClientError")
 }
 
+// TestRevokePurchase_UsesStampedWindow asserts the window check reads
+// RevocationWindowClosesAt (the value stamped at purchase time, issue #290) as
+// the single source of truth, not a recompute from Timestamp. A row whose
+// Timestamp is recent (would pass a recompute) but whose stamped window is in
+// the past must be denied -- proving the stamped column drives the decision.
+func TestRevokePurchase_UsesStampedWindow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
+
+	r := armReservationRecord()
+	// Timestamp is recent (a Timestamp-based recompute would say "open")...
+	r.Timestamp = time.Now().UTC().Add(-1 * time.Hour)
+	// ...but the stamped window already closed an hour ago.
+	closed := time.Now().UTC().Add(-1 * time.Hour)
+	r.RevocationWindowClosesAt = &closed
+	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, ce.message, "window closed")
+}
+
+// TestRevokePurchase_EmptyReservationIDRejected asserts callAzureReturn rejects
+// an order-only ARM path (empty reservationID) up front rather than submitting
+// an empty Return to Azure (issue #290 robustness gap).
+func TestRevokePurchase_EmptyReservationIDRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	// No MarkPurchaseRevoked / client calls expected: must reject before any API.
+	calcClient := &stubCalcRefundClient{err: errors.New("should-not-be-called")}
+	returnClient := &stubReturnClient{err: errors.New("should-not-be-called")}
+
+	r := armReservationRecord()
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, ce.message, "reservation ID")
+}
+
 // --- parseAzureReservationIDs ---
 
 func TestParseAzureReservationIDs(t *testing.T) {

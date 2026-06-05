@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -562,6 +563,30 @@ type PurchaseHistoryFilter struct {
 	// Limit caps the row count; clamped to [1, MaxListLimit] with a
 	// DefaultListLimit fallback when <= 0.
 	Limit int
+}
+
+// AzureRevocationWindowDays is the length of the Azure reservation free-cancel
+// window: a reservation can be returned for a full refund within this many days
+// of purchase (issue #290). It is the single source of truth for the window,
+// referenced both at purchase-write time (to stamp
+// PurchaseHistoryRecord.RevocationWindowClosesAt) and by the revoke endpoint's
+// window check, so the two never drift.
+const AzureRevocationWindowDays = 7
+
+// RevocationWindowClosesAtFor returns the timestamp at which the in-app revoke
+// button should stop being offered for a purchase of the given provider made at
+// purchaseTime, or nil when the provider has no in-app free-cancel window.
+//
+// Only Azure has a direct-API free-cancel window in Phase 1. AWS EC2 RIs have a
+// 24h window but no direct cancel API (revocation goes through an AWS Support
+// case, out of Phase-1 scope), and GCP commitments have no free-cancel window
+// at all, so both return nil and the History UI hides the button.
+func RevocationWindowClosesAtFor(provider string, purchaseTime time.Time) *time.Time {
+	if strings.EqualFold(provider, "azure") {
+		closesAt := purchaseTime.AddDate(0, 0, AzureRevocationWindowDays)
+		return &closesAt
+	}
+	return nil
 }
 
 // PurchaseHistoryRecord is the response-layer representation for rows on the
