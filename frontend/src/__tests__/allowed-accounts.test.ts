@@ -29,7 +29,11 @@
 // ---------------------------------------------------------------------------
 
 jest.mock('../api', () => ({
-  listAccounts: jest.fn(),
+  // #949/#951: the topbar dropdown now reads the minimal-disclosure endpoint
+  // (view:recommendations) instead of the view:accounts list. The backend
+  // applies the same allowed_accounts filter, so the mock still stands in for
+  // a backend-filtered subset.
+  listAccountsMinimal: jest.fn(),
   getHistory: jest.fn(),
   cancelPurchase: jest.fn(),
 }));
@@ -150,7 +154,7 @@ describe('Account chip - allowed_accounts enforcement (issue #313)', () => {
   test('chip lists only the accounts returned by listAccounts (backend-filtered subset)', async () => {
     // Simulate backend returning only the two accounts the user is allowed
     // to access (the rest are filtered server-side by allowed_accounts).
-    (api.listAccounts as jest.Mock).mockResolvedValue([
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
       { id: 'allowed-1', name: 'Prod AWS', external_id: '111111111111' },
       { id: 'allowed-2', name: 'Staging AWS', external_id: '222222222222' },
     ]);
@@ -173,7 +177,7 @@ describe('Account chip - allowed_accounts enforcement (issue #313)', () => {
   });
 
   test('chip does not contain accounts absent from the listAccounts response', async () => {
-    (api.listAccounts as jest.Mock).mockResolvedValue([
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
       { id: 'allowed-only', name: 'Allowed Prod', external_id: '999999999999' },
     ]);
 
@@ -193,7 +197,7 @@ describe('Account chip - allowed_accounts enforcement (issue #313)', () => {
   });
 
   test('chip shows only All Accounts when listAccounts returns empty list (zero allowed accounts)', async () => {
-    (api.listAccounts as jest.Mock).mockResolvedValue([]);
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([]);
 
     initTopbarFilters();
     await new Promise((r) => setTimeout(r, 0));
@@ -221,7 +225,7 @@ describe('History list - allowed_accounts enforcement (issue #313)', () => {
     jest.clearAllMocks();
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN);
     (confirmDialog as jest.Mock).mockResolvedValue(true);
-    (api.listAccounts as jest.Mock).mockResolvedValue([]);
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([]);
   });
 
   test('renders exactly the rows returned by getHistory (no extra client-side rows)', async () => {

@@ -14,7 +14,9 @@
  */
 
 jest.mock('../api', () => ({
-  listAccounts: jest.fn(),
+  // #949/#951: the dropdown now uses the minimal-disclosure endpoint
+  // (view:recommendations) so it populates for Standard / Read-Only users.
+  listAccountsMinimal: jest.fn(),
 }));
 
 import * as api from '../api';
@@ -34,7 +36,7 @@ describe('Topbar filters', () => {
     setupSlot();
     state.setCurrentProvider('');
     state.setCurrentAccountIDs([]);
-    (api.listAccounts as jest.Mock).mockResolvedValue([]);
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -49,6 +51,31 @@ describe('Topbar filters', () => {
     // chips: provider + account.
     const chips = slot?.querySelectorAll('.chip-select-root');
     expect(chips?.length).toBe(2);
+  });
+
+  // #951: a Standard / Read-Only user (who can call listAccountsMinimal but
+  // would 403 on the full listAccounts) gets a populated Account dropdown.
+  // The mock stands in for the minimal endpoint succeeding for such a user.
+  test('populates the account dropdown from the minimal endpoint (Standard user, #951)', async () => {
+    (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
+      { id: 'acct-1', name: 'Prod', external_id: '111', provider: 'aws' },
+      { id: 'acct-2', name: 'Dev', external_id: '222', provider: 'aws' },
+    ]);
+
+    initTopbarFilters();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.listAccountsMinimal).toHaveBeenCalled();
+
+    // Open the account chip (second trigger) and assert the real accounts show
+    // up beyond the seed "All Accounts" option.
+    const triggers = document.querySelectorAll<HTMLButtonElement>('.chip-select');
+    (triggers[1] as HTMLButtonElement).click();
+    const optionValues = Array.from(
+      document.querySelectorAll<HTMLLIElement>('.chip-select-option'),
+    ).map((el) => el.dataset['value']);
+    expect(optionValues).toContain('acct-1');
+    expect(optionValues).toContain('acct-2');
   });
 
   // Issue #477: URL hydration + writeback tests.
@@ -84,7 +111,7 @@ describe('Topbar filters', () => {
 
     test('account-chip change writes back to URL query params', async () => {
       window.history.replaceState({}, '', '/opportunities');
-      (api.listAccounts as jest.Mock).mockResolvedValue([
+      (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
         { id: 'acct-99', name: 'prod', external_id: '999' },
       ]);
 
@@ -111,7 +138,7 @@ describe('Topbar filters', () => {
     test('selecting "All Accounts" removes the account query param', async () => {
       // Start with an account already selected via URL.
       window.history.replaceState({}, '', '/opportunities?account=acct-7');
-      (api.listAccounts as jest.Mock).mockResolvedValue([
+      (api.listAccountsMinimal as jest.Mock).mockResolvedValue([
         { id: 'acct-7', name: 'old', external_id: '7' },
       ]);
 
@@ -167,7 +194,7 @@ describe('Topbar filters', () => {
     const firstBlocker = new Promise<unknown[]>((r) => { resolveFirst = r; });
     let resolveSecond: ((value: unknown[]) => void) | undefined;
     const secondBlocker = new Promise<unknown[]>((r) => { resolveSecond = r; });
-    (api.listAccounts as jest.Mock)
+    (api.listAccountsMinimal as jest.Mock)
       .mockReturnValueOnce(firstBlocker)
       .mockReturnValueOnce(secondBlocker);
 

@@ -3467,9 +3467,14 @@ function mountBottomActionBox(): HTMLElement | null {
     const noPurchaseBanner = document.createElement('div');
     noPurchaseBanner.className = 'info-banner';
     noPurchaseBanner.setAttribute('role', 'note');
+    // Scope the message to the execute-purchases capability only (row 550):
+    // Standard users CAN create plans, so the banner must not imply otherwise.
+    // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
+    // is admin-only, so a non-admin can't self-serve there — only an admin can
+    // add them to the Purchaser group.
     noPurchaseBanner.textContent =
-      'You can view but not execute purchases. ' +
-      'Ask an admin to add you to the Purchaser group, or add yourself in Settings → Users.';
+      'You can view and plan, but not execute purchases directly. ' +
+      'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
     box.appendChild(noPurchaseBanner);
   }
 

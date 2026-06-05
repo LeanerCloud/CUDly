@@ -1269,7 +1269,10 @@ async function handlePlanAccountSearch(value: string): Promise<void> {
   try {
     const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement | null;
     const provider = providerSelect?.value as api.Provider | undefined;
-    const accounts = await api.listAccounts({ search: value, ...(provider ? { provider } : {}) });
+    // Minimal-disclosure list (view:recommendations) so plan-account search
+    // works for Standard / Read-Only users; the full view:accounts list 403s
+    // for them. See issues #949/#951.
+    const accounts = await api.listAccountsMinimal({ search: value, ...(provider ? { provider } : {}) });
     suggestions.textContent = '';
     if (accounts.length === 0) {
       suggestions.classList.add('hidden');
@@ -1389,7 +1392,12 @@ function prefillPurchaseConfigFromCommitment(rec: api.Recommendation): void {
  */
 async function prefillAccountChipFromId(accountId: string, session: number): Promise<void> {
   try {
-    const account = await api.getAccount(accountId);
+    // Resolve via the minimal-disclosure list (view:recommendations) instead of
+    // GET /api/accounts/:id (view:accounts) so the target prefills for
+    // Standard / Read-Only users too — the per-id endpoint 403s for them, which
+    // previously left the target empty and made Save Plan silently no-op once
+    // the empty-target guard rejected submit. See issues #949/#951.
+    const account = (await api.listAccountsMinimal()).find((a) => a.id === accountId);
     // Session guard: discard the result if the modal was closed and reopened
     // while this promise was in-flight. planModalSession is incremented on
     // each new modal open, so a mismatch means this callback is stale.

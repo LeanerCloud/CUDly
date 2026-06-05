@@ -241,6 +241,12 @@ func (r *Router) registerRoutes() {
 		// response shape, not gated at the route layer.
 		{ExactPath: "/api/accounts/discover-org", Method: "POST", Handler: r.discoverOrgAccountsHandler, Auth: AuthAdmin},
 		{ExactPath: "/api/accounts/self", Method: "POST", Handler: r.createSelfAccountHandler, Auth: AuthAdmin},
+		// Minimal-disclosure accounts list for the global filter + plan-target
+		// prefill (issues #949/#951). Gated in-handler on view:recommendations so
+		// Standard / Read-Only users can populate the dropdown; the full account
+		// object stays behind view:accounts on GET /api/accounts below. Must
+		// precede the generic "/api/accounts/" GET prefix route.
+		{ExactPath: "/api/accounts/list", Method: "GET", Handler: r.listAccountsMinimalHandler, Auth: AuthUser},
 		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler, Auth: AuthUser},
 		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler, Auth: AuthAdmin},
 		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler, Auth: AuthAdmin},
@@ -772,6 +778,10 @@ func formatNotFoundError(method, path string) error {
 
 func (r *Router) listAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
 	return r.h.listAccounts(ctx, req)
+}
+
+func (r *Router) listAccountsMinimalHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.listAccountsMinimal(ctx, req)
 }
 
 func (r *Router) createAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
