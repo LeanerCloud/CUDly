@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -11,6 +13,15 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// hashSessionTokenForTest mirrors auth.hashSessionToken (private). Session
+// tokens are stored as sha256+hex so the constant-time guard in
+// auth.Service.ValidateSession matches when both sides are derived from the
+// same raw token.
+func hashSessionTokenForTest(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
 func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) {
 	t.Helper()
@@ -57,9 +68,10 @@ func TestAuthServiceAdapter_ValidateSession(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
-	// Token gets hashed, use mock.Anything
+	// Token gets hashed; the stored Token must match hashSessionToken("valid-token")
+	// so the constant-time guard in ValidateSession (PR #837 follow-up) succeeds.
 	mockStore.On("GetSession", ctx, mock.AnythingOfType("string")).Return(&auth.Session{
-		Token:     "hashed-token",
+		Token:     hashSessionTokenForTest("valid-token"),
 		UserID:    "user-1",
 		Email:     "test@example.com",
 		ExpiresAt: time.Now().Add(time.Hour),
@@ -230,9 +242,10 @@ func TestAuthServiceAdapter_ValidateCSRFToken(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
-	// Token gets hashed, so use mock.Anything
+	// Token gets hashed; the stored Token must match hashSessionToken("session-token")
+	// so the constant-time guard in ValidateSession (PR #837 follow-up) succeeds.
 	mockStore.On("GetSession", ctx, mock.AnythingOfType("string")).Return(&auth.Session{
-		Token:     "hashed-session-token",
+		Token:     hashSessionTokenForTest("session-token"),
 		UserID:    "user-1",
 		CSRFToken: "csrf-token",
 		ExpiresAt: time.Now().Add(time.Hour),

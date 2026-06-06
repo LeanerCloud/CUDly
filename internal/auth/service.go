@@ -324,6 +324,13 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session not found")
 	}
 
+	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// GetSession does `WHERE token = $1` which is not constant-time in PostgreSQL;
+	// align with ValidateUserAPIKey / validateResetToken (issue #392 PR #837).
+	if subtle.ConstantTimeCompare([]byte(session.Token), []byte(hashedToken)) != 1 {
+		return nil, fmt.Errorf("session not found")
+	}
+
 	if session.ExpiresAt.IsZero() {
 		return nil, fmt.Errorf("session has no expiry: data integrity error")
 	}
