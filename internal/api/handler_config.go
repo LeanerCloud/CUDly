@@ -23,7 +23,7 @@ func sourceCloud() string {
 }
 
 // Configuration handlers
-func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
+func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*ConfigResponse, error) {
 	globalCfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -34,12 +34,21 @@ func (h *Handler) getConfig(ctx context.Context) (*ConfigResponse, error) {
 		return nil, err
 	}
 
-	return &ConfigResponse{
-		Global:         globalCfg,
-		Services:       services,
-		SourceCloud:    sourceCloud(),
-		SourceIdentity: h.resolveSourceIdentity(ctx),
-	}, nil
+	resp := &ConfigResponse{
+		Global:      globalCfg,
+		Services:    services,
+		SourceCloud: sourceCloud(),
+	}
+
+	// SourceIdentity contains the host cloud account ID (AWS account number,
+	// Azure tenant ID, etc.). Only expose it to admin sessions so that
+	// non-admin users cannot extract the cloud identity of the CUDly host
+	// account (issue #407).
+	if _, adminErr := h.requireAdmin(ctx, req); adminErr == nil {
+		resp.SourceIdentity = h.resolveSourceIdentity(ctx)
+	}
+
+	return resp, nil
 }
 
 // preserveOmittedRecommendationFields merges persisted GlobalConfig values

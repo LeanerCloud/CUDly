@@ -427,7 +427,7 @@ func (r *Router) upcomingPurchasesHandler(ctx context.Context, req *events.Lambd
 }
 
 func (r *Router) getConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getConfig(ctx)
+	return r.h.getConfig(ctx, req)
 }
 
 func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
