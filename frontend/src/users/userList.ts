@@ -182,6 +182,7 @@ function renderUserExpandPanel(user: APIUser): string {
     <div class="expand-panel-body">
       <div class="expand-panel-groups">
         <h5>Group Membership</h5>
+        <p class="text-muted">A user receives the combined (union) of all selected groups&#8217; permissions, so adding a lower-privilege group alongside a higher one has no effect.</p>
         ${availableGroups.length === 0
           ? '<p class="text-muted">No groups defined yet.</p>'
           : `<div class="group-checkbox-list">
