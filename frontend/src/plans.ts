@@ -700,9 +700,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   // sees NO action buttons, mirroring the backend ownership gate. This is
   // a UX gate; the backend authorizeExecutionManagement is the real
   // boundary.
-  const isOwner = canManageScheduledPurchase(purchase);
-  const canManagePlan = canAccess('update', 'plans') && isOwner;
-  const canDisablePlan = canAccess('delete', 'plans') && isOwner;
+  const canManagePurchase = canManageScheduledPurchase(purchase);
+  const canRunPurchase = canManagePurchase && canAccess('execute', 'purchases') && canRun;
+  const canPauseOrResumePurchase = canManagePurchase && canAccess('update', 'purchases');
+  const canEditPlan = canManagePurchase && canAccess('update', 'plans');
+  const canDisablePlan = canManagePurchase && canAccess('delete', 'purchases');
 
   return `
     <tr class="planned-purchase-row ${statusClass}">
@@ -720,10 +722,10 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canManagePlan && canRun ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canManagePlan && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canManagePlan && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canManagePlan ? `<button data-action="edit" data-id="${purchase.id}" data-plan-id="${purchase.plan_id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${purchase.id}" data-plan-id="${purchase.plan_id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
         ${canDisablePlan ? `<button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>

@@ -1319,6 +1319,56 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 	assert.Equal(t, "cancelled", result.Status)
 }
 
+// TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409 is a
+// regression test for CR #995 Finding 1: when TransitionExecutionStatus
+// returns ErrExecutionNotInExpectedStatus but the fetched row is NOT
+// "cancelled" (e.g. the execution raced to "running"), cancelOrRecoverExecution
+// must return a 409 and must NOT call disablePlan (no GetPurchasePlan call).
+func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+
+	execID := "abababab-abab-abab-abab-abababababab"
+	planID := "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd"
+
+	conflictErr := fmt.Errorf("%w: execution %s cannot transition", config.ErrExecutionNotInExpectedStatus, execID)
+
+	// The execution raced to "running" — not "cancelled".
+	runningExec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      "running",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").Return(nil, conflictErr)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(runningExec, nil)
+	// GetPurchasePlan must NOT be called — AssertExpectations verifies this.
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.Error(t, err, "racing-to-running execution must fail")
+	assert.Nil(t, result)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code, "status mismatch must return 409")
+	assert.Contains(t, ce.message, "cannot be cancelled", "error must name the action")
+	assert.Contains(t, ce.message, "running", "error must include actual status")
+}
+
 func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

@@ -78,9 +78,6 @@ const ownedPurchase = {
   created_by_user_id: CREATOR_ID,
 };
 
-// Same row but created by someone else.
-const othersPurchase = { ...ownedPurchase, created_by_user_id: OTHER_ID };
-
 // Legacy row with no creator (pre-migration NULL).
 const legacyPurchase = { ...ownedPurchase, created_by_user_id: undefined as string | undefined };
 
@@ -91,7 +88,9 @@ const setUser = (id: string, opts: { updateAny?: boolean } = {}) => {
   const effectivePermissions = [
     { action: 'update', resource: 'plans' },
     { action: 'delete', resource: 'plans' },
+    { action: 'execute', resource: 'purchases' },
     { action: 'update', resource: 'purchases' },
+    { action: 'delete', resource: 'purchases' },
   ];
   if (opts.updateAny) {
     effectivePermissions.push({ action: 'update-any', resource: 'purchases' });
@@ -151,7 +150,7 @@ describe('Scheduled-purchase ownership gating (issue #950)', () => {
 
   test("update-any holder sees buttons on another user's scheduled purchase", async () => {
     setUser(OTHER_ID, { updateAny: true });
-    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [othersPurchase] });
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [ownedPurchase] });
     await loadPlans();
     const html = ppHtml();
     expect(html).toContain('data-action="run"');

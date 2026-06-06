@@ -378,6 +378,11 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if existing == nil {
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
+	if existing.Status != "cancelled" {
+		return nil, NewClientError(409, fmt.Sprintf(
+			"execution %s cannot be cancelled (status=%s)",
+			executionID, existing.Status))
+	}
 	return existing, nil
 }
 
