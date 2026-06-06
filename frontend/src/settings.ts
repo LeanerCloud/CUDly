@@ -77,6 +77,13 @@ export function setGlobalDefaultsForTest(defaults: { term: number; payment: stri
   cachedGlobalDefaults = { ...defaults };
 }
 
+/** Returns true when an API error signals a 403 permission-denied response. */
+function isPermissionDeniedError(error: unknown): boolean {
+  return (error as { status?: number }).status === 403
+    && error instanceof Error
+    && error.message.startsWith('permission denied');
+}
+
 // sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
 // across modal close/reopen cycles within the same session so the operator
 // can copy the value into AWS, close the modal, and come back to the same
@@ -2981,10 +2988,7 @@ export async function loadGlobalSettings(): Promise<void> {
     // so the page degrades gracefully instead of showing a red banner.
     // All other failures (network errors, 5xx, or unrelated 403s) still
     // surface the banner.
-    const isPermissionDenied =
-      (error as { status?: number }).status === 403 &&
-      (error instanceof Error && error.message.startsWith('permission denied'));
-    if (isPermissionDenied) {
+    if (isPermissionDeniedError(error)) {
       if (loadingEl) loadingEl.classList.add('hidden');
       return;
     }
