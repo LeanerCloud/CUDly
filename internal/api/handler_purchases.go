@@ -340,29 +340,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	// Cancel the scheduled execution. The RETURNING clause gives us the
-	// parent plan_id so we can disable the plan in the same handler call.
-	//
-	// Idempotency: if TransitionExecutionStatus returns
-	// ErrExecutionNotInExpectedStatus the row is already in a terminal state
-	// (most likely "cancelled" from a previous attempt). In that case we
-	// fetch the execution to recover the PlanID and still attempt to disable
-	// the plan, so a retry never leaves plan.enabled=true.
-	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
+	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID)
 	if err != nil {
-		if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-			return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
-		}
-		// The cancel already landed (e.g. a prior request succeeded and was
-		// retried). Recover the execution so we can still disable the plan.
-		existing, getErr := h.config.GetExecutionByID(ctx, executionID)
-		if getErr != nil {
-			return nil, fmt.Errorf("disable plan: failed to get execution %s after conflict: %w", executionID, getErr)
-		}
-		if existing == nil {
-			return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
-		}
-		cancelled = existing
+		return nil, err
 	}
 
 	// Set the parent plan's enabled flag to false so the Plans page toggle
@@ -376,6 +356,29 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	}
 
 	return &StatusResponse{Status: "cancelled"}, nil
+}
+
+// cancelOrRecoverExecution transitions the execution to "cancelled" if it is
+// still in {pending, paused}. If a prior attempt already cancelled it
+// (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
+// can still drive the plan-disable side-effect, keeping the operation
+// idempotent across retries.
+func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
+	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
+	if err == nil {
+		return cancelled, nil
+	}
+	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+	}
+	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
+	if getErr != nil {
+		return nil, fmt.Errorf("disable plan: failed to get execution %s after conflict: %w", executionID, getErr)
+	}
+	if existing == nil {
+		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
+	}
+	return existing, nil
 }
 
 // disablePlan fetches the plan identified by planID and sets Enabled=false if
