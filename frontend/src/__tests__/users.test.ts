@@ -2483,3 +2483,58 @@ describe('group assignment UX (issue #998)', () => {
     });
   });
 });
+
+// ============================================================================
+// GROUP UNION HINT (issue #1001)
+// ============================================================================
+describe('group union permission hint (issue #1001)', () => {
+  const mockUsers = [
+    { id: '1', email: 'alice@test.com', groups: ['g1'], mfa_enabled: false },
+  ];
+  const mockGroups = [
+    { id: 'g1', name: 'Admins', permissions: [], description: '', allowed_accounts: [] },
+    { id: 'g2', name: 'Viewers', permissions: [], description: '', allowed_accounts: [] },
+  ];
+
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="users-list"></div>
+      <div id="user-stats"></div>
+      <div id="bulk-actions-bar" class="hidden">
+        <span id="selected-count">0</span>
+      </div>
+    `;
+    userState.setAllUsers(mockUsers as any);
+    userState.setFilteredUsers(mockUsers as any);
+    userState.setAvailableGroups(mockGroups as any);
+    userState.clearSelectedUserIds();
+    jest.clearAllMocks();
+  });
+
+  it('renders the union hint in the group membership expand panel', () => {
+    userList.renderUsers(mockUsers as any);
+
+    const expandBtn = document.querySelector<HTMLButtonElement>(
+      '.user-expand-btn[data-user-id="1"]',
+    );
+    expect(expandBtn).toBeTruthy();
+    expandBtn!.click();
+
+    const panel = document.querySelector('.user-expand-panel[data-user-id="1"]');
+    expect(panel).toBeTruthy();
+    expect(panel!.textContent).toContain('combined (union) of all selected groups');
+  });
+
+  it('hint appears in expand-panel-groups section, before the checkbox list', () => {
+    userList.renderUsers(mockUsers as any);
+
+    const expandBtn = document.querySelector<HTMLButtonElement>(
+      '.user-expand-btn[data-user-id="1"]',
+    );
+    expandBtn!.click();
+
+    const groupsSection = document.querySelector('.expand-panel-groups');
+    expect(groupsSection).toBeTruthy();
+    expect(groupsSection!.textContent).toContain('combined (union) of all selected groups');
+  });
+});
