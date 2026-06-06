@@ -341,12 +341,12 @@ Purchasing card instead — that propagates without per-account work.
 
 ### How to edit an existing override
 
-- **Inline edit Payment** on an existing override row (per #72) — pick
-  the new value from the dropdown and it persists immediately.
-- **Reset** deletes the override entirely; the account falls back to
+- **AWS overrides support inline edit** of Term, Payment, Coverage, and
+  Enabled directly on the row — each field persists immediately on change.
+- **Non-AWS overrides** (Azure, GCP) display field values as read-only text;
+  per-provider editing is tracked in #109.
+- **Delete** removes the override entirely; the account falls back to
   the global default for that (provider, service) pair.
-- Inline edit for **Term / Coverage / Enabled** is tracked in #110 —
-  for now those fields require deleting and recreating the override.
 
 ### What "Inherit" means
 
