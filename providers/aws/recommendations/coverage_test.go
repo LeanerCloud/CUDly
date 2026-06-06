@@ -132,7 +132,7 @@ func TestGetRICoverageMap_LookbackDefault(t *testing.T) {
 // window math (e.g. reverting to a hardcoded 30) causes a test failure.
 func TestGetRICoverageMap_LookbackWindowWidth(t *testing.T) {
 	cases := []struct {
-		name        string
+		name         string
 		lookbackDays int
 	}{
 		{"14-day window", 14},
