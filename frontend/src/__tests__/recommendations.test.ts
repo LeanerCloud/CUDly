@@ -2873,6 +2873,28 @@ describe('Bundle B: column header filter triggers', () => {
       // All providers must be visible so the user can switch from aws to azure.
       expect(values).toEqual(['aws', 'azure']);
     });
+
+    test('service popover pins active-filter values even when cross-filtering would omit them (alwaysInclude)', async () => {
+      // Contradictory filter state: provider=azure (only has vm) + service=ec2 (no azure rows).
+      // Opening the service popover: cross-filtering by provider=azure yields only vm.
+      // But ec2 is in the service column's own active filter, so alwaysInclude must keep it
+      // visible so the user can deselect it without first clearing the provider filter.
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        provider: { kind: 'set', values: ['azure'] },
+        service:  { kind: 'set', values: ['ec2'] },
+      });
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+      const values = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).map((cb) => cb.dataset['value']).sort();
+      // vm is visible because provider=azure cross-filter leaves only that azure row.
+      expect(values).toContain('vm');
+      // ec2 must also be visible even though no azure row has service=ec2:
+      // the alwaysInclude set pins values from the column's own active filter.
+      expect(values).toContain('ec2');
+    });
   });
 });
 
