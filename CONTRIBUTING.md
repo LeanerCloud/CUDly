@@ -74,7 +74,8 @@ go test ./...
 
 ### Go workspace and worktrees (gopls setup)
 
-The repo ships a `go.work` that lists only the primary module (`.`). This is
+The repo ships a `go.work` that lists every module in this repository (the
+root module, `pkg`, the three provider modules, and `tests/e2e`). This is
 enough for standard clones. When you are working across multiple git worktrees
 simultaneously, gopls needs each worktree's module added to the workspace or it
 flags every file in the sibling trees with `BrokenImport` / `undefined: <Type>`.
@@ -82,8 +83,8 @@ flags every file in the sibling trees with `BrokenImport` / `undefined: <Type>`.
 **Do not edit the committed `go.work`** for local paths -- they vary per
 developer and per session.
 
-Instead, create a `go.work.local` next to `go.work` (it is gitignored) and add
-your active worktrees there:
+Instead, create a `go.work.local` next to `go.work` (it is gitignored): start
+from a copy of the committed `go.work` and append your active worktrees:
 
 ```go
 // go.work.local -- gitignored, developer-local
@@ -91,6 +92,11 @@ go 1.25.0
 
 use (
     .
+    ./pkg
+    ./providers/aws
+    ./providers/azure
+    ./providers/gcp
+    ./tests/e2e
     ../.worktrees/CUDly/fix-516
     ../.worktrees/CUDly/feat-something
 )
@@ -114,8 +120,8 @@ After adding or removing a worktree, update `go.work.local` to match:
 go work edit -use $(git worktree list --porcelain | awk '/^worktree/{print $2}' | tail -n +2 | tr '\n' ' ') 2>/dev/null || true
 ```
 
-The committed `go.work` (listing only `.`) keeps `go build ./...` and CI clean
-for everyone without requiring any local setup.
+The committed `go.work` (listing only this repository's own modules) keeps
+`go build ./...` and CI clean for everyone without requiring any local setup.
 
 ### Running Tests
 
