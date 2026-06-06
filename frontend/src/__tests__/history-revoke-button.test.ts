@@ -60,7 +60,22 @@ jest.mock('../state', () => ({
 import * as api from '../api';
 import { getCurrentUser } from '../state';
 
-const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: ['administrators'] };
+// Administrators group GUID -- mirrors ADMINISTRATORS_GROUP_ID in
+// frontend/src/permissions.ts. Without this, isAdmin() returns false and
+// canAccess('admin', '*') / canAccess('revoke-any', 'purchases') in the
+// fallback branch don't grant. Seeded-group GUID, not the label string.
+const ADMIN_GROUP_ID = '00000000-0000-5000-8000-000000000001';
+const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMIN_GROUP_ID] };
+// Plain authenticated user with no revoke verbs in their effective set --
+// used by the RBAC regression test below.
+const NON_REVOKER_USER = {
+  id: 'plain-uuid',
+  email: 'plain@example.com',
+  groups: [],
+  effectivePermissions: [
+    { action: 'view', resource: 'history' },
+  ],
+};
 
 const FUTURE = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(); // +5 days
 const PAST = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // -1 hour
@@ -205,6 +220,27 @@ describe('History inline Revoke button (issue #290)', () => {
       summary: {},
       purchases: [
         makeRow({ purchase_id: 'commit-anon', revocation_window_closes_at: FUTURE }),
+      ],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toEqual([]);
+  });
+
+  // Regression guard for the missing RBAC gate (PR #804 review pass).
+  // canRevokeCompletedRow previously returned true for any signed-in user --
+  // the button rendered, then the backend 403d on click, replicating the
+  // same UX-vs-RBAC drift PR #995 caught for the approve / delete paths.
+  // canCancelPendingRow / canApprovePendingRow / canRetryFailedRow all check
+  // canAccess; canRevokeCompletedRow must do the same. With an explicit
+  // effectivePermissions set lacking revoke-* the button must be hidden.
+  test('hides Revoke when the session has no revoke-* permission', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(NON_REVOKER_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'commit-noperms', revocation_window_closes_at: FUTURE }),
       ],
     });
 

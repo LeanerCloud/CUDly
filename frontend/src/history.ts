@@ -545,8 +545,11 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 //   * provider must be "azure" (AWS and GCP have no direct cancel API);
 //   * revocation_window_closes_at must be in the future;
 //   * row must not already be revoked (revoked_at absent);
-//   * admin -> always yes; non-admin -> yes (revoke-own granted by default
-//     to all authenticated users; account-access is enforced server-side).
+//   * session must have revoke-any:purchases or revoke-own:purchases. Without
+//     this the button rendered for every signed-in user and the backend just
+//     403d, replicating the same UX-vs-RBAC drift PR #995 caught for the
+//     approve / delete paths. Mirror the peer predicates (canCancelPendingRow,
+//     canApprovePendingRow, canRetryFailedRow) which all check canAccess.
 function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'completed' && status !== '') return false;
@@ -556,7 +559,10 @@ function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
   const user = getCurrentUser();
   if (!user) return false;
-  return true;
+  // RBAC: admin or revoke-any always; otherwise revoke-own (account-scope
+  // ownership is enforced server-side, the same model as the backend handler).
+  if (canAccess('admin', '*') || canAccess('revoke-any', 'purchases')) return true;
+  return canAccess('revoke-own', 'purchases');
 }
 
 // retryThresholdReached returns true when the row has hit the soft-

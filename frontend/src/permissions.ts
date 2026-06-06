@@ -53,6 +53,8 @@ export type Action =
   // ANY user's scheduled purchase, bypassing the creator-scope ownership
   // check (issue #950). Mirrors cancel-any/approve-any on History rows.
   | 'update-any'
+  | 'revoke-own'
+  | 'revoke-any'
   | 'admin';
 
 // Resource names. Closed enum for the same reason.
