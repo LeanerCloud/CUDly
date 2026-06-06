@@ -105,6 +105,8 @@ Forgetting this rule has been a recurring failure mode in this
 project. Before declaring a "pushed and done" turn complete, confirm
 at least one `ci-watch-*` background task is armed.
 
+See also: [PR labeling](#pr-labeling--mirror-closing-issue-labels-mandatory) — every push to a PR branch must also carry the closing issue's triage labels.
+
 ## CodeRabbit loop — iterate to silence (MANDATORY)
 
 CodeRabbit reviews this repo on every push to a PR branch. The full
@@ -143,6 +145,8 @@ Actionable items AND every Nitpick is either fixed or has a
 justification reply on the thread", not "PR opened and CR pinged". When
 in doubt, copy the iteration loop above (steps 2–6) into the fork
 prompt verbatim.
+
+See also: [PR labeling](#pr-labeling--mirror-closing-issue-labels-mandatory) — label-mirroring is part of the same PR-open turn, before the first CR ping.
 
 ## PR labeling — mirror closing-issue labels (MANDATORY)
 
