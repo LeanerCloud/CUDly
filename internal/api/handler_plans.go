@@ -289,9 +289,20 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	// pointer). A retry would then duplicate rows 1-3. WithTx makes
 	// both classes of corruption impossible — the caller can safely
 	// retry on transient errors knowing nothing was committed.
+	//
+	// Issue #950: stamp the session user onto each new execution's
+	// created_by_user_id so the per-row creator-scope ownership gate
+	// (authorizeExecutionManagement) recognises the actor who scheduled
+	// the purchases as their owner. Without this the rows ship NULL and
+	// are unreachable for pause / resume / run / delete by anyone except
+	// admins / update-any holders, including the user who just clicked
+	// "Create planned purchases" for their own plan. Admin-API-key and
+	// non-UUID sessions resolve to nil, matching the executePurchase /
+	// retry paths and the migration-000041 fail-closed policy.
+	creator := resolveCreatorUserID(session)
 	created := 0
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		n, txErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, req.Count, startDate)
+		n, txErr := h.createPurchaseExecutionsTx(ctx, tx, plan, planID, req.Count, startDate, creator)
 		if txErr != nil {
 			return txErr
 		}
@@ -344,7 +355,14 @@ func (h *Handler) getPlanForPurchaseCreation(ctx context.Context, planID string)
 // Returns the number of rows that would have been committed had the
 // loop completed — used for the user-visible response on success;
 // undefined (and unused) on error since the rollback voids them all.
-func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int, startDate time.Time) (int, error) {
+//
+// creator carries the session user's UUID (or nil for the admin-API-key /
+// non-UUID-session paths) and is stamped onto every inserted row's
+// created_by_user_id so the issue-#950 ownership gate downstream can
+// recognise the actor as the rightful manager. A nil value mirrors the
+// migration-000041 fail-closed semantics: legacy / unattributed rows are
+// reachable only by admin / update-any holders.
+func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int, startDate time.Time, creator *string) (int, error) {
 	intervalDays := plan.RampSchedule.StepIntervalDays
 	if intervalDays == 0 {
 		intervalDays = 7 // Default to weekly if not set
@@ -359,12 +377,13 @@ func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, pla
 			return created, fmt.Errorf("failed to generate approval token (row %d/%d): %w", created+1, count, err)
 		}
 		execution := &config.PurchaseExecution{
-			PlanID:        planID,
-			ExecutionID:   uuid.New().String(),
-			Status:        "pending",
-			StepNumber:    plan.RampSchedule.CurrentStep + i + 1,
-			ScheduledDate: scheduledDate,
-			ApprovalToken: approvalToken,
+			PlanID:          planID,
+			ExecutionID:     uuid.New().String(),
+			Status:          "pending",
+			StepNumber:      plan.RampSchedule.CurrentStep + i + 1,
+			ScheduledDate:   scheduledDate,
+			ApprovalToken:   approvalToken,
+			CreatedByUserID: creator,
 		}
 
 		if err := h.config.SavePurchaseExecutionTx(ctx, tx, execution); err != nil {

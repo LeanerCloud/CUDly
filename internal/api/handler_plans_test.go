@@ -445,6 +445,117 @@ func TestHandler_createPlannedPurchases(t *testing.T) {
 	assert.Equal(t, 3, result.Created)
 }
 
+// TestHandler_createPlannedPurchases_StampsCreator is the issue-#950 regression
+// guard: every execution row written through POST /api/plans/{id}/purchases
+// MUST carry the session user's UUID in CreatedByUserID, otherwise the
+// per-row ownership gate (authorizeExecutionManagement in
+// handler_purchases.go) downstream cannot recognise the actor as the
+// rightful manager and the user who just scheduled the purchases is
+// locked out of pause / resume / run / delete until an admin steps in.
+//
+// Pre-fix the field shipped zero-valued (nil pointer), making every
+// freshly scheduled row look like a legacy unattributed entry.
+func TestHandler_createPlannedPurchases_StampsCreator(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	userSession := &Session{UserID: userID, Email: "u@example.com"}
+
+	plan := &config.PurchasePlan{
+		ID:   "11111111-1111-1111-1111-111111111111",
+		Name: "Test Plan",
+		RampSchedule: config.RampSchedule{
+			StepIntervalDays: 7,
+			CurrentStep:      0,
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
+
+	// Capture every saved execution's CreatedByUserID so we can assert
+	// the field is stamped on each row in the batch (not just the first).
+	var savedCreators []*string
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) {
+			exec := args.Get(1).(*config.PurchaseExecution)
+			savedCreators = append(savedCreators, exec.CreatedByUserID)
+		}).
+		Return(nil).Times(3)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	body := `{"count": 3, "start_date": "2024-12-01"}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+		Body:    body,
+	}
+	result, err := handler.createPlannedPurchases(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Created)
+
+	require.Len(t, savedCreators, 3, "expected 3 saved executions")
+	for i, c := range savedCreators {
+		require.NotNil(t, c, "execution %d shipped a nil CreatedByUserID (issue #950 regression)", i)
+		assert.Equal(t, userID, *c, "execution %d shipped the wrong CreatedByUserID", i)
+	}
+}
+
+// TestHandler_createPlannedPurchases_AdminAPIKeyCreatorIsNil locks in that
+// the stateless admin-API-key path (UserID == apiKeyAdminUserID, not a UUID)
+// stamps NULL rather than the literal sentinel. resolveCreatorUserID rejects
+// non-UUID UserIDs so the FK to users stays valid; the row falls through to
+// the admin / update-any management path exactly like a legacy scheduler-
+// created row would.
+func TestHandler_createPlannedPurchases_AdminAPIKeyCreatorIsNil(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	apiKeySession := &Session{UserID: apiKeyAdminUserID, Email: "admin-api-key"}
+
+	plan := &config.PurchasePlan{
+		ID:   "11111111-1111-1111-1111-111111111111",
+		Name: "Test Plan",
+		RampSchedule: config.RampSchedule{
+			StepIntervalDays: 7,
+			CurrentStep:      0,
+		},
+	}
+
+	mockAuth.On("ValidateSession", ctx, "api-key").Return(apiKeySession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
+
+	var savedCreators []*string
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
+		Run(func(args mock.Arguments) {
+			exec := args.Get(1).(*config.PurchaseExecution)
+			savedCreators = append(savedCreators, exec.CreatedByUserID)
+		}).
+		Return(nil).Times(2)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	body := `{"count": 2, "start_date": "2024-12-01"}`
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer api-key"},
+		Body:    body,
+	}
+	_, err := handler.createPlannedPurchases(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+
+	require.Len(t, savedCreators, 2)
+	for i, c := range savedCreators {
+		assert.Nil(t, c, "execution %d should ship a nil CreatedByUserID for the admin-API-key path", i)
+	}
+}
+
 // TestHandler_createPlannedPurchases_MidLoopFailureRollsBack verifies
 // the partial-failure regression CodeRabbit flagged: a save failure on
 // row N must NOT leave rows 1..N-1 persisted (they would be retried as
