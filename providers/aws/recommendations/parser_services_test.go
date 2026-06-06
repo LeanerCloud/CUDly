@@ -511,7 +511,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 
 	t.Run("missing MemoryDB instance details returns error", func(t *testing.T) {
 		rec := &common.Recommendation{}
-		err := client.parseMemoryDBDetails(rec, &types.ReservationPurchaseRecommendationDetail{})
+		err := client.parseMemoryDBDetails(context.Background(), rec, &types.ReservationPurchaseRecommendationDetail{})
 		require.Error(t, err, "should fail loudly when MemoryDB instance details are absent")
 		assert.Contains(t, err.Error(), "instance details not found")
 		assert.Nil(t, rec.Details, "Details should remain nil on error")
@@ -527,7 +527,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 				},
 			},
 		}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.Error(t, err, "should fail loudly when NodeType is absent")
 		assert.Contains(t, err.Error(), "NodeType")
 		assert.Nil(t, rec.Details, "Details should remain nil on error")
@@ -543,7 +543,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 				},
 			},
 		}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.NoError(t, err)
 		assert.Equal(t, "db.r6g.large", rec.ResourceType)
 		assert.Equal(t, "us-east-1", rec.Region)
@@ -562,7 +562,7 @@ func TestParseMemoryDBDetails(t *testing.T) {
 				},
 			},
 		}
-		err := client.parseMemoryDBDetails(rec, details)
+		err := client.parseMemoryDBDetails(context.Background(), rec, details)
 		require.NoError(t, err)
 		assert.Equal(t, "db.r6gd.xlarge", rec.ResourceType)
 		cacheDetails, ok := rec.Details.(*common.CacheDetails)

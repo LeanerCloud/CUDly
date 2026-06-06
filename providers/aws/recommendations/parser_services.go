@@ -199,7 +199,7 @@ func (c *Client) parseRedshiftDetails(_ context.Context, rec *common.Recommendat
 // If the MemoryDB sub-struct or its NodeType is absent, the function returns an
 // error so the recommendation is skipped loudly (logged by parseRecommendations)
 // rather than silently guessing an offering.
-func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseMemoryDBDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details == nil || details.InstanceDetails == nil || details.InstanceDetails.MemoryDBInstanceDetails == nil {
 		return fmt.Errorf("MemoryDB instance details not found; cannot determine offering - Cost Explorer did not populate instance details")
 	}
