@@ -49,6 +49,10 @@ export type Action =
   | 'approve-any'
   | 'execute-own'
   | 'execute-any'
+  // update-any:purchases lets a holder manage (pause/resume/run/delete)
+  // ANY user's scheduled purchase, bypassing the creator-scope ownership
+  // check (issue #950). Mirrors cancel-any/approve-any on History rows.
+  | 'update-any'
   | 'admin';
 
 // Resource names. Closed enum for the same reason.

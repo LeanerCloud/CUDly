@@ -10,6 +10,7 @@ import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommend
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 
@@ -375,6 +376,31 @@ function attachSparkline(key: string, values: readonly number[]): void {
 
 export const __test__ = { sparklinePoints, attachSparkline, computeServiceStats };
 
+// canCancelUpcomingPurchase returns true when the current session is
+// permitted to cancel the given upcoming purchase via the Dashboard
+// widget (issue #950). UX gate only -- the backend
+// authorizeExecutionManagement in internal/api/handler_purchases.go
+// remains the security boundary; a false-positive surfaces as a 403
+// toast rather than a successful mutation.
+//
+// Mirrors canManageScheduledPurchase in plans.ts so the Plans page and
+// the Dashboard widget agree on which Cancel buttons appear:
+//   * admin (admin:*) or update-any:purchases -> can cancel any row;
+//   * otherwise the row's created_by_user_id must match the current user;
+//   * legacy / scheduler-tick rows with undefined created_by_user_id ->
+//     no Cancel button for non-privileged users (out of reach without
+//     update-any).
+// Additionally requires the base delete:purchases verb the backend
+// handler asks for, mirroring the gate on the Plans page disable button.
+export function canCancelUpcomingPurchase(purchase: UpcomingPurchase): boolean {
+  if (!canAccess('delete', 'purchases')) return false;
+  if (canAccess('admin', '*') || canAccess('update-any', 'purchases')) return true;
+  const user = state.getCurrentUser();
+  if (!user) return false;
+  if (!purchase.created_by_user_id) return false;
+  return purchase.created_by_user_id === user.id;
+}
+
 function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
   const container = document.getElementById('upcoming-list');
   if (!container) return;
@@ -449,13 +475,20 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
     viewBtn.dataset['action'] = 'view-purchase';
     viewBtn.dataset['id'] = String(p.execution_id);
     viewBtn.textContent = 'View Details';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.dataset['action'] = 'cancel-purchase';
-    cancelBtn.dataset['id'] = String(p.execution_id);
-    cancelBtn.className = 'danger';
-    cancelBtn.textContent = 'Cancel';
     actions.appendChild(viewBtn);
-    actions.appendChild(cancelBtn);
+    // Issue #950: Cancel routes to DELETE /api/purchases/planned/{id},
+    // which the backend now gates on creator-scope ownership. Hide the
+    // button when the current session is not authorised so the operator
+    // doesn't get a 403 toast on click. Plans page applies the same gate
+    // via canManageScheduledPurchase + canAccess('delete','purchases').
+    if (canCancelUpcomingPurchase(p)) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.dataset['action'] = 'cancel-purchase';
+      cancelBtn.dataset['id'] = String(p.execution_id);
+      cancelBtn.className = 'danger';
+      cancelBtn.textContent = 'Cancel';
+      actions.appendChild(cancelBtn);
+    }
 
     card.appendChild(info);
     card.appendChild(savings);
@@ -547,30 +580,36 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
   btnRow.className = 'modal-buttons';
   content.appendChild(btnRow);
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.type = 'button';
-  cancelBtn.id = 'cancel-purchase-detail-btn';
-  cancelBtn.className = 'danger';
-  cancelBtn.textContent = 'Cancel Purchase';
-  cancelBtn.addEventListener('click', async () => {
-    const ok = await confirmDialog({
-      title: 'Cancel this scheduled purchase?',
-      body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
-      confirmLabel: 'Cancel purchase',
-      destructive: true,
+  // Issue #950: gate the Cancel button on the same ownership check as
+  // the card-level button above. Users land here from "View Details",
+  // which is visible to everyone; only the destructive action needs the
+  // creator-scope gate.
+  if (canCancelUpcomingPurchase(p)) {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.id = 'cancel-purchase-detail-btn';
+    cancelBtn.className = 'danger';
+    cancelBtn.textContent = 'Cancel Purchase';
+    cancelBtn.addEventListener('click', async () => {
+      const ok = await confirmDialog({
+        title: 'Cancel this scheduled purchase?',
+        body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
+        confirmLabel: 'Cancel purchase',
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        await api.deletePlannedPurchase(executionId);
+        modal.remove();
+        await loadDashboard();
+        showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
+      } catch (cancelError) {
+        console.error('Failed to cancel purchase:', cancelError);
+        showToast({ message: 'Failed to cancel purchase', kind: 'error' });
+      }
     });
-    if (!ok) return;
-    try {
-      await api.deletePlannedPurchase(executionId);
-      modal.remove();
-      await loadDashboard();
-      showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
-    } catch (cancelError) {
-      console.error('Failed to cancel purchase:', cancelError);
-      showToast({ message: 'Failed to cancel purchase', kind: 'error' });
-    }
-  });
-  btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(cancelBtn);
+  }
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';

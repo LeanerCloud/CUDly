@@ -429,6 +429,66 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	assert.Equal(t, 2, second.StepNumber)
 }
 
+// TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID is the
+// issue-#950 follow-up regression: the dashboard widget on the frontend
+// applies a creator-scope ownership gate on the Cancel button (mirrors
+// the Plans page); it can only do so if the backend ships
+// created_by_user_id on every row. Pre-fix the field was absent, so the
+// widget defaulted to "no owner known" and either showed Cancel for
+// everyone (when ungated) or for nobody (when gated) -- both wrong.
+func TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+
+	scheduled := time.Now().AddDate(0, 0, 7)
+	plan := config.PurchasePlan{
+		ID:      "11111111-1111-1111-1111-111111111111",
+		Name:    "Owned Plan",
+		Enabled: true,
+		Services: map[string]config.ServiceConfig{
+			"aws/ec2": {Provider: "aws", Service: "ec2"},
+		},
+		RampSchedule: config.RampSchedule{TotalSteps: 4},
+	}
+	creator := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	pending := []config.PurchaseExecution{
+		{
+			ExecutionID:     "11112222-3333-4444-5555-666677778888",
+			PlanID:          plan.ID,
+			Status:          "pending",
+			ScheduledDate:   scheduled,
+			StepNumber:      1,
+			CreatedByUserID: &creator,
+		},
+		{
+			// Legacy / scheduler-tick row: NULL creator. Must serialise as
+			// no created_by_user_id field (omitempty on the JSON tag) so
+			// the frontend treats it as out-of-reach for non-update-any
+			// users -- the documented #950 behaviour.
+			ExecutionID:     "99998888-7777-6666-5555-444433332222",
+			PlanID:          plan.ID,
+			Status:          "pending",
+			ScheduledDate:   scheduled.AddDate(0, 0, 7),
+			StepNumber:      2,
+			CreatedByUserID: nil,
+		},
+	}
+
+	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
+	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+
+	result, err := handler.getUpcomingPurchases(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result.Purchases, 2)
+
+	require.NotNil(t, result.Purchases[0].CreatedByUserID, "owned-row CreatedByUserID must propagate")
+	assert.Equal(t, creator, *result.Purchases[0].CreatedByUserID)
+	assert.Nil(t, result.Purchases[1].CreatedByUserID, "legacy NULL-creator row must stay nil")
+}
+
 // TestHandler_getUpcomingPurchases_OrphanExecutionSkipped guards against the
 // "execution row with deleted parent plan" cleanup-gap edge case: rather
 // than crash, the widget hides the orphan. Cleanup is a separate concern.

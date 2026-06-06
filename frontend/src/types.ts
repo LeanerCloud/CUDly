@@ -47,6 +47,11 @@ export interface UpcomingPurchase {
   step_number: number;
   total_steps: number;
   estimated_savings: number;
+  // created_by_user_id mirrors the field on api.UpcomingPurchase so the
+  // dashboard widget can apply the issue-#950 creator-scope ownership
+  // gate on the Cancel button. Optional: legacy / scheduler-tick rows
+  // ship NULL here.
+  created_by_user_id?: string;
 }
 
 // Recommendations types

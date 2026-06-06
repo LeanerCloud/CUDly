@@ -194,14 +194,57 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 	const userID = "33333333-3333-3333-3333-333333333333"
 	const execID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
-	t.Run("user with update:purchases can pause a planned purchase", func(t *testing.T) {
+	t.Run("creator with update:purchases can pause their own planned purchase", func(t *testing.T) {
+		// Issue #950: a standard user manages only the scheduled purchases
+		// they created. update-any is false; the creator match authorises.
 		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		creator := userID
 		mockStore := new(MockConfigStore)
-		// requireExecutionAccess calls GetExecutionByID; stub a minimal row.
+		// requireExecutionAccess + authorizeExecutionManagement both call
+		// GetExecutionByID; stub a row created by this user.
+		mockStore.On("GetExecutionByID", ctx, execID).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
+		// TransitionExecutionStatus is called next; stub it.
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.pausePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
+		assertNotForbidden(t, err)
+	})
+
+	t.Run("non-creator with update:purchases is rejected with 403 (issue #950)", func(t *testing.T) {
+		// The user holds update:purchases (and account access) but did NOT
+		// create the execution and lacks update-any -> 403. This is the
+		// regression guard for the pre-fix authz hole.
+		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		otherCreator := "99999999-9999-9999-9999-999999999999"
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetExecutionByID", ctx, execID).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.pausePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
+		assert403(t, err)
+		// The status transition must never run for a non-owner.
+		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("update-any holder can pause another user's planned purchase (issue #950)", func(t *testing.T) {
+		// An operator role with update-any:purchases bypasses the creator
+		// check, mirroring cancel-any/approve-any on History.
+		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(true, nil)
+		mockStore := new(MockConfigStore)
+		// update-any short-circuits the ownership fetch in
+		// authorizeExecutionManagement; only requireExecutionAccess fetches.
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
-		// TransitionExecutionStatus is called next; stub it.
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 
@@ -239,18 +282,37 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 	const userID = "44444444-4444-4444-4444-444444444444"
 	const execID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 
-	t.Run("user with delete:purchases can delete a planned purchase", func(t *testing.T) {
+	t.Run("creator with delete:purchases can delete their own planned purchase", func(t *testing.T) {
+		// Issue #950: ownership gate also applies to delete; a creator with
+		// delete:purchases (no update-any) is authorised by the creator match.
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		creator := userID
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
-			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
 		assertNotForbidden(t, err)
+	})
+
+	t.Run("non-creator with delete:purchases is rejected with 403 (issue #950)", func(t *testing.T) {
+		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		otherCreator := "99999999-9999-9999-9999-999999999999"
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetExecutionByID", ctx, execID).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
+
+		h := &Handler{auth: mockAuth, config: mockStore}
+		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
+		assert403(t, err)
+		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("user without delete:purchases is rejected with 403", func(t *testing.T) {
