@@ -429,3 +429,65 @@ func TestTokenOnlyApprove_BypassesCSRF(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.(map[string]string)["status"])
 }
+
+// Regression test for #404: approve/cancel/reject paths must require CSRF
+// when the request carries a session bearer token. Previously they were
+// unconditionally exempt, meaning a logged-in user could be CSRF-attacked
+// into approving a purchase via a malicious page.
+func TestRequiresCSRFValidation_TokenBasedPathsWithSession(t *testing.T) {
+	h := &Handler{}
+
+	tokenOnlyReq := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{},
+	}
+	sessionReq := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer some-session-token",
+		},
+	}
+
+	tokenPaths := []string{
+		"/api/purchases/approve/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"/api/purchases/cancel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"/api/ri-exchange/approve/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"/api/ri-exchange/reject/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+	}
+
+	for _, path := range tokenPaths {
+		// Token-only (no session): CSRF should NOT be required.
+		if got := h.requiresCSRFValidation("POST", path, tokenOnlyReq); got {
+			t.Errorf("path %s with no session: expected requiresCSRFValidation=false (token-only flow), got true (regression of #404)", path)
+		}
+
+		// Session present: CSRF MUST be required (issue #404).
+		if got := h.requiresCSRFValidation("POST", path, sessionReq); !got {
+			t.Errorf("path %s with session: expected requiresCSRFValidation=true (session flow requires CSRF), got false (regression of #404)", path)
+		}
+	}
+}
+
+// Regression guard: unconditionally-exempt paths (login, setup-admin, etc.) must
+// remain exempt regardless of whether a session is present.
+func TestRequiresCSRFValidation_AlwaysExemptPaths(t *testing.T) {
+	h := &Handler{}
+
+	sessionReq := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer some-session-token",
+		},
+	}
+
+	alwaysExempt := []string{
+		"/api/auth/login",
+		"/api/auth/setup-admin",
+		"/api/auth/forgot-password",
+		"/api/auth/reset-password",
+		"/api/register",
+	}
+
+	for _, path := range alwaysExempt {
+		if got := h.requiresCSRFValidation("POST", path, sessionReq); got {
+			t.Errorf("always-exempt path %s: expected requiresCSRFValidation=false even with session, got true", path)
+		}
+	}
+}

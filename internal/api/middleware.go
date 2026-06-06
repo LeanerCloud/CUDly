@@ -119,36 +119,46 @@ func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) strin
 	return ""
 }
 
-// requiresCSRFValidation returns true for state-changing requests that need CSRF protection
-func (h *Handler) requiresCSRFValidation(method, path string) bool {
+// requiresCSRFValidation returns true for state-changing requests that need CSRF protection.
+//
+// The req parameter is used to tighten the CSRF exemption for token-based
+// approve/cancel/reject paths (issue #404): when the caller supplies both an
+// in-URL approval token AND a valid session bearer token, the request is
+// session-authenticated and CSRF protection must apply. When only the
+// in-URL token is present (pure email-link flow, no session), CSRF is skipped.
+func (h *Handler) requiresCSRFValidation(method, path string, req *events.LambdaFunctionURLRequest) bool {
 	// Only POST, PUT, DELETE need CSRF protection
 	if method != "POST" && method != "PUT" && method != "DELETE" {
 		return false
 	}
 
-	// Auth endpoints that don't have a session yet are exempt.
-	//
-	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
-	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
-	// validateSecurity() short-circuits before requiresCSRFValidation() is
-	// reached on the token-only (email-link) path. For the session-authed path
-	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
-	// directly inside those functions -- a blanket middleware exemption would
-	// leave session-authenticated POSTs to these endpoints unprotected (CSRF).
-	//
-	// Similarly, /api/ri-exchange/approve/ and /api/ri-exchange/reject/ are
-	// AuthPublic and therefore exempted by isPublicEndpoint(), not here.
-	csrfExemptPaths := []string{
+	// Auth endpoints that don't have a session yet are exempt unconditionally.
+	csrfExemptAlways := []string{
 		"/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
 		"/api/register", // Public registration (no session)
 	}
-
-	for _, exempt := range csrfExemptPaths {
+	for _, exempt := range csrfExemptAlways {
 		if strings.HasPrefix(path, exempt) {
 			return false
+		}
+	}
+
+	// Token-based approve/cancel/reject paths are exempt ONLY when the request
+	// carries no session bearer token. If a session is present, the request is
+	// session-authenticated and standard CSRF protection applies (issue #404).
+	csrfExemptWhenTokenOnly := []string{
+		"/api/purchases/approve/",
+		"/api/purchases/cancel/",
+		"/api/ri-exchange/approve/",
+		"/api/ri-exchange/reject/",
+	}
+	for _, prefix := range csrfExemptWhenTokenOnly {
+		if strings.HasPrefix(path, prefix) {
+			// Only skip CSRF when there is no session token on the request.
+			return h.extractBearerToken(req) != ""
 		}
 	}
 
