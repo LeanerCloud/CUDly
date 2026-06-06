@@ -818,6 +818,10 @@ interface BackendPlan {
     total_steps: number;
   };
   next_execution_date?: string;
+  // unassigned is true for legacy plans that have zero plan_accounts rows
+  // (issue #973). The backend sets this flag when an account filter is
+  // active so the frontend can bucket them under an "Unassigned" section.
+  unassigned?: boolean;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -907,6 +911,85 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
   }
 }
 
+// renderPlanCard generates the HTML for a single plan card.
+// When the plan is unassigned (no plan_accounts rows) account-scoped
+// actions that require an account (Add Purchases, Edit) are suppressed
+// — only History and Delete remain — and a read-only "Unassigned" badge
+// is shown so operators can identify and re-scope the plan.
+function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean): string {
+  const info = extractPlanInfo(plan);
+  const status = getStatusBadge(plan.enabled, plan.auto_purchase);
+  const rampSchedule = plan.ramp_schedule || { type: 'immediate', current_step: 0, total_steps: 1 };
+  const overdue = isPlanOverdue(plan);
+  // Hide the stale next_execution_date for disabled plans — keeping it
+  // visible implies the plan will still run on that date, which it won't.
+  const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
+  const overdueBadge = overdue && plan.enabled
+    ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+    : '';
+  // Read-only mode: unassigned plans cannot be purchased against until an
+  // operator re-assigns them to at least one account.
+  const isUnassigned = Boolean(plan.unassigned);
+
+  return `
+    <div class="plan-card">
+      <div class="plan-header">
+        <h3>${escapeHtml(plan.name)}</h3>
+        <div class="plan-status">
+          <span class="status-badge ${status.class}">${status.label}</span>
+          ${overdueBadge}
+          ${canManagePlan && !isUnassigned ? `
+          <label class="toggle-label">
+            <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+          ` : ''}
+        </div>
+      </div>
+      <div class="plan-body">
+        <div class="plan-details">
+          <div class="plan-detail">
+            <span class="plan-detail-label">Provider</span>
+            <span class="plan-detail-value"><span class="provider-badge ${info.provider}">${info.provider.toUpperCase()}</span></span>
+          </div>
+          <div class="plan-detail">
+            <span class="plan-detail-label">Service</span>
+            <span class="plan-detail-value">${escapeHtml(info.service)}</span>
+          </div>
+          <div class="plan-detail">
+            <span class="plan-detail-label">Term</span>
+            <span class="plan-detail-value">${formatTerm(info.term)}</span>
+          </div>
+          <div class="plan-detail">
+            <span class="plan-detail-label">Coverage</span>
+            <span class="plan-detail-value">${info.coverage}%</span>
+          </div>
+          <div class="plan-detail">
+            <span class="plan-detail-label">Ramp Schedule</span>
+            <span class="plan-detail-value">${formatBackendRampSchedule(rampSchedule)}</span>
+          </div>
+          <div class="plan-detail">
+            <span class="plan-detail-label">Progress</span>
+            <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
+          </div>
+          ${showNextDate ? `
+          <div class="plan-detail">
+            <span class="plan-detail-label">Next Purchase</span>
+            <span class="plan-detail-value">${formatDate(plan.next_execution_date || '')}</span>
+          </div>
+          ` : ''}
+        </div>
+        <div class="plan-actions">
+          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${plan.id}">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${plan.id}" class="secondary">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPlans(plans: LocalPlan[]): void {
   const container = document.getElementById('plans-list');
   if (!container) return;
@@ -922,83 +1005,44 @@ function renderPlans(plans: LocalPlan[]): void {
   const canManagePlan = canAccess('update', 'plans');
   const canDeletePlan = canAccess('delete', 'plans');
 
-  container.innerHTML = plans.map(rawPlan => {
-    // Cast to BackendPlan to handle the actual API response format
-    const plan = rawPlan as unknown as BackendPlan;
-    const info = extractPlanInfo(plan);
-    const status = getStatusBadge(plan.enabled, plan.auto_purchase);
-    const rampSchedule = plan.ramp_schedule || { type: 'immediate', current_step: 0, total_steps: 1 };
-    const overdue = isPlanOverdue(plan);
-    // Hide the stale next_execution_date for disabled plans — keeping it
-    // visible implies the plan will still run on that date, which it won't.
-    const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
-    const overdueBadge = overdue && plan.enabled
-      ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
-      : '';
+  // Issue #973: split plans into assigned (have plan_accounts rows) and
+  // unassigned (legacy plans with zero plan_accounts rows, flagged by the
+  // backend). Unassigned plans are rendered under a separate read-only
+  // section so operators can discover and re-scope them.
+  const assignedPlans = plans.filter(p => !(p as unknown as BackendPlan).unassigned);
+  const unassignedPlans = plans.filter(p => (p as unknown as BackendPlan).unassigned);
 
-    return `
-      <div class="plan-card">
-        <div class="plan-header">
-          <h3>${escapeHtml(plan.name)}</h3>
-          <div class="plan-status">
-            <span class="status-badge ${status.class}">${status.label}</span>
-            ${overdueBadge}
-            ${canManagePlan ? `
-            <label class="toggle-label">
-              <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
-              <span class="slider"></span>
-            </label>
-            ` : ''}
-          </div>
-        </div>
-        <div class="plan-body">
-          <div class="plan-details">
-            <div class="plan-detail">
-              <span class="plan-detail-label">Provider</span>
-              <span class="plan-detail-value"><span class="provider-badge ${info.provider}">${info.provider.toUpperCase()}</span></span>
-            </div>
-            <div class="plan-detail">
-              <span class="plan-detail-label">Service</span>
-              <span class="plan-detail-value">${escapeHtml(info.service)}</span>
-            </div>
-            <div class="plan-detail">
-              <span class="plan-detail-label">Term</span>
-              <span class="plan-detail-value">${formatTerm(info.term)}</span>
-            </div>
-            <div class="plan-detail">
-              <span class="plan-detail-label">Coverage</span>
-              <span class="plan-detail-value">${info.coverage}%</span>
-            </div>
-            <div class="plan-detail">
-              <span class="plan-detail-label">Ramp Schedule</span>
-              <span class="plan-detail-value">${formatBackendRampSchedule(rampSchedule)}</span>
-            </div>
-            <div class="plan-detail">
-              <span class="plan-detail-label">Progress</span>
-              <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
-            </div>
-            ${showNextDate ? `
-            <div class="plan-detail">
-              <span class="plan-detail-label">Next Purchase</span>
-              <span class="plan-detail-value">${formatDate(plan.next_execution_date || '')}</span>
-            </div>
-            ` : ''}
-          </div>
-          <div class="plan-actions">
-            ${canManagePlan ? `<button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
-            ${canManagePlan ? `<button data-action="edit-plan" data-id="${plan.id}">Edit</button>` : ''}
-            <button data-action="view-history" data-id="${plan.id}" class="secondary">History</button>
-            ${canDeletePlan ? `<button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>` : ''}
-          </div>
-        </div>
+  const assignedHtml = assignedPlans.map(rawPlan =>
+    renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan)
+  ).join('');
+
+  let unassignedHtml = '';
+  if (unassignedPlans.length > 0) {
+    const cards = unassignedPlans.map(rawPlan =>
+      renderPlanCard(rawPlan as unknown as BackendPlan, canManagePlan, canDeletePlan)
+    ).join('');
+    unassignedHtml = `
+      <div class="plans-section-header unassigned-plans-header">
+        <h4>Unassigned</h4>
+        <span class="plans-section-description">These legacy plans have no associated accounts and cannot be purchased against. Assign accounts or delete them.</span>
       </div>
+      ${cards}
     `;
-  }).join('');
+  }
 
-  // Asynchronously populate account names per plan
-  container.querySelectorAll<HTMLElement>('.plan-card').forEach((card, idx) => {
-    const plan = plans[idx] as unknown as BackendPlan;
-    if (plan.id) void loadPlanAccountNames(plan.id, card);
+  container.innerHTML = assignedHtml + unassignedHtml;
+
+  // Asynchronously populate account names per assigned plan card.
+  // Unassigned plans intentionally skip this: they have no plan_accounts
+  // rows so the API call would return an empty list.
+  container.querySelectorAll<HTMLElement>('.plan-card').forEach((card) => {
+    const planId = card.querySelector<HTMLElement>('[data-id]')?.dataset['id'];
+    // Find the matching plan to check unassigned status.
+    const allPlans = [...assignedPlans, ...unassignedPlans];
+    const matchedPlan = allPlans.find(p => (p as unknown as BackendPlan).id === planId) as unknown as BackendPlan | undefined;
+    if (planId && matchedPlan && !matchedPlan.unassigned) {
+      void loadPlanAccountNames(planId, card);
+    }
   });
 
   // Add event listeners

@@ -129,7 +129,8 @@ func (s *mockablePostgresStore) ListPurchasePlans(ctx context.Context, filter Pu
 	query := `
 		SELECT id, name, enabled, auto_purchase, notification_days_before,
 		       services, ramp_schedule, created_at, updated_at,
-		       next_execution_date, last_execution_date, last_notification_sent
+		       next_execution_date, last_execution_date, last_notification_sent,
+		       false AS unassigned
 		FROM purchase_plans
 		ORDER BY created_at DESC
 	`
@@ -159,6 +160,7 @@ func (s *mockablePostgresStore) ListPurchasePlans(ctx context.Context, filter Pu
 			&nextExecDate,
 			&lastExecDate,
 			&lastNotifSent,
+			&plan.Unassigned,
 		)
 		if err != nil {
 			return nil, err
@@ -743,13 +745,14 @@ func TestListPurchasePlans_Success(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	}).
 		AddRow("plan-1", "First Plan", true, false, 7,
 			servicesJSON1, rampJSON1, now, now,
-			sql.NullTime{Time: nextExec, Valid: true}, sql.NullTime{}, sql.NullTime{}).
+			sql.NullTime{Time: nextExec, Valid: true}, sql.NullTime{}, sql.NullTime{}, false).
 		AddRow("plan-2", "Second Plan", false, true, 3,
 			servicesJSON2, rampJSON2, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false)
 
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
@@ -783,6 +786,7 @@ func TestListPurchasePlans_Empty(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	})
 
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
@@ -828,9 +832,10 @@ func TestListPurchasePlans_InvalidServicesJSON(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	}).AddRow("plan-1", "Bad Plan", true, false, 7,
 		[]byte("not valid json"), rampJSON, now, now,
-		sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
+		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false)
 
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
@@ -856,9 +861,10 @@ func TestListPurchasePlans_InvalidRampScheduleJSON(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	}).AddRow("plan-1", "Bad Ramp Plan", true, false, 7,
 		servicesJSON, []byte("{invalid}"), now, now,
-		sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
+		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false)
 
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).
 		WillReturnRows(rows)
@@ -1923,9 +1929,10 @@ func TestListPurchasePlans_RowsError(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	}).AddRow("plan-1", "Plan 1", true, false, 7,
 		servicesJSON, rampJSON, now, now,
-		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}).
+		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false).
 		RowError(0, errors.New("row iteration error"))
 
 	mock.ExpectQuery(`SELECT id, name, enabled, auto_purchase, notification_days_before`).

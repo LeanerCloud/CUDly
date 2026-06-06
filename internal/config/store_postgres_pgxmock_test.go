@@ -295,12 +295,13 @@ func TestPGXMock_ListPurchasePlans_Success(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("p1", "Plan 1", true, false, 3, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}).
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false).
 		AddRow("p2", "Plan 2", false, true, 7, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{})
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
 	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
@@ -318,6 +319,52 @@ func TestPGXMock_ListPurchasePlans_Error(t *testing.T) {
 
 	_, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
 	require.Error(t, err)
+}
+
+// TestPGXMock_ListPurchasePlans_UnassignedIncluded verifies that when an
+// account filter is active, plans with zero plan_accounts rows are returned
+// alongside the matched-account plans, flagged with Unassigned=true.
+//
+// This is the regression guard for issue #973: before the fix the INNER JOIN
+// on plan_accounts silently excluded zero-account legacy plans from every
+// account-filtered response.
+func TestPGXMock_ListPurchasePlans_UnassignedIncluded(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	svcJSON, _ := json.Marshal(map[string]ServiceConfig{})
+	rampJSON, _ := json.Marshal(RampSchedule{})
+
+	cols := []string{
+		"id", "name", "enabled", "auto_purchase", "notification_days_before",
+		"services", "ramp_schedule", "created_at", "updated_at",
+		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"unassigned",
+	}
+	// The query returns two rows: one assigned (unassigned=false) and one
+	// legacy zero-account plan (unassigned=true).
+	rows := pgxmock.NewRows(cols).
+		AddRow("assigned-id", "Assigned Plan", true, false, 3, svcJSON, rampJSON, now, now,
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false).
+		AddRow("legacy-id", "Legacy Plan", true, false, 3, svcJSON, rampJSON, now, now,
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, true)
+	mock.ExpectQuery("SELECT").WithArgs("acc-uuid").WillReturnRows(rows)
+
+	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{AccountIDs: []string{"acc-uuid"}})
+	require.NoError(t, err)
+	require.Len(t, plans, 2)
+
+	// The assigned plan must NOT be flagged unassigned.
+	assert.Equal(t, "assigned-id", plans[0].ID)
+	assert.False(t, plans[0].Unassigned, "assigned plan should have Unassigned=false")
+
+	// The legacy zero-account plan must be flagged unassigned.
+	assert.Equal(t, "legacy-id", plans[1].ID)
+	assert.True(t, plans[1].Unassigned, "zero-account plan should have Unassigned=true")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── UpdatePurchasePlan ───────────────────────────────────────────────────────

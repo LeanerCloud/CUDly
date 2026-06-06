@@ -562,6 +562,86 @@ describe('Plans Module', () => {
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Null Services Plan');
     });
+
+    // Regression guard for issue #973: a plan with unassigned=true must
+    // appear in the "Unassigned" section, and an assigned plan must NOT
+    // appear there. Before the fix the backend silently dropped zero-account
+    // plans from account-filtered responses, so no "Unassigned" section was
+    // ever rendered.
+    test('unassigned plan renders under Unassigned section, assigned plan does not (issue #973)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'assigned-plan',
+            name: 'Assigned Plan',
+            enabled: true,
+            auto_purchase: false,
+            unassigned: false,
+            services: {
+              'ec2': { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 }
+            },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 }
+          },
+          {
+            id: 'legacy-plan',
+            name: 'Legacy Unscoped Plan',
+            enabled: true,
+            auto_purchase: false,
+            unassigned: true,
+            services: {
+              'rds': { provider: 'aws', service: 'rds', enabled: true, term: 3, payment: 'no-upfront', coverage: 70 }
+            },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 }
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      const html = list?.innerHTML ?? '';
+
+      // Both plans are rendered.
+      expect(html).toContain('Assigned Plan');
+      expect(html).toContain('Legacy Unscoped Plan');
+
+      // The "Unassigned" section header is present.
+      expect(html).toContain('unassigned-plans-header');
+      expect(html).toContain('Unassigned');
+
+      // The unassigned section header must appear AFTER the assigned plan card
+      // (assigned plans come first, unassigned section is appended after).
+      const assignedPos = html.indexOf('Assigned Plan');
+      const unassignedHeaderPos = html.indexOf('unassigned-plans-header');
+      const legacyPos = html.indexOf('Legacy Unscoped Plan');
+      expect(assignedPos).toBeLessThan(unassignedHeaderPos);
+      expect(unassignedHeaderPos).toBeLessThan(legacyPos);
+    });
+
+    test('no Unassigned section when all plans are assigned', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [
+          {
+            id: 'plan-a',
+            name: 'Normal Plan',
+            enabled: true,
+            auto_purchase: false,
+            unassigned: false,
+            services: {
+              'ec2': { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 80 }
+            },
+            ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 }
+          }
+        ]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      expect(list?.innerHTML).not.toContain('unassigned-plans-header');
+    });
   });
 
   describe('loadPlannedPurchases', () => {
