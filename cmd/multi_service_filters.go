@@ -24,6 +24,7 @@ func applyFilters(recs []common.Recommendation, cfg *Config, instanceVersions ma
 			label := fmt.Sprintf("%s/%s/%s", recs[i].Service, recs[i].Region, recs[i].ResourceType)
 			log.Printf("INFO: --min-pool-size=%.1f dropped %s (avg=%.2f < threshold)", cfg.MinPoolSize, label, recs[i].AverageInstancesUsedPerHour)
 			poolDropCount++
+			drops.Add(common.DropMinPoolSize, 1)
 			continue
 		}
 		adjusted, include, dropReason := processRecommendation(&recs[i], cfg, instanceVersions, versionInfo, currentRegion)

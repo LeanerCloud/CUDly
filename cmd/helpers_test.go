@@ -1387,3 +1387,55 @@ func TestApplyTargetCoverage_SP_NoSignalGuards(t *testing.T) {
 		assert.Equal(t, 1500.0, out[0].EstimatedSavings, "EstimatedSavings must remain unscaled when scaling failed")
 	})
 }
+
+// TestApplyTargetCoverage_DropTargetAlreadyMet verifies that when existing
+// coverage already meets or exceeds the target, the recommendation is
+// dropped and the drop is recorded in a non-nil DropSummary under the
+// DropTargetAlreadyMet category. If the drops.Add call for that branch
+// were removed, d.Total() would stay at 0 and the assertion below would fail.
+func TestApplyTargetCoverage_DropTargetAlreadyMet(t *testing.T) {
+	// ExistingCoveragePct=90 >= target=80: gapPct=80-90=-10 <= 0 -> drop.
+	rec := common.Recommendation{
+		Service:                     common.ServiceEC2,
+		Region:                      "us-east-1",
+		ResourceType:                "t3.medium",
+		Count:                       5,
+		CommitmentType:              common.CommitmentReservedInstance,
+		AverageInstancesUsedPerHour: 8.0,
+		ExistingCoveragePct:         90.0,
+	}
+
+	d := common.NewDropSummary()
+	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80, d)
+
+	assert.Empty(t, out, "already-covered rec should be dropped")
+	assert.Equal(t, 1, d.Total(), "drop summary should record 1 drop")
+	assert.Contains(t, d.FormatOneLine(), common.DropTargetAlreadyMet,
+		"drop summary should name the target-already-met category")
+}
+
+// TestApplyTargetCoverage_DropTargetSizedToZero verifies that when the
+// floor(avg * gapPct / 100) formula produces 0, the recommendation is
+// dropped and the drop is recorded in a non-nil DropSummary under the
+// DropTargetSizedToZero category. If the drops.Add call for that branch
+// were removed, d.Total() would stay at 0 and the assertion below would fail.
+func TestApplyTargetCoverage_DropTargetSizedToZero(t *testing.T) {
+	// avg=0.4, target=80%, existing=0%: floor(0.4 * 80/100) = floor(0.32) = 0 -> drop.
+	rec := common.Recommendation{
+		Service:                     common.ServiceEC2,
+		Region:                      "us-east-1",
+		ResourceType:                "t3.micro",
+		Count:                       1,
+		CommitmentType:              common.CommitmentReservedInstance,
+		AverageInstancesUsedPerHour: 0.4,
+		ExistingCoveragePct:         0.0,
+	}
+
+	d := common.NewDropSummary()
+	out := ApplyTargetCoverage([]common.Recommendation{rec}, 80, d)
+
+	assert.Empty(t, out, "floor-to-zero rec should be dropped")
+	assert.Equal(t, 1, d.Total(), "drop summary should record 1 drop")
+	assert.Contains(t, d.FormatOneLine(), common.DropTargetSizedToZero,
+		"drop summary should name the target-sized-to-zero category")
+}
