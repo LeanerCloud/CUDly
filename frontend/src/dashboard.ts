@@ -268,6 +268,8 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   // When no recommendations and no commitments exist, "100% coverage" is
   // misleading — nothing is being tracked. Show a dash instead.
   const nothingTracked = !data.total_recommendations && !data.active_commitments;
+  // #978: round to 1 decimal place to match sibling coverage formatting (inventory.ts)
+  // and prevent overflow at narrower screen widths.
   const coverageValue = nothingTracked ? '—' : `${(data.current_coverage || 0).toFixed(1)}%`;
   const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${(data.target_coverage || 80).toFixed(1)}%`;
 
