@@ -216,6 +216,41 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 	_, _ = adapter.GetAllRecommendations(context.Background())
 }
 
+// TestGetRecommendations_SavingsPlansServiceIncluded pins that shouldIncludeService
+// allows ServiceSavingsPlans through both when params.Service is empty (all-services
+// sweep) and when explicitly set to ServiceSavingsPlans, and does not include it
+// when a different service is requested. This ensures the SP goroutine added to the
+// fan-out in GetRecommendations is exercised on every scheduler collection run.
+func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
+	tests := []struct {
+		name     string
+		params   common.RecommendationParams
+		expected bool
+	}{
+		{
+			name:     "empty params includes savingsplans",
+			params:   common.RecommendationParams{},
+			expected: true,
+		},
+		{
+			name:     "explicit savingsplans service is included",
+			params:   common.RecommendationParams{Service: common.ServiceSavingsPlans},
+			expected: true,
+		},
+		{
+			name:     "different service excludes savingsplans",
+			params:   common.RecommendationParams{Service: common.ServiceCompute},
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldIncludeService(tt.params, common.ServiceSavingsPlans)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
 // TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation
 // pins the contract that GetRecommendations propagates ctx.Err() to its caller
 // after the errgroup Wait() — the parent context being cancelled or its
