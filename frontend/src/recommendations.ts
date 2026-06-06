@@ -1520,6 +1520,7 @@ export const COLUMN_DEFS: readonly ColumnDef[] = [
   { key: 'account',               label: 'Account',           kind: 'categorical' },
   { key: 'service',               label: 'Service',           kind: 'categorical' },
   { key: 'resource_type',         label: 'Resource Type',     kind: 'categorical' },
+  { key: 'capacity',              label: 'Capacity',          kind: 'categorical' },
   { key: 'region',                label: 'Region',            kind: 'categorical' },
   { key: 'count',                 label: 'Count',             kind: 'numeric'     },
   { key: 'term',                  label: 'Term',              kind: 'categorical' },
@@ -1638,12 +1639,24 @@ export function applyColumnFilters(
   );
 }
 
+// formatCapacity renders the VCPU+MemoryGB pair from a ComputeDetails rec.
+// Mirrors the Go-side ComputeDetails.GetDetailDescription format:
+// "<vcpu> vCPU / <memoryGB> GB". Returns null when either field is absent or
+// zero so callers can render a dash rather than a misleading "0 vCPU / 0 GB".
+export function formatCapacity(vcpu: number | null | undefined, memoryGB: number | null | undefined): string | null {
+  if (!vcpu || !memoryGB) return null;
+  // String(n) trims trailing zeros for whole numbers (16, not 16.0)
+  // and preserves fractional precision (0.5), matching Go's %g format.
+  return `${vcpu} vCPU / ${String(memoryGB)} GB`;
+}
+
 function categoricalCellValue(r: LocalRecommendation, col: state.RecommendationsColumnId): string {
   switch (col) {
     case 'provider':       return r.provider ?? '';
     case 'account':        return r.cloud_account_id ?? '';
     case 'service':        return r.service ?? '';
     case 'resource_type':  return r.resource_type ?? '';
+    case 'capacity':       return formatCapacity(r.vcpu, r.memory_gb) ?? '';
     case 'region':         return r.region ?? '';
     case 'term':           return r.term == null ? '' : String(r.term);
     case 'payment':        return r.payment ?? '';
@@ -1683,6 +1696,7 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     case 'account':
     case 'service':
     case 'resource_type':
+    case 'capacity':
     case 'region':
     case 'term':
     case 'payment':
@@ -1725,6 +1739,7 @@ export function displayPrecision(col: state.RecommendationsColumnId, period: Cos
     case 'account':
     case 'service':
     case 'resource_type':
+    case 'capacity':
     case 'region':
     case 'term':
     case 'payment':
@@ -2747,6 +2762,10 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
       return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
       return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+    case 'capacity': {
+      const cap = formatCapacity(rec.vcpu, rec.memory_gb);
+      return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;
+    }
     case 'region':
       return `<td>${escapeHtml(rec.region)}</td>`;
     case 'count':

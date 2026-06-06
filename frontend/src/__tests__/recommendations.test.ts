@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -628,6 +628,46 @@ describe('Recommendations Module', () => {
       expect(list?.innerHTML).toContain('us-east-1');
     });
 
+    // #219 end-to-end render regression. Feeds the REAL API shape the fixed
+    // backend now emits: top-level vcpu/memory_gb (decoded from the nested
+    // ComputeDetails by buildRecommendationsResponse). Asserts the Capacity
+    // cell renders "8 vCPU / 32 GB" for a sized compute rec and "—" for a rec
+    // with neither field. Pre-fix, the backend never emitted these top-level
+    // fields, so the cell rendered "—" for every row in production while the
+    // formatCapacity unit tests stayed green on injected values the API never
+    // produced — this test ties the rendered cell to the real response shape.
+    test('renders Capacity cell from top-level vcpu/memory_gb (#219)', async () => {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: [
+          { id: 'rec-cap', provider: 'aws', service: 'ec2',
+            resource_type: 'm5.2xlarge', region: 'us-east-1',
+            count: 1, term: 1, savings: 100, upfront_cost: 500,
+            vcpu: 8, memory_gb: 32 },
+          { id: 'rec-nocap', provider: 'aws', service: 'rds',
+            resource_type: 'db.t3.medium', region: 'us-east-1',
+            count: 1, term: 1, savings: 50, upfront_cost: 200 },
+        ],
+        regions: ['us-east-1'],
+      });
+
+      await loadRecommendations();
+
+      const list = document.getElementById('recommendations-list');
+      // The capacity column is the cell immediately after resource_type.
+      const capCell = (recId: string): string | undefined => {
+        const checkbox = list?.querySelector<HTMLElement>(`input[data-rec-id="${recId}"]`);
+        const row = checkbox?.closest('tr');
+        const cells = Array.from(row?.querySelectorAll('td') ?? []);
+        const rtIdx = cells.findIndex((td) => td.textContent?.includes(recId === 'rec-cap' ? 'm5.2xlarge' : 'db.t3.medium'));
+        return cells[rtIdx + 1]?.textContent ?? undefined;
+      };
+
+      expect(capCell('rec-cap')).toBe('8 vCPU / 32 GB');
+      // Rec with no vcpu/memory_gb renders the em-dash placeholder, not "0".
+      expect(capCell('rec-nocap')).toBe('—');
+    });
+
     test('shows empty-state message when no recommendations', async () => {
       // Issue #700: zero rows now render an empty <tbody> with a hint cell
       // rather than replacing the entire table with a <p>. The <thead> stays
@@ -973,15 +1013,15 @@ describe('Recommendations Module', () => {
       });
     });
 
-    test('renders sortable column headers with indicators (Bundle B + #282 + #317: 13 columns)', async () => {
+    test('renders sortable column headers with indicators (Bundle B + #282 + #317 + #219: 14 columns)', async () => {
       await loadRecommendations();
       const list = document.getElementById('recommendations-list');
-      // Bundle B + issue #282 + #317: every data column is sortable. 13 sortable data columns:
-      // provider, account, service, resource_type, region, count, term, payment,
+      // Bundle B + issue #282 + #317 + #219: every data column is sortable. 14 sortable data columns:
+      // provider, account, service, resource_type, capacity, region, count, term, payment,
       // savings, upfront_cost, monthly_cost, on_demand_monthly, effective_savings_pct.
       // The leading checkbox column is not sortable.
       const sortables = list?.querySelectorAll('th.sortable');
-      expect(sortables?.length).toBe(13);
+      expect(sortables?.length).toBe(14);
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
@@ -1024,9 +1064,9 @@ describe('Recommendations Module', () => {
 
       const rows = document.querySelectorAll('tr.recommendation-row');
       const paymentCells = Array.from(rows).map((row) => {
-        // Payment column is the 9th <td> (0-indexed: 0=checkbox, 1=provider,
-        // 2=account, 3=service, 4=resource_type, 5=region, 6=count, 7=term, 8=payment)
-        return row.querySelectorAll('td')[8]?.textContent?.trim() ?? '';
+        // Payment column is the 10th <td> (0-indexed: 0=checkbox, 1=provider,
+        // 2=account, 3=service, 4=resource_type, 5=capacity, 6=region, 7=count, 8=term, 9=payment)
+        return row.querySelectorAll('td')[9]?.textContent?.trim() ?? '';
       });
       expect(paymentCells).toContain('All Upfront');
       expect(paymentCells).toContain('Partial Upfront');
@@ -1057,7 +1097,7 @@ describe('Recommendations Module', () => {
       // Only the all-upfront rec should be rendered.
       expect(rows.length).toBe(1);
       // Payment cell text should be "All Upfront".
-      const paymentCell = rows[0]?.querySelectorAll('td')[8];
+      const paymentCell = rows[0]?.querySelectorAll('td')[9];
       expect(paymentCell?.textContent?.trim()).toBe('All Upfront');
 
       // Restore filter mock so it doesn't leak into subsequent tests.
@@ -2026,6 +2066,29 @@ describe('applyColumnFilters', () => {
     });
     expect(out.map(r => r.id)).toEqual(['b']);
   });
+
+  test('capacity filter matches formatted "N vCPU / M GB" string', () => {
+    const recs: LocalRecommendation[] = [
+      { ...rec({ id: 'a' }), vcpu: 8,   memory_gb: 32 } as LocalRecommendation,
+      { ...rec({ id: 'b' }), vcpu: 4,   memory_gb: 16 } as LocalRecommendation,
+      { ...rec({ id: 'c' }), vcpu: null, memory_gb: null } as unknown as LocalRecommendation,
+    ];
+    const out = applyColumnFilters(recs, {
+      capacity: { kind: 'set', values: ['8 vCPU / 32 GB'] },
+    });
+    expect(out.map(r => r.id)).toEqual(['a']);
+  });
+
+  test('capacity filter with empty string matches recs without vcpu/memory_gb', () => {
+    const recs: LocalRecommendation[] = [
+      { ...rec({ id: 'a' }), vcpu: 8,   memory_gb: 32 } as LocalRecommendation,
+      { ...rec({ id: 'b' }), vcpu: null, memory_gb: null } as unknown as LocalRecommendation,
+    ];
+    const out = applyColumnFilters(recs, {
+      capacity: { kind: 'set', values: [''] },
+    });
+    expect(out.map(r => r.id)).toEqual(['b']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2147,7 +2210,7 @@ describe('Bundle B: column header filter triggers', () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>('th .column-filter-btn[data-column]');
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['account', 'count', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
+      ['account', 'capacity', 'count', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'payment', 'provider', 'region', 'resource_type', 'savings', 'service', 'term', 'upfront_cost'].sort(),
     );
   });
 
@@ -5397,12 +5460,13 @@ describe('Column visibility (issue #318)', () => {
   // --- TOGGLEABLE_COLUMNS and COLUMN_DEFS ---
 
   describe('COLUMN_DEFS and TOGGLEABLE_COLUMNS', () => {
-    test('COLUMN_DEFS contains all 14 column ids (13 data + usage_history sparkline)', () => {
+    test('COLUMN_DEFS contains all 15 column ids (13 data + capacity + usage_history sparkline)', () => {
       const keys = COLUMN_DEFS.map((c) => c.key);
       expect(keys).toContain('provider');
       expect(keys).toContain('account');
       expect(keys).toContain('service');
       expect(keys).toContain('resource_type');
+      expect(keys).toContain('capacity');
       expect(keys).toContain('region');
       expect(keys).toContain('count');
       expect(keys).toContain('term');
@@ -5414,7 +5478,12 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).toContain('effective_savings_pct');
       // issue #239: usage_history sparkline column added
       expect(keys).toContain('usage_history');
-      expect(COLUMN_DEFS.length).toBe(14);
+      expect(COLUMN_DEFS.length).toBe(15);
+    });
+
+    test('capacity column appears immediately after resource_type', () => {
+      const keys = COLUMN_DEFS.map((c) => c.key);
+      expect(keys.indexOf('capacity')).toBe(keys.indexOf('resource_type') + 1);
     });
 
     test('TOGGLEABLE_COLUMNS excludes fixed identity columns', () => {
@@ -5423,7 +5492,8 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).not.toContain('account');
       expect(keys).not.toContain('service');
       expect(keys).not.toContain('resource_type');
-      // All other 10 columns (9 original + usage_history) should be toggleable.
+      // All other 11 columns (9 original + capacity + usage_history) should be toggleable.
+      expect(keys).toContain('capacity');
       expect(keys).toContain('region');
       expect(keys).toContain('count');
       expect(keys).toContain('term');
@@ -5434,8 +5504,45 @@ describe('Column visibility (issue #318)', () => {
       expect(keys).toContain('on_demand_monthly');
       expect(keys).toContain('effective_savings_pct');
       expect(keys).toContain('usage_history');
-      expect(keys.length).toBe(10);
+      expect(keys.length).toBe(11);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatCapacity (closes #219)
+// ---------------------------------------------------------------------------
+describe('formatCapacity', () => {
+  test('returns formatted string when both vcpu and memory_gb are populated', () => {
+    expect(formatCapacity(8, 32)).toBe('8 vCPU / 32 GB');
+  });
+
+  test('handles fractional memory without trailing zeros', () => {
+    expect(formatCapacity(2, 0.5)).toBe('2 vCPU / 0.5 GB');
+  });
+
+  test('returns null when vcpu is null', () => {
+    expect(formatCapacity(null, 32)).toBeNull();
+  });
+
+  test('returns null when memory_gb is null', () => {
+    expect(formatCapacity(8, null)).toBeNull();
+  });
+
+  test('returns null when vcpu is undefined', () => {
+    expect(formatCapacity(undefined, 32)).toBeNull();
+  });
+
+  test('returns null when memory_gb is undefined', () => {
+    expect(formatCapacity(8, undefined)).toBeNull();
+  });
+
+  test('returns null when vcpu is 0 (unknown)', () => {
+    expect(formatCapacity(0, 32)).toBeNull();
+  });
+
+  test('returns null when memory_gb is 0 (unknown)', () => {
+    expect(formatCapacity(8, 0)).toBeNull();
   });
 });
 

@@ -8,7 +8,7 @@ import type { Recommendation } from './api/types';
 // Closed enumeration of column ids the per-column filters target.
 // Typo-safety: misspellings at call sites become compile errors.
 export type RecommendationsColumnId =
-  | 'provider' | 'account' | 'service' | 'resource_type' | 'region'
+  | 'provider' | 'account' | 'service' | 'resource_type' | 'capacity' | 'region'
   | 'count' | 'term' | 'payment' | 'savings' | 'upfront_cost'
   | 'monthly_cost' | 'on_demand_monthly' | 'effective_savings_pct'
   | 'usage_history';

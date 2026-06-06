@@ -154,6 +154,14 @@ export interface Recommendation {
   // oldest-to-newest). Absent/null when the provider did not populate it
   // (non-AWS providers or pre-#239 cached rows).
   usage_history?: number[] | null;
+  // vcpu / memory_gb surface the compute size of the recommended instance
+  // type so the Capacity column can render "<vcpu> vCPU / <memory_gb> GB"
+  // (#219). Emitted top-level by the backend (buildRecommendationsResponse
+  // decodes the nested ComputeDetails and stamps them) only for compute recs
+  // with a known size; absent for non-compute services, legacy rows, or
+  // unknown sizes. formatCapacity renders absent/0 as "—".
+  vcpu?: number | null;
+  memory_gb?: number | null;
 }
 
 export interface RecommendationFilters {

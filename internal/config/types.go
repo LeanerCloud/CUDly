@@ -383,6 +383,23 @@ type RecommendationRecord struct {
 	// recommendations JSONB payload — no DDL change needed (closes #239
 	// Part 1 for AWS).
 	UsageHistory []float64 `json:"usage_history,omitempty" dynamodbav:"usage_history,omitempty"`
+	// VCPU and MemoryGB surface the compute size of the recommended
+	// instance type so the frontend's Capacity column can render
+	// "<vcpu> vCPU / <memory> GB" without parsing the opaque Details blob
+	// (#219). They are NOT persisted: the canonical source is the typed
+	// ComputeDetails nested inside Details (config must stay free of
+	// pkg/common imports). The api layer decodes Details via
+	// common.DecodeServiceDetailsFor in buildRecommendationsResponse and
+	// stamps these top-level fields on the way out, so the API JSON carries
+	// them at the top level where the frontend already reads them.
+	//
+	// Pointers (not plain int/float64) so "absent / non-compute / unknown
+	// size" serialises as omitted rather than a misleading 0: the frontend
+	// renders absent as "—", and a literal 0 would otherwise look like a
+	// real "0 vCPU / 0 GB" capacity. dynamodbav:"-" because they are
+	// derived-on-read, never stored.
+	VCPU     *int     `json:"vcpu,omitempty" dynamodbav:"-"`
+	MemoryGB *float64 `json:"memory_gb,omitempty" dynamodbav:"-"`
 }
 
 // PurchaseSuppression records the per-tuple grace window after a bulk

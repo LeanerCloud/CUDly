@@ -108,6 +108,11 @@ export interface LocalRecommendation {
   // null or absent means the collector did not populate it (non-AWS providers
   // or pre-#239 cached rows); the cell renders "—" in that case.
   usage_history?: number[] | null;
+  // ComputeDetails fields surfaced by PR #810/#816/#833.
+  // null = provider catalogue did not return a value (renders as "—", not "0").
+  // Absent on non-compute recs (RDS, savings plans, etc.).
+  vcpu?: number | null;
+  memory_gb?: number | null;
 }
 
 export interface RecommendationsSummary {
