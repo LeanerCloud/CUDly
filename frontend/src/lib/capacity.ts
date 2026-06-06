@@ -66,9 +66,18 @@ export function compareByCapacity(
 
 /**
  * extractCapacity pulls vcpu / memory_gb from an opaque details blob.
- * Returns zeros (treated as unknown by the comparator) for non-compute
- * payloads or absent fields, matching the ComputeDetails omitempty
- * behaviour on the wire.
+ * Returns null for non-compute payloads or absent/non-finite fields,
+ * matching the ComputeDetails omitempty behaviour on the wire.
+ *
+ * Note: Number.isFinite() is used (not typeof === 'number') to reject NaN,
+ * which passes the typeof check but would produce NaN subtraction results in
+ * compareNullable and cause an unstable sort. NaN falls into the unknown bucket
+ * and sorts last alongside null/absent/0 values.
+ *
+ * Intended consumer: the recommendations table capacity sort (clicking the
+ * vCPU/Memory column header). Wiring that column requires a UX decision
+ * (adding a new RecommendationsColumnId entry and a rendered column header);
+ * see issue #82 for context.
  */
 function extractCapacity(details: unknown): ComputeCapacity {
   if (
@@ -78,9 +87,8 @@ function extractCapacity(details: unknown): ComputeCapacity {
   ) {
     const d = details as Record<string, unknown>;
     return {
-      vcpu: typeof d['vcpu'] === 'number' ? d['vcpu'] : null,
-      memory_gb:
-        typeof d['memory_gb'] === 'number' ? d['memory_gb'] : null,
+      vcpu: Number.isFinite(d['vcpu']) ? (d['vcpu'] as number) : null,
+      memory_gb: Number.isFinite(d['memory_gb']) ? (d['memory_gb'] as number) : null,
     };
   }
   return { vcpu: null, memory_gb: null };
