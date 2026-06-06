@@ -107,6 +107,13 @@ export interface UpcomingPurchase {
   step_number: number;
   total_steps: number;
   estimated_savings: number;
+  // created_by_user_id is the UUID of the user who scheduled the
+  // execution, propagated by the backend so the dashboard's "Cancel"
+  // button can apply the same creator-scope ownership gate the Plans
+  // page uses (issue #950). Optional because legacy / scheduler-tick
+  // rows ship NULL here; the gate treats undefined as "not the current
+  // user" and hides the button for non-update-any callers.
+  created_by_user_id?: string;
 }
 
 // Recommendation types

@@ -87,6 +87,17 @@ jest.mock('../state', () => ({
   // during setup to register its reload callback.
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
+  // Issue #950: the dashboard upcoming-purchase widget now gates the
+  // Cancel button on creator-scope ownership (canCancelUpcomingPurchase
+  // -> canAccess + getCurrentUser). Default the session to an admin so
+  // the pre-#950 cancel-flow tests below keep exercising the click path;
+  // the dedicated ownership tests override this per-test.
+  getCurrentUser: jest.fn().mockReturnValue({
+    id: 'admin-user',
+    email: 'admin@example.com',
+    groups: ['00000000-0000-5000-8000-000000000001'],
+    effectivePermissions: [{ action: 'admin', resource: '*' }],
+  }),
 }));
 
 // Mock utils

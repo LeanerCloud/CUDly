@@ -624,6 +624,15 @@ type UpcomingPurchase struct {
 	StepNumber       int     `json:"step_number"`
 	TotalSteps       int     `json:"total_steps"`
 	EstimatedSavings float64 `json:"estimated_savings"`
+	// CreatedByUserID propagates the underlying execution's
+	// created_by_user_id so the dashboard widget can apply the same
+	// creator-scope ownership gate the Plans page uses (issue #950).
+	// Without it the widget renders a "Cancel" button on every row
+	// while the backend now 403s for non-owners -- a UX hole that
+	// surfaces as a confusing toast on click. Mirrors the field on
+	// PlannedPurchase / PurchaseHistoryEntry. omitempty so legacy
+	// NULL-creator rows keep the JSON shape they had pre-fix.
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 }
 
 // PlannedPurchasesResponse holds the list of planned purchases

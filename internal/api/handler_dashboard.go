@@ -394,6 +394,7 @@ func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecu
 		StepNumber:       exec.StepNumber,
 		TotalSteps:       plan.RampSchedule.TotalSteps,
 		EstimatedSavings: exec.EstimatedSavings,
+		CreatedByUserID:  exec.CreatedByUserID,
 	}
 }
 
