@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/stretchr/testify/assert"
@@ -412,4 +413,95 @@ func TestShouldIncludeAccount(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestApplyFilters_DropMinPoolSize verifies that a recommendation whose
+// AverageInstancesUsedPerHour is below --min-pool-size is recorded in a
+// non-nil DropSummary under the DropMinPoolSize category. If the
+// drops.Add call for that path were removed, d.Total() would stay at 0
+// and the first assertion below would fail.
+func TestApplyFilters_DropMinPoolSize(t *testing.T) {
+	origCfg := toolCfg
+	defer func() { toolCfg = origCfg }()
+
+	// Pool with avg=1.5 is below min-pool-size=2; it should be dropped.
+	rec := common.Recommendation{
+		Region:                      "us-east-1",
+		ResourceType:                "db.t3.micro",
+		Count:                       2,
+		AverageInstancesUsedPerHour: 1.5,
+	}
+	toolCfg.MinPoolSize = 2.0
+
+	d := common.NewDropSummary()
+	result := applyFilters(
+		[]common.Recommendation{rec},
+		toolCfg,
+		make(map[string][]InstanceEngineVersion),
+		make(map[string]MajorEngineVersionInfo),
+		"",
+		d,
+	)
+
+	assert.Empty(t, result, "below-min-pool-size rec should be filtered out")
+	assert.Equal(t, 1, d.Total(), "drop summary should record 1 drop")
+	assert.Contains(t, d.FormatOneLine(), common.DropMinPoolSize,
+		"drop summary should name the --min-pool-size category")
+}
+
+// TestApplyFilters_DropExtendedSupport verifies that a recommendation whose
+// entire instance count is on an engine version in extended support is
+// recorded in a non-nil DropSummary under DropExtendedSupport when
+// --include-extended-support is false. If the drops.Add call for that
+// path were removed, d.Total() would stay at 0 and the assertion below
+// would fail.
+func TestApplyFilters_DropExtendedSupport(t *testing.T) {
+	origCfg := toolCfg
+	defer func() { toolCfg = origCfg }()
+
+	toolCfg.IncludeExtendedSupport = false
+
+	// One RDS MySQL 5.7.42 instance in us-east-1; 5.7 is in extended support.
+	rec := common.Recommendation{
+		Region:       "us-east-1",
+		ResourceType: "db.t3.micro",
+		Count:        1,
+		Service:      common.ServiceRDS,
+		Details:      &common.DatabaseDetails{Engine: "mysql"},
+	}
+
+	instanceVersions := map[string][]InstanceEngineVersion{
+		"db.t3.micro": {
+			{Engine: "mysql", EngineVersion: "5.7.42", InstanceClass: "db.t3.micro", Region: "us-east-1"},
+		},
+	}
+
+	// Mark mysql 5.7 as in extended support (start date well in the past).
+	versionInfo := map[string]MajorEngineVersionInfo{
+		"mysql:5.7": {
+			Engine:             "mysql",
+			MajorEngineVersion: "5.7",
+			SupportedEngineLifecycles: []EngineLifecycleInfo{
+				{
+					LifecycleSupportName:      "open-source-rds-extended-support",
+					LifecycleSupportStartDate: time.Now().Add(-365 * 24 * time.Hour),
+				},
+			},
+		},
+	}
+
+	d := common.NewDropSummary()
+	result := applyFilters(
+		[]common.Recommendation{rec},
+		toolCfg,
+		instanceVersions,
+		versionInfo,
+		"",
+		d,
+	)
+
+	assert.Empty(t, result, "all-extended-support rec should be filtered out")
+	assert.Equal(t, 1, d.Total(), "drop summary should record 1 drop")
+	assert.Contains(t, d.FormatOneLine(), common.DropExtendedSupport,
+		"drop summary should name the --include-extended-support category")
 }
