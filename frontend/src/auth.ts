@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { escapeHtml } from './utils';
 import { openModal, closeModal } from './modal';
-import { isAdmin as permissionsIsAdmin } from './permissions';
+import { isAdmin as permissionsIsAdmin, canAccess } from './permissions';
 
 // Login rate limiting
 let lastLoginAttempt = 0;
@@ -933,6 +933,15 @@ export function updateUserUI(): void {
     const adminOnly = permissionsIsAdmin();
     document.querySelectorAll<HTMLElement>('.admin-only').forEach(el => {
       el.classList.toggle('visible', adminOnly);
+    });
+
+    // Gate nav entries and page containers that require view:purchases.
+    // Mirrors the admin-only pattern: the CSS class hides by default;
+    // .visible makes the element visible. Direct URL navigation into a
+    // gated page is handled in navigation.ts switchTab().
+    const canViewPurchases = canAccess('view', 'purchases');
+    document.querySelectorAll<HTMLElement>('.requires-purchases').forEach(el => {
+      el.classList.toggle('visible', canViewPurchases);
     });
   } else {
     // Hide user info when not logged in

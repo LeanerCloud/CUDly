@@ -18,6 +18,7 @@ import {
   DEFAULT_INVENTORY_SUB_SECTION,
 } from './inventory';
 import { isAdmin } from './auth';
+import { canAccess } from './permissions';
 
 interface TabMeta {
   title: string;
@@ -71,6 +72,22 @@ interface SwitchTabOptions {
 }
 
 /**
+ * Render a friendly no-access placeholder inside a tab container.
+ * Called when the user navigates to a tab they lack the required permission
+ * for (issue #1000). Replaces any prior content so no stale API error
+ * banners are left behind.
+ */
+function renderNoAccess(tabId: string): void {
+  const container = document.getElementById(tabId);
+  if (!container) return;
+  const p = document.createElement('p');
+  p.className = 'empty-state';
+  p.textContent =
+    'You do not have access to this page. Contact your administrator if you need access.';
+  container.replaceChildren(p);
+}
+
+/**
  * Switch between tabs
  */
 export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
@@ -108,6 +125,10 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       void loadPlans();
       break;
     case 'purchases':
+      if (!canAccess('view', 'purchases')) {
+        renderNoAccess(`${tabName}-tab`);
+        break;
+      }
       initHistoryDateRange();
       void loadSavingsHistory();
       // Auto-load history so the Approval queue card and the Purchase
@@ -121,6 +142,10 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       switchSettingsSubTab(getSettingsSubTabFromPath(), { push: false });
       break;
     case 'inventory':
+      if (!canAccess('view', 'purchases')) {
+        renderNoAccess(`${tabName}-tab`);
+        break;
+      }
       loadInventory(getInventorySubTabFromPath());
       break;
   }

@@ -375,6 +375,20 @@ body {
     display: revert;
 }
 
+/*
+ * Nav entries and page containers that require the view:purchases permission
+ * (issue #1000). Hidden by default; toggled visible by updateUserUI() in
+ * auth.ts when canAccess('view', 'purchases') returns true. Uses the same
+ * display:revert trick as .admin-only so sidebar flex layout is preserved.
+ */
+.requires-purchases {
+    display: none;
+}
+
+.requires-purchases.visible {
+    display: revert;
+}
+
 /* Honour the user's OS-level reduced-motion preference (issue #340).
  * Transitions and CSS animations get effectively disabled — duration
  * collapses to 0.01ms so animation-end events still fire (some JS
