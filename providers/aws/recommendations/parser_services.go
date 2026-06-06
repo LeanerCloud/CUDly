@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 )
 
 // parseRDSDetails extracts RDS-specific details
-func (c *Client) parseRDSDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RDSInstanceDetails == nil {
 		return fmt.Errorf("RDS instance details not found")
 	}
@@ -43,7 +44,7 @@ func (c *Client) parseRDSDetails(rec *common.Recommendation, details *types.Rese
 }
 
 // parseElastiCacheDetails extracts ElastiCache-specific details
-func (c *Client) parseElastiCacheDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseElastiCacheDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ElastiCacheInstanceDetails == nil {
 		return fmt.Errorf("ElastiCache instance details not found")
 	}
@@ -66,8 +67,48 @@ func (c *Client) parseElastiCacheDetails(rec *common.Recommendation, details *ty
 	return nil
 }
 
-// parseEC2Details extracts EC2-specific details
-func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+// resolveEC2Tenancy maps a Cost Explorer tenancy value to the EC2 RI API
+// tenancy string. CE uses "shared" for the default tenancy; "dedicated" maps
+// directly. Any nil or unrecognised value is treated as default.
+func resolveEC2Tenancy(tenancy *string) string {
+	if tenancy != nil && *tenancy == "dedicated" {
+		return string(ec2types.TenancyDedicated)
+	}
+	return string(ec2types.TenancyDefault)
+}
+
+// resolveEC2Scope maps a Cost Explorer availability zone value to the EC2 RI
+// API scope string. A non-empty AZ means AZ scope; otherwise region scope.
+func resolveEC2Scope(az *string) string {
+	if az != nil && *az != "" {
+		return string(ec2types.ScopeAvailabilityZone)
+	}
+	return string(ec2types.ScopeRegional)
+}
+
+// enrichFromCatalogue populates VCPU and MemoryGB on ec2Info from the
+// lazily-cached DescribeInstanceTypes catalogue. Non-fatal on cache miss.
+func (c *Client) enrichFromCatalogue(ctx context.Context, ec2Info *common.ComputeDetails) {
+	if ec2Info.InstanceType == "" {
+		return
+	}
+	entry, ok := c.instanceTypeLookup(ctx, ec2Info.InstanceType)
+	if !ok {
+		return
+	}
+	if entry.vCPUs > 0 {
+		ec2Info.VCPU = entry.vCPUs
+	}
+	if entry.memoryGB > 0 {
+		ec2Info.MemoryGB = entry.memoryGB
+	}
+}
+
+// parseEC2Details extracts EC2-specific details and enriches the rec with
+// vCPU and memory from the lazily-cached DescribeInstanceTypes catalogue.
+// If the catalogue fetch failed or the instance type is not found, VCPU
+// and MemoryGB remain 0 (the omitempty JSON tags hide them from payloads).
+func (c *Client) parseEC2Details(ctx context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.EC2InstanceDetails == nil {
 		return fmt.Errorf("EC2 instance details not found")
 	}
@@ -85,29 +126,16 @@ func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.Rese
 	if ec2Details.Region != nil {
 		rec.Region = normalizeRegionName(*ec2Details.Region)
 	}
-	// Tenancy: CE returns "shared" for default tenancy; the EC2 RI filter API
-	// expects "default" (types.TenancyDefault). CE "dedicated" maps directly.
-	// Any nil or unrecognised value is treated as default.
-	if ec2Details.Tenancy != nil && *ec2Details.Tenancy == "dedicated" {
-		ec2Info.Tenancy = string(ec2types.TenancyDedicated)
-	} else {
-		ec2Info.Tenancy = string(ec2types.TenancyDefault)
-	}
-
-	// Scope: the EC2 RI filter API expects "Region" (types.ScopeRegional) or
-	// "Availability Zone" (types.ScopeAvailabilityZone) - not lowercase/hyphenated.
-	if ec2Details.AvailabilityZone != nil && *ec2Details.AvailabilityZone != "" {
-		ec2Info.Scope = string(ec2types.ScopeAvailabilityZone)
-	} else {
-		ec2Info.Scope = string(ec2types.ScopeRegional)
-	}
+	ec2Info.Tenancy = resolveEC2Tenancy(ec2Details.Tenancy)
+	ec2Info.Scope = resolveEC2Scope(ec2Details.AvailabilityZone)
+	c.enrichFromCatalogue(ctx, ec2Info)
 
 	rec.Details = ec2Info
 	return nil
 }
 
 // parseOpenSearchDetails extracts OpenSearch-specific details
-func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseOpenSearchDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ESInstanceDetails == nil {
 		return fmt.Errorf("OpenSearch/Elasticsearch instance details not found")
 	}
@@ -134,7 +162,7 @@ func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *typ
 }
 
 // parseRedshiftDetails extracts Redshift-specific details
-func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseRedshiftDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RedshiftInstanceDetails == nil {
 		return fmt.Errorf("Redshift instance details not found")
 	}
@@ -172,9 +200,9 @@ func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types
 // If rec.ResourceType is empty, the function returns an error so the
 // recommendation is skipped loudly (logged by parseRecommendations) rather
 // than silently substituting a wrong default instance type.
-func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, _ *types.ReservationPurchaseRecommendationDetail) error {
+func (c *Client) parseMemoryDBDetails(_ context.Context, rec *common.Recommendation, _ *types.ReservationPurchaseRecommendationDetail) error {
 	if rec.ResourceType == "" {
-		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering — Cost Explorer did not populate instance details")
+		return fmt.Errorf("MemoryDB recommendation has no ResourceType; cannot determine offering - Cost Explorer did not populate instance details")
 	}
 	rec.Details = &common.CacheDetails{
 		Engine:   "redis",

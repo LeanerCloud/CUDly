@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -14,12 +15,12 @@ import (
 )
 
 // parseRecommendations converts AWS recommendations to common.Recommendation format
-func (c *Client) parseRecommendations(awsRecs []types.ReservationPurchaseRecommendation, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) parseRecommendations(ctx context.Context, awsRecs []types.ReservationPurchaseRecommendation, params common.RecommendationParams) ([]common.Recommendation, error) {
 	var recommendations []common.Recommendation
 
 	for _, awsRec := range awsRecs {
 		for i, details := range awsRec.RecommendationDetails {
-			rec, err := c.parseRecommendationDetail(&details, params)
+			rec, err := c.parseRecommendationDetail(ctx, &details, params)
 			if err != nil {
 				fmt.Printf("Warning: Failed to parse recommendation detail %d: %v\n", i, err)
 				continue
@@ -35,7 +36,7 @@ func (c *Client) parseRecommendations(awsRecs []types.ReservationPurchaseRecomme
 }
 
 // parseRecommendationDetail converts a single AWS recommendation detail
-func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRecommendationDetail, params common.RecommendationParams) (*common.Recommendation, error) {
+func (c *Client) parseRecommendationDetail(ctx context.Context, details *types.ReservationPurchaseRecommendationDetail, params common.RecommendationParams) (*common.Recommendation, error) {
 	rec := &common.Recommendation{
 		Provider:       common.ProviderAWS,
 		Service:        params.Service,
@@ -74,7 +75,7 @@ func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRec
 	c.parseRIUtilizationSignals(rec, details)
 
 	// Parse service-specific details
-	if err := c.parseServiceSpecificDetails(rec, details, params.Service); err != nil {
+	if err := c.parseServiceSpecificDetails(ctx, rec, details, params.Service); err != nil {
 		return nil, err
 	}
 
@@ -178,10 +179,10 @@ func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.
 }
 
 // serviceParserFunc defines the signature for service-specific parsers
-type serviceParserFunc func(*common.Recommendation, *types.ReservationPurchaseRecommendationDetail) error
+type serviceParserFunc func(context.Context, *common.Recommendation, *types.ReservationPurchaseRecommendationDetail) error
 
 // parseServiceSpecificDetails routes to the appropriate service parser
-func (c *Client) parseServiceSpecificDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail, service common.ServiceType) error {
+func (c *Client) parseServiceSpecificDetails(ctx context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail, service common.ServiceType) error {
 	// Map of service types to their parser functions
 	serviceParsers := map[common.ServiceType]serviceParserFunc{
 		common.ServiceRDS:           c.parseRDSDetails,
@@ -202,5 +203,5 @@ func (c *Client) parseServiceSpecificDetails(rec *common.Recommendation, details
 		return fmt.Errorf("unsupported service: %s", service)
 	}
 
-	return parser(rec, details)
+	return parser(ctx, rec, details)
 }
