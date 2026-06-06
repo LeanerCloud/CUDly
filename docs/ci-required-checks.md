@@ -8,15 +8,21 @@ CUDly repository and the admin commands needed to enforce them.
 PR #232 (merged 2026-05-03) added `.github/workflows/frontend-build.yml`,
 which runs `npm ci`, `npm run typecheck`, and `npm run build` on every PR
 touching `frontend/**`. The workflow shipped, but the corresponding
-`Frontend build (PR)` check was never added to the branch-protection
+`Build frontend` check was never added to the branch-protection
 required-checks list. A PR that breaks the frontend build can currently be
 merged without a block (issue #377).
+
+> **Note on context naming**: GitHub branch-protection contexts are derived
+> from the **job `name:`** field, not the workflow `name:` field. The workflow
+> is named `Frontend build (PR)` but its single job is named `Build frontend`,
+> so the context GitHub reports (and that must be entered here) is
+> `Build frontend`.
 
 ## Required checks -- canonical list
 
 Both `feat/multicloud-web-frontend` and `main` should require:
 
-- `Frontend build (PR)`
+- `Build frontend`
 - Any other checks already present at the time an admin applies this runbook
   (retrieve the live list first; see Step 1 below).
 
@@ -45,12 +51,12 @@ Replace `EXISTING_CHECK_1` etc. with the contexts returned by Step 1:
 gh api -X PATCH \
   repos/LeanerCloud/CUDly/branches/feat/multicloud-web-frontend/protection/required_status_checks \
   -F 'contexts[]=EXISTING_CHECK_1' \
-  -F 'contexts[]=Frontend build (PR)'
+  -F 'contexts[]=Build frontend'
 
 gh api -X PATCH \
   repos/LeanerCloud/CUDly/branches/main/protection/required_status_checks \
   -F 'contexts[]=EXISTING_CHECK_1' \
-  -F 'contexts[]=Frontend build (PR)'
+  -F 'contexts[]=Build frontend'
 ```
 
 ### Step 3 -- create protection from scratch (if Step 1 returned 404)
@@ -64,7 +70,7 @@ gh api -X PUT \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Frontend build (PR)"]
+    "contexts": ["Build frontend"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": null,
@@ -78,7 +84,7 @@ gh api -X PUT \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Frontend build (PR)"]
+    "contexts": ["Build frontend"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": null,
@@ -97,12 +103,12 @@ gh api repos/LeanerCloud/CUDly/branches/main/protection \
   --jq '.required_status_checks.contexts'
 ```
 
-Both should include `"Frontend build (PR)"`.
+Both should include `"Build frontend"`.
 
 ### Step 5 -- smoke test
 
 Open a draft PR with a deliberate TypeScript error in `frontend/` and confirm
-that the `Frontend build (PR)` check turns red and the merge button is blocked.
+that the `Build frontend` check turns red and the merge button is blocked.
 
 ## Notes
 
@@ -110,4 +116,4 @@ that the `Frontend build (PR)` check turns red and the merge button is blocked.
   merging; adjust if that is too strict for the current workflow.
 - The GitHub UI path for the same change is: Settings > Branches >
   Branch protection rules > Edit rule > "Require status checks to pass" >
-  search for `Frontend build (PR)` > save.
+  search for `Build frontend` > save.
