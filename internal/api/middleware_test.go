@@ -284,7 +284,7 @@ func TestHandler_requiresCSRFValidation_ExactMatch(t *testing.T) {
 	for _, tt := range tests {
 		name := tt.method + " " + tt.path
 		t.Run(name, func(t *testing.T) {
-			result := handler.requiresCSRFValidation(tt.method, tt.path)
+			result := handler.requiresCSRFValidation(tt.method, tt.path, nil)
 			assert.Equal(t, tt.requiresCSRF, result)
 		})
 	}
