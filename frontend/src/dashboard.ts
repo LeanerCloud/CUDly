@@ -852,6 +852,9 @@ export function renderSavingsByService(
     data: {
       labels,
       datasets: [
+        // Current sits at the base of the stack so already-realized savings
+        // are visually "under" the potential range -- dataset order in Chart.js
+        // stacked bars determines bottom-to-top rendering.
         {
           label: 'Current / Committed',
           data: currentData,
@@ -889,6 +892,13 @@ export function renderSavingsByService(
             label: (ctx) => {
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
+              if (!s) return '';
+              // The current-savings dataset gets a focused, single-line
+              // tooltip; the range datasets share the full breakdown.
+              if (ctx.dataset?.label === 'Current / Committed') {
+                const current = byService[svc]?.current_savings ?? 0;
+                return `Current / Committed: $${current.toLocaleString()}`;
+              }
               const current = byService[svc]?.current_savings ?? 0;
               const maxRec = s?.max ?? 0;
               const minRec = s?.min ?? 0;
