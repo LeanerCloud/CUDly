@@ -161,7 +161,13 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		cancelled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		// The scheduled-revoke path uses its own CAS variant that flips ONLY
+		// status='scheduled' -> 'cancelled'. CancelExecutionAtomic accepts
+		// only ('pending','notified') and would always return zero rows on
+		// a scheduled row, miscoded as "race lost" -> a misleading 410 even
+		// during the happy path. Issue #290 wave-2: keep the two CAS contracts
+		// distinct so 410 unambiguously means "scheduler already fired".
+		cancelled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
 		if err != nil {
 			return err
 		}

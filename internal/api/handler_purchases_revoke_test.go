@@ -621,7 +621,7 @@ func TestRevokePurchase_ScheduledExecution_WindowExpired(t *testing.T) {
 
 // TestRevokePurchase_ScheduledExecution_CASRace verifies that a concurrent
 // scheduler tick that fires the execution between our window-check SELECT and
-// the CancelExecutionAtomic UPDATE is surfaced as a 410 (not a 500).
+// the CancelScheduledExecutionAtomic UPDATE is surfaced as a 410 (not a 500).
 func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -639,7 +639,7 @@ func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	// Simulate the scheduler transitioning the row to "approved" between our
 	// window-check and the CAS update (zero rows matched -> "approved").
-	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
 		Return(false, "approved", nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -649,6 +649,48 @@ func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 410, ce.code)
 	assert.Contains(t, ce.message, "revocation window has closed")
+}
+
+// TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS is the regression
+// test for the migration 000066 / handler bug where the revoke-scheduled flow
+// dispatched into CancelExecutionAtomic. That method's SQL guard is
+// status IN ('pending','notified'), which never matches a scheduled row, so
+// EVERY revoke attempt on a scheduled execution returned 410 -- including the
+// happy path. Mock-default success ("true,cancelled,nil") in MockConfigStore
+// hid the bug; the handler now calls CancelScheduledExecutionAtomic instead.
+//
+// This test pins the expected mock method explicitly with a captured assertion
+// rather than the default; if a future refactor flips the call back to the
+// wrong method, this expectation is unmet and AssertExpectations fails.
+func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	execID := "exec-bugreg-happy"
+	adminSess := revokeAdminSession()
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+	exec := scheduledExecution(execID, "")
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+		Return(true, "cancelled", nil).Once()
+	// Suppression cleanup must run inside the same tx as the CAS.
+	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
+	// Negative invariant: the WRONG method must never be called for a scheduled row.
+	mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.NoError(t, err)
+	m, ok := result.(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "cancelled", m["status"])
+	assert.Contains(t, m["message"], "No cloud API call")
 }
 
 // TestRevokePurchase_ScheduledExecution_RevokeOwnCreator verifies that

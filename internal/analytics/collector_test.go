@@ -269,6 +269,10 @@ func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return false, "", nil
 }
 
+func (m *mockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }

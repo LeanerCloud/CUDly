@@ -191,6 +191,21 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
+// CancelScheduledExecutionAtomic mocks the CancelScheduledExecutionAtomic
+// operation (Gmail-style pre-fire delay revoke, issue #290 wave-2). Default
+// is the happy path (true, "cancelled", nil) so the scheduled-revoke tests
+// inherit the same low-ceremony pattern as CancelExecutionAtomic above.
+// Tests exercising the CAS-race path (scheduler tick already fired) register
+// an expectation that returns (false, <racing_status>, nil), typically
+// (false, "approved", nil) to simulate the scheduler winning the race.
+func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	if !isExpected(&m.Mock, "CancelScheduledExecutionAtomic") {
+		return true, "cancelled", nil
+	}
+	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 // GetPendingExecutions mocks the GetPendingExecutions operation
 func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.PurchaseExecution, error) {
 	args := m.Called(ctx)
