@@ -312,17 +312,18 @@ func isARMFamily(family string) bool {
 //	medium ($50+ savings)                -> 0.5
 //	low    (otherwise)                   -> 0.0
 //
-// When SavingsAbs is nil (not supplied) the component returns 0.5 (neutral)
-// so that an absent field doesn't tilt the ranking.
+// When SavingsAbs is nil (not supplied) or RecommendationCount is zero
+// (missing) the component returns 0.5 (neutral) so that an absent field
+// doesn't tilt the ranking.
 func confidenceComponent(off OfferingOption) float64 {
 	if off.SavingsAbs == nil {
 		return 0.5
 	}
+	if off.RecommendationCount == 0 {
+		return 0.5
+	}
 	savings := *off.SavingsAbs
 	count := off.RecommendationCount
-	if count < 1 {
-		count = 1
-	}
 	switch {
 	case savings >= 200 && count >= 3:
 		return 1.0
