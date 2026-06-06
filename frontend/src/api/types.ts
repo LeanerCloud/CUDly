@@ -305,9 +305,16 @@ export interface ServiceConfig {
   exclude_types?: string[];
 }
 
+/** Response from GET /api/info (unauthenticated). Only safe-to-expose fields. */
 export interface PublicInfo {
   version: string;
   admin_exists: boolean;
+}
+
+/** Response from GET /api/info/deployment (AuthUser). Sensitive identifiers
+ *  that must not be visible to unauthenticated callers (#633). */
+export interface DeploymentInfo {
+  /** AWS Console deep-link to the Secrets Manager secret holding the API key. */
   api_key_secret_url?: string;
   /** AWS account ID of the CUDly Lambda (from STS GetCallerIdentity). Present
    *  only on AWS-hosted deployments; omitted on Azure/GCP or when STS is

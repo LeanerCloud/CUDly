@@ -46,7 +46,10 @@ export async function init(): Promise<void> {
     try {
       const publicInfo = await api.getPublicInfo();
       if (!publicInfo.admin_exists) {
-        await showAdminSetupModal(publicInfo.api_key_secret_url);
+        // api_key_secret_url is no longer served on the unauthenticated
+        // /api/info endpoint (#633). The admin setup modal works without
+        // the hint — the deployer can find the secret in the AWS console.
+        await showAdminSetupModal(undefined);
         return;
       }
     } catch {

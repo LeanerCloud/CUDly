@@ -23,6 +23,7 @@ export type {
   Config,
   ServiceConfig,
   PublicInfo,
+  DeploymentInfo,
   PurchaseResult,
   PurchaseDetails,
   PlannedPurchasesResponse,
@@ -89,6 +90,7 @@ export {
   setupAdmin,
   changePassword,
   getPublicInfo,
+  getDeploymentInfo,
   // MFA lifecycle (issue #497)
   MFALoginError,
   setupMFA,

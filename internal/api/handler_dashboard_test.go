@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -648,8 +649,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 		assert.Equal(t, "1.0.0", result.Version)
 		assert.True(t, result.AdminExists)
-		assert.Contains(t, result.APIKeySecretURL, "us-east-1")
-		assert.Contains(t, result.APIKeySecretURL, "secretsmanager")
 	})
 
 	t.Run("with auth service and no admin", func(t *testing.T) {
@@ -664,7 +663,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, result.AdminExists)
-		assert.Empty(t, result.APIKeySecretURL)
 	})
 
 	t.Run("auth service check error still returns response", func(t *testing.T) {
@@ -691,37 +689,6 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		assert.False(t, result.AdminExists)
 	})
 
-	t.Run("ARN parsing for different regions", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-
-		handler := &Handler{
-			auth:       mockAuth,
-			secretsARN: "arn:aws:secretsmanager:eu-west-1:987654321098:secret:my-secret-xyz789",
-		}
-
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
-
-		assert.Contains(t, result.APIKeySecretURL, "eu-west-1")
-	})
-
-	t.Run("invalid ARN format", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-
-		handler := &Handler{
-			auth:       mockAuth,
-			secretsARN: "invalid-arn",
-		}
-
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
-
-		// Invalid ARN should result in empty URL
-		assert.Empty(t, result.APIKeySecretURL)
-	})
-
 	t.Run("with rate limiting - allowed", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
 		mockRateLimiter := new(MockRateLimiter)
@@ -738,6 +705,78 @@ func TestHandler_getPublicInfo(t *testing.T) {
 		assert.True(t, result.AdminExists)
 	})
 
+	// Regression test for #633: sensitive identifiers must never appear in the
+	// unauthenticated /api/info response, even when a secretsARN is configured.
+	t.Run("no sensitive fields in unauthenticated response (#633)", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
+
+		handler := &Handler{
+			auth:       mockAuth,
+			secretsARN: "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key-abc123",
+		}
+
+		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("10.0.0.1"))
+		require.NoError(t, err)
+
+		// PublicInfoResponse no longer carries these fields — the struct itself is
+		// the compile-time guard. The JSON assertion catches any future re-addition
+		// via an embedded struct or interface{} workaround.
+		assert.Equal(t, "1.0.0", result.Version)
+		assert.True(t, result.AdminExists)
+		encoded, jsonErr := json.Marshal(result)
+		require.NoError(t, jsonErr)
+		body := string(encoded)
+		assert.NotContains(t, body, "api_key_secret_url", "api_key_secret_url must not appear in /api/info response")
+		assert.NotContains(t, body, "deployment_aws_account_id", "deployment_aws_account_id must not appear in /api/info response")
+	})
+}
+
+func TestHandler_getDeploymentInfo(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns ARN-derived URL and account ID", func(t *testing.T) {
+		handler := &Handler{
+			secretsARN: "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key-abc123",
+		}
+
+		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
+		require.NoError(t, err)
+
+		assert.Contains(t, result.APIKeySecretURL, "us-east-1")
+		assert.Contains(t, result.APIKeySecretURL, "secretsmanager")
+	})
+
+	t.Run("ARN parsing for different regions", func(t *testing.T) {
+		handler := &Handler{
+			secretsARN: "arn:aws:secretsmanager:eu-west-1:987654321098:secret:my-secret-xyz789",
+		}
+
+		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
+		require.NoError(t, err)
+
+		assert.Contains(t, result.APIKeySecretURL, "eu-west-1")
+	})
+
+	t.Run("invalid ARN format returns empty URL", func(t *testing.T) {
+		handler := &Handler{
+			secretsARN: "invalid-arn",
+		}
+
+		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
+		require.NoError(t, err)
+
+		assert.Empty(t, result.APIKeySecretURL)
+	})
+
+	t.Run("empty secretsARN returns empty URL", func(t *testing.T) {
+		handler := &Handler{}
+
+		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
+		require.NoError(t, err)
+
+		assert.Empty(t, result.APIKeySecretURL)
+	})
 }
 
 func TestHandler_calculateCommitmentMetrics(t *testing.T) {
