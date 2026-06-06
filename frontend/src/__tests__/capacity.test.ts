@@ -32,6 +32,15 @@ function recNoDetails(resourceType: string): { details: undefined; resource_type
   return { details: undefined, resource_type: resourceType };
 }
 
+/** Builds a rec with raw numeric values including NaN/Infinity (bypasses rec() guards). */
+function recRaw(
+  resourceType: string,
+  vcpu: unknown,
+  memoryGb: unknown
+): { details: unknown; resource_type: string } {
+  return { details: { vcpu, memory_gb: memoryGb }, resource_type: resourceType };
+}
+
 // ---------------------------------------------------------------------------
 // Basic ordering
 // ---------------------------------------------------------------------------
@@ -113,6 +122,35 @@ describe('compareByCapacity — null/absent/zero sort last', () => {
     const known = rec('c5.xlarge', 4, 8);
     const nullMem = rec('something', 4, null);
     expect(compareByCapacity(known, nullMem)).toBeLessThan(0);
+  });
+
+  // NaN guard: typeof NaN === 'number' but NaN is not a finite capacity value.
+  // extractCapacity must fold NaN into the unknown bucket (null) so that
+  // compareNullable never sees it; NaN subtraction would return NaN and violate
+  // the sort contract (NaN is neither < 0 nor > 0 nor === 0).
+  it('NaN vcpu is treated as unknown and sorts after positive vcpu', () => {
+    const known = rec('m5.large', 2, 8);
+    const nanVcpu = recRaw('bad-type', NaN, 8);
+    expect(compareByCapacity(known, nanVcpu)).toBeLessThan(0);
+    expect(compareByCapacity(nanVcpu, known)).toBeGreaterThan(0);
+  });
+
+  it('NaN memoryGB is treated as unknown and sorts after known memoryGB when vCPU ties', () => {
+    const known = rec('c5.xlarge', 4, 8);
+    const nanMem = recRaw('r5.xlarge', 4, NaN);
+    expect(compareByCapacity(known, nanMem)).toBeLessThan(0);
+    expect(compareByCapacity(nanMem, known)).toBeGreaterThan(0);
+  });
+
+  it('two NaN-vcpu recs: tie resolved by resource_type (no NaN-comparison instability)', () => {
+    const a = recRaw('alpha', NaN, NaN);
+    const b = recRaw('beta', NaN, NaN);
+    const ab = compareByCapacity(a, b);
+    const ba = compareByCapacity(b, a);
+    expect(ab).toBeLessThan(0);
+    expect(ba).toBeGreaterThan(0);
+    // Symmetry: sign must flip, not collapse to 0 or NaN.
+    expect(Math.sign(ab)).toBe(-Math.sign(ba));
   });
 });
 
