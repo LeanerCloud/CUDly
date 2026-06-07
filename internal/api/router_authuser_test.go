@@ -131,7 +131,6 @@ func TestRequireAuth_UserSession(t *testing.T) {
 	require.NotNil(t, p)
 	assert.Equal(t, PrincipalSession, p.Kind)
 	assert.Equal(t, "uid", p.UserID)
-	assert.Equal(t, "user", p.Role)
 	assert.Equal(t, userSession, p.Session)
 }
 

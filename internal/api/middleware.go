@@ -170,7 +170,6 @@ func (h *Handler) principalFromBearerToken(ctx context.Context, req *events.Lamb
 		Kind:    PrincipalSession,
 		UserID:  session.UserID,
 		Email:   session.Email,
-		Role:    session.Role,
 		Session: session,
 	}
 }
