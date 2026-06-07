@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -586,4 +587,27 @@ func decodeBase64Password(encoded string) (string, error) {
 		return "", NewClientError(400, "invalid password encoding")
 	}
 	return string(decoded), nil
+}
+
+// parseMinSavingsParam parses a numeric savings-floor query parameter.
+// Returns (0, nil) when the parameter is absent or empty (no floor).
+// Returns 400 when the value is present but not a valid non-negative
+// integer or float. Fractional values are allowed (e.g. "12.5") since
+// savings floors can be sub-dollar amounts.
+//
+// paramName is included in the error message so callers can distinguish
+// min_savings_usd vs min_savings_pct errors in client logs.
+func parseMinSavingsParam(raw string, paramName string) (float64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return 0, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, NewClientError(400, fmt.Sprintf("%s must be a non-negative number", paramName))
+	}
+	if v < 0 {
+		return 0, NewClientError(400, fmt.Sprintf("%s must be non-negative", paramName))
+	}
+	return v, nil
 }

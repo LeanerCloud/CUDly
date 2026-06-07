@@ -443,13 +443,23 @@ type PurchaseSuppression struct {
 // RecommendationFilter parameterises ListStoredRecommendations and the
 // handler-facing scheduler.ListRecommendations wrapper. Zero-value fields
 // mean "no filter"; non-empty AccountIDs restricts to the given IDs.
+//
+// MinSavingsUSD is a dollar floor: only recommendations whose monthly savings
+// are >= MinSavingsUSD are returned. 0 means no floor.
+//
+// MinSavingsPct is a percentage floor (0–100): only recommendations whose
+// effective savings percentage (savings/on-demand*100) meets or exceeds this
+// threshold are returned. 0 means no floor. Applied in-process after the DB
+// query rather than in SQL (avoids a computed column). These two filters are
+// independent and can be combined.
 type RecommendationFilter struct {
-	Provider   string   // "aws" / "azure" / "gcp" / "" (all)
-	Service    string   // "" = all services
-	Region     string   // "" = all regions
-	AccountIDs []string // nil/empty = all accounts
-	MinSavings float64  // 0 = no floor on monthly savings
-	ID         string   // "" = all ids; non-empty = exact match on the id column
+	Provider      string   // "aws" / "azure" / "gcp" / "" (all)
+	Service       string   // "" = all services
+	Region        string   // "" = all regions
+	AccountIDs    []string // nil/empty = all accounts
+	MinSavingsUSD float64  // 0 = no floor on monthly savings dollar amount
+	MinSavingsPct float64  // 0 = no floor on savings percentage (0–100 scale)
+	ID            string   // "" = all ids; non-empty = exact match on the id column
 }
 
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no

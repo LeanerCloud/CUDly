@@ -266,8 +266,13 @@ func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
 	if len(filter.AccountIDs) > 0 {
 		add("cloud_account_id = ANY($%d)", filter.AccountIDs)
 	}
-	if filter.MinSavings > 0 {
-		add("monthly_savings >= $%d", filter.MinSavings)
+	// MinSavingsUSD is pushed into SQL as a dollar floor on monthly_savings.
+	// MinSavingsPct is NOT pushed into SQL -- it is applied in-process in
+	// ListStoredRecommendations after the query, because monthly_savings is
+	// an absolute dollar column and the percentage requires knowledge of the
+	// on-demand baseline stored inside the JSONB payload.
+	if filter.MinSavingsUSD > 0 {
+		add("monthly_savings >= $%d", filter.MinSavingsUSD)
 	}
 	if filter.ID != "" {
 		add("payload->>'id' = $%d", filter.ID)
@@ -278,10 +283,47 @@ func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+// recEffectiveSavingsPct computes the effective savings percentage for a
+// recommendation record. Mirrors the formula used client-side in
+// frontend/src/recommendations.ts::effectiveSavingsPct so server-side and
+// client-side filtering produce the same results.
+//
+// Returns (pct, true) when a meaningful percentage can be computed:
+//
+//	amortized_upfront = upfront_cost / (term * 12)
+//	effective_savings = savings - amortized_upfront
+//	pct               = (effective_savings / on_demand_monthly) * 100
+//
+// Returns (0, false) when any required input is absent or invalid (term == 0,
+// no on-demand baseline and no monthly_cost, or on-demand == 0).
+func recEffectiveSavingsPct(rec *RecommendationRecord) (float64, bool) {
+	if rec.Term == 0 {
+		return 0, false
+	}
+	hasOnDemand := rec.OnDemandCost != nil && *rec.OnDemandCost > 0
+	if !hasOnDemand && rec.MonthlyCost == nil {
+		return 0, false
+	}
+	monthsInTerm := float64(rec.Term * 12)
+	amortized := rec.UpfrontCost / monthsInTerm
+	effectiveSavings := rec.Savings - amortized
+	var onDemand float64
+	if hasOnDemand {
+		onDemand = *rec.OnDemandCost
+	} else {
+		onDemand = *rec.MonthlyCost + rec.Savings + amortized
+	}
+	if onDemand == 0 {
+		return 0, false
+	}
+	return (effectiveSavings / onDemand) * 100, true
+}
+
 // ListStoredRecommendations reads recommendations matching the filter.
-// All pushed-down filter conditions are applied in SQL so Postgres (not
-// Go) prunes the rows. The payload JSONB is decoded back into the original
-// RecommendationRecord. Ordering is left to callers.
+// SQL-pushed conditions (Provider, Service, Region, AccountIDs,
+// MinSavingsUSD) are applied in SQL so Postgres prunes the rows; the
+// MinSavingsPct filter is applied in-process because the on-demand
+// baseline lives inside the JSONB payload (not a native column).
 func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) {
 	whereClause, args := buildRecommendationFilter(filter)
 	rows, err := s.db.Query(ctx, `SELECT payload FROM recommendations`+whereClause, args...)
@@ -299,6 +341,14 @@ func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter Re
 		var rec RecommendationRecord
 		if err := json.Unmarshal(payload, &rec); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+		}
+		// Apply the in-process percentage floor. Recs where the percentage
+		// cannot be computed (missing on-demand baseline) pass through -- we
+		// only drop a rec when pct is computable AND below the threshold.
+		if filter.MinSavingsPct > 0 {
+			if pct, ok := recEffectiveSavingsPct(&rec); ok && pct < filter.MinSavingsPct {
+				continue
+			}
 		}
 		out = append(out, rec)
 	}

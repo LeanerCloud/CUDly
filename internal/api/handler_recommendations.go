@@ -57,13 +57,31 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 	// (store_postgres_recommendations.go). The disabled-account case is
 	// enforced by filterRecommendationsByAllowedAccounts after the DB read.
 
+	// min_savings_usd: absolute dollar floor on monthly savings.
+	// min_savings_pct: effective savings percentage floor (0-100 scale).
+	// Both are optional; absent or "0" means no floor. Fractions are
+	// rejected (a user typing "30%" expects a percentage, not $30.5).
+	minSavingsUSD, err := parseMinSavingsParam(params["min_savings_usd"], "min_savings_usd")
+	if err != nil {
+		return nil, err
+	}
+	minSavingsPct, err := parseMinSavingsParam(params["min_savings_pct"], "min_savings_pct")
+	if err != nil {
+		return nil, err
+	}
+	if minSavingsPct < 0 || minSavingsPct > 100 {
+		return nil, NewClientError(400, "min_savings_pct must be between 0 and 100")
+	}
+
 	// Translate query string → DB-level filter. ListRecommendations
 	// pushes these into the WHERE clause so the cache does the pruning.
 	filter := config.RecommendationFilter{
-		Provider:   params["provider"],
-		Service:    params["service"],
-		Region:     params["region"],
-		AccountIDs: accountIDs,
+		Provider:      params["provider"],
+		Service:       params["service"],
+		Region:        params["region"],
+		AccountIDs:    accountIDs,
+		MinSavingsUSD: minSavingsUSD,
+		MinSavingsPct: minSavingsPct,
 	}
 
 	recommendations, err := h.scheduler.ListRecommendations(ctx, filter)

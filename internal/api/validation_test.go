@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateRegion(t *testing.T) {
@@ -495,6 +496,54 @@ func TestValidateAWSWebIdentityTokenFile(t *testing.T) {
 				}
 			} else {
 				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestParseMinSavingsParam is the regression test for issue #1089.
+// It asserts that the savings-floor parsing helper correctly handles absent,
+// zero, numeric, and invalid inputs, and that the "usd" and "pct" paths
+// produce independent parsing results (preventing unit conflation at parse time).
+func TestParseMinSavingsParam(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		paramName string
+		wantVal   float64
+		wantError bool
+	}{
+		// Absent / zero inputs produce a zero floor (no filter).
+		{"empty string", "", "min_savings_usd", 0, false},
+		{"zero string", "0", "min_savings_usd", 0, false},
+		{"whitespace only", "   ", "min_savings_usd", 0, false},
+
+		// Valid positive values.
+		{"positive integer", "30", "min_savings_usd", 30, false},
+		{"positive float", "12.5", "min_savings_usd", 12.5, false},
+		{"large integer", "10000", "min_savings_usd", 10000, false},
+
+		// Percentage param uses the same parsing path.
+		{"pct integer", "20", "min_savings_pct", 20, false},
+		{"pct float", "33.3", "min_savings_pct", 33.3, false},
+
+		// Invalid inputs.
+		{"non-numeric word", "thirty", "min_savings_usd", 0, true},
+		{"negative value", "-5", "min_savings_usd", 0, true},
+		{"mixed string", "30abc", "min_savings_usd", 0, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val, err := parseMinSavingsParam(tc.raw, tc.paramName)
+			if tc.wantError {
+				require.Error(t, err)
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+				assert.Equal(t, 400, ce.code)
+			} else {
+				require.NoError(t, err)
+				assert.InDelta(t, tc.wantVal, val, 0.0001)
 			}
 		})
 	}
