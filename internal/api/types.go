@@ -3,7 +3,6 @@ package api
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/analytics"
@@ -14,19 +13,6 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
-
-// RateLimiter provides simple in-memory rate limiting for auth endpoints
-// Note: For Lambda, this only works within a single warm instance.
-// For production, use database-backed rate limiting.
-type RateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string]*rateLimitEntry
-}
-
-type rateLimitEntry struct {
-	count     int
-	resetTime time.Time
-}
 
 // RateLimiterInterface defines the interface for rate limiting implementations
 // This allows for both in-memory and database-backed rate limiters

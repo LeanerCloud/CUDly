@@ -180,6 +180,20 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	// internal/server/app.go) and passed in via cfg.OIDCSigner. Leave
 	// it nil to disable the /.well-known/* endpoints.
 
+	// Startup assertion: every key string used in checkRateLimit call sites must
+	// have a dedicated entry in getDefaultRateLimits(). A missing key falls
+	// silently through to api_general (300/min), as happened in issue #1016.
+	// This panics at init time so the gap is caught in tests and on cold start,
+	// not under production load.
+	assertRateLimitKeysKnown(
+		"login",
+		"setup_admin",
+		"reset_password",
+		"change_password",
+		"register",
+		"approve_cancel_public",
+	)
+
 	return h
 }
 

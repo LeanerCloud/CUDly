@@ -133,17 +133,24 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	}
 
 	// Auth endpoints that don't have a session yet are exempt unconditionally.
-	csrfExemptAlways := []string{
+	// Prefix matching is safe for these /api/auth/* paths because no admin
+	// sub-paths share those prefixes.
+	csrfExemptAlwaysPrefix := []string{
 		"/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-		"/api/register", // Public registration (no session)
 	}
-	for _, exempt := range csrfExemptAlways {
+	for _, exempt := range csrfExemptAlwaysPrefix {
 		if strings.HasPrefix(path, exempt) {
 			return false
 		}
+	}
+	// Exact match for the public self-registration endpoint (issue #1017).
+	// HasPrefix would also exempt /api/registrations/<id>/approve|reject|delete,
+	// which are AuthAdmin state-changing routes that MUST be CSRF-protected.
+	if path == "/api/register" {
+		return false
 	}
 
 	// Token-based approve/cancel/reject paths are exempt ONLY when the request
@@ -287,9 +294,10 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 // checkRateLimit checks if the request is allowed based on IP-based rate limiting.
 // Returns nil if allowed, or an error if rate limited.
 //
-// Note: This function uses a fail-open design - if the rate limiter encounters
-// an error (e.g., Redis unavailable), the request is allowed through rather than
-// blocking legitimate users. This is intentional to ensure availability.
+// This function uses a fail-open design: if the rate limiter encounters an error
+// (e.g. DB pool exhaustion, transient unavailability), the request is allowed
+// through. Use checkRateLimitStrict for endpoints where availability of the
+// rate limiter is itself a security requirement (credential brute-force surface).
 func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) error {
 	if h.rateLimiter == nil {
 		return nil
@@ -301,6 +309,35 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 		logging.Warnf("Rate limiter error for IP %s: %v", clientIP, err)
 		// Continue on rate limiter errors to avoid blocking legitimate requests
 		return nil
+	}
+	if !allowed {
+		logging.Warnf("Rate limit exceeded for %s from IP: %s", endpoint, clientIP)
+		return NewClientError(429, "too many requests, please try again later")
+	}
+	return nil
+}
+
+// checkRateLimitStrict is the fail-closed variant of checkRateLimit for
+// credential endpoints (login, setup_admin, reset_password, change_password).
+//
+// When the rate limiter returns an error (DB unavailable, pool exhaustion), this
+// function returns 503 instead of allowing the request through. An attacker who
+// can induce DB pressure would otherwise unlock unlimited password guessing on
+// these endpoints (02-M1). A high-severity error log is emitted so monitoring
+// can detect and alert on the fail-closed window.
+func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) error {
+	if h.rateLimiter == nil {
+		return nil
+	}
+
+	clientIP := req.RequestContext.HTTP.SourceIP
+	allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, endpoint)
+	if err != nil {
+		// High-severity alert: rate limiter unavailable on a credential endpoint.
+		// Fail closed to preserve brute-force protection.
+		logging.Errorf("ALERT: rate limiter error on credential endpoint %s for IP %s; request denied (02-M1): %v",
+			endpoint, clientIP, err)
+		return NewClientError(503, "service temporarily unavailable, please try again later")
 	}
 	if !allowed {
 		logging.Warnf("Rate limit exceeded for %s from IP: %s", endpoint, clientIP)

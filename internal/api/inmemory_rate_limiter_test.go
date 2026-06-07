@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -262,6 +263,54 @@ func TestGetDefaultRateLimits_SetupAdminHasDedicatedBucket(t *testing.T) {
 		"setup_admin window must be 15 minutes per issue #411")
 }
 
+// Regression test for #1016: "register" must have a dedicated strict rate-limit
+// bucket and must NOT fall through to the permissive api_general config (300/min).
+// An attacker at 300/min can flood the DB with pending-registration rows and
+// trigger a synchronous admin-notification email per request (inbox spam + DoS).
+func TestGetDefaultRateLimits_RegisterHasDedicatedBucket(t *testing.T) {
+	limits := getDefaultRateLimits()
+
+	cfg, ok := limits["register"]
+	if !ok {
+		t.Fatal("register key missing from default rate limits (issue #1016): add it to getDefaultRateLimits()")
+	}
+
+	// Contract from #1016: 5 attempts per 15 minutes.
+	assert.Equal(t, 5, cfg.MaxAttempts, "register max attempts must be 5 per issue #1016")
+	assert.Equal(t, 15*time.Minute, cfg.Window, "register window must be 15 minutes per issue #1016")
+
+	// register must be far stricter than api_general (300/min).
+	apiGeneral := limits["api_general"]
+	if cfg.MaxAttempts >= apiGeneral.MaxAttempts {
+		t.Errorf("register limit (%d) is not stricter than api_general (%d); regression of #1016",
+			cfg.MaxAttempts, apiGeneral.MaxAttempts)
+	}
+
+	// Window must be non-zero.
+	if cfg.Window == 0 {
+		t.Error("register rate limit has zero window duration")
+	}
+}
+
+// Regression test for #1016: assertRateLimitKeysKnown must panic when an
+// unregistered key is supplied, so a future caller typo is caught at startup
+// rather than silently falling through to api_general.
+func TestAssertRateLimitKeysKnown_PanicsOnUnknownKey(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("assertRateLimitKeysKnown did not panic for an unknown key")
+		}
+	}()
+	assertRateLimitKeysKnown("this_key_does_not_exist_in_the_map")
+}
+
+// Regression test for #1016: assertRateLimitKeysKnown must not panic when all
+// supplied keys are present in getDefaultRateLimits().
+func TestAssertRateLimitKeysKnown_NoopForKnownKeys(t *testing.T) {
+	// Should not panic.
+	assertRateLimitKeysKnown("login", "setup_admin", "register", "approve_cancel_public")
+}
+
 // Regression test for #420: NewInMemoryRateLimiter must be ready at construction
 // time (not after a slow lazy init) so Lambda cold-start first requests are protected.
 func TestNewInMemoryRateLimiter_ReadyImmediately(t *testing.T) {
@@ -290,5 +339,36 @@ func TestNewInMemoryRateLimiter_ReadyImmediately(t *testing.T) {
 	}
 	if blocked {
 		t.Errorf("expected login to be blocked after %d attempts; rate limiter was not enforcing (regression of #420)", loginLimit.MaxAttempts)
+	}
+}
+
+// Regression test for 02-M3: the in-memory rate limiter must not grow without
+// bound even when entries are within their active window (not yet expired).
+// Previously only expired entries were purged, allowing an attacker rotating
+// source IPs to cause unbounded memory growth.
+//
+// Strategy: inject exactly cap+2 unique IPs with a long window. The (cap+1)-th
+// call sees len==cap, triggers eviction to 80% of cap, then adds one entry.
+// The (cap+2)-th call adds one more. Final count is ~(80%*cap)+2, which is
+// strictly less than cap. A pre-fix run would reach cap+2.
+func TestInMemoryRateLimiter_EntriesCapEnforced(t *testing.T) {
+	rl := NewInMemoryRateLimiter()
+	ctx := context.Background()
+
+	// Fill to just above the cap so exactly one eviction cycle fires.
+	total := inMemoryRateLimitMaxEntries + 2
+	for i := 0; i < total; i++ {
+		ip := fmt.Sprintf("10.%d.%d.%d", i/65536%256, i/256%256, i%256)
+		_, _ = rl.AllowWithIP(ctx, ip, "login")
+	}
+
+	rl.mu.Lock()
+	count := len(rl.attempts)
+	rl.mu.Unlock()
+
+	// After eviction the count must be strictly less than cap.
+	if count >= inMemoryRateLimitMaxEntries {
+		t.Errorf("entry count %d is >= cap %d after %d calls: eviction did not fire (02-M3 regression)",
+			count, inMemoryRateLimitMaxEntries, total)
 	}
 }

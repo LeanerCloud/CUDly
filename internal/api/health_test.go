@@ -85,7 +85,9 @@ func TestHandler_GetHealth_ConfigStoreUnhealthy(t *testing.T) {
 
 	assert.Equal(t, "degraded", response.Status)
 	assert.Equal(t, "unhealthy", response.Checks["config_store"].Status)
-	assert.Contains(t, response.Checks["config_store"].Message, "Failed to access config store")
+	// Error detail must NOT appear in the public body (02-L4: info-leak fix).
+	assert.Equal(t, "config store unavailable", response.Checks["config_store"].Message)
+	assert.NotContains(t, response.Checks["config_store"].Message, "database connection failed")
 	assert.Equal(t, "healthy", response.Checks["auth_service"].Status)
 }
 
@@ -179,8 +181,9 @@ func TestHandler_checkConfigStore_AccessError(t *testing.T) {
 	check := handler.checkConfigStore(ctx)
 
 	assert.Equal(t, "unhealthy", check.Status)
-	assert.Contains(t, check.Message, "Failed to access config store")
-	assert.Contains(t, check.Message, "connection timeout")
+	// Error detail must NOT appear in the public body (02-L4: info-leak fix).
+	assert.Equal(t, "config store unavailable", check.Message)
+	assert.NotContains(t, check.Message, "connection timeout")
 }
 
 func TestHandler_checkAuthService_Healthy(t *testing.T) {
