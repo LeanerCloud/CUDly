@@ -28,13 +28,46 @@ type DBRateLimiter struct {
 // Verify that DBRateLimiter implements RateLimiterInterface
 var _ RateLimiterInterface = (*DBRateLimiter)(nil)
 
-// NewDBRateLimiter creates a new database-backed rate limiter
+// dbRateLimiterScheduledCleanupInterval is the period between scheduled
+// cleanup runs started by StartCleanupWorker. Separate from cleanupInterval
+// (the minimum time between opportunistic cleanup runs) so that the scheduled
+// worker can tick independently. Exposed as a var so tests can override it.
+var dbRateLimiterScheduledCleanupInterval = 10 * time.Minute
+
+// NewDBRateLimiter creates a new database-backed rate limiter.
+// Call StartCleanupWorker on the returned limiter to ensure periodic cleanup
+// of expired rows independent of traffic (addresses 02-M2).
 func NewDBRateLimiter(pool *pgxpool.Pool) *DBRateLimiter {
 	return &DBRateLimiter{
 		pool:            pool,
 		limits:          getDefaultRateLimits(),
-		cleanupInterval: 60 * time.Second, // Only cleanup at most once per minute
+		cleanupInterval: 60 * time.Second, // minimum gap between opportunistic cleanup runs
 	}
+}
+
+// StartCleanupWorker launches a background goroutine that calls cleanup()
+// on a fixed schedule, independent of the count==1 opportunistic trigger.
+//
+// This ensures that perpetually-denied keys (whose count never resets to 1)
+// are also evicted, preventing unbounded row growth on the rate_limits table
+// under sustained abuse (02-M2). The goroutine stops when ctx is cancelled.
+//
+// Call this once at server startup after creating the DBRateLimiter. The
+// goroutine is lightweight (one blocked timer channel) and safe to call from
+// tests with a short-lived context.
+func (rl *DBRateLimiter) StartCleanupWorker(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(dbRateLimiterScheduledCleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.cleanup()
+			}
+		}
+	}()
 }
 
 // SetLimit allows customizing rate limits for specific endpoints

@@ -635,7 +635,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	// Initialize distributed rate limiter for Lambda (multi-instance)
 	// For Fargate/containers, we already have in-memory rate limiter from startup
 	if app.appConfig.IsLambda {
-		app.RateLimiter = api.NewDBRateLimiter(dbConn.Pool())
+		dbRL := api.NewDBRateLimiter(dbConn.Pool())
+		// Start the scheduled cleanup worker so perpetually-denied keys (whose
+		// count never resets to 1) are still evicted on a fixed schedule (02-M2).
+		dbRL.StartCleanupWorker(ctx)
+		app.RateLimiter = dbRL
 		log.Println("Initialized database-backed rate limiter for Lambda (distributed state)")
 	}
 
