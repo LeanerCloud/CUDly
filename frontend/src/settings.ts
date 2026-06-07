@@ -13,6 +13,12 @@ import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPay
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
 import { canAccess } from './permissions';
+import {
+  injectServiceFilterControls,
+  populateServiceFilterControls,
+  readServiceFilterControls,
+  isServiceFilterError,
+} from './serviceFilters';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -3182,6 +3188,11 @@ export async function loadGlobalSettings(): Promise<void> {
         const el = byId<HTMLInputElement>(field.enabledId);
         if (el) el.checked = svc?.enabled !== false;
       }
+      // Inject (idempotent) and populate the per-service recommendation-filter
+      // controls (include/exclude engines/types/regions + min-count). The
+      // backend already persists and applies these; this is the GUI surface.
+      injectServiceFilterControls(field);
+      populateServiceFilterControls(field, svc);
     }
 
     // After loading persisted values, apply per-service commitment
@@ -3410,6 +3421,22 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   try {
     await api.updateConfig(settings);
 
+    // Read + validate the per-service recommendation filters up front so a bad
+    // min-count aborts the whole save with a targeted toast (rather than firing
+    // some service saves and failing midway). Each entry holds the parsed
+    // filter values for the matching card.
+    const filterValuesByService = new Map<string, ReturnType<typeof readServiceFilterControls>>();
+    for (const field of SERVICE_FIELDS) {
+      const result = readServiceFilterControls(field);
+      if (isServiceFilterError(result)) {
+        showToast({ message: result.message, kind: 'error' });
+        if (saveBtn) saveBtn.disabled = false;
+        saveInFlight = false;
+        return;
+      }
+      filterValuesByService.set(`${field.provider}-${field.service}`, result);
+    }
+
     const serviceSaves = SERVICE_FIELDS.map((field) => {
       const { provider, service, termId, paymentId } = field;
       const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
@@ -3417,10 +3444,9 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
         ? (byId<HTMLSelectElement>(paymentId)?.value || 'all-upfront')
         : settings.default_payment;
       const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
-      // Carry forward every field the UI doesn't own. coverage, ramp_schedule,
-      // include_engines, etc. can be set out-of-band (API, future UI, migration)
-      // and a full UPSERT that only honoured the four term/payment/enabled/coverage
-      // fields would silently wipe them every time the user clicked Save.
+      // Carry forward every field the UI doesn't own (e.g. ramp_schedule).
+      // The recommendation-filter fields are now UI-owned and overwritten from
+      // the card's controls below.
 
       // Issue #136: per-product SP cards expose their own coverage and enabled
       // controls. Read from the DOM when the card has the controls; fall back
@@ -3438,6 +3464,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
         if (el) enabled = el.checked;
       }
 
+      const filters = filterValuesByService.get(`${provider}-${service}`);
       const cfg: api.ServiceConfig = {
         ...(base ?? {}),
         provider,
@@ -3446,6 +3473,17 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
         term,
         payment,
         coverage,
+        // Filters: send the card's current values. isServiceFilterError was
+        // already ruled out above, so `filters` here is always the value form.
+        ...(filters && !isServiceFilterError(filters) ? {
+          include_engines: filters.include_engines,
+          exclude_engines: filters.exclude_engines,
+          include_types: filters.include_types,
+          exclude_types: filters.exclude_types,
+          include_regions: filters.include_regions,
+          exclude_regions: filters.exclude_regions,
+          min_count: filters.min_count,
+        } : {}),
       };
       return api.updateServiceConfig(provider, service, cfg);
     });
