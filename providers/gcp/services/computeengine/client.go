@@ -37,8 +37,9 @@ const maxCommitmentsPages = 50
 const maxMachineTypeItems = 20
 
 // memMBPerVCPU is the memory-per-vCPU ratio (in MB) for GCP general-purpose
-// committed-use discounts. GCP requires both VCPU and MEMORY_MB in a single
-// commitments.insert call; the ratio is fixed at 4096 MB per vCPU for
+// committed-use discounts. GCP requires both a VCPU and a MEMORY resource (the
+// memory Amount is expressed in MB) in a single commitments.insert call; the
+// ratio is fixed at 4096 MB per vCPU for
 // GENERAL_PURPOSE commitments.
 const memMBPerVCPU = 4096
 
@@ -362,7 +363,7 @@ func (c *ComputeEngineClient) convertGCPCommitmentToCommon(commitment *computepb
 // ResourceCommitment represents a single resource within a GCP commitment.
 type ResourceCommitment struct {
 	Amount int64  // number of vCPUs or memory in MB
-	Type   string // "VCPU" or "MEMORY_MB"
+	Type   string // GCP ResourceCommitment.Type enum: "VCPU" or "MEMORY"
 }
 
 // CommitmentRequest represents a single GCP commitment to create.
@@ -374,7 +375,8 @@ type CommitmentRequest struct {
 }
 
 // GroupCommitments groups recommendations by project+region+term into CommitmentRequests.
-// GCP requires both VCPU and MEMORY_MB in a single commitments.insert call.
+// GCP requires both a VCPU and a MEMORY resource (memory Amount in MB) in a
+// single commitments.insert call.
 // Each recommendation's Count is treated as vCPU count; memory is estimated at 4 GB per vCPU.
 func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 	type key struct{ account, region, term string }
@@ -405,7 +407,9 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 			Region: k.region,
 			Resources: []ResourceCommitment{
 				{Type: "VCPU", Amount: a.vcpus},
-				{Type: "MEMORY_MB", Amount: a.vcpus * memMBPerVCPU},
+				// "MEMORY" is the GCP ResourceCommitment.Type enum member; the
+				// Amount is in MB (see buildInsertRequest, issue #1022).
+				{Type: "MEMORY", Amount: a.vcpus * memMBPerVCPU},
 			},
 		})
 		counter++
@@ -581,7 +585,8 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 
 	commitmentName := idempotentCommitmentName(opts.IdempotencyToken)
 
-	// GCP requires both VCPU and MEMORY_MB in a single commitment insert.
+	// GCP requires both a VCPU and a MEMORY resource (memory Amount in MB) in a
+	// single commitment insert.
 	commitment := &computepb.Commitment{
 		Name:        stringPtr(commitmentName),
 		Plan:        stringPtr(plan),
@@ -593,7 +598,11 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 				Amount: int64Ptr(int64(rec.Count)),
 			},
 			{
-				Type:   stringPtr("MEMORY_MB"),
+				// GCP's ResourceCommitment.Type enum is VCPU/MEMORY/LOCAL_SSD/
+				// ACCELERATOR; the memory member is "MEMORY" (the Amount is still in
+				// MB). Sending "MEMORY_MB" is an invalid enum value and GCP rejects
+				// the commitments.insert, failing the purchase (issue #1022).
+				Type:   stringPtr("MEMORY"),
 				Amount: int64Ptr(int64(rec.Count) * memMBPerVCPU),
 			},
 		},
@@ -962,16 +971,19 @@ func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, r
 	}
 }
 
-// isMemoryAmountOp returns true when op's path_filters indicate a MEMORY_MB
+// isMemoryAmountOp returns true when op's path_filters indicate a memory
 // resource type. Used by extractVCPUCountFromRecommendation to skip the memory
 // sibling of the VCPU operation in a GCP commitment resource operation group.
+// Matches both "MEMORY" (the canonical ResourceCommitment.Type enum member) and
+// the legacy "MEMORY_MB" spelling, since the Recommender's path_filter encoding
+// is not contractually documented (issue #1022).
 func isMemoryAmountOp(op *recommenderpb.Operation) bool {
 	for filterKey, filterVal := range op.GetPathFilters() {
 		if !strings.Contains(strings.ToLower(filterKey), "type") {
 			continue
 		}
 		if sv, ok := filterVal.GetKind().(*structpb.Value_StringValue); ok {
-			if strings.EqualFold(sv.StringValue, "MEMORY_MB") {
+			if strings.EqualFold(sv.StringValue, "MEMORY") || strings.EqualFold(sv.StringValue, "MEMORY_MB") {
 				return true
 			}
 		}

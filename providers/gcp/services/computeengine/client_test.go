@@ -1038,17 +1038,25 @@ func TestConverterToInsert_CountNonZero_VCPUAmountSet(t *testing.T) {
 	require.NotNil(t, insertReq)
 	require.NotNil(t, insertReq.CommitmentResource)
 
+	// The resource Type strings MUST be valid GCP ResourceCommitment.Type enum
+	// members (VCPU/MEMORY/LOCAL_SSD/ACCELERATOR). "MEMORY_MB" is NOT a valid
+	// enum value and GCP rejects the commitments.insert, failing the purchase
+	// (issue #1022). This loop asserts on the canonical "MEMORY" spelling.
 	var vcpuAmount, memoryAmount int64
+	var sawInvalidType string
 	for _, r := range insertReq.CommitmentResource.Resources {
 		switch r.GetType() {
 		case "VCPU":
 			vcpuAmount = r.GetAmount()
-		case "MEMORY_MB":
+		case "MEMORY":
 			memoryAmount = r.GetAmount()
+		default:
+			sawInvalidType = r.GetType()
 		}
 	}
+	assert.Empty(t, sawInvalidType, "insert request must use only valid ResourceCommitment.Type enum members; got %q (issue #1022)", sawInvalidType)
 	assert.Greater(t, vcpuAmount, int64(0), "VCPU Amount in the insert request must be > 0 (issue #1022 C1)")
-	assert.Greater(t, memoryAmount, int64(0), "MEMORY_MB Amount in the insert request must be > 0 (issue #1022 C1)")
+	assert.Greater(t, memoryAmount, int64(0), "MEMORY Amount in the insert request must be > 0 (issue #1022 C1)")
 }
 
 // TestConverterFillsPricingForScorer is the regression test for issue #1022 C2.
@@ -1190,4 +1198,64 @@ func TestConvertGCPRecommendation_ParamPaymentOptionRespected(t *testing.T) {
 	rec := client.convertGCPRecommendation(ctx, gcpRec, params)
 	require.NotNil(t, rec)
 	assert.Equal(t, "monthly", rec.PaymentOption)
+}
+
+// TestGroupCommitments_UsesValidMemoryEnum is a regression test for issue #1022:
+// GroupCommitments must emit the canonical GCP ResourceCommitment.Type enum
+// member "MEMORY" (Amount in MB), not the invalid "MEMORY_MB" string that GCP
+// rejects on commitments.insert. Fails on the pre-fix code that emitted
+// "MEMORY_MB".
+func TestGroupCommitments_UsesValidMemoryEnum(t *testing.T) {
+	recs := []common.Recommendation{
+		{
+			Provider: common.ProviderGCP,
+			Service:  common.ServiceCompute,
+			Account:  "test-project",
+			Region:   "us-central1",
+			Term:     "1yr",
+			Count:    4,
+		},
+	}
+
+	groups := GroupCommitments(recs)
+	require.Len(t, groups, 1, "one project+region+term group expected")
+
+	var sawVCPU, sawMemory bool
+	for _, r := range groups[0].Resources {
+		switch r.Type {
+		case "VCPU":
+			sawVCPU = true
+			assert.Equal(t, int64(4), r.Amount, "VCPU amount must equal the summed Count")
+		case "MEMORY":
+			sawMemory = true
+			assert.Equal(t, int64(4*memMBPerVCPU), r.Amount, "MEMORY amount must be 4096 MB per vCPU")
+		default:
+			t.Fatalf("invalid ResourceCommitment.Type %q (issue #1022): must be VCPU/MEMORY/LOCAL_SSD/ACCELERATOR", r.Type)
+		}
+	}
+	assert.True(t, sawVCPU, "GroupCommitments must include a VCPU resource")
+	assert.True(t, sawMemory, "GroupCommitments must include a MEMORY resource (issue #1022)")
+}
+
+// TestIsMemoryAmountOp_MatchesBothSpellings asserts that the inbound Recommender
+// memory-op detector skips both the canonical "MEMORY" and legacy "MEMORY_MB"
+// path_filter spellings, so the VCPU extractor never mistakes the memory sibling
+// for the vCPU amount (issue #1022).
+func TestIsMemoryAmountOp_MatchesBothSpellings(t *testing.T) {
+	for _, typeVal := range []string{"MEMORY", "MEMORY_MB", "memory"} {
+		sv, _ := structpb.NewValue(typeVal)
+		op := &recommenderpb.Operation{
+			PathFilters: map[string]*structpb.Value{
+				"/resources/*/type": sv,
+			},
+		}
+		assert.True(t, isMemoryAmountOp(op), "isMemoryAmountOp must skip memory op with type %q", typeVal)
+	}
+
+	// A VCPU op (or an op with no type filter) must NOT be treated as memory.
+	svVCPU, _ := structpb.NewValue("VCPU")
+	vcpuOp := &recommenderpb.Operation{
+		PathFilters: map[string]*structpb.Value{"/resources/*/type": svVCPU},
+	}
+	assert.False(t, isMemoryAmountOp(vcpuOp), "isMemoryAmountOp must not skip a VCPU op")
 }
