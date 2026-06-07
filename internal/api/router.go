@@ -440,7 +440,7 @@ func (r *Router) updateConfigHandler(ctx context.Context, req *events.LambdaFunc
 }
 
 func (r *Router) getServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getServiceConfig(ctx, params["id"])
+	return r.h.getServiceConfig(ctx, req, params["id"])
 }
 
 func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

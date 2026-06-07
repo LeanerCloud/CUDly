@@ -24,6 +24,13 @@ func sourceCloud() string {
 
 // Configuration handlers
 func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*ConfigResponse, error) {
+	// Require view:config permission. Every other read handler in the package
+	// pairs the route-level AuthUser gate with this explicit permission check;
+	// config GET must be consistent (02-M4).
+	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
+		return nil, err
+	}
+
 	globalCfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -179,7 +186,12 @@ func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg co
 	return cfg, nil
 }
 
-func (h *Handler) getServiceConfig(ctx context.Context, service string) (any, error) {
+func (h *Handler) getServiceConfig(ctx context.Context, req *events.LambdaFunctionURLRequest, service string) (any, error) {
+	// Require view:config permission. Consistent with getConfig (02-M4).
+	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
+		return nil, err
+	}
+
 	// Validate for path traversal attacks
 	if err := validateServicePath(service); err != nil {
 		return nil, err
