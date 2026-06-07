@@ -194,19 +194,26 @@ func (c *GlobalConfig) Validate() error {
 	if err := validateCoverage(c.DefaultCoverage); err != nil {
 		return err
 	}
-	if !isValidCollectionSchedule(c.CollectionSchedule) {
-		return fmt.Errorf("invalid collection_schedule: %q (valid: hourly, daily, weekly)", c.CollectionSchedule)
-	}
-	if c.NotificationDaysBefore < 0 || c.NotificationDaysBefore > MaxNotificationDaysBefore {
-		return fmt.Errorf("notification_days_before must be between 0 and %d, got: %d", MaxNotificationDaysBefore, c.NotificationDaysBefore)
-	}
-	if err := c.validateGracePeriodDays(); err != nil {
+	if err := c.validateScheduleAndNotifications(); err != nil {
 		return err
 	}
 	if err := validateOfferingClass(c.OfferingClass); err != nil {
 		return err
 	}
 	return c.validateRecommendationsFields()
+}
+
+// validateScheduleAndNotifications validates collection_schedule and
+// notification_days_before. Extracted to keep Validate's cyclomatic
+// complexity under the project limit.
+func (c *GlobalConfig) validateScheduleAndNotifications() error {
+	if !isValidCollectionSchedule(c.CollectionSchedule) {
+		return fmt.Errorf("invalid collection_schedule: %q (valid: hourly, daily, weekly)", c.CollectionSchedule)
+	}
+	if c.NotificationDaysBefore < 0 || c.NotificationDaysBefore > MaxNotificationDaysBefore {
+		return fmt.Errorf("notification_days_before must be between 0 and %d, got: %d", MaxNotificationDaysBefore, c.NotificationDaysBefore)
+	}
+	return c.validateGracePeriodDays()
 }
 
 // validateRecommendationsFields validates the recommendation-cycle parameters
