@@ -273,6 +273,21 @@ func LoadApplicationConfig() ApplicationConfig {
 	}
 }
 
+// validateAppConfigEnvDefaults validates the money-moving env-sourced defaults
+// at the startup boundary. Both DEFAULT_PAYMENT_OPTION and DEFAULT_RAMP_SCHEDULE
+// flow into the purchase manager as system-wide defaults; a typo propagates
+// silently into every purchase unless we reject it here (issue #1026).
+// Empty values are always valid (means "use the purchase manager's built-in default").
+func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
+	if err := config.ValidatePaymentOptionEnv(cfg.DefaultPaymentOption); err != nil {
+		return fmt.Errorf("invalid DEFAULT_PAYMENT_OPTION: %w", err)
+	}
+	if err := config.ValidateRampScheduleEnv(cfg.DefaultRampSchedule); err != nil {
+		return fmt.Errorf("invalid DEFAULT_RAMP_SCHEDULE: %w", err)
+	}
+	return nil
+}
+
 // resolveScheduledTaskSecret resolves SCHEDULED_TASK_SECRET_NAME to its real
 // value via the configured SecretResolver (Azure Key Vault / AWS Secrets
 // Manager) when possible. Falls back to cfg.ScheduledTaskSecret (plaintext
@@ -337,6 +352,12 @@ func buildScheduledAuth(cfg ApplicationConfig) (*scheduledauth.Validator, error)
 func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
 	if deps.DBConfig == nil {
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
+	}
+
+	// Validate money-moving env defaults at the startup boundary -- consistent with the
+	// fail-fast posture used for scheduledauth mode and ADMIN_PASSWORD_SECRET (issue #1026).
+	if err := validateAppConfigEnvDefaults(cfg); err != nil {
+		return nil, err
 	}
 
 	cfg.ScheduledTaskSecret = resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
@@ -844,18 +865,24 @@ func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Conf
 
 func getEnvInt(key string, defaultVal int) int {
 	if val := os.Getenv(key); val != "" {
-		if result, err := strconv.Atoi(val); err == nil {
-			return result
+		result, err := strconv.Atoi(val)
+		if err != nil {
+			log.Printf("WARNING: %s=%q is not a valid integer; using default %d", key, val, defaultVal)
+			return defaultVal
 		}
+		return result
 	}
 	return defaultVal
 }
 
 func getEnvFloat(key string, defaultVal float64) float64 {
 	if val := os.Getenv(key); val != "" {
-		if result, err := strconv.ParseFloat(val, 64); err == nil {
-			return result
+		result, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultVal)
+			return defaultVal
 		}
+		return result
 	}
 	return defaultVal
 }

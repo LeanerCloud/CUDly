@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -460,7 +461,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			Version:                "v2.0",
 			NotificationDaysBefore: 7,
 			DefaultTerm:            1,
-			DefaultPaymentOption:   "AllUpfront",
+			DefaultPaymentOption:   "all-upfront", // canonical form; "AllUpfront" is now correctly rejected at startup
 			DefaultCoverage:        95.5,
 			APIKeySecretARN:        "arn:aws:key",
 			EnableDashboard:        true,
@@ -481,6 +482,110 @@ func TestNewApplicationFromDeps(t *testing.T) {
 		testutil.AssertEqual(t, cfg.DashboardURL, app.appConfig.DashboardURL)
 		testutil.AssertEqual(t, cfg.CORSAllowedOrigin, app.appConfig.CORSAllowedOrigin)
 	})
+}
+
+// TestNewApplicationFromDepsValidatesEnvDefaults is a regression test for
+// issue #1026: before the fix, invalid DEFAULT_PAYMENT_OPTION /
+// DEFAULT_RAMP_SCHEDULE values were silently propagated into the purchase
+// manager. The test confirms that NewApplicationFromDeps now fails fast on
+// an invalid value rather than accepting it.
+func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
+	ctx := context.Background()
+	validDBConfig := &database.Config{Host: "localhost", Port: 5432, Database: "cudly_test", User: "test", Password: "test"}
+
+	t.Run("invalid DEFAULT_PAYMENT_OPTION is rejected at startup", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultPaymentOption: "AllUpfront", // typo: should be "all-upfront"
+		}
+		deps := ExternalDeps{DBConfig: validDBConfig}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertError(t, err)
+		testutil.AssertContains(t, err.Error(), "DEFAULT_PAYMENT_OPTION")
+	})
+
+	t.Run("invalid DEFAULT_RAMP_SCHEDULE is rejected at startup", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultRampSchedule: "Immediate", // wrong case
+		}
+		deps := ExternalDeps{DBConfig: validDBConfig}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertError(t, err)
+		testutil.AssertContains(t, err.Error(), "DEFAULT_RAMP_SCHEDULE")
+	})
+
+	t.Run("empty DEFAULT_PAYMENT_OPTION is accepted", func(t *testing.T) {
+		// Empty means "use purchase manager built-in default" -- must not error.
+		cfg := ApplicationConfig{DefaultPaymentOption: ""}
+		deps := ExternalDeps{
+			EmailSender: &noopEmailSender{},
+			DBConfig:    validDBConfig,
+		}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		// Error is expected for other reasons (e.g. scheduledauth or DB), but
+		// NOT for the payment option: verify the message does not mention it.
+		if err != nil {
+			testutil.AssertTrue(t, !strings.Contains(err.Error(), "DEFAULT_PAYMENT_OPTION"),
+				"empty DEFAULT_PAYMENT_OPTION must not produce a validation error, got: "+err.Error())
+		}
+	})
+
+	t.Run("valid DEFAULT_PAYMENT_OPTION is accepted", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultPaymentOption: "all-upfront",
+		}
+		deps := ExternalDeps{
+			EmailSender: &noopEmailSender{},
+			DBConfig:    validDBConfig,
+		}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		// Error may occur for unrelated reasons but must not mention payment option.
+		if err != nil {
+			testutil.AssertTrue(t, !strings.Contains(err.Error(), "DEFAULT_PAYMENT_OPTION"),
+				"valid DEFAULT_PAYMENT_OPTION must not produce a validation error, got: "+err.Error())
+		}
+	})
+}
+
+// TestGetEnvIntLogsOnBadValue is a regression test for M1: before the fix,
+// getEnvInt silently returned the default on a malformed value. The test
+// confirms that a WARNING is now logged.
+func TestGetEnvIntLogsOnBadValue(t *testing.T) {
+	testutil.SetEnv(t, "TEST_ENV_INT_BAD", "notanint")
+
+	var logged string
+	orig := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	result := getEnvInt("TEST_ENV_INT_BAD", 42)
+	logged = buf.String()
+
+	testutil.AssertEqual(t, 42, result) // falls back to default
+	testutil.AssertTrue(t, strings.Contains(logged, "WARNING"),
+		"Expected WARNING log for bad int env var, got: "+logged)
+	testutil.AssertTrue(t, strings.Contains(logged, "TEST_ENV_INT_BAD"),
+		"Expected key name in warning log, got: "+logged)
+}
+
+// TestGetEnvFloatLogsOnBadValue mirrors TestGetEnvIntLogsOnBadValue for floats.
+func TestGetEnvFloatLogsOnBadValue(t *testing.T) {
+	testutil.SetEnv(t, "TEST_ENV_FLOAT_BAD", "eighty")
+
+	var logged string
+	orig := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	result := getEnvFloat("TEST_ENV_FLOAT_BAD", 80.0)
+	logged = buf.String()
+
+	testutil.AssertEqual(t, 80.0, result)
+	testutil.AssertTrue(t, strings.Contains(logged, "WARNING"),
+		"Expected WARNING log for bad float env var, got: "+logged)
+	testutil.AssertTrue(t, strings.Contains(logged, "TEST_ENV_FLOAT_BAD"),
+		"Expected key name in warning log, got: "+logged)
 }
 
 func TestInitConfigStore(t *testing.T) {

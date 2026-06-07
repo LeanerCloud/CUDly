@@ -488,3 +488,35 @@ func isValidRampScheduleType(t string) bool {
 	}
 	return false
 }
+
+// ValidatePaymentOptionEnv validates a payment-option value read from an
+// environment variable (e.g. DEFAULT_PAYMENT_OPTION). Empty string is
+// always valid ("use the purchase manager's built-in default"). Non-empty
+// values must be in the union of all provider payment option sets.
+// Called by the server startup boundary so misconfiguration is caught at
+// boot time rather than silently propagated into purchases (issue #1026).
+func ValidatePaymentOptionEnv(val string) error {
+	if val == "" {
+		return nil
+	}
+	if !isValidPaymentOption(val) {
+		return fmt.Errorf("value %q is not a recognised payment option (valid: %s)", val, strings.Join(validPaymentOptionsUnion, ", "))
+	}
+	return nil
+}
+
+// ValidateRampScheduleEnv validates a ramp-schedule value read from an
+// environment variable (e.g. DEFAULT_RAMP_SCHEDULE). Empty string is
+// always valid ("use the purchase manager's built-in default"). Non-empty
+// values must be in ValidRampScheduleTypes.
+// Called by the server startup boundary so misconfiguration is caught at
+// boot time rather than silently propagated into purchases (issue #1026).
+func ValidateRampScheduleEnv(val string) error {
+	if val == "" {
+		return nil
+	}
+	if !isValidRampScheduleType(val) {
+		return fmt.Errorf("value %q is not a recognised ramp schedule type (valid: %s)", val, strings.Join(ValidRampScheduleTypes, ", "))
+	}
+	return nil
+}
