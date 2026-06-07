@@ -105,7 +105,9 @@ jest.mock('../utils', () => ({
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
   escapeHtml: jest.fn((str) => str || ''),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // providerBadgeClass added for L4/D1 fix: whitelist-based CSS class helper.
+  providerBadgeClass: jest.fn((p) => ['aws', 'azure', 'gcp'].includes((p || '').toLowerCase()) ? (p || '').toLowerCase() : ''),
 }));
 
 import * as api from '../api';

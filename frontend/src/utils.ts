@@ -285,3 +285,30 @@ export function calculatePaybackMonths(upfrontCost: number, monthlySavings: numb
   if (!upfrontCost || upfrontCost <= 0) return 0;
   return Math.ceil(upfrontCost / monthlySavings);
 }
+
+/** Canonical set of known cloud providers used for whitelist checks. */
+const KNOWN_PROVIDERS = ['aws', 'azure', 'gcp'] as const;
+
+/**
+ * Return the whitelisted CSS class name for a provider value.
+ *
+ * Whitelist guards against stored XSS when provider strings are interpolated
+ * into innerHTML class attributes (findings H1/L4, issues #443 / CR #253).
+ * An unrecognised value produces an empty string (no badge modifier class).
+ */
+export function providerBadgeClass(provider: string | null | undefined): string {
+  if (!provider) return '';
+  const n = provider.toLowerCase();
+  return (KNOWN_PROVIDERS as readonly string[]).includes(n) ? n : '';
+}
+
+/**
+ * Render a `<span class="provider-badge ...">LABEL</span>` string for use in
+ * innerHTML templates.  Both the CSS class and the text label are sanitised:
+ * the class is whitelisted to known providers and the label is HTML-escaped.
+ */
+export function providerBadgeHtml(provider: string | null | undefined): string {
+  const cls = providerBadgeClass(provider);
+  const label = escapeHtml((provider || '').toUpperCase());
+  return `<span class="provider-badge${cls ? ` ${cls}` : ''}">${label}</span>`;
+}

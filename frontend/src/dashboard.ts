@@ -5,7 +5,7 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts } from './utils';
+import { formatCurrency, getDateParts, providerBadgeClass } from './utils';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
@@ -444,10 +444,11 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
     const descP = document.createElement('p');
     const badge = document.createElement('span');
     badge.className = 'provider-badge';
-    // Whitelist provider to a CSS class — only alphanumeric + hyphen allowed
-    const safeProvider = /^[a-z0-9-]+$/i.test(p.provider) ? p.provider : 'unknown';
-    badge.classList.add(safeProvider);
-    badge.textContent = p.provider.toUpperCase();
+    // Use shared whitelist helper (providerBadgeClass) for consistency with
+    // plans.ts and history.ts (D1 / L4 -- aligns on aws|azure|gcp set).
+    const safeProvider = providerBadgeClass(p.provider);
+    if (safeProvider) badge.classList.add(safeProvider);
+    badge.textContent = (p.provider || '').toUpperCase();
     descP.appendChild(badge);
     descP.appendChild(document.createTextNode(` ${p.service} - Step ${p.step_number} of ${p.total_steps}`));
     details.appendChild(h4);

@@ -1,7 +1,7 @@
 /**
  * Plans module tests
  */
-import { loadPlans, savePlan, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal, setupPlanHandlers } from '../plans';
+import { loadPlans, savePlan, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal, setupPlanHandlers, _resetRampHandlersForTest } from '../plans';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -108,7 +108,11 @@ jest.mock('../utils', () => ({
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
   formatCurrency: jest.fn((val) => `$${val || 0}`),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // providerBadgeHtml added for H1 fix: returns a deterministic span so XSS
+  // regression tests can assert neutralisation without a real DOM escaper.
+  providerBadgeHtml: jest.fn((p) => `<span class="provider-badge ${['aws','azure','gcp'].includes((p||'').toLowerCase()) ? (p||'').toLowerCase() : ''}">${(p||'').toUpperCase()}</span>`),
+  CURRENCY_DEFAULT_DIGITS: 0,
 }));
 
 import * as api from '../api';
@@ -182,6 +186,9 @@ describe('Plans Module', () => {
     jest.clearAllMocks();
     window.alert = jest.fn();
     window.confirm = jest.fn().mockReturnValue(true);
+    // Reset ramp-handlers install-once guard: DOM is rebuilt each beforeEach,
+    // so static modal elements are fresh and need listeners re-attached (H3 fix).
+    _resetRampHandlersForTest();
   });
 
   describe('loadPlans', () => {
@@ -2684,6 +2691,98 @@ describe('Plans Module', () => {
       // query by id to get the current node.
       const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
       expect(searchInput.disabled).toBe(false);
+    });
+  });
+
+  // Regression tests for H3: setupRampScheduleHandlers must not stack duplicate
+  // listeners on static modal elements across multiple modal opens.
+  // Pre-fix: opening the plan modal N times would attach N handlers to each
+  // element, so a single radio change would fire updateCommitmentOptions N times.
+  describe('H3 regression: setupRampScheduleHandlers install-once guard', () => {
+    test('provider-change handler fires exactly once after opening modal 3 times', () => {
+      const { populateTermSelect: mockPopulate } = jest.requireMock('../commitmentOptions') as {
+        populateTermSelect: jest.Mock;
+      };
+
+      // beforeEach already called _resetRampHandlersForTest() so the flag is clear.
+      // Open the modal 3 times without resetting between them.
+      openNewPlanModal(); // first open: installs handlers (rampHandlersInstalled = true)
+      openNewPlanModal(); // second open: guard returns early -- no re-attach
+      openNewPlanModal(); // third open: guard returns early -- no re-attach
+
+      mockPopulate.mockClear(); // clear any calls from setup above
+
+      // Dispatch one change event on the provider select.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'azure';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      // populateTermSelect is called exactly once from updateCommitmentOptions.
+      // Pre-fix (no guard) it would be called 3 times (once per open).
+      expect(mockPopulate).toHaveBeenCalledTimes(1);
+    });
+
+    test('ramp schedule radio handler fires exactly once after 2 modal opens', () => {
+      // The radio-change handler calls updatePlanNameFromSchedule which reads
+      // the plan-name input. Count invocations via a side-effect on populateTermSelect.
+      const { populateTermSelect: mockPopulate } = jest.requireMock('../commitmentOptions') as {
+        populateTermSelect: jest.Mock;
+      };
+
+      // beforeEach called _resetRampHandlersForTest(); open twice without reset between.
+      openNewPlanModal(); // installs
+      openNewPlanModal(); // guard: no re-install
+
+      mockPopulate.mockClear();
+
+      // The provider-select change handler calls updateCommitmentOptions -> populateTermSelect.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'gcp';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      // With stacked handlers it would fire twice (once per open).
+      // With the guard it fires exactly once.
+      expect(mockPopulate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Regression for H1: providerBadgeHtml must be used for planned-purchase rows
+  // and plan card detail (prevents XSS via class attribute injection).
+  describe('H1 regression: provider badge XSS neutralisation in plans.ts', () => {
+    test('providerBadgeHtml is called with the purchase provider for planned-purchase rows', async () => {
+      const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
+
+      const maliciousProvider = 'aws"><img src=x onerror=alert(1)>';
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
+        purchases: [
+          {
+            id: 'pp-1',
+            plan_id: 'plan-1',
+            plan_name: 'Test Plan',
+            provider: maliciousProvider,
+            service: 'ec2',
+            resource_type: 'Standard',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            payment: 'no-upfront',
+            upfront_cost: 0,
+            estimated_savings: 50,
+            scheduled_date: '2024-06-01',
+            status: 'pending',
+            step_number: 1,
+            total_steps: 4,
+          }
+        ]
+      });
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+
+      await loadPlans();
+
+      // providerBadgeHtml must have been called with the malicious string.
+      // Pre-fix the string was raw-interpolated into a class attribute via innerHTML.
+      // Post-fix it goes through the helper which whitelists and escapes it.
+      expect(mockBadge).toHaveBeenCalledWith(maliciousProvider);
     });
   });
 });

@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -26,6 +26,12 @@ import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from 
 // (the New-Plan-from-scratch path has no pre-resolved target). See #273
 // CR follow-up.
 let pendingPlanRecommendations: api.Recommendation[] = [];
+
+// Install-once guard for setupRampScheduleHandlers. The elements it binds are
+// static modal singletons that are never replaced, so adding listeners on
+// every modal open stacks duplicate handlers. The flag ensures we bind once;
+// reset to false only in tests via resetRampHandlersForTest().
+let rampHandlersInstalled = false;
 
 /**
  * Load plans and planned purchases
@@ -713,7 +719,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
-      <td><span class="provider-badge ${purchase.provider}">${purchase.provider.toUpperCase()}</span></td>
+      <td>${providerBadgeHtml(purchase.provider)}</td>
       <td>${escapeHtml(purchase.service)}</td>
       <td>${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})</td>
       <td>${purchase.count}</td>
@@ -950,7 +956,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         <div class="plan-details">
           <div class="plan-detail">
             <span class="plan-detail-label">Provider</span>
-            <span class="plan-detail-value"><span class="provider-badge ${info.provider}">${info.provider.toUpperCase()}</span></span>
+            <span class="plan-detail-value">${providerBadgeHtml(info.provider)}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Service</span>
@@ -1748,9 +1754,14 @@ function wirePlanRangeInputs(): void {
 }
 
 /**
- * Set up event handlers for ramp schedule changes
+ * Set up event handlers for ramp schedule changes.
+ * Guarded by rampHandlersInstalled so re-opening the plan modal does not
+ * stack duplicate listeners on the static modal elements (H3, feedback_event_listener_dedup).
  */
 function setupRampScheduleHandlers(): void {
+  if (rampHandlersInstalled) return;
+  rampHandlersInstalled = true;
+
   // Listen to ramp schedule radio changes
   document.querySelectorAll<HTMLInputElement>('input[name="ramp-schedule"]').forEach(radio => {
     radio.addEventListener('change', () => {
@@ -2147,4 +2158,15 @@ function updateServiceDropdownForProvider(provider: string): void {
     // Trigger change event to update term/payment options
     serviceSelect.dispatchEvent(new Event('change'));
   }
+}
+
+/**
+ * Reset the ramp-handlers install-once guard.
+ * Exported for unit tests only: each test rebuilds the DOM so the static
+ * modal elements are fresh; without this reset the guard prevents listener
+ * re-attachment and tests that open the modal multiple times break.
+ * Must NOT be called in production code.
+ */
+export function _resetRampHandlersForTest(): void {
+  rampHandlersInstalled = false;
 }

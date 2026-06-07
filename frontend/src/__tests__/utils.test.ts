@@ -16,7 +16,9 @@ import {
   isValidEmail,
   formatRampSchedule,
   getStatusBadge,
-  calculatePaybackMonths
+  calculatePaybackMonths,
+  providerBadgeClass,
+  providerBadgeHtml
 } from '../utils';
 
 describe('formatCurrency', () => {
@@ -361,5 +363,79 @@ describe('calculatePaybackMonths', () => {
   test('returns 0 for zero/negative upfront', () => {
     expect(calculatePaybackMonths(0, 100)).toBe(0);
     expect(calculatePaybackMonths(-100, 100)).toBe(0);
+  });
+});
+
+// Regression tests for H1/D1/L4: providerBadgeClass whitelist.
+// Pre-fix the class was interpolated raw from the API (plans.ts) or allowed any
+// alphanumeric string (dashboard.ts).  Post-fix all sites go through this
+// helper which enforces the aws|azure|gcp allow-list.
+describe('providerBadgeClass', () => {
+  test('returns lowercase provider for known aws', () => {
+    expect(providerBadgeClass('aws')).toBe('aws');
+    expect(providerBadgeClass('AWS')).toBe('aws');
+  });
+
+  test('returns lowercase provider for known azure', () => {
+    expect(providerBadgeClass('azure')).toBe('azure');
+    expect(providerBadgeClass('Azure')).toBe('azure');
+  });
+
+  test('returns lowercase provider for known gcp', () => {
+    expect(providerBadgeClass('gcp')).toBe('gcp');
+  });
+
+  test('returns empty string for unknown provider (XSS payload neutralised)', () => {
+    // Regression: pre-fix this value would be injected verbatim as a CSS class.
+    expect(providerBadgeClass('aws"><img src=x onerror=alert(1)>')).toBe('');
+    expect(providerBadgeClass('evil-class')).toBe('');
+    expect(providerBadgeClass('unknown')).toBe('');
+  });
+
+  test('returns empty string for null/undefined/empty', () => {
+    expect(providerBadgeClass(null)).toBe('');
+    expect(providerBadgeClass(undefined)).toBe('');
+    expect(providerBadgeClass('')).toBe('');
+  });
+});
+
+// Regression tests for H1: providerBadgeHtml XSS in plans.ts.
+// Pre-fix: plans.ts interpolated provider raw into class + textContent via innerHTML.
+// Post-fix: class is whitelisted; text is HTML-escaped.
+describe('providerBadgeHtml', () => {
+  test('renders known provider with correct class and uppercased label', () => {
+    const html = providerBadgeHtml('aws');
+    expect(html).toContain('class="provider-badge aws"');
+    expect(html).toContain('>AWS<');
+  });
+
+  test('renders azure with correct class', () => {
+    const html = providerBadgeHtml('azure');
+    expect(html).toContain('class="provider-badge azure"');
+    expect(html).toContain('>AZURE<');
+  });
+
+  test('neutralises XSS payload in class attribute position', () => {
+    // The raw value would previously be injected as: class="provider-badge <payload>"
+    const payload = 'aws"><img src=x onerror=alert(document.cookie)>';
+    const html = providerBadgeHtml(payload);
+    // Class must not contain the raw payload.
+    expect(html).not.toContain(payload);
+    // No <img> or onerror in the output.
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('onerror');
+    // Class falls back to just provider-badge (no extra class token).
+    expect(html).toMatch(/class="provider-badge"/);
+  });
+
+  test('HTML-escapes text content of unknown provider', () => {
+    const html = providerBadgeHtml('<script>alert(1)</script>');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;SCRIPT&gt;');
+  });
+
+  test('handles null/undefined gracefully', () => {
+    expect(providerBadgeHtml(null)).toContain('provider-badge');
+    expect(providerBadgeHtml(undefined)).toContain('provider-badge');
   });
 });
