@@ -1078,3 +1078,52 @@ func TestSendRIExchangePendingApproval_ErrNoRecipientWhenEmpty(t *testing.T) {
 	err := sender.SendRIExchangePendingApproval(context.Background(), data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
+
+// TestSendNotification_SubjectSanitizedAndTruncated verifies that 07-M3 is
+// enforced: SendNotification strips CR/LF from the subject and truncates it
+// to 100 bytes before publishing to SNS. A subject longer than 100 bytes or
+// containing newlines would cause an InvalidParameter error at runtime.
+func TestSendNotification_SubjectSanitizedAndTruncated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("newline_stripped", func(t *testing.T) {
+		var captured *sns.PublishInput
+		mockSNS := new(MockSNSClient)
+		mockSNS.On("Publish", mock.Anything, mock.MatchedBy(func(in *sns.PublishInput) bool {
+			captured = in
+			return true
+		})).Return(&sns.PublishOutput{MessageId: aws.String("id-1")}, nil)
+		t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+		sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
+			TopicARN: "arn:aws:sns:us-east-1:123:topic",
+		})
+
+		err := sender.SendNotification(context.Background(), "Plan A\r\nInjected", "clean body")
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		assert.NotContains(t, *captured.Subject, "\r")
+		assert.NotContains(t, *captured.Subject, "\n")
+	})
+
+	t.Run("long_subject_truncated", func(t *testing.T) {
+		const longSubject = "AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA"
+		var captured *sns.PublishInput
+		mockSNS := new(MockSNSClient)
+		mockSNS.On("Publish", mock.Anything, mock.MatchedBy(func(in *sns.PublishInput) bool {
+			captured = in
+			return true
+		})).Return(&sns.PublishOutput{MessageId: aws.String("id-2")}, nil)
+		t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+		sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
+			TopicARN: "arn:aws:sns:us-east-1:123:topic",
+		})
+
+		err := sender.SendNotification(context.Background(), longSubject, "clean body")
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		assert.LessOrEqual(t, len(*captured.Subject), snsMaxSubjectLen,
+			"SNS subject must not exceed %d bytes", snsMaxSubjectLen)
+	})
+}
