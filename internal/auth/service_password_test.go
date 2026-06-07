@@ -268,6 +268,35 @@ func TestService_RequestPasswordReset(t *testing.T) {
 	})
 }
 
+// TestService_RequestPasswordReset_RateLimit is the regression test for 03-M5.
+// An active token issued within PasswordResetRateLimit must be preserved: the
+// second call must return nil without calling UpdateUser or sending an email.
+func TestService_RequestPasswordReset_RateLimit(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	mockEmail := new(MockEmailSender)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	service := createTestService(mockStore, mockEmail)
+
+	// User already has a fresh reset token (expiry well in the future, issued seconds ago).
+	freshExpiry := time.Now().Add(PasswordResetExpiry - 5*time.Second)
+	userWithFreshToken := &User{
+		ID:                  "rate-limit-user",
+		Email:               "ratelimit@example.com",
+		PasswordResetToken:  "existing-hashed-token",
+		PasswordResetExpiry: &freshExpiry,
+		Active:              true,
+	}
+
+	mockStore.On("GetUserByEmail", ctx, "ratelimit@example.com").Return(userWithFreshToken, nil).Once()
+	// UpdateUser and SendPasswordResetEmail must NOT be called.
+
+	err := service.RequestPasswordReset(ctx, "ratelimit@example.com")
+	require.NoError(t, err, "rate-limited reset must not return an error (enumeration protection)")
+	// Verify by asserting no UpdateUser or email calls happened (handled by AssertExpectations).
+}
+
 func TestService_ConfirmPasswordReset(t *testing.T) {
 	ctx := context.Background()
 
@@ -693,7 +722,7 @@ func TestCheckCommonPasswords(t *testing.T) {
 	assert.NoError(t, service.checkCommonPasswords("SuperAdmin2024"))
 }
 
-// Test containsSequentialChars function
+// Test containsRepeatedChars function
 func TestContainsSequentialChars(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -753,7 +782,7 @@ func TestContainsSequentialChars(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := containsSequentialChars(tt.password, tt.n)
+			got := containsRepeatedChars(tt.password, tt.n)
 			assert.Equal(t, tt.want, got)
 		})
 	}

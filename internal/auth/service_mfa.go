@@ -46,21 +46,38 @@ const recoveryCodeLength = 8
 // shown to humans once and typed back, so visual clarity matters.
 const recoveryCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-// verifyTOTP validates a TOTP code against the secret
-// Implements RFC 6238 TOTP with 30-second time steps
-// Uses constant-time comparison to prevent timing attacks
+// verifyTOTP validates a TOTP code against the secret.
+// Implements RFC 6238 TOTP with 30-second time steps.
+// Uses constant-time comparison to prevent timing attacks.
+//
+// Fails closed: returns false immediately when code or secret is empty.
+// An empty code can arrive from a missing form field; an empty secret signals
+// a data-integrity anomaly (MFA enabled but no secret stored). In both cases
+// the correct behavior is to reject, not to accidentally match because
+// generateTOTP("","") returns "" and ConstantTimeCompare("","") == 1.
 func verifyTOTP(secret, code string) bool {
-	// Allow for time skew by checking current and adjacent time windows
+	// Fail closed: reject empty code and empty secret up front.
+	// generateTOTP returns "" on base32-decode failure; ConstantTimeCompare("","")
+	// evaluates to 1 and would bypass MFA for any caller that passes code="".
+	if code == "" {
+		return false
+	}
+	if secret == "" {
+		return false
+	}
+
+	// Allow for time skew by checking current and adjacent time windows.
 	currentTime := time.Now().Unix()
 	timeStep := int64(config.MFATimeStep)
 
-	// Check current time step and one step before/after for clock skew tolerance
-	// Use constant-time comparison and avoid early returns to prevent timing attacks
+	// Check current time step and one step before/after for clock skew tolerance.
+	// Use constant-time comparison and avoid early returns to prevent timing attacks.
 	valid := 0
 	for _, offset := range []int64{-1, 0, 1} {
 		counter := (currentTime / timeStep) + offset
 		expected := generateTOTP(secret, counter)
-		// Use constant-time comparison - bitwise OR accumulates matches
+		// generateTOTP returns "" on base32-decode failure; a non-empty code can
+		// never equal "" so a bad secret produces no match.
 		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
 			valid = 1
 		}
@@ -207,6 +224,10 @@ func (s *Service) hashRecoveryCode(code string) (string, error) {
 // removal is what makes recovery codes single-use; the caller must
 // persist the user afterwards via UpdateUser.
 //
+// Fails closed on empty input: an empty string normalizes to "", which
+// bcrypt.CompareHashAndPassword would compare against every stored hash.
+// Reject it immediately to avoid leaking which hashes exist.
+//
 // Iterates over all stored hashes (bcrypt compare is constant-time
 // for the matching hash but not across the slice — recovery codes
 // are 8 chars of high-entropy alphabet, so timing leakage of which
@@ -214,6 +235,10 @@ func (s *Service) hashRecoveryCode(code string) (string, error) {
 // branch-free by ORing the bool into a single accumulator).
 func (s *Service) consumeRecoveryCode(user *User, entered string) bool {
 	normalized := normalizeRecoveryCode(entered)
+	// Fail closed: reject empty input before any bcrypt comparison.
+	if normalized == "" {
+		return false
+	}
 	matchIdx := -1
 	for i, hash := range user.MFARecoveryCodes {
 		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(normalized)); err == nil {

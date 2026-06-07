@@ -374,7 +374,9 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	// it here means scheduled-task cold starts don't race the first
 	// inbound HTTP request.
 	if issuer := resolveOIDCIssuerURL(cfg); issuer != "" {
-		oidc.SetIssuerURL(issuer)
+		if err := oidc.SetIssuerURL(issuer); err != nil {
+			log.Printf("WARN: oidc issuer URL invalid, ignoring: %v", err)
+		}
 	} else if cfg.IsLambda {
 		primeCtx, primeCancel := context.WithTimeout(ctx, 5*time.Second)
 		if err := oidc.PrimeIssuerURLFromLambda(primeCtx); err != nil {

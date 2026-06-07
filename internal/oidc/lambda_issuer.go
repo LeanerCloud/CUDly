@@ -54,6 +54,8 @@ func primeIssuerURLFromLambdaClient(ctx context.Context, client LambdaFunctionUR
 		return fmt.Errorf("oidc: lambda GetFunctionUrlConfig returned empty url")
 	}
 	base := strings.TrimRight(*out.FunctionUrl, "/")
-	SetIssuerURL(base + "/oidc")
+	if err := SetIssuerURL(base + "/oidc"); err != nil {
+		return fmt.Errorf("oidc: lambda function URL is not a valid https issuer base: %w", err)
+	}
 	return nil
 }

@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -71,7 +72,7 @@ func (s *pgCredentialStore) LoadRaw(ctx context.Context, accountID, credType str
 		accountID, credType,
 	).Scan(&blob)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("credentials: load credential: %w", err)

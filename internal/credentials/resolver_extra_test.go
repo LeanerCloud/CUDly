@@ -458,6 +458,61 @@ func TestResolveAccessKeyProvider_NilStore(t *testing.T) {
 	assert.Contains(t, err.Error(), "credential store required")
 }
 
+// ---------------------------------------------------------------------------
+// 03-N5 — Required payload fields validated after unmarshal
+// ---------------------------------------------------------------------------
+
+// TestResolveAccessKeyProvider_EmptyAccessKeyID verifies that an AWS payload
+// with a missing access_key_id is rejected with a descriptive error (03-N5).
+func TestResolveAccessKeyProvider_EmptyAccessKeyID(t *testing.T) {
+	store := newMockStore()
+	payload, _ := json.Marshal(map[string]string{
+		"access_key_id":     "",
+		"secret_access_key": "not-empty",
+	})
+	store.data["acct1/aws_access_keys"] = payload
+
+	account := &config.CloudAccount{
+		ID:          "acct1",
+		AWSAuthMode: "access_keys",
+	}
+	_, err := ResolveAWSCredentialProvider(context.Background(), account, store, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "access_key_id is empty")
+}
+
+// TestResolveAccessKeyProvider_EmptySecretKey verifies that an AWS payload
+// with a missing secret_access_key is rejected with a descriptive error (03-N5).
+func TestResolveAccessKeyProvider_EmptySecretKey(t *testing.T) {
+	store := newMockStore()
+	payload, _ := json.Marshal(map[string]string{
+		"access_key_id":     "AKIAIOSFODNN7EXAMPLE",
+		"secret_access_key": "",
+	})
+	store.data["acct1/aws_access_keys"] = payload
+
+	account := &config.CloudAccount{
+		ID:          "acct1",
+		AWSAuthMode: "access_keys",
+	}
+	_, err := ResolveAWSCredentialProvider(context.Background(), account, store, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secret_access_key is empty")
+}
+
+// TestResolveAzureCredentials_EmptyClientSecret verifies that an Azure payload
+// with a missing client_secret is rejected with a descriptive error (03-N5).
+func TestResolveAzureCredentials_EmptyClientSecret(t *testing.T) {
+	store := newMockStore()
+	payload, _ := json.Marshal(map[string]string{"client_secret": ""})
+	store.data["acct1/azure_client_secret"] = payload
+
+	account := &config.CloudAccount{ID: "acct1"}
+	_, err := ResolveAzureCredentials(context.Background(), account, store)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client_secret is empty")
+}
+
 // minimalRSAPEM returns a minimal RSA private key PEM for use in JSON
 // (newlines replaced with \n literal so it fits in a JSON string).
 func minimalRSAPEM() string {

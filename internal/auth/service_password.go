@@ -33,7 +33,14 @@ const (
 	minPasswordLength       = 12  // Minimum password length
 	maxPasswordLength       = 128 // Maximum password length to prevent bcrypt DoS
 	passwordHistorySize     = 5   // Number of previous passwords to remember
-	sequentialCharThreshold = 3   // Number of identical consecutive characters to reject
+	repeatedCharThreshold = 3   // Number of identical consecutive characters to reject
+
+	// PasswordResetRateLimit is the minimum interval between password reset requests
+	// for the same email address. A second request within this window is silently
+	// dropped (the existing token remains valid) to prevent a griefing vector where
+	// an attacker repeatedly requests resets to perpetually invalidate the victim's
+	// legitimate link.
+	PasswordResetRateLimit = 1 * time.Minute
 )
 
 // commonPasswords is a list of commonly used weak passwords to reject
@@ -68,9 +75,11 @@ func (s *Service) verifyPassword(password, hash string) bool {
 	return err == nil
 }
 
-// containsSequentialChars checks if password contains n or more identical consecutive characters
-// For example, "aaa", "111", "###" would be caught with n=3
-func containsSequentialChars(password string, n int) bool {
+// containsRepeatedChars checks if password contains n or more identical consecutive characters.
+// For example, "aaa", "111", "###" would be caught with n=3.
+// Note: this checks for repeated (identical) chars, not sequential runs (abc, 123) --
+// the name "Sequential" in the original was misleading; renamed for accuracy (03-L3).
+func containsRepeatedChars(password string, n int) bool {
 	if len(password) < n || n < 2 {
 		return false
 	}
@@ -145,8 +154,8 @@ func (s *Service) validatePassword(password string) error {
 	}
 
 	// Check for sequential identical characters
-	if containsSequentialChars(password, sequentialCharThreshold) {
-		return fmt.Errorf("password must not contain %d or more identical consecutive characters", sequentialCharThreshold)
+	if containsRepeatedChars(password, repeatedCharThreshold) {
+		return fmt.Errorf("password must not contain %d or more identical consecutive characters", repeatedCharThreshold)
 	}
 
 	// Check against common passwords
@@ -265,6 +274,19 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		// Don't reveal if email exists
 		logging.Debugf("Password reset requested for non-existent email: %s", redactEmail(email))
 		return nil
+	}
+
+	// Rate-limit: if a reset token was issued recently (within PasswordResetRateLimit),
+	// silently return so the existing token stays valid. This prevents a griefing
+	// attack where an adversary who knows the victim's email repeatedly requests
+	// resets to perpetually invalidate the victim's legitimate link.
+	if user.PasswordResetExpiry != nil {
+		tokenAge := PasswordResetExpiry - time.Until(*user.PasswordResetExpiry)
+		if tokenAge < PasswordResetRateLimit {
+			logging.Debugf("Password reset rate-limited for %s (token age %s < %s)",
+				redactEmail(email), tokenAge.Round(time.Second), PasswordResetRateLimit)
+			return nil
+		}
 	}
 
 	// Generate reset token
@@ -453,17 +475,36 @@ func (s *Service) processPasswordReset(user *User, newPassword string) error {
 	return nil
 }
 
-// redactEmail returns a redacted version of an email address for safe logging.
-// e.g. "user@example.com" -> "us***@example.com"
+// redactEmail returns a redacted version of an email address safe for debug logs.
+// Both the local part and the domain are partially masked to reduce PII exposure
+// for low-entropy addresses (03-L1, see also feedback_pii_in_logs).
+// Example: "user@example.com" -> "us***@ex***.com"
 func redactEmail(email string) string {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {
 		return "***"
 	}
 	local := email[:at]
-	domain := email[at:] // includes the '@'
+	domain := email[at+1:] // without '@'
 	if len(local) <= 2 {
-		return "***" + domain
+		local = "***"
+	} else {
+		local = local[:2] + "***"
 	}
-	return local[:2] + "***" + domain
+
+	// Mask the domain: keep the TLD but redact the hostname.
+	// e.g. "example.com" -> "ex***.com"
+	dot := strings.LastIndex(domain, ".")
+	if dot < 0 || dot == 0 {
+		domain = "***"
+	} else {
+		tld := domain[dot:]   // ".com"
+		host := domain[:dot]  // "example"
+		if len(host) <= 2 {
+			domain = "***" + tld
+		} else {
+			domain = host[:2] + "***" + tld
+		}
+	}
+	return local + "@" + domain
 }

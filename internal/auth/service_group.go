@@ -229,7 +229,19 @@ func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionCo
 		s.matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
 }
 
-// matchStringListConstraints checks if two string lists have any overlap
+// matchStringListConstraints checks if two string lists have any overlap.
+//
+// Semantics (03-L6): if either list is empty the constraint is treated as
+// satisfied ("no constraint specified = no restriction"). Concretely:
+//   - empty permList: the permission has no constraint on this dimension
+//   - empty reqList: the request does not specify this dimension
+//
+// Both cases return true (match). Only when both lists are non-empty is
+// containsAny used to require at least one common element.
+//
+// Callers that need "a constrained permission must only match an explicit
+// request value" should verify reqList is non-empty before calling, or add
+// a separate dimension-specific check.
 func (s *Service) matchStringListConstraints(permList, reqList []string) bool {
 	if len(permList) > 0 && len(reqList) > 0 {
 		return containsAny(permList, reqList)

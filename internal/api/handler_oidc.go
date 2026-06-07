@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/oidc"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -124,7 +125,13 @@ func (h *Handler) resolveIssuerURL(req *events.LambdaFunctionURLRequest) string 
 		return ""
 	}
 	issuer := base + OIDCBasePath
-	oidc.SetIssuerURL(issuer)
+	if err := oidc.SetIssuerURL(issuer); err != nil {
+		// The computed issuer URL is derived from the Lambda request's DomainName
+		// (or the configured DASHBOARD_URL). A rejection here means the env is
+		// misconfigured. Log and return empty so callers treat OIDC as unavailable.
+		logging.Warnf("oidc: resolved issuer URL rejected: %v", err)
+		return ""
+	}
 	return issuer
 }
 

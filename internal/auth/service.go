@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
 	"net/mail"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"golang.org/x/sync/singleflight"
 )
 
 // Configuration constants
@@ -41,6 +43,15 @@ type Service struct {
 	dashboardURL       string
 	bcryptCostOverride int // if > 0, overrides bcryptCost const (used by tests for speed)
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
+	// csrfKey is the server-side key used to derive CSRF tokens as
+	// HMAC-SHA256(csrfKey, rawSessionToken). Tokens are never stored
+	// in cleartext; validation recomputes the HMAC and compares.
+	// A random key is generated at NewService time when not supplied.
+	csrfKey []byte
+	// lastUsedSFG deduplicates concurrent UpdateLastUsed calls for the
+	// same API key so a burst of authenticated requests does not spawn
+	// an unbounded number of goroutines.
+	lastUsedSFG singleflight.Group
 }
 
 // ServiceConfig holds configuration for the auth service
@@ -50,6 +61,11 @@ type ServiceConfig struct {
 	SessionDuration  time.Duration
 	DashboardURL     string
 	OnPasswordChange func(ctx context.Context, userID, newPassword string)
+	// CSRFKey is the server-side secret used to derive CSRF tokens as
+	// HMAC-SHA256(CSRFKey, rawSessionToken). Must be 32 bytes for
+	// 256-bit security. When empty, NewService generates a random key and
+	// logs a warning; all existing sessions will require re-login on restart.
+	CSRFKey []byte
 }
 
 // NewService creates a new auth service
@@ -83,12 +99,26 @@ func NewService(cfg ServiceConfig) *Service {
 		}
 	}
 
+	csrfKey := cfg.CSRFKey
+	if len(csrfKey) == 0 {
+		// No key supplied: generate a random ephemeral key. CSRF tokens issued
+		// before a restart will become invalid (re-login required). Operators
+		// should supply a stable key via CSRFKey to avoid this on restarts.
+		logging.Warnf("auth: CSRFKey not set — generating ephemeral key; all CSRF tokens will be invalidated on service restart. Set CSRFKey to a stable 32-byte value.")
+		csrfKey = make([]byte, 32)
+		if _, err := rand.Read(csrfKey); err != nil {
+			// rand.Read only fails on catastrophic OS errors; panic is appropriate.
+			panic(fmt.Sprintf("auth: failed to generate ephemeral CSRF key: %v", err))
+		}
+	}
+
 	return &Service{
 		store:            cfg.Store,
 		emailSender:      cfg.EmailSender,
 		sessionDuration:  cfg.SessionDuration,
 		dashboardURL:     cfg.DashboardURL,
 		onPasswordChange: cfg.OnPasswordChange,
+		csrfKey:          csrfKey,
 	}
 }
 
@@ -209,8 +239,8 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
 			return fmt.Errorf("Check your email address and password and try again")
 		}
-		// verifyTOTP is panic-safe: a malformed secret causes generateTOTP to return ""
-		// (base32 decode error), resulting in a comparison miss rather than a panic.
+		// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
+		// secret, and base32-decode errors all return false rather than a match.
 		if verifyTOTP(user.MFASecret, req.MFACode) {
 			return nil
 		}
@@ -312,26 +342,30 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 	return &result, nil
 }
 
-// ValidateCSRFToken validates the CSRF token for a session
+// ValidateCSRFToken validates the CSRF token for a session.
+//
+// The expected CSRF token is derived as HMAC-SHA256(csrfKey, rawSessionToken),
+// matching the token produced by createSession. Validation never reads the
+// stored csrf_token column; it recomputes the MAC from the raw session token
+// so a database read (SQLi, backup, replica) cannot yield a usable CSRF token.
 func (s *Service) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken string) error {
 	if csrfToken == "" {
 		return fmt.Errorf("CSRF token is required")
 	}
 
-	session, err := s.ValidateSession(ctx, sessionToken)
-	if err != nil {
+	// ValidateSession is called for its side-effects (expiry check, session
+	// existence) and to obtain the raw session token for HMAC derivation.
+	// The session object itself is not used for the CSRF comparison.
+	if _, err := s.ValidateSession(ctx, sessionToken); err != nil {
 		return fmt.Errorf("invalid session: %w", err)
 	}
 
-	if session.CSRFToken == "" {
-		// Security: Reject sessions without CSRF tokens instead of allowing bypass
-		// Legacy sessions must re-authenticate to get a proper CSRF token
-		logging.Warnf("Rejecting session without CSRF token")
-		return fmt.Errorf("session requires re-authentication for CSRF protection")
-	}
+	// Derive the expected CSRF token from the raw session token and the
+	// server-side key. This is identical to what createSession produced.
+	expected := deriveCSRFToken(s.csrfKey, sessionToken)
 
-	// Use constant-time comparison to prevent timing attacks
-	if subtle.ConstantTimeCompare([]byte(session.CSRFToken), []byte(csrfToken)) != 1 {
+	// Use constant-time comparison to prevent timing attacks.
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(csrfToken)) != 1 {
 		return fmt.Errorf("invalid CSRF token")
 	}
 

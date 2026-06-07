@@ -146,6 +146,14 @@ func resolveAccessKeyProvider(ctx context.Context, account *config.CloudAccount,
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse access key payload for account %s: %w", account.ID, err)
 	}
+	// Validate required fields after unmarshal (03-N5): empty fields would
+	// flow through to the SDK and fail with a less descriptive error later.
+	if payload.AccessKeyID == "" {
+		return nil, fmt.Errorf("credentials: access_key_id is empty in stored payload for account %s", account.ID)
+	}
+	if payload.SecretAccessKey == "" {
+		return nil, fmt.Errorf("credentials: secret_access_key is empty in stored payload for account %s", account.ID)
+	}
 	return credentials.NewStaticCredentialsProvider(payload.AccessKeyID, payload.SecretAccessKey, ""), nil
 }
 
@@ -285,6 +293,10 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)
+	}
+	// Validate required fields after unmarshal (03-N5).
+	if payload.ClientSecret == "" {
+		return nil, fmt.Errorf("credentials: client_secret is empty in stored payload for account %s", account.ID)
 	}
 	return &AzureCredentials{ClientSecret: payload.ClientSecret}, nil
 }
