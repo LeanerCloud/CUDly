@@ -27,8 +27,10 @@ export function formatCurrency(
   currency: string = '$',
   digits: number = CURRENCY_DEFAULT_DIGITS
 ): string {
-  if (value === null || value === undefined || isNaN(value)) {
-    return `${currency}${(0).toFixed(digits)}`;
+  // Represent absent or non-finite values distinctly from a real $0 so
+  // callers can see when data is missing vs actually zero (finding 11-N2).
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '--';
   }
   return `${currency}${value.toLocaleString(undefined, {
     minimumFractionDigits: digits,
@@ -188,12 +190,26 @@ export function buildUrl(baseUrl: string, params: Record<string, string | number
 }
 
 /**
- * Deep clone an object using JSON serialization.
- * Note: This drops undefined values, converts Date to strings,
- * and does not preserve Set/Map objects. For objects containing
- * Set/Map, use structuredClone() instead.
+ * Deep clone an object using structuredClone (finding 11-N1).
+ *
+ * structuredClone preserves undefined values, Date objects, Set and Map
+ * instances, and circular-reference-safe trees.  The old JSON round-trip
+ * silently dropped undefined, converted Date to strings, and lost Set/Map.
+ *
+ * For callers that explicitly need JSON-serialisation semantics (e.g. to
+ * strip undefined before sending to the API) use jsonClone() instead.
  */
 export function deepClone<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') return obj;
+  return structuredClone(obj);
+}
+
+/**
+ * Clone via JSON round-trip: drops undefined values, converts Date to strings,
+ * and does not preserve Set/Map.  Use this only when JSON-serialisation
+ * semantics are explicitly required; prefer deepClone for general cloning.
+ */
+export function jsonClone<T>(obj: T): T {
   if (obj === null || typeof obj !== 'object') return obj;
   return JSON.parse(JSON.stringify(obj)) as T;
 }

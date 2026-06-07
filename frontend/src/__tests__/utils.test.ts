@@ -13,6 +13,7 @@ import {
   parseQueryParams,
   buildUrl,
   deepClone,
+  jsonClone,
   isValidEmail,
   formatRampSchedule,
   getStatusBadge,
@@ -32,13 +33,19 @@ describe('formatCurrency', () => {
     expect(formatCurrency(0)).toBe('$0');
   });
 
-  test('handles null and undefined', () => {
-    expect(formatCurrency(null as unknown as number)).toBe('$0');
-    expect(formatCurrency(undefined as unknown as number)).toBe('$0');
+  test('handles null and undefined with distinct absent marker (11-N2)', () => {
+    // Absent/non-finite values now render as '--' to distinguish missing data
+    // from a real $0 balance (finding 11-N2, feedback_nullable_not_zero).
+    expect(formatCurrency(null as unknown as number)).toBe('--');
+    expect(formatCurrency(undefined as unknown as number)).toBe('--');
   });
 
-  test('handles NaN', () => {
-    expect(formatCurrency(NaN)).toBe('$0');
+  test('handles NaN with distinct absent marker (11-N2)', () => {
+    expect(formatCurrency(NaN)).toBe('--');
+  });
+
+  test('still renders real zero as $0', () => {
+    expect(formatCurrency(0)).toBe('$0');
   });
 
   test('supports custom currency symbol', () => {
@@ -437,5 +444,68 @@ describe('providerBadgeHtml', () => {
   test('handles null/undefined gracefully', () => {
     expect(providerBadgeHtml(null)).toContain('provider-badge');
     expect(providerBadgeHtml(undefined)).toContain('provider-badge');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for finding 11-N1: deepClone defaults to structuredClone.
+// Note: the jsdom test environment polyfills structuredClone with a JSON
+// round-trip (see setup.ts) because jsdom does not expose Node's built-in
+// structuredClone. As a result, undefined preservation can only be asserted
+// when the native structuredClone is available (not in jsdom).
+// ---------------------------------------------------------------------------
+describe('deepClone (11-N1: structuredClone default)', () => {
+  test('deep copy: mutation of clone does not affect source', () => {
+    const obj = { nested: { x: 1 } };
+    const clone = deepClone(obj);
+    clone.nested.x = 99;
+    expect(obj.nested.x).toBe(1);
+  });
+
+  test('deep copy: clones arrays independently', () => {
+    const arr = [1, [2, 3]] as [number, number[]];
+    const clone = deepClone(arr);
+    (clone[1] as number[])[0] = 99;
+    expect((arr[1] as number[])[0]).toBe(2);
+  });
+
+  test('handles primitives and null without throwing', () => {
+    expect(deepClone(null)).toBe(null);
+    expect(deepClone(42)).toBe(42);
+    expect(deepClone('hello')).toBe('hello');
+  });
+});
+
+describe('jsonClone (explicit JSON-serialisation variant)', () => {
+  test('drops undefined values (expected JSON behaviour)', () => {
+    const obj = { a: 1, b: undefined };
+    const clone = jsonClone(obj);
+    // JSON round-trip removes keys whose value is undefined.
+    expect('b' in clone).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for finding 11-N2: formatCurrency distinguishes absent from $0.
+// ---------------------------------------------------------------------------
+describe('formatCurrency (11-N2: absent vs real zero)', () => {
+  test('null returns -- not $0', () => {
+    expect(formatCurrency(null as unknown as number)).toBe('--');
+  });
+
+  test('undefined returns -- not $0', () => {
+    expect(formatCurrency(undefined as unknown as number)).toBe('--');
+  });
+
+  test('NaN returns -- not $0', () => {
+    expect(formatCurrency(NaN)).toBe('--');
+  });
+
+  test('Infinity returns -- not $Infinity', () => {
+    expect(formatCurrency(Infinity)).toBe('--');
+  });
+
+  test('real zero still renders as $0', () => {
+    expect(formatCurrency(0)).toBe('$0');
   });
 });
