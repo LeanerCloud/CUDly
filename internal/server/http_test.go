@@ -414,10 +414,10 @@ func TestHTTPTransportServesOIDCEndpoints(t *testing.T) {
 			testutil.AssertTrue(t, strings.HasPrefix(ct, "application/json"),
 				"Expected Content-Type application/json for "+path+", got: "+ct)
 
-			// With no signer configured HandleOIDC returns 404 JSON (not 200);
-			// the important invariant is that it is *not* an SPA-served HTML 200.
-			testutil.AssertTrue(t, resp.StatusCode != http.StatusOK || strings.HasPrefix(ct, "application/json"),
-				"SPA fallback must not serve OIDC paths")
+			// With no signer configured HandleOIDC returns 404 JSON (not an
+			// SPA-served HTML 200); assert the concrete status so the test
+			// fails loudly if the path ever falls through to the SPA fallback.
+			testutil.AssertEqual(t, http.StatusNotFound, resp.StatusCode)
 		})
 	}
 }
