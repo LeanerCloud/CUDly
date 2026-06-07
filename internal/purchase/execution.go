@@ -86,7 +86,16 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 	// execution where credentials are inherited from the host).
 	accountID := targetAccountID
 	if accountID == "" {
-		accountID = m.getAWSAccountID(ctx)
+		// Fall back to the ambient AWS STS identity for logging/tagging.
+		// getAWSAccountID returns ("", error) on failure so the caller
+		// can substitute a sentinel rather than baking "unknown" into the
+		// purchase history record (05-L2).
+		if id, err := m.getAWSAccountID(ctx); err != nil {
+			logging.Warnf("purchase[%s]: could not resolve ambient AWS account ID: %v; proceeding with empty account ID",
+				exec.ExecutionID, err)
+		} else {
+			accountID = id
+		}
 	}
 
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
@@ -533,6 +542,11 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
 		}, getMaxAccountParallelism())
 
+	// aggregatePurchaseOutcomes is intentionally single-threaded: the fan-out
+	// results are collected above, and the aggregator walks them serially so
+	// there are no concurrent writes to totals, exec.Recommendations, or
+	// purchaseErrors (05-N2). Do NOT move the aggregation inside the FanOut
+	// closure or run it concurrently with the fan-out.
 	return m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
 }
 
@@ -597,12 +611,23 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 // History view (which synthesises completed executions that carry an Error).
 // Appends rather than overwrites so multiple failed history writes within one
 // execution are all recorded.
+// historyAuditGapPrefix is the structured prefix stamped on exec.Error by
+// recordHistoryAuditGap. Using a fixed prefix makes these entries queryable
+// in CloudWatch Insights / log aggregators without grepping free-form text
+// (05-L1). The prefix is intentionally stable; changing it invalidates any
+// existing dashboards or alerts that pattern-match on it.
+const historyAuditGapPrefix = "history_write_failed"
+
 func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, histErr error) {
 	// histErr is a raw persistence error: log it server-side for diagnosis but
 	// keep it out of exec.Error, which is surfaced to clients via the history
 	// status_description. Only a generic, user-safe note reaches the UI.
 	logging.Errorf("history audit gap for commitment %s: %v", commitmentID, histErr)
-	note := fmt.Sprintf("commitment %s purchased but its history record failed to save", commitmentID)
+	// Structured marker: historyAuditGapPrefix + ":" + commitmentID so log
+	// queries can filter on "history_write_failed" and operators can correlate
+	// the commitment ID to the cloud provider's record without parsing prose.
+	note := fmt.Sprintf("%s: commitment %s purchased but its history record failed to save",
+		historyAuditGapPrefix, commitmentID)
 	exec.Error = appendErrNote(exec.Error, note)
 }
 
@@ -644,6 +669,12 @@ func appendErrNote(existing, note string) string {
 // the allowed whitelist; an unexpected value (DB tampering, future
 // code path) is dropped to "" rather than fed onto a cloud commitment
 // where it would be expensive to retract.
+//
+// On invalid source the purchase PROCEEDS UNTAGGED (05-L3 decision):
+// failing the rec over a tag-only field would abort a successful cloud
+// purchase, which is a worse outcome than a missing tag. Input
+// validation at the API write boundary (exec.Source on save) is the
+// correct gate; this fallback is last-resort defence-in-depth.
 func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string {
 	source := exec.Source
 	if source == "" {
@@ -1031,24 +1062,24 @@ func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
 	return m.config.UpdatePurchasePlan(ctx, plan)
 }
 
-// getAWSAccountID retrieves the current AWS account ID using STS
-func (m *Manager) getAWSAccountID(ctx context.Context) string {
+// getAWSAccountID retrieves the current AWS account ID using STS.
+// It returns ("", error) on all failure paths so the caller decides how to
+// handle the absent ID (log a sentinel, skip tagging, etc.) rather than
+// silently recording "unknown" in the purchase history row (05-L2).
+func (m *Manager) getAWSAccountID(ctx context.Context) (string, error) {
 	if m.stsClient == nil {
-		logging.Debug("STS client not configured, using 'unknown' as account ID")
-		return "unknown"
+		return "", fmt.Errorf("STS client not configured")
 	}
 
 	result, err := m.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		logging.Warnf("Failed to get AWS account ID: %v", err)
-		return "unknown"
+		return "", fmt.Errorf("STS GetCallerIdentity: %w", err)
 	}
 
-	if result.Account != nil {
-		return *result.Account
+	if result.Account == nil {
+		return "", fmt.Errorf("STS returned nil Account")
 	}
-
-	return "unknown"
+	return *result.Account, nil
 }
 
 // applyEngineFallback backfills the Engine field on DB / Cache Details

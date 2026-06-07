@@ -85,11 +85,21 @@ type ProcessResult struct {
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
-// status before the recovery sweep treats it as stranded (issue #632). It must
-// be comfortably larger than the longest possible synchronous purchase run so a
-// legitimately in-flight execution is never failed out from under itself. The
-// purchase Lambda timeout is 60s; 15min (matching the RI-exchange stale-sweep
-// threshold in pkg/exchange) leaves a wide safety margin.
+// status before the recovery sweep in ProcessScheduledPurchases treats it as
+// stranded (issue #632). It must be comfortably larger than the longest
+// possible synchronous purchase run so a legitimately in-flight execution is
+// never failed out from under itself. The purchase Lambda timeout is 60s;
+// 15min (matching the RI-exchange stale-sweep threshold in pkg/exchange)
+// leaves a wide safety margin.
+//
+// Note: the purchase.Reaper (reaper.go) uses DefaultReapAfter (10m) to cover
+// both "approved" and "running" rows via an atomic CAS. These two thresholds
+// serve different sweep paths and the 15m vs 10m difference is intentional:
+// the reaper is CAS-protected and can safely reap "running" rows (the real
+// executor wins the CAS race if it is still alive), while this legacy sweep
+// only targets "approved" rows from the cron path and is deliberately
+// conservative (05-N3). A future consolidation should align both under a
+// single env-configurable threshold.
 const staleApprovedThreshold = 15 * time.Minute
 
 // NotificationResult holds the result of sending notifications
