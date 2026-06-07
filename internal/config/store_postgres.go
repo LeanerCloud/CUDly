@@ -1297,27 +1297,33 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			return nil, fmt.Errorf("failed to unmarshal recommendations: %w", err)
 		}
 
-		// Handle nullable timestamps
-		if notifSent.Valid {
-			exec.NotificationSent = &notifSent.Time
-		}
-		if completedAt.Valid {
-			exec.CompletedAt = &completedAt.Time
-		}
-		if expiresAt.Valid {
-			exec.TTL = ttlFromTime(expiresAt.Time)
-		}
-		if tokenExpiresAt.Valid {
-			exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
-		}
-		if executedAt.Valid {
-			exec.ExecutedAt = &executedAt.Time
-		}
+		applyExecutionNullableTimes(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt)
 
 		executions = append(executions, exec)
 	}
 
 	return executions, rows.Err()
+}
+
+// applyExecutionNullableTimes maps the nullable timestamp columns onto exec.
+// It pulls the per-field NULL handling out of scanExecutionRows to keep that
+// function under the cyclomatic limit.
+func applyExecutionNullableTimes(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt sql.NullTime) {
+	if notifSent.Valid {
+		exec.NotificationSent = &notifSent.Time
+	}
+	if completedAt.Valid {
+		exec.CompletedAt = &completedAt.Time
+	}
+	if expiresAt.Valid {
+		exec.TTL = ttlFromTime(expiresAt.Time)
+	}
+	if tokenExpiresAt.Valid {
+		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
+	}
+	if executedAt.Valid {
+		exec.ExecutedAt = &executedAt.Time
+	}
 }
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.
