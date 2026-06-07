@@ -206,7 +206,6 @@ func TestService_ValidateSession(t *testing.T) {
 			Token:     "completely-different-hash",
 			UserID:    "user-999",
 			Email:     "mismatch@example.com",
-			Role:      RoleUser,
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 
