@@ -465,7 +465,7 @@ func TestCompositeScore_SameGenOutranksTermMismatch(t *testing.T) {
 	}
 	// m6i.xlarge: same "m" prefix (gen jump bonus), exact NF, high confidence.
 	nearPerfect := OfferingOption{
-		InstanceType:        "m6i.xlarge",
+		InstanceType:         "m6i.xlarge",
 		EffectiveMonthlyCost: 85, // slightly more expensive
 		NormalizationFactor:  8,
 		SavingsAbs:           floatPtr(220),
@@ -473,7 +473,7 @@ func TestCompositeScore_SameGenOutranksTermMismatch(t *testing.T) {
 	}
 	// r5.xlarge: different prefix (no family gen bonus), same NF, no confidence.
 	crossFamily := OfferingOption{
-		InstanceType:        "r5.xlarge",
+		InstanceType:         "r5.xlarge",
 		EffectiveMonthlyCost: 80, // same cost as source -- better raw price
 		NormalizationFactor:  8,
 	}
@@ -497,13 +497,13 @@ func TestCompositeScore_SameArchOutranksCrossArch(t *testing.T) {
 	}
 	// c6i: same "c" prefix (family gen bonus), Intel x86 (same arch).
 	sameArch := OfferingOption{
-		InstanceType:        "c6i.xlarge",
+		InstanceType:         "c6i.xlarge",
 		EffectiveMonthlyCost: 90,
 		NormalizationFactor:  8,
 	}
 	// c6g: same "c" prefix (family gen bonus), Graviton ARM (cross arch).
 	crossArch := OfferingOption{
-		InstanceType:        "c6g.xlarge",
+		InstanceType:         "c6g.xlarge",
 		EffectiveMonthlyCost: 90,
 		NormalizationFactor:  8,
 	}
@@ -522,14 +522,14 @@ func TestCompositeScore_HighConfidenceOutranksLow(t *testing.T) {
 		MonthlyCost:         70,
 	}
 	highConf := OfferingOption{
-		InstanceType:        "r5.xlarge",
+		InstanceType:         "r5.xlarge",
 		EffectiveMonthlyCost: 70,
 		NormalizationFactor:  8,
 		SavingsAbs:           floatPtr(250),
 		RecommendationCount:  4,
 	}
 	lowConf := OfferingOption{
-		InstanceType:        "r5.xlarge",
+		InstanceType:         "r5.xlarge",
 		EffectiveMonthlyCost: 70,
 		NormalizationFactor:  8,
 		SavingsAbs:           floatPtr(10),
@@ -550,13 +550,13 @@ func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
 		MonthlyCost:         70,
 	}
 	absentSavings := OfferingOption{
-		InstanceType:        "r6i.xlarge",
+		InstanceType:         "r6i.xlarge",
 		EffectiveMonthlyCost: 70,
 		NormalizationFactor:  8,
 		SavingsAbs:           nil, // not supplied
 	}
 	lowConf := OfferingOption{
-		InstanceType:        "r6i.xlarge",
+		InstanceType:         "r6i.xlarge",
 		EffectiveMonthlyCost: 70,
 		NormalizationFactor:  8,
 		SavingsAbs:           floatPtr(5), // explicitly low confidence
