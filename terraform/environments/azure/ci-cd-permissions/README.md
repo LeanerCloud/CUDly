@@ -15,6 +15,22 @@ secrets ever need to be stored.
 | `azuread_application_federated_identity_credential.github_pr` | Federated credential for pull-request plan checks |
 | `azurerm_role_definition.cudly_deploy` | Custom role with minimum required permissions |
 | `azurerm_role_assignment.cudly_deploy` | Assigns the custom role to the SP at subscription scope |
+| `module.cudly_reservation_role` (`azurerm_role_definition`) | Host-side custom "CUDly Reservation Purchaser" role definition consumed by the runtime container-apps deploy |
+
+> **Bootstrap-only role definition.** The reservation-purchaser role *definition*
+> lives here, not in the runtime container-apps module, because creating an
+> `azurerm_role_definition` requires
+> `Microsoft.Authorization/roleDefinitions/write`, a bootstrap-class permission
+> the runtime CI deploy SP intentionally does not have (it only holds
+> `roleDefinitions/read` + `roleAssignments/{read,write,delete}`). The runtime
+> deploy looks the role up by name via `data.azurerm_role_definition` and creates
+> only the assignment.
+>
+> **Re-apply this module once after pulling this change** (and any time the
+> reservation role's name or actions change) so the role definition exists before
+> the next runtime Azure deploy. If it is missing, the runtime
+> `data.azurerm_role_definition` lookup fails loudly with a "not found" error:
+> the signal to re-run this bootstrap, not to widen the deploy SP's permissions.
 
 ### Permissions granted
 
