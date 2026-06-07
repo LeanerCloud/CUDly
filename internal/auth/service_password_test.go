@@ -722,7 +722,7 @@ func TestCheckCommonPasswords(t *testing.T) {
 	assert.NoError(t, service.checkCommonPasswords("SuperAdmin2024"))
 }
 
-// Test containsSequentialChars function
+// Test containsRepeatedChars function
 func TestContainsSequentialChars(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -782,7 +782,7 @@ func TestContainsSequentialChars(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := containsSequentialChars(tt.password, tt.n)
+			got := containsRepeatedChars(tt.password, tt.n)
 			assert.Equal(t, tt.want, got)
 		})
 	}

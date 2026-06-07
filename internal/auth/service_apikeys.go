@@ -50,8 +50,13 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permiss
 	hash := sha256.Sum256([]byte(apiKey))
 	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
 
-	// Extract key prefix (first 8 chars) for display
-	keyPrefix := apiKey[:8]
+	// Extract key prefix (first 8 chars) for display. The key is always 43 chars
+	// (32 random bytes base64url-encoded), so [:8] is safe today. The guard makes
+	// the function robust to future changes in key-generation length (03-L2).
+	keyPrefix := apiKey
+	if len(apiKey) > 8 {
+		keyPrefix = apiKey[:8]
+	}
 
 	// Validate permissions - ensure they don't exceed user's permissions
 	if err := s.validateAPIKeyPermissions(ctx, user, permissions); err != nil {

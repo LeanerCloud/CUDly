@@ -1,6 +1,11 @@
 package oidc
 
-import "sync"
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+)
 
 // globalIssuer is a process-wide cache of the OIDC issuer URL this
 // deployment publishes. It exists because the AWS Lambda Function URL
@@ -19,16 +24,24 @@ type issuerCache struct {
 
 var globalIssuer issuerCache
 
-// SetIssuerURL stores the deployment's OIDC issuer URL. No-op when
-// called with an empty string, so callers can unconditionally forward
-// whatever the env var resolved to without checking first.
-func SetIssuerURL(url string) {
-	if url == "" {
-		return
+// SetIssuerURL stores the deployment's OIDC issuer URL. The URL must be an
+// absolute https:// URL; non-https or relative URLs are rejected and the
+// cache is left unchanged (03-L4). No-op when called with an empty string.
+func SetIssuerURL(rawURL string) error {
+	if rawURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("oidc: invalid issuer URL %q: %w", rawURL, err)
+	}
+	if !parsed.IsAbs() || !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("oidc: issuer URL must be an absolute https:// URL, got %q", rawURL)
 	}
 	globalIssuer.mu.Lock()
 	defer globalIssuer.mu.Unlock()
-	globalIssuer.url = url
+	globalIssuer.url = rawURL
+	return nil
 }
 
 // IssuerURL returns whatever was last stored via SetIssuerURL, or the

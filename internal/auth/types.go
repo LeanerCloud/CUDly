@@ -161,6 +161,13 @@ func (ctx *AuthContext) HasPermission(action, resource string) bool {
 // accounts — either because it's empty (backward-compat default) or contains
 // a "*" wildcard entry. Handlers can use this to short-circuit their filter
 // loops without iterating accounts when access is unrestricted.
+//
+// WARNING — fail-open default (03-L5): an empty allowed list means "all
+// accounts", not "no accounts". This is a deliberate backward-compatibility
+// default so existing groups without an AllowedAccounts configuration grant
+// full access. New callers that intend to express "no access" must represent
+// that with an explicit sentinel (e.g. a list containing only a non-existent
+// account ID) and must NOT rely on an empty list for the "deny all" case.
 func IsUnrestrictedAccess(allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
