@@ -155,9 +155,12 @@ export function throttle<T extends (...args: unknown[]) => unknown>(
  */
 export function escapeHtml(str: string | null | undefined): string {
   if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**

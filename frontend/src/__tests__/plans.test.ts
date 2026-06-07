@@ -111,7 +111,13 @@ jest.mock('../utils', () => ({
   populateAccountFilter: jest.fn(() => Promise.resolve()),
   // providerBadgeHtml added for H1 fix: returns a deterministic span so XSS
   // regression tests can assert neutralisation without a real DOM escaper.
-  providerBadgeHtml: jest.fn((p) => `<span class="provider-badge ${['aws','azure','gcp'].includes((p||'').toLowerCase()) ? (p||'').toLowerCase() : ''}">${(p||'').toUpperCase()}</span>`),
+  providerBadgeHtml: jest.fn((p) => {
+    const cls = ['aws','azure','gcp'].includes((p||'').toLowerCase()) ? (p||'').toLowerCase() : '';
+    const label = (p||'').toUpperCase()
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return `<span class="provider-badge ${cls}">${label}</span>`;
+  }),
   CURRENCY_DEFAULT_DIGITS: 0,
 }));
 

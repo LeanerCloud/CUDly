@@ -13,7 +13,8 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Mirrors the real formatCurrency behaviour: null/undefined/NaN -> '--', numbers -> '$<val>'
+  formatCurrency: jest.fn((val) => (val === null || val === undefined || isNaN(val)) ? '--' : `$${val}`),
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
@@ -481,13 +482,15 @@ describe('History Module', () => {
       const summary = document.getElementById('history-summary');
       // total_purchases is present; money fields that are absent must be '--'
       expect(summary?.textContent).toContain('3');
-      // The formatCurrency mock returns '$<val>' for numbers and '$0' for null/0;
-      // since total_upfront is absent (undefined), formatCurrency receives null
-      // and must return '--' (as the real impl does post-fix).
-      // In the test environment the mock is: (val) => `$${val || 0}` so we
-      // verify the produced HTML is consistent with the -- path by confirming
-      // the summary was rendered (not the error/unknown banner).
+      // formatCurrency must be called with null for the absent total_upfront
+      // field and must produce '--', not '$0'. This assertion fails if the
+      // production code regresses to passing 0 or a fabricated value.
+      const { formatCurrency } = jest.requireMock('../utils') as { formatCurrency: jest.Mock };
+      expect(formatCurrency).toHaveBeenCalledWith(null);
+      // The rendered card must show '--', not a dollar amount.
       expect(summary?.innerHTML).toContain('Total Upfront Spent');
+      expect(summary?.innerHTML).toContain('<p class="value">--</p>');
+      expect(summary?.innerHTML).not.toContain('<p class="value">$0</p>');
     });
 
     test('renderHistorySummary: null summary shows unknown-state banner with all four cards', async () => {

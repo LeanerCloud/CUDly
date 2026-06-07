@@ -205,7 +205,7 @@ describe('throttle', () => {
 
 describe('escapeHtml', () => {
   test('escapes HTML special characters', () => {
-    expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert("xss")&lt;/script&gt;');
+    expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
   });
 
   test('escapes ampersands', () => {
@@ -213,7 +213,7 @@ describe('escapeHtml', () => {
   });
 
   test('escapes quotes', () => {
-    expect(escapeHtml('"test"')).toBe('"test"');
+    expect(escapeHtml('"test"')).toBe('&quot;test&quot;');
   });
 
   test('returns empty string for null/undefined', () => {
