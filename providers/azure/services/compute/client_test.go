@@ -506,6 +506,44 @@ func TestComputeClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	assert.Contains(t, err.Error(), "no pricing data found")
 }
 
+// TestComputeClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from the hardcoded 0.62
+// multiplier (issue #1020 H4). Pre-fix this would have silently surfaced a
+// fabricated TotalCost/SavingsPercentage as a real quote.
+func TestComputeClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.096,
+				"unitPrice": 0.096,
+				"armRegionName": "eastus",
+				"armSkuName": "Standard_D2s_v3",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(
+		mocks.CreateMockHTTPResponse(http.StatusOK, onDemandOnly), nil,
+	)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
+}
+
 // MockTokenCredential for testing PurchaseCommitment
 type MockTokenCredential struct {
 	token string

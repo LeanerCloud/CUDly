@@ -657,8 +657,13 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = onDemandPrice * hoursInTerm * 0.62 // Azure VMs typically 38% discount
+		return nil, fmt.Errorf("no reservation pricing found for VM size %s (%d year) in region %s", vmSize, termYears, region)
 	}
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100

@@ -541,8 +541,13 @@ func (c *CosmosDBClient) getCosmosPricing(ctx context.Context, sku, region strin
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = estimateCosmosReservationPrice(onDemandPrice, hoursInTerm)
+		return nil, fmt.Errorf("no reservation pricing found for Cosmos DB (%d year) in region %s", termYears, region)
 	}
 
 	savingsPercentage := calculateCosmosSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice)
@@ -591,13 +596,6 @@ func extractCosmosPricing(items []CosmosRetailPriceItem, termYears int) (onDeman
 	}
 
 	return onDemand, reservation, currency
-}
-
-// estimateCosmosReservationPrice estimates reservation price when not available
-func estimateCosmosReservationPrice(onDemandPrice, hoursInTerm float64) float64 {
-	onDemandTotal := onDemandPrice * hoursInTerm
-	// Azure Cosmos DB reservations typically offer 65% savings
-	return onDemandTotal * 0.35
 }
 
 // calculateCosmosSavingsPercentage calculates the savings percentage

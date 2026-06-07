@@ -122,6 +122,21 @@ func createSampleSQLPricingResponse() string {
 			},
 			{
 				"currencyCode": "USD",
+				"retailPrice": 1800.0,
+				"unitPrice": 1800.0,
+				"armRegionName": "eastus",
+				"location": "US East",
+				"meterName": "S0 DTUs",
+				"skuName": "Standard",
+				"productName": "SQL Database",
+				"serviceName": "SQL Database",
+				"unitOfMeasure": "1 DTU/Hour",
+				"type": "Reservation",
+				"armSkuName": "Standard_S0",
+				"reservationTerm": "3 Years"
+			},
+			{
+				"currencyCode": "USD",
 				"retailPrice": 0.096,
 				"unitPrice": 0.096,
 				"armRegionName": "eastus",
@@ -351,6 +366,42 @@ func TestDatabaseClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	_, err := client.GetOfferingDetails(ctx, rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
+}
+
+// TestDatabaseClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from the hardcoded 0.65
+// multiplier (issue #1020 H4). Pre-fix this would have silently surfaced a
+// fabricated TotalCost/SavingsPercentage as a real quote.
+func TestDatabaseClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.096,
+				"unitPrice": 0.096,
+				"armRegionName": "eastus",
+				"armSkuName": "Standard_S0",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_S0",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
 func TestDatabaseClient_GetExistingCommitments_Empty(t *testing.T) {

@@ -487,8 +487,13 @@ func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string,
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = estimateSearchReservationPrice(onDemandPrice, hoursInTerm)
+		return nil, fmt.Errorf("no reservation pricing found for Azure Search SKU %s (%d year) in region %s", sku, termYears, region)
 	}
 
 	savingsPercentage := calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice)
@@ -564,13 +569,6 @@ func extractSearchPricing(items []struct {
 	}
 
 	return onDemand, reservation, currency
-}
-
-// estimateSearchReservationPrice estimates reservation price when not available
-func estimateSearchReservationPrice(onDemandPrice, hoursInTerm float64) float64 {
-	onDemandTotal := onDemandPrice * hoursInTerm
-	// Azure Search reservations typically offer 30-40% savings
-	return onDemandTotal * 0.65
 }
 
 // calculateSearchSavingsPercentage calculates the savings percentage

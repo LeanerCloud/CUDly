@@ -535,8 +535,13 @@ func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, 
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = onDemandPrice * hoursInTerm * 0.65
+		return nil, fmt.Errorf("no reservation pricing found for SQL Database SKU %s (%d year) in region %s", sku, termYears, region)
 	}
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
