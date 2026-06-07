@@ -104,22 +104,6 @@ func TestIsStaticPath(t *testing.T) {
 	}
 }
 
-// ----- hasFileContent -----
-
-func TestHasFileContent_NonEmptyDir(t *testing.T) {
-	dir := makeStaticDir(t, map[string]string{"index.html": "<html/>"})
-	testutil.AssertEqual(t, true, hasFileContent(dir))
-}
-
-func TestHasFileContent_EmptyDir(t *testing.T) {
-	dir := t.TempDir()
-	testutil.AssertEqual(t, false, hasFileContent(dir))
-}
-
-func TestHasFileContent_NonExistentDir(t *testing.T) {
-	testutil.AssertEqual(t, false, hasFileContent("/nonexistent/path/that/does/not/exist"))
-}
-
 // ----- staticDirFromEnv -----
 
 func TestStaticDirFromEnv_Unset(t *testing.T) {
@@ -194,6 +178,36 @@ func TestResolveStaticFilePath_DirectoryTraversal(t *testing.T) {
 		absFile, _ := filepath.Abs(filePath)
 		testutil.AssertTrue(t, len(absFile) >= len(absDir), "traversal attempt must stay inside dir")
 	}
+}
+
+// TestResolveStaticFilePath_SiblingDirBlocked is a regression test for 04-M6:
+// the previous HasPrefix check lacked a separator, so a sibling directory
+// named "<dir>-evil" would have passed the containment check because
+// "/srv/static" is a string-prefix of "/srv/static-evil". The fix appends
+// os.PathSeparator to the prefix so only paths genuinely inside the dir pass.
+func TestResolveStaticFilePath_SiblingDirBlocked(t *testing.T) {
+	// Create a parent and the real static dir inside it.
+	parent := t.TempDir()
+	realDir := filepath.Join(parent, "static")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir static: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "index.html"), []byte("<html/>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	// Create a sibling whose name starts with "static" (the prefix-confusion case).
+	siblingDir := filepath.Join(parent, "static-evil")
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
+		t.Fatalf("mkdir static-evil: %v", err)
+	}
+	secretFile := filepath.Join(siblingDir, "secret.txt")
+	if err := os.WriteFile(secretFile, []byte("should-not-serve"), 0o644); err != nil {
+		t.Fatalf("write secret.txt: %v", err)
+	}
+
+	// Attempting to resolve a path that lands in the sibling must return ok=false.
+	_, _, ok := resolveStaticFilePath(realDir, "/../static-evil/secret.txt")
+	testutil.AssertEqual(t, false, ok)
 }
 
 func TestResolveStaticFilePath_IndexMissingForSPARoute(t *testing.T) {

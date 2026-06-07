@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io/fs"
 	"log"
 	"mime"
 	"net/http"
@@ -23,36 +22,16 @@ type spaHandler struct {
 }
 
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Clean the path to prevent directory traversal
-	urlPath := path.Clean(r.URL.Path)
-	if urlPath == "/" {
-		urlPath = "/index.html"
-	}
-
-	// Try to serve the requested file
-	filePath := filepath.Join(h.dir, filepath.FromSlash(urlPath))
-
-	info, err := os.Stat(filePath)
-	if err == nil && !info.IsDir() {
-		setCacheHeaders(w, urlPath)
-		http.ServeFile(w, r, filePath)
-		return
-	}
-
-	// File not found: if path has an extension, return 404
-	if path.Ext(urlPath) != "" {
+	// Delegate path resolution to resolveStaticFilePath, which provides the
+	// same separator-aware containment check used by the Lambda static path.
+	// This closes the drift between the two static-serving paths (04-M6).
+	filePath, cleanPath, ok := resolveStaticFilePath(h.dir, r.URL.Path)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-
-	// SPA fallback: serve index.html for extensionless paths
-	indexPath := filepath.Join(h.dir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	setCacheHeaders(w, "/index.html")
-	http.ServeFile(w, r, indexPath)
+	setCacheHeaders(w, cleanPath)
+	http.ServeFile(w, r, filePath)
 }
 
 // setCacheHeaders sets Cache-Control based on file type.
@@ -90,7 +69,10 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	if err != nil {
 		return "", "", false
 	}
-	if !strings.HasPrefix(absFile, absDir) {
+	// Require the separator after absDir so that a sibling directory whose
+	// name shares a prefix (e.g. /srv/static-evil vs /srv/static) cannot
+	// pass the containment check (04-M6).
+	if !strings.HasPrefix(absFile, absDir+string(os.PathSeparator)) && absFile != absDir {
 		return "", "", false
 	}
 
@@ -193,12 +175,3 @@ func isStaticPath(urlPath string) bool {
 	return true
 }
 
-// hasFileContent checks if the static dir contains at least one file,
-// used during startup to validate the STATIC_DIR configuration.
-func hasFileContent(dir string) bool {
-	entries, err := fs.ReadDir(os.DirFS(dir), ".")
-	if err != nil {
-		return false
-	}
-	return len(entries) > 0
-}
