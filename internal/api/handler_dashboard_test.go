@@ -45,10 +45,16 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 	mockStore := new(MockConfigStore)
 
+	// Two rds recs for DISTINCT physical resources (different resource_type) so
+	// they aggregate additively, plus one ec2 rec. Distinct cells are required
+	// because summarizeRecommendationsWithCoverage now dedupes per
+	// physical-resource cell: two recs sharing the same
+	// (provider, account, service, region, resource_type, engine) key would be
+	// treated as mutually-exclusive term/payment variants and collapsed to one.
 	recommendations := []config.RecommendationRecord{
-		{Service: "rds", Savings: 100.0},
-		{Service: "ec2", Savings: 200.0},
-		{Service: "rds", Savings: 50.0},
+		{Service: "rds", ResourceType: "db.r5.large", Savings: 100.0},
+		{Service: "ec2", ResourceType: "m5.large", Savings: 200.0},
+		{Service: "rds", ResourceType: "db.r5.xlarge", Savings: 50.0},
 	}
 
 	globalCfg := &config.GlobalConfig{
@@ -352,6 +358,59 @@ func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing
 	// when coverage is configured (the bug produced 0 here).
 	require.Positive(t, byService["ec2"].CurrentSavings)
 	require.Positive(t, byService["rds"].CurrentSavings)
+}
+
+// TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell is the
+// regression for the by_service ~6x over-report: after PR #195's per-(term,
+// payment) fan-out, one physical-resource cell yields up to 6 mutually-exclusive
+// variant recs. The reducer used to sum every variant into
+// by_service[svc].PotentialSavings, inflating it ~6x. The fix dedupes to one
+// representative per cell (the MAX scaled savings) before summing.
+//
+// Pre-fix this test FAILS: the old sum-all-variants code returned
+// PotentialSavings = 600 (100+200+300) for cell-1 plus 50 for cell-2 = 650,
+// whereas the correct per-cell MAX is 300 + 50 = 350.
+func TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell(t *testing.T) {
+	acct := "acct-A"
+	// cellVariant builds one term/payment variant of the SAME physical-resource
+	// cell: identical provider/account/service/region/resource_type/engine, only
+	// the savings (and notionally term/payment) differ.
+	cellVariant := func(region, resourceType, engine string, term int, payment string, savings float64) config.RecommendationRecord {
+		a := acct
+		return config.RecommendationRecord{
+			Provider:       "aws",
+			Service:        "ec2",
+			Region:         region,
+			ResourceType:   resourceType,
+			Engine:         engine,
+			Term:           term,
+			Payment:        payment,
+			Savings:        savings,
+			CloudAccountID: &a,
+		}
+	}
+
+	recs := []config.RecommendationRecord{
+		// Cell 1: three variants of the same resource. MAX scaled savings = 300.
+		cellVariant("us-east-1", "m5.large", "", 1, "no_upfront", 100),
+		cellVariant("us-east-1", "m5.large", "", 1, "partial_upfront", 200),
+		cellVariant("us-east-1", "m5.large", "", 3, "all_upfront", 300),
+		// Cell 2: a distinct resource (different resource_type). Only variant: 50.
+		cellVariant("us-east-1", "r5.large", "", 1, "no_upfront", 50),
+	}
+
+	// No coverage override: scaledSavings returns rec.Savings unchanged.
+	total, byService := summarizeRecommendationsWithCoverage(recs, nil)
+
+	// by_service must equal the sum of per-cell MAX savings (300 + 50), NOT the
+	// sum of all variants (100+200+300+50 = 650).
+	assert.InDelta(t, 350.0, byService["ec2"].PotentialSavings, 0.0001,
+		"by_service potential must sum per-cell MAX (300+50), not all variants")
+	assert.InDelta(t, 350.0, byService["ec2"].CurrentSavings, 0.0001,
+		"by_service current must dedupe identically to potential")
+	// The headline total dedupes the same way.
+	assert.InDelta(t, 350.0, total, 0.0001,
+		"total must sum per-cell MAX (300+50), not all variants")
 }
 
 func TestHandler_getUpcomingPurchases(t *testing.T) {

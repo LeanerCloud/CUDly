@@ -191,6 +191,10 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // coverageByKey via config.AccountConfigKey(account, provider, service).
 // Pass coverageByKey=nil to disable scaling (every rec counts fully).
 //
+// Variants of the same physical-resource cell are deduped to a single
+// representative before summing (see bestVariantPerCell) so the per-(term,
+// payment) fan-out does not over-report savings; details in the function body.
+//
 // Recs without a CloudAccountID and recs whose triple has no entry in the
 // map all count at full weight — this matches the pre-#196 behaviour for
 // un-configured accounts. Zero-coverage configs are excluded from the map
@@ -218,12 +222,24 @@ func summarizeRecommendationsWithCoverage(
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
 ) (float64, map[string]ServiceSavings) {
+	// Dedupe to one representative variant per physical-resource cell BEFORE
+	// summing. After PR #195's per-(term, payment) fan-out, a single physical
+	// resource produces up to 6 rec rows (2 terms x 3 payments). Those rows are
+	// mutually-exclusive ALTERNATIVES, not additive: the operator can only buy
+	// one commitment for that resource. Summing every variant inflated both the
+	// headline total and each by_service[svc].PotentialSavings by ~6x. The
+	// headline KPI already avoids this on the frontend by grouping per cell
+	// (frontend/src/recommendations.ts cellKey / groupRecsByCell, and the
+	// dashboard.ts:139-142 comment about "~6x inflation of summing every
+	// variant"); this reducer is the backend equivalent.
+	representatives := bestVariantPerCell(recs, coverageByKey)
+
 	var total float64
 	byService := make(map[string]ServiceSavings)
-	for _, rec := range recs {
-		scaled := scaledSavings(rec, coverageByKey)
+	for _, rep := range representatives {
+		scaled := rep.scaled
 		total += scaled
-		svc := byService[rec.Service]
+		svc := byService[rep.rec.Service]
 		svc.PotentialSavings += scaled
 		// CurrentSavings is the committed/realized monthly savings for the
 		// service: the full 100%-coverage potential (rec.Savings) projected
@@ -236,9 +252,70 @@ func summarizeRecommendationsWithCoverage(
 		// Issue #908: this field was previously never set, so the Home
 		// chart's current-savings underlay always rendered as $0.
 		svc.CurrentSavings += scaled
-		byService[rec.Service] = svc
+		byService[rep.rec.Service] = svc
 	}
 	return total, byService
+}
+
+// cellRepresentative is the chosen variant for one physical-resource cell plus
+// its already-computed coverage-scaled savings (cached so callers don't re-run
+// scaledSavings).
+type cellRepresentative struct {
+	rec    config.RecommendationRecord
+	scaled float64
+}
+
+// recCellKey composes the physical-resource cell key for a recommendation:
+// (provider, cloud_account_id, service, region, resource_type, engine). Recs
+// sharing this key are per-(term, payment) ALTERNATIVES for the same resource,
+// not additive entries.
+//
+// Cross-language duplication note: this MUST stay aligned with the frontend
+// cellKey in frontend/src/recommendations.ts, which joins the same six fields
+// with "|" in this order: provider, cloud_account_id, service, region,
+// resource_type, engine. The two implementations must bucket the exact same
+// variants so the backend by_service rollup and the frontend per-cell grouping
+// agree. A nil CloudAccountID maps to the empty segment, matching the
+// frontend's nullish-coalescing of cloud_account_id to an empty string.
+func recCellKey(rec config.RecommendationRecord) string {
+	account := ""
+	if rec.CloudAccountID != nil {
+		account = *rec.CloudAccountID
+	}
+	return strings.Join([]string{
+		rec.Provider,
+		account,
+		rec.Service,
+		rec.Region,
+		rec.ResourceType,
+		rec.Engine,
+	}, "|")
+}
+
+// bestVariantPerCell collapses recs to one representative per physical-resource
+// cell, keeping the variant with the MAXIMUM coverage-scaled savings. Max (not
+// sum) is correct because the variants are mutually-exclusive alternatives, and
+// the best realistic single purchase is the per-cell potential a user expects.
+// Order of first-seen cells is preserved for deterministic aggregation.
+func bestVariantPerCell(
+	recs []config.RecommendationRecord,
+	coverageByKey map[string]float64,
+) []cellRepresentative {
+	indexByCell := make(map[string]int, len(recs))
+	reps := make([]cellRepresentative, 0, len(recs))
+	for _, rec := range recs {
+		scaled := scaledSavings(rec, coverageByKey)
+		key := recCellKey(rec)
+		if idx, ok := indexByCell[key]; ok {
+			if scaled > reps[idx].scaled {
+				reps[idx] = cellRepresentative{rec: rec, scaled: scaled}
+			}
+			continue
+		}
+		indexByCell[key] = len(reps)
+		reps = append(reps, cellRepresentative{rec: rec, scaled: scaled})
+	}
+	return reps
 }
 
 // scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
