@@ -42,11 +42,15 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	// Rate limiting: 30 admin operations per user per minute
+	// Rate limiting: 30 admin operations per user per minute.
+	// Fail-open: this endpoint is already behind requirePermission so the auth
+	// surface is lower than the unauthenticated credential endpoints. Emit a
+	// high-severity alert so the fail-open window is observable (02-M1).
 	if h.rateLimiter != nil {
 		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
-			logging.Warnf("rate limiter error for user %s on admin operation: %v", session.UserID, err)
+			logging.Errorf("ALERT: rate limiter error on admin operation for user %s; proceeding fail-open (02-M1): %v",
+				session.UserID, err)
 		} else if !allowed {
 			return nil, NewClientError(429, "too many requests, please slow down")
 		}

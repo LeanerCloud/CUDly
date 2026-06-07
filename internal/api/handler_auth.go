@@ -21,7 +21,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 	}
 
 	// Rate limiting: 5 attempts per IP per 15 minutes
-	if err := h.checkRateLimit(ctx, req, "login"); err != nil {
+	if err := h.checkRateLimitStrict(ctx, req, "login"); err != nil {
 		return nil, err
 	}
 
@@ -224,7 +224,7 @@ func (h *Handler) setupAdmin(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	// Rate limiting: 5 attempts per IP per 15 minutes for admin setup
-	if err := h.checkRateLimit(ctx, req, "setup_admin"); err != nil {
+	if err := h.checkRateLimitStrict(ctx, req, "setup_admin"); err != nil {
 		return nil, err
 	}
 
@@ -253,12 +253,15 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Rate limiting: 10 attempts per email per 5 minutes to prevent enumeration attacks
+	// Rate limiting: 10 attempts per email per 5 minutes to prevent enumeration attacks.
+	// On rate-limiter error: emit a high-severity alert (02-M1) but continue with the
+	// request. Failing closed here would reveal infrastructure state (503 vs 200) to
+	// an enumerating attacker and harm legitimate users more than the enumeration risk.
 	if h.rateLimiter != nil {
 		allowed, err := h.rateLimiter.AllowWithEmail(ctx, pwdReq.Email, "forgot_password")
 		if err != nil {
-			logging.Warnf("Rate limiter error for email %s: %v", redactEmail(pwdReq.Email), err)
-			// Continue on rate limiter errors to avoid blocking legitimate requests
+			logging.Errorf("ALERT: rate limiter error on forgot_password for %s; proceeding fail-open (02-M1): %v",
+				redactEmail(pwdReq.Email), err)
 		} else if !allowed {
 			logging.Warnf("Rate limit exceeded for forgot password: %s", redactEmail(pwdReq.Email))
 			// Always return success message to prevent email enumeration
@@ -303,7 +306,7 @@ func (h *Handler) resetPasswordStatus(ctx context.Context, req *events.LambdaFun
 
 	// Same rate-limit bucket as the submit endpoint: a token-probing
 	// attacker would otherwise get a free oracle to test tokens.
-	if err := h.checkRateLimit(ctx, req, "reset_password"); err != nil {
+	if err := h.checkRateLimitStrict(ctx, req, "reset_password"); err != nil {
 		return nil, err
 	}
 
@@ -332,7 +335,7 @@ func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	// Rate limiting: 10 attempts per IP per 15 minutes
-	if err := h.checkRateLimit(ctx, req, "reset_password"); err != nil {
+	if err := h.checkRateLimitStrict(ctx, req, "reset_password"); err != nil {
 		return nil, err
 	}
 
@@ -465,7 +468,7 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 	}
 
 	// Rate limiting: 10 attempts per IP per 15 minutes
-	if err := h.checkRateLimit(ctx, req, "change_password"); err != nil {
+	if err := h.checkRateLimitStrict(ctx, req, "change_password"); err != nil {
 		return nil, err
 	}
 

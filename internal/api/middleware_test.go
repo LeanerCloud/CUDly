@@ -522,3 +522,67 @@ func TestRequiresCSRFValidation_AlwaysExemptPaths(t *testing.T) {
 		}
 	}
 }
+
+// Regression test for 02-M1: checkRateLimitStrict must return 503 when the
+// rate limiter encounters an error (fail-closed), whereas checkRateLimit must
+// return nil (fail-open) for the same error.
+func TestHandler_checkRateLimitStrict_FailsClosedOnError(t *testing.T) {
+	ctx := context.Background()
+	limiterErr := errors.New("db pool exhausted")
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "1.2.3.4", "login").Return(false, limiterErr)
+	t.Cleanup(func() { mockRL.AssertExpectations(t) })
+
+	h := &Handler{rateLimiter: mockRL}
+	req := makeSourceIPReq("1.2.3.4")
+
+	err := h.checkRateLimitStrict(ctx, req, "login")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "checkRateLimitStrict must return a ClientError on limiter error")
+	assert.Equal(t, 503, ce.code, "checkRateLimitStrict must return 503 (fail-closed) on limiter error")
+}
+
+func TestHandler_checkRateLimit_FailsOpenOnError(t *testing.T) {
+	ctx := context.Background()
+	limiterErr := errors.New("db pool exhausted")
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "1.2.3.4", "api_general").Return(false, limiterErr)
+	t.Cleanup(func() { mockRL.AssertExpectations(t) })
+
+	h := &Handler{rateLimiter: mockRL}
+	req := makeSourceIPReq("1.2.3.4")
+
+	err := h.checkRateLimit(ctx, req, "api_general")
+	assert.NoError(t, err, "checkRateLimit must allow through (fail-open) on limiter error")
+}
+
+func TestHandler_checkRateLimitStrict_Returns429WhenDenied(t *testing.T) {
+	ctx := context.Background()
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", ctx, "1.2.3.4", "login").Return(false, nil)
+	t.Cleanup(func() { mockRL.AssertExpectations(t) })
+
+	h := &Handler{rateLimiter: mockRL}
+	req := makeSourceIPReq("1.2.3.4")
+
+	err := h.checkRateLimitStrict(ctx, req, "login")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 429, ce.code)
+}
+
+// makeSourceIPReq builds a minimal request with the given source IP.
+func makeSourceIPReq(ip string) *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				SourceIP: ip,
+			},
+		},
+	}
+}
