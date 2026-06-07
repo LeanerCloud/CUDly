@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,14 +45,18 @@ func (p *mockListAllPager) NextPage(_ context.Context) (armbillingbenefits.Savin
 type mockOrderAliasClient struct {
 	createPoller SavingsPlanOrderAliasPoller
 	createErr    error
+	// capturedName records the alias name passed to BeginCreate so tests can
+	// assert the deterministic idempotency-derived name.
+	capturedName string
 }
 
 func (m *mockOrderAliasClient) BeginCreate(
 	_ context.Context,
-	_ string,
+	savingsPlanOrderAliasName string,
 	_ armbillingbenefits.SavingsPlanOrderAliasModel,
 	_ *armbillingbenefits.SavingsPlanOrderAliasClientBeginCreateOptions,
 ) (SavingsPlanOrderAliasPoller, error) {
+	m.capturedName = savingsPlanOrderAliasName
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -264,6 +269,58 @@ func TestPurchaseCommitment_BadTerm(t *testing.T) {
 	result, err := c.PurchaseCommitment(context.Background(), makeRec("99yr"), common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
+}
+
+// TestPurchaseCommitment_DeterministicAliasNameFromToken verifies that when an
+// idempotency token is supplied, the SavingsPlanOrderAlias name is derived
+// deterministically from it (the canonical GUID) rather than from a timestamp.
+// Because the alias is created with an HTTP PUT, a re-drive with the same token
+// re-PUTs the same alias instead of buying a second savings plan (issue #636).
+// Pre-fix this test FAILS: PurchaseCommitment ignored PurchaseOptions and always
+// used a time.Now().UnixNano() alias name, so two re-drives produced two distinct
+// aliases (two purchases).
+func TestPurchaseCommitment_DeterministicAliasNameFromToken(t *testing.T) {
+	orderID := "/subscriptions/sub/providers/Microsoft.BillingBenefits/savingsPlanOrders/order1"
+	resp := armbillingbenefits.SavingsPlanOrderAliasClientCreateResponse{
+		SavingsPlanOrderAliasModel: armbillingbenefits.SavingsPlanOrderAliasModel{ID: &orderID},
+	}
+
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+	wantName := common.ReservationOrderID(token, "")
+	require.NotEmpty(t, wantName, "token must yield a deterministic GUID")
+
+	// First drive.
+	mock1 := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c1 := NewClient(nil, "sub", "eastus")
+	c1.SetOrderAliasClient(mock1)
+	_, err := c1.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{IdempotencyToken: token})
+	require.NoError(t, err)
+	assert.Equal(t, wantName, mock1.capturedName)
+
+	// Re-drive of the same execution: same token must yield the same alias name.
+	mock2 := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c2 := NewClient(nil, "sub", "eastus")
+	c2.SetOrderAliasClient(mock2)
+	_, err = c2.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{IdempotencyToken: token})
+	require.NoError(t, err)
+	assert.Equal(t, mock1.capturedName, mock2.capturedName,
+		"re-drive with the same idempotency token must reuse the alias name (PUT is idempotent)")
+}
+
+// TestPurchaseCommitment_EmptyTokenUsesTimestampName verifies the CLI path (no
+// idempotency token) retains a non-deterministic timestamp-based alias name.
+func TestPurchaseCommitment_EmptyTokenUsesTimestampName(t *testing.T) {
+	orderID := "/subscriptions/sub/providers/Microsoft.BillingBenefits/savingsPlanOrders/order1"
+	resp := armbillingbenefits.SavingsPlanOrderAliasClientCreateResponse{
+		SavingsPlanOrderAliasModel: armbillingbenefits.SavingsPlanOrderAliasModel{ID: &orderID},
+	}
+	mock := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c := NewClient(nil, "sub", "eastus")
+	c.SetOrderAliasClient(mock)
+	_, err := c.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{})
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(mock.capturedName, "cudly-"),
+		"empty token should keep the timestamp-based cudly-<nanos> alias name")
 }
 
 // --- ValidateOffering ---
