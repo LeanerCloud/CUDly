@@ -508,6 +508,40 @@ func TestServiceConfig_Validate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "coverage must be between 0 and 100",
 		},
+		{
+			name: "valid min_count",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Term:     3,
+				Coverage: 80,
+				Payment:  "all-upfront",
+				MinCount: 5,
+			},
+			wantErr: false,
+		},
+		{
+			name: "negative min_count",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Coverage: 80,
+				MinCount: -1,
+			},
+			wantErr: true,
+			errMsg:  "min_count must be 0 (no filter) or a positive number",
+		},
+		{
+			name: "min_count too high",
+			config: ServiceConfig{
+				Provider: "aws",
+				Service:  "ec2",
+				Coverage: 80,
+				MinCount: MaxServiceMinCount + 1,
+			},
+			wantErr: true,
+			errMsg:  "exceeds reasonable limit",
+		},
 	}
 
 	for _, tt := range tests {

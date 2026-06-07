@@ -78,9 +78,25 @@ func filterRecsByResolvedConfigs(
 		if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
 			continue
 		}
+		if !meetsMinCount(rec.Count, cfg) {
+			continue
+		}
 		out = append(out, rec)
 	}
 	return out
+}
+
+// meetsMinCount implements the read-time half of the GUI/CLI --min-count
+// filter: a rec is dropped when its count is below cfg.MinCount. A MinCount
+// of 0 (the default) disables the filter, matching the CLI flag's
+// 0-no-floor semantics. count is the persisted RecommendationRecord.Count
+// (already grace-suppression-adjusted by the time this runs, so the floor
+// applies to the net count the user would actually see).
+func meetsMinCount(count int, cfg *config.ServiceConfig) bool {
+	if cfg.MinCount <= 0 {
+		return true
+	}
+	return count >= cfg.MinCount
 }
 
 // engineMatches applies the engine include/exclude rule with a "lax for

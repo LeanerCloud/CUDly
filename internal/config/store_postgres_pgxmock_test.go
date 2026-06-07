@@ -169,11 +169,11 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	cols := []string{
 		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
 		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types",
+		"include_types", "exclude_types", "min_count",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
-		[]string{"mysql"}, []string{}, []string{"us-east-1"}, []string{}, []string{}, []string{},
+		[]string{"mysql"}, []string{}, []string{"us-east-1"}, []string{}, []string{}, []string{}, 2,
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -182,6 +182,7 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	assert.Equal(t, "aws", cfg.Provider)
 	assert.Equal(t, "ec2", cfg.Service)
 	assert.Equal(t, []string{"mysql"}, cfg.IncludeEngines)
+	assert.Equal(t, 2, cfg.MinCount)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -195,13 +196,13 @@ func TestPGXMock_ListServiceConfigs_Success(t *testing.T) {
 	cols := []string{
 		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
 		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types",
+		"include_types", "exclude_types", "min_count",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}).
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0).
 		AddRow("aws", "rds", true, 3, "all-upfront", 70.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{})
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
 	cfgs, err := store.ListServiceConfigs(ctx)

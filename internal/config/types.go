@@ -119,6 +119,13 @@ type ServiceConfig struct {
 	ExcludeRegions []string `json:"exclude_regions,omitempty" dynamodbav:"exclude_regions,omitempty"`
 	IncludeTypes   []string `json:"include_types,omitempty" dynamodbav:"include_types,omitempty"`
 	ExcludeTypes   []string `json:"exclude_types,omitempty" dynamodbav:"exclude_types,omitempty"`
+	// MinCount is the GUI/persisted equivalent of the CLI --min-count flag:
+	// the minimum instance/node count a recommendation must carry to be
+	// surfaced. Applied at read time by
+	// scheduler.filterRecsByResolvedConfigs against the persisted
+	// RecommendationRecord.Count. 0 (the default) disables the filter,
+	// matching the CLI flag's 0-no-floor semantics.
+	MinCount int `json:"min_count,omitempty" dynamodbav:"min_count,omitempty"`
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution

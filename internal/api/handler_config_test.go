@@ -220,6 +220,88 @@ func TestHandler_updateServiceConfig(t *testing.T) {
 	assert.Equal(t, "updated", result.Status)
 }
 
+// TestMergeServiceConfig_PresenceAwareFilterOverlay verifies that the
+// recommendation-filter fields are overlaid from the request only when the
+// body actually carries the key, while the four scalar UI fields are always
+// overlaid. A partial PUT that omits a filter must preserve the existing
+// value; a PUT that includes it (even empty) must apply it.
+func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
+	ctx := context.Background()
+	// Each subtest gets a fresh existing record: mergeServiceConfig overlays
+	// onto the pointer returned by GetServiceConfig (the production postgres
+	// store returns a fresh struct per call), so a shared fixture would leak
+	// mutations across subtests.
+	newExisting := func() *config.ServiceConfig {
+		return &config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+			Payment: "all-upfront", Coverage: 50,
+			IncludeEngines: []string{"mysql"},
+			ExcludeTypes:   []string{"db.t2.micro"},
+			MinCount:       4,
+		}
+	}
+
+	t.Run("body includes filter fields -> overlaid", func(t *testing.T) {
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+
+		req := config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: false, Term: 1,
+			Payment: "no-upfront", Coverage: 90,
+			IncludeEngines: []string{"postgres"},
+			MinCount:       7,
+		}
+		body := `{"enabled":false,"term":1,"payment":"no-upfront","coverage":90,"include_engines":["postgres"],"min_count":7}`
+
+		merged, err := mergeServiceConfig(ctx, store, req, body)
+		require.NoError(t, err)
+		assert.False(t, merged.Enabled)
+		assert.Equal(t, 1, merged.Term)
+		assert.Equal(t, 90.0, merged.Coverage)
+		assert.Equal(t, []string{"postgres"}, merged.IncludeEngines)
+		assert.Equal(t, 7, merged.MinCount)
+		// exclude_types absent from body -> preserved from existing
+		assert.Equal(t, []string{"db.t2.micro"}, merged.ExcludeTypes)
+	})
+
+	t.Run("body omits filter fields -> preserved", func(t *testing.T) {
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+
+		req := config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+			Payment: "all-upfront", Coverage: 80,
+		}
+		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80}`
+
+		merged, err := mergeServiceConfig(ctx, store, req, body)
+		require.NoError(t, err)
+		assert.Equal(t, 80.0, merged.Coverage)
+		assert.Equal(t, []string{"mysql"}, merged.IncludeEngines, "omitted filter must be preserved")
+		assert.Equal(t, []string{"db.t2.micro"}, merged.ExcludeTypes)
+		assert.Equal(t, 4, merged.MinCount, "omitted min_count must be preserved")
+	})
+
+	t.Run("body includes empty filter -> cleared", func(t *testing.T) {
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+
+		req := config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+			Payment: "all-upfront", Coverage: 80,
+			IncludeEngines: []string{},
+		}
+		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80,"include_engines":[]}`
+
+		merged, err := mergeServiceConfig(ctx, store, req, body)
+		require.NoError(t, err)
+		assert.Empty(t, merged.IncludeEngines, "explicit empty list clears the filter")
+	})
+}
+
 func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

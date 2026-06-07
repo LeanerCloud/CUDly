@@ -2099,6 +2099,13 @@ components:
           type: array
           items:
             type: string
+        min_count:
+          type: integer
+          minimum: 0
+          description: |
+            Minimum instance/node count a recommendation must carry to be
+            surfaced (GUI/persisted equivalent of the CLI --min-count flag).
+            0 (default) disables the filter.
 
     CommitmentOptionsResponse:
       type: object
