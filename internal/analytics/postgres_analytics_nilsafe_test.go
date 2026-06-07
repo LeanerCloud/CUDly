@@ -36,12 +36,13 @@ func TestPostgresAnalyticsStore_SaveSnapshot_MetadataMarshalError(t *testing.T) 
 
 	t.Run("returns error when metadata contains un-marshallable value", func(t *testing.T) {
 		snapshot := &SavingsSnapshot{
-			ID:        "existing-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
-			Region:    "us-east-1",
+			ID:             "existing-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			Region:         "us-east-1",
+			CommitmentType: "RI",
 			// A channel is not JSON-serialisable, so json.Marshal will fail.
 			Metadata: map[string]any{
 				"bad_field": make(chan int),
@@ -57,9 +58,10 @@ func TestPostgresAnalyticsStore_SaveSnapshot_MetadataMarshalError(t *testing.T) 
 		// When ID is empty, a UUID is generated. The un-marshallable metadata
 		// error is still returned, but the ID field on the snapshot is set first.
 		snapshot := &SavingsSnapshot{
-			ID:        "", // will be populated
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
+			ID:             "", // will be populated
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "SavingsPlan",
 			Metadata: map[string]any{
 				"bad_field": make(chan int),
 			},
@@ -84,17 +86,18 @@ func TestPostgresAnalyticsStore_SaveSnapshot_MetadataMarshalError(t *testing.T) 
 // real (or mock-backed) *database.Connection.
 
 // TestPostgresAnalyticsStore_CreatePartitionsForRange_ReversedDates verifies
-// that when start > end the loop body is never entered and the function returns
-// nil without touching s.db.
+// that when start > end the function rejects the reversed range with an error
+// (L3 fix) rather than silently returning nil success without touching s.db.
 func TestPostgresAnalyticsStore_CreatePartitionsForRange_ReversedDates(t *testing.T) {
 	store := NewPostgresAnalyticsStore(nil)
 
-	t.Run("start after end returns nil without DB call", func(t *testing.T) {
+	t.Run("start after end returns error without DB call", func(t *testing.T) {
 		future := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
 		past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		err := store.CreatePartitionsForRange(context.Background(), future, past)
-		assert.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be after")
 	})
 
 	t.Run("start equal to end with no DB panics – test only the date logic", func(t *testing.T) {

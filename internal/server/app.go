@@ -46,9 +46,13 @@ type Application struct {
 	Auth        *auth.Service
 	RateLimiter api.RateLimiterInterface // Distributed rate limiter (DB-backed for multi-instance)
 	Analytics   AnalyticsStoreInterface  // Analytics store for savings data
-	Version     string
-	DB          *database.Connection // PostgreSQL database connection
-	TaskLocker  TaskLocker           // Advisory lock for scheduled tasks (defaults to DB)
+	// AnalyticsCollector aggregates savings into snapshots on a schedule.
+	// Nil until reinitializeAfterConnect wires it; the collect task no-ops
+	// when nil so test builds without a DB stay quiet.
+	AnalyticsCollector AnalyticsCollectorInterface
+	Version            string
+	DB                 *database.Connection // PostgreSQL database connection
+	TaskLocker         TaskLocker           // Advisory lock for scheduled tasks (defaults to DB)
 
 	// Static file serving directory (from STATIC_DIR env var)
 	staticDir string
@@ -121,6 +125,10 @@ type ApplicationConfig struct {
 	ScheduledTaskSecret     string
 	ScheduledTaskSecretName string
 	IsLambda                bool
+
+	// Analytics snapshot collector knobs. See analytics_collect.go for
+	// defaults and boundary validation (LoadAnalyticsConfig).
+	Analytics AnalyticsConfig
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure
@@ -261,6 +269,7 @@ func LoadApplicationConfig() ApplicationConfig {
 		ScheduledTaskSecret:     os.Getenv("SCHEDULED_TASK_SECRET"),
 		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
 		IsLambda:                isLambdaRuntime(),
+		Analytics:               LoadAnalyticsConfig(),
 	}
 }
 
@@ -464,6 +473,10 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 func NewApplication(ctx context.Context) (*Application, error) {
 	cfg := LoadApplicationConfig()
 
+	if err := cfg.Analytics.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid analytics configuration: %w", err)
+	}
+
 	log.Printf("CUDly Server initializing, version: %s", cfg.Version)
 
 	// Initialize configuration store (PostgreSQL)
@@ -639,9 +652,15 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		log.Println("Initialized database-backed rate limiter for Lambda (distributed state)")
 	}
 
-	// Initialize analytics store for savings data and materialized views
+	// Initialize analytics store for savings data and materialized views, plus
+	// the snapshot collector behind the scheduled analytics_collect task.
 	app.Analytics = analytics.NewPostgresAnalyticsStore(dbConn)
-	log.Println("Initialized PostgreSQL analytics store")
+	collector, err := newAnalyticsCollector(dbConn, app.Config)
+	if err != nil {
+		return fmt.Errorf("failed to create analytics collector: %w", err)
+	}
+	app.AnalyticsCollector = collector
+	log.Println("Initialized PostgreSQL analytics store and snapshot collector")
 
 	// Initialize credential store (AES-256-GCM encrypted credential blobs).
 	encKey, encKeySource, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
@@ -739,6 +758,8 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EmailNotifier:       app.Email,
 		DashboardURL:        app.appConfig.DashboardURL,
 		AnalyticsClient:     api.NewPostgresAnalyticsClient(dbConn),
+		AnalyticsCollector:  app.AnalyticsCollector,
+		AnalyticsSnapshots:  analytics.NewPostgresAnalyticsStore(dbConn),
 		OIDCSigner:          app.signer,
 		OIDCIssuerURL:       resolveOIDCIssuerURL(app.appConfig),
 		CommitmentOpts:      commitmentOpts,

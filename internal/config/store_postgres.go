@@ -1411,6 +1411,27 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// GetActivePurchaseHistory retrieves every purchase_history row still within its
+// commitment term at asOf, across all accounts. The active filter is pushed into
+// SQL so the result is bounded by the number of live commitments (not by all
+// history ever recorded), which is what the analytics collector needs and avoids
+// silently truncating older-but-still-active 1y/3y commitments. term*8760 hours
+// matches the collector's HoursPerYear (365*24) so the SQL and Go term windows
+// agree.
+func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]PurchaseHistoryRecord, error) {
+	query := `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		FROM purchase_history
+		WHERE term > 0
+		  AND timestamp + make_interval(hours => term * 8760) > $1
+		ORDER BY timestamp DESC
+	`
+
+	return s.queryPurchaseHistory(ctx, query, asOf)
+}
+
 // appendAccountPredicate pulls the dual-column account-predicate arg-building
 // branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
 //

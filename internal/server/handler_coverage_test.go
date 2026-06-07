@@ -48,11 +48,33 @@ func TestHandleCleanupExpiredRecords_NilAuthAndConfig(t *testing.T) {
 // ----- handleRefreshAnalytics -----
 
 type mockAnalyticsStore struct {
-	refreshErr error
+	refreshErr             error
+	createFuturePartErr    error
+	dropOldPartErr         error
+	createFuturePartMonths int
+	dropOldPartRetention   int
+	// *HadDeadline capture whether each DDL step ran under a bounded context, so
+	// the 06-N3 fix (per-step timeouts under RDS Proxy) is positively asserted.
+	createFuturePartHadDeadline bool
+	dropOldPartHadDeadline      bool
+	refreshHadDeadline          bool
 }
 
 func (m *mockAnalyticsStore) RefreshMaterializedViews(ctx context.Context) error {
+	_, m.refreshHadDeadline = ctx.Deadline()
 	return m.refreshErr
+}
+
+func (m *mockAnalyticsStore) CreateFuturePartitions(ctx context.Context, monthsAhead int) error {
+	_, m.createFuturePartHadDeadline = ctx.Deadline()
+	m.createFuturePartMonths = monthsAhead
+	return m.createFuturePartErr
+}
+
+func (m *mockAnalyticsStore) DropOldPartitions(ctx context.Context, retentionMonths int) error {
+	_, m.dropOldPartHadDeadline = ctx.Deadline()
+	m.dropOldPartRetention = retentionMonths
+	return m.dropOldPartErr
 }
 
 func TestHandleRefreshAnalytics_Success(t *testing.T) {
@@ -360,4 +382,74 @@ func (m *mockConfigStoreForExchangeStale) SavePurchaseExecutionTx(ctx context.Co
 }
 func (m *mockConfigStoreForExchangeStale) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
+}
+
+// ----- handleCollectAnalytics -----
+
+type mockAnalyticsCollector struct {
+	collectErr error
+	calls      int
+}
+
+func (m *mockAnalyticsCollector) Collect(ctx context.Context) error {
+	m.calls++
+	return m.collectErr
+}
+
+func TestHandleCollectAnalytics_Disabled(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: false, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          &mockAnalyticsStore{},
+		AnalyticsCollector: &mockAnalyticsCollector{},
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "disabled", result["status"])
+}
+
+func TestHandleCollectAnalytics_SuccessRunsFullPipeline(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	store := &mockAnalyticsStore{}
+	collector := &mockAnalyticsCollector{}
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 18, PartitionsAhead: 4}},
+		Analytics:          store,
+		AnalyticsCollector: collector,
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "success", result["status"])
+	testutil.AssertEqual(t, 1, collector.calls)
+	testutil.AssertEqual(t, 4, store.createFuturePartMonths)
+	testutil.AssertEqual(t, 18, store.dropOldPartRetention)
+}
+
+func TestHandleCollectAnalytics_CollectErrorIsPartial(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          &mockAnalyticsStore{},
+		AnalyticsCollector: &mockAnalyticsCollector{collectErr: errors.New("collect failed")},
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertNoError(t, err) // best-effort: logged, not propagated
+	testutil.AssertEqual(t, "partial", result["status"])
+}
+
+func TestHandleCollectAnalytics_NilCollectorSkips(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	app := &Application{
+		appConfig: ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics: &mockAnalyticsStore{},
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, "skipped", result["status"])
+}
+
+func TestAnalyticsConfig_Validate(t *testing.T) {
+	testutil.AssertNoError(t, AnalyticsConfig{RetentionMonths: 1, PartitionsAhead: 1}.Validate())
+	testutil.AssertTrue(t, AnalyticsConfig{RetentionMonths: 0, PartitionsAhead: 1}.Validate() != nil, "retention < 1 must error")
+	testutil.AssertTrue(t, AnalyticsConfig{RetentionMonths: 1, PartitionsAhead: 0}.Validate() != nil, "partitions < 1 must error")
 }

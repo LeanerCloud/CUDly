@@ -13,306 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testablePostgresAnalyticsStore is a test-only wrapper that allows mocking
+// testablePostgresAnalyticsStore is a thin test wrapper that delegates to the
+// REAL PostgresAnalyticsStore (with a pgxmock pool as its dbConn) so these
+// tests exercise the production SQL rather than a parallel reimplementation
+// that could silently drift from it. The embedded *PostgresAnalyticsStore
+// satisfies AnalyticsStore; only SaveSnapshot is overridden to give empty IDs
+// a deterministic value the assertions can match.
 type testablePostgresAnalyticsStore struct {
+	*PostgresAnalyticsStore
 	mock pgxmock.PgxPoolIface
 }
 
-// Verify testablePostgresAnalyticsStore implements AnalyticsStore
-var _ AnalyticsStore = (*testablePostgresAnalyticsStore)(nil)
+func newTestableStore(mock pgxmock.PgxPoolIface) *testablePostgresAnalyticsStore {
+	return &testablePostgresAnalyticsStore{
+		PostgresAnalyticsStore: &PostgresAnalyticsStore{db: mock},
+		mock:                   mock,
+	}
+}
 
-// SaveSnapshot stores a single savings snapshot
+// SaveSnapshot delegates to the real store after assigning a deterministic ID
+// for the empty-ID case so the WithArgs expectations stay stable.
 func (s *testablePostgresAnalyticsStore) SaveSnapshot(ctx context.Context, snapshot *SavingsSnapshot) error {
-	// Generate UUID if not provided
 	if snapshot.ID == "" {
 		snapshot.ID = "generated-uuid"
 	}
-
-	// Marshal metadata to JSONB
-	var metadataJSON []byte
-	var err error
-	if snapshot.Metadata != nil {
-		metadataJSON, err = json.Marshal(snapshot.Metadata)
-		if err != nil {
-			return err
-		}
-	}
-
-	query := `
-		INSERT INTO savings_snapshots (
-			id, account_id, timestamp, provider, service, region,
-			commitment_type, total_commitment, total_usage, total_savings,
-			coverage_percentage, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`
-
-	_, err = s.mock.Exec(ctx, query,
-		snapshot.ID,
-		snapshot.AccountID,
-		snapshot.Timestamp,
-		snapshot.Provider,
-		snapshot.Service,
-		snapshot.Region,
-		snapshot.CommitmentType,
-		snapshot.TotalCommitment,
-		snapshot.TotalUsage,
-		snapshot.TotalSavings,
-		snapshot.CoveragePercentage,
-		metadataJSON,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return s.PostgresAnalyticsStore.SaveSnapshot(ctx, snapshot)
 }
 
-// BulkInsertSnapshots inserts multiple snapshots efficiently
-func (s *testablePostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapshots []SavingsSnapshot) error {
-	if len(snapshots) == 0 {
-		return nil
-	}
-	// For testing, we'll use batch insert instead of COPY
-	return errors.New("bulk insert requires real connection")
-}
-
-// QuerySavings retrieves savings snapshots based on query parameters
-func (s *testablePostgresAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error) {
-	query := `
-		SELECT id, account_id, timestamp, provider, service, region,
-		       commitment_type, total_commitment, total_usage, total_savings,
-		       coverage_percentage, metadata
-		FROM savings_snapshots
-		WHERE account_id = $1
-		  AND timestamp >= $2
-		  AND timestamp <= $3
-	`
-
-	args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-	argIndex := 4
-
-	if req.Provider != "" {
-		args = append(args, req.Provider)
-		argIndex++
-	}
-
-	if req.Service != "" {
-		args = append(args, req.Service)
-		argIndex++
-	}
-
-	if req.Limit > 0 {
-		args = append(args, req.Limit)
-	}
-	_ = argIndex // suppress unused variable warning
-
-	rows, err := s.mock.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	snapshots := make([]SavingsSnapshot, 0)
-	for rows.Next() {
-		var snapshot SavingsSnapshot
-		var metadataJSON []byte
-
-		err := rows.Scan(
-			&snapshot.ID,
-			&snapshot.AccountID,
-			&snapshot.Timestamp,
-			&snapshot.Provider,
-			&snapshot.Service,
-			&snapshot.Region,
-			&snapshot.CommitmentType,
-			&snapshot.TotalCommitment,
-			&snapshot.TotalUsage,
-			&snapshot.TotalSavings,
-			&snapshot.CoveragePercentage,
-			&metadataJSON,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(metadataJSON) > 0 {
-			if err := json.Unmarshal(metadataJSON, &snapshot.Metadata); err != nil {
-				return nil, err
-			}
-		}
-
-		snapshots = append(snapshots, snapshot)
-	}
-
-	return snapshots, rows.Err()
-}
-
-// QueryMonthlyTotals retrieves monthly aggregated totals
-func (s *testablePostgresAnalyticsStore) QueryMonthlyTotals(ctx context.Context, accountID string, months int) ([]MonthlySummary, error) {
-	query := `
-		SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count
-		FROM monthly_savings_summary
-		WHERE account_id = $1
-		  AND month >= DATE_TRUNC('month', NOW() - INTERVAL '1 month' * $2)
-		ORDER BY month DESC, provider, service
-	`
-
-	rows, err := s.mock.Query(ctx, query, accountID, months)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	summaries := make([]MonthlySummary, 0)
-	for rows.Next() {
-		var summary MonthlySummary
-		err := rows.Scan(
-			&summary.Month,
-			&summary.AccountID,
-			&summary.Provider,
-			&summary.Service,
-			&summary.TotalSavings,
-			&summary.AvgCoverage,
-			&summary.SnapshotCount,
-		)
-		if err != nil {
-			return nil, err
-		}
-		summaries = append(summaries, summary)
-	}
-
-	return summaries, rows.Err()
-}
-
-// QueryByProvider retrieves savings breakdown by provider
-func (s *testablePostgresAnalyticsStore) QueryByProvider(ctx context.Context, accountID string, startDate, endDate time.Time) ([]ProviderBreakdown, error) {
-	query := `
-		SELECT provider, service, SUM(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
-		FROM savings_snapshots
-		WHERE account_id = $1
-		  AND timestamp >= $2
-		  AND timestamp <= $3
-		GROUP BY provider, service
-		ORDER BY total_savings DESC
-	`
-
-	rows, err := s.mock.Query(ctx, query, accountID, startDate, endDate)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	breakdowns := make([]ProviderBreakdown, 0)
-	for rows.Next() {
-		var breakdown ProviderBreakdown
-		err := rows.Scan(
-			&breakdown.Provider,
-			&breakdown.Service,
-			&breakdown.TotalSavings,
-			&breakdown.AvgCoverage,
-		)
-		if err != nil {
-			return nil, err
-		}
-		breakdowns = append(breakdowns, breakdown)
-	}
-
-	return breakdowns, rows.Err()
-}
-
-// QueryByService retrieves savings breakdown by service
-func (s *testablePostgresAnalyticsStore) QueryByService(ctx context.Context, accountID string, provider string, startDate, endDate time.Time) ([]ServiceBreakdown, error) {
-	query := `
-		SELECT service, region, SUM(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
-		FROM savings_snapshots
-		WHERE account_id = $1
-		  AND provider = $2
-		  AND timestamp >= $3
-		  AND timestamp <= $4
-		GROUP BY service, region
-		ORDER BY total_savings DESC
-	`
-
-	rows, err := s.mock.Query(ctx, query, accountID, provider, startDate, endDate)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	breakdowns := make([]ServiceBreakdown, 0)
-	for rows.Next() {
-		var breakdown ServiceBreakdown
-		err := rows.Scan(
-			&breakdown.Service,
-			&breakdown.Region,
-			&breakdown.TotalSavings,
-			&breakdown.AvgCoverage,
-		)
-		if err != nil {
-			return nil, err
-		}
-		breakdowns = append(breakdowns, breakdown)
-	}
-
-	return breakdowns, rows.Err()
-}
-
-// CreatePartition creates a partition for a specific month
-func (s *testablePostgresAnalyticsStore) CreatePartition(ctx context.Context, forMonth time.Time) error {
-	query := `SELECT create_savings_snapshot_partition($1)`
-
-	_, err := s.mock.Exec(ctx, query, forMonth)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// DropOldPartitions removes partitions older than retention period
-func (s *testablePostgresAnalyticsStore) DropOldPartitions(ctx context.Context, retentionMonths int) error {
-	query := `SELECT drop_old_savings_partitions($1)`
-
-	_, err := s.mock.Exec(ctx, query, retentionMonths)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// CreatePartitionsForRange creates partitions for a date range
-func (s *testablePostgresAnalyticsStore) CreatePartitionsForRange(ctx context.Context, startDate, endDate time.Time) error {
-	current := time.Date(startDate.Year(), startDate.Month(), 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(endDate.Year(), endDate.Month(), 1, 0, 0, 0, 0, time.UTC)
-
-	for !current.After(end) {
-		if err := s.CreatePartition(ctx, current); err != nil {
-			return err
-		}
-		current = current.AddDate(0, 1, 0)
-	}
-
-	return nil
-}
-
-// RefreshMaterializedViews refreshes all analytics materialized views
-func (s *testablePostgresAnalyticsStore) RefreshMaterializedViews(ctx context.Context) error {
-	query := `SELECT refresh_savings_materialized_views()`
-
-	_, err := s.mock.Exec(ctx, query)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Close cleans up resources
-func (s *testablePostgresAnalyticsStore) Close() error {
-	return nil
-}
+// Verify the wrapper still satisfies AnalyticsStore.
+var _ AnalyticsStore = (*testablePostgresAnalyticsStore)(nil)
 
 // =====================
 // Tests
@@ -342,7 +71,7 @@ func TestSaveSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		snapshot := &SavingsSnapshot{
@@ -354,9 +83,9 @@ func TestSaveSnapshot(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    100.0,
-			TotalUsage:         80.0,
+			TotalUsage:         f64ptr(80.0),
 			TotalSavings:       20.0,
-			CoveragePercentage: 80.0,
+			CoveragePercentage: f64ptr(80.0),
 			Metadata:           map[string]interface{}{"key": "value"},
 		}
 
@@ -364,6 +93,7 @@ func TestSaveSnapshot(t *testing.T) {
 			WithArgs(
 				snapshot.ID,
 				snapshot.AccountID,
+				snapshot.CloudAccountID,
 				snapshot.Timestamp,
 				snapshot.Provider,
 				snapshot.Service,
@@ -387,31 +117,19 @@ func TestSaveSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "", // empty ID
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
+			ID:             "", // empty ID
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			CommitmentType: "RI",
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
-			WithArgs(
-				"generated-uuid", // should be generated
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-			).
+			WithArgs(append([]any{"generated-uuid"}, anyArgs(12)...)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 		err = store.SaveSnapshot(context.Background(), snapshot)
@@ -425,32 +143,20 @@ func TestSaveSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "test-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
-			Metadata:  nil,
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			CommitmentType: "SavingsPlan",
+			Metadata:       nil,
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
-			WithArgs(
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(),
-				pgxmock.AnyArg(), // nil metadata becomes empty byte slice
-			).
+			WithArgs(anyArgs(13)...). // includes nil cloud_account_id + nil metadata
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 		err = store.SaveSnapshot(context.Background(), snapshot)
@@ -463,26 +169,45 @@ func TestSaveSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "test-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "RI",
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
-			WithArgs(
-				pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-				pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-				pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-				pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			).
+			WithArgs(anyArgs(13)...).
 			WillReturnError(errors.New("database error"))
 
 		err = store.SaveSnapshot(context.Background(), snapshot)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects invalid commitment_type before any DB call", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		store := newTestableStore(mock)
+
+		snapshot := &SavingsSnapshot{
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "bogus",
+		}
+
+		// No mock expectations set: if the DB were contacted the test would fail
+		// with an unexpected call, proving the guard fires client-side.
+		err = store.SaveSnapshot(context.Background(), snapshot)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid commitment_type")
+		assert.Contains(t, err.Error(), "bogus")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
@@ -494,7 +219,7 @@ func TestBulkInsertSnapshots(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{})
 		assert.NoError(t, err)
@@ -505,11 +230,35 @@ func TestBulkInsertSnapshots(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
-		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{{}})
+		// The real store's COPY path acquires a pooled connection; pgxmock's
+		// Acquire is unimplemented, so a non-empty bulk insert surfaces that.
+		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{{CommitmentType: "RI"}})
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "bulk insert requires real connection")
+		assert.Contains(t, err.Error(), "failed to acquire connection")
+	})
+
+}
+
+// TestValidateCommitmentType directly exercises the commitment_type guard that
+// BulkInsertSnapshots applies in its COPY builder (L4), since the COPY path
+// itself can only be reached with a real pooled connection.
+func TestValidateCommitmentType(t *testing.T) {
+	t.Run("accepts RI", func(t *testing.T) {
+		assert.NoError(t, validateCommitmentType("RI"))
+	})
+	t.Run("accepts SavingsPlan", func(t *testing.T) {
+		assert.NoError(t, validateCommitmentType("SavingsPlan"))
+	})
+	t.Run("rejects an unknown value", func(t *testing.T) {
+		err := validateCommitmentType("bogus")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid commitment_type")
+		assert.Contains(t, err.Error(), "bogus")
+	})
+	t.Run("rejects empty", func(t *testing.T) {
+		assert.Error(t, validateCommitmentType(""))
 	})
 }
 
@@ -520,29 +269,29 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 		metadataJSON, _ := json.Marshal(map[string]interface{}{"key": "value"})
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		}).AddRow(
-			"snapshot-1", "account-123", now, "aws", "rds", "us-east-1",
-			"RI", 100.0, 80.0, 20.0, 80.0, metadataJSON,
+			"snapshot-1", "account-123", strPtr("cloud-1"), now, "aws", "rds", "us-east-1",
+			"RI", 100.0, f64ptr(80.0), 20.0, f64ptr(80.0), metadataJSON,
 		)
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		snapshots, err := store.QuerySavings(context.Background(), req)
@@ -560,26 +309,26 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		})
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now, "aws").
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			Provider:  "aws",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			Provider:     "aws",
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -592,26 +341,26 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		})
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now, "rds").
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}, "rds").
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			Service:   "rds",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			Service:      "rds",
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -624,26 +373,26 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		})
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now, 10).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}, 10).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
-			Limit:     10,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
+			Limit:        10,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -656,25 +405,25 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		})
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		snapshots, err := store.QuerySavings(context.Background(), req)
@@ -689,19 +438,19 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnError(errors.New("database error"))
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -715,28 +464,28 @@ func TestQuerySavings(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		}).AddRow(
-			"snapshot-1", "account-123", now, "aws", "rds", "us-east-1",
-			"RI", 100.0, 80.0, 20.0, 80.0, []byte("invalid json"),
+			"snapshot-1", "account-123", strPtr("cloud-1"), now, "aws", "rds", "us-east-1",
+			"RI", 100.0, f64ptr(80.0), 20.0, f64ptr(80.0), []byte("invalid json"),
 		)
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -752,21 +501,21 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		month := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
 		}).
-			AddRow(month, "account-123", "aws", "rds", 1500.0, 85.0, 720).
-			AddRow(month, "account-123", "aws", "elasticache", 800.0, 75.0, 720)
+			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), 720).
+			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "elasticache", 800.0, f64ptr(75.0), 720)
 
-		mock.ExpectQuery(`SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count`).
-			WithArgs("account-123", 6).
+		mock.ExpectQuery(`SELECT month, account_id`).
+			WithArgs(6, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		summaries, err := store.QueryMonthlyTotals(context.Background(), "account-123", 6)
+		summaries, err := store.QueryMonthlyTotals(context.Background(), []string{"account-123"}, nil, 6)
 		require.NoError(t, err)
 		assert.Len(t, summaries, 2)
 		assert.Equal(t, "rds", summaries[0].Service)
@@ -779,13 +528,13 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
-		mock.ExpectQuery(`SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count`).
-			WithArgs("account-123", 6).
+		mock.ExpectQuery(`SELECT month, account_id`).
+			WithArgs(6, []string{"account-123"}).
 			WillReturnError(errors.New("database error"))
 
-		_, err = store.QueryMonthlyTotals(context.Background(), "account-123", 6)
+		_, err = store.QueryMonthlyTotals(context.Background(), []string{"account-123"}, nil, 6)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -796,17 +545,17 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
 		})
 
-		mock.ExpectQuery(`SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count`).
-			WithArgs("account-123", 6).
+		mock.ExpectQuery(`SELECT month, account_id`).
+			WithArgs(6, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		summaries, err := store.QueryMonthlyTotals(context.Background(), "account-123", 6)
+		summaries, err := store.QueryMonthlyTotals(context.Background(), []string{"account-123"}, nil, 6)
 		require.NoError(t, err)
 		assert.Empty(t, summaries)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -820,7 +569,7 @@ func TestQueryByProvider(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
@@ -828,14 +577,14 @@ func TestQueryByProvider(t *testing.T) {
 		rows := pgxmock.NewRows([]string{
 			"provider", "service", "total_savings", "avg_coverage",
 		}).
-			AddRow("aws", "rds", 2500.0, 85.0).
-			AddRow("aws", "elasticache", 1200.0, 75.0)
+			AddRow("aws", "rds", 2500.0, f64ptr(85.0)).
+			AddRow("aws", "elasticache", 1200.0, f64ptr(75.0))
 
-		mock.ExpectQuery(`SELECT provider, service, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		breakdowns, err := store.QueryByProvider(context.Background(), "account-123", startDate, now)
+		breakdowns, err := store.QueryByProvider(context.Background(), []string{"account-123"}, nil, startDate, now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 2)
 		assert.Equal(t, "aws", breakdowns[0].Provider)
@@ -849,16 +598,16 @@ func TestQueryByProvider(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
-		mock.ExpectQuery(`SELECT provider, service, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnError(errors.New("database error"))
 
-		_, err = store.QueryByProvider(context.Background(), "account-123", startDate, now)
+		_, err = store.QueryByProvider(context.Background(), []string{"account-123"}, nil, startDate, now)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -872,7 +621,7 @@ func TestQueryByService(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
@@ -880,14 +629,14 @@ func TestQueryByService(t *testing.T) {
 		rows := pgxmock.NewRows([]string{
 			"service", "region", "total_savings", "avg_coverage",
 		}).
-			AddRow("rds", "us-east-1", 1800.0, 90.0).
-			AddRow("rds", "us-west-2", 700.0, 75.0)
+			AddRow("rds", "us-east-1", 1800.0, f64ptr(90.0)).
+			AddRow("rds", "us-west-2", 700.0, f64ptr(75.0))
 
-		mock.ExpectQuery(`SELECT service, region, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", "aws", startDate, now).
+		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
-		breakdowns, err := store.QueryByService(context.Background(), "account-123", "aws", startDate, now)
+		breakdowns, err := store.QueryByService(context.Background(), []string{"account-123"}, nil, "aws", startDate, now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 2)
 		assert.Equal(t, "rds", breakdowns[0].Service)
@@ -901,16 +650,16 @@ func TestQueryByService(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
-		mock.ExpectQuery(`SELECT service, region, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", "aws", startDate, now).
+		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnError(errors.New("database error"))
 
-		_, err = store.QueryByService(context.Background(), "account-123", "aws", startDate, now)
+		_, err = store.QueryByService(context.Background(), []string{"account-123"}, nil, "aws", startDate, now)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -924,7 +673,7 @@ func TestCreatePartition(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		forMonth := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 
@@ -942,7 +691,7 @@ func TestCreatePartition(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		forMonth := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 
@@ -964,7 +713,7 @@ func TestDropOldPartitions(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		mock.ExpectExec(`SELECT drop_old_savings_partitions`).
 			WithArgs(12).
@@ -980,7 +729,7 @@ func TestDropOldPartitions(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		mock.ExpectExec(`SELECT drop_old_savings_partitions`).
 			WithArgs(12).
@@ -1000,7 +749,7 @@ func TestCreatePartitionsForRange(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		startDate := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
 		endDate := time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC)
@@ -1030,7 +779,7 @@ func TestCreatePartitionsForRange(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		startDate := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
 		endDate := time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC)
@@ -1059,7 +808,7 @@ func TestRefreshMaterializedViews(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		mock.ExpectExec(`SELECT refresh_savings_materialized_views`).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
@@ -1074,7 +823,7 @@ func TestRefreshMaterializedViews(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		mock.ExpectExec(`SELECT refresh_savings_materialized_views`).
 			WillReturnError(errors.New("refresh error"))
@@ -1099,9 +848,9 @@ func TestSavingsSnapshot(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    100.50,
-			TotalUsage:         80.25,
+			TotalUsage:         f64ptr(80.25),
 			TotalSavings:       20.25,
-			CoveragePercentage: 80.0,
+			CoveragePercentage: f64ptr(80.0),
 			Metadata: map[string]interface{}{
 				"key": "value",
 			},
@@ -1115,9 +864,11 @@ func TestSavingsSnapshot(t *testing.T) {
 		assert.Equal(t, "us-east-1", snapshot.Region)
 		assert.Equal(t, "RI", snapshot.CommitmentType)
 		assert.InDelta(t, 100.50, snapshot.TotalCommitment, 0.001)
-		assert.InDelta(t, 80.25, snapshot.TotalUsage, 0.001)
+		require.NotNil(t, snapshot.TotalUsage)
+		assert.InDelta(t, 80.25, *snapshot.TotalUsage, 0.001)
 		assert.InDelta(t, 20.25, snapshot.TotalSavings, 0.001)
-		assert.InDelta(t, 80.0, snapshot.CoveragePercentage, 0.001)
+		require.NotNil(t, snapshot.CoveragePercentage)
+		assert.InDelta(t, 80.0, *snapshot.CoveragePercentage, 0.001)
 		assert.Equal(t, "value", snapshot.Metadata["key"])
 	})
 
@@ -1132,9 +883,9 @@ func TestSavingsSnapshot(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    100.50,
-			TotalUsage:         80.25,
+			TotalUsage:         f64ptr(80.25),
 			TotalSavings:       20.25,
-			CoveragePercentage: 80.0,
+			CoveragePercentage: f64ptr(80.0),
 		}
 
 		data, err := json.Marshal(snapshot)
@@ -1157,15 +908,15 @@ func TestQueryRequest(t *testing.T) {
 		start := time.Now().Add(-24 * time.Hour)
 		end := time.Now()
 		req := QueryRequest{
-			AccountID: "account-123",
-			Provider:  "aws",
-			Service:   "rds",
-			StartDate: start,
-			EndDate:   end,
-			Limit:     100,
+			AccountUUIDs: []string{"account-123"},
+			Provider:     "aws",
+			Service:      "rds",
+			StartDate:    start,
+			EndDate:      end,
+			Limit:        100,
 		}
 
-		assert.Equal(t, "account-123", req.AccountID)
+		assert.Equal(t, []string{"account-123"}, req.AccountUUIDs)
 		assert.Equal(t, "aws", req.Provider)
 		assert.Equal(t, "rds", req.Service)
 		assert.Equal(t, start, req.StartDate)
@@ -1175,9 +926,9 @@ func TestQueryRequest(t *testing.T) {
 
 	t.Run("handles optional fields", func(t *testing.T) {
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    time.Now().Add(-24 * time.Hour),
+			EndDate:      time.Now(),
 		}
 
 		assert.Equal(t, "", req.Provider) // Optional, can be empty
@@ -1196,7 +947,7 @@ func TestMonthlySummary(t *testing.T) {
 			Provider:      "aws",
 			Service:       "rds",
 			TotalSavings:  1500.50,
-			AvgCoverage:   85.5,
+			AvgCoverage:   f64ptr(85.5),
 			SnapshotCount: 720,
 		}
 
@@ -1205,7 +956,8 @@ func TestMonthlySummary(t *testing.T) {
 		assert.Equal(t, "aws", summary.Provider)
 		assert.Equal(t, "rds", summary.Service)
 		assert.InDelta(t, 1500.50, summary.TotalSavings, 0.001)
-		assert.InDelta(t, 85.5, summary.AvgCoverage, 0.001)
+		require.NotNil(t, summary.AvgCoverage)
+		assert.InDelta(t, 85.5, *summary.AvgCoverage, 0.001)
 		assert.Equal(t, 720, summary.SnapshotCount)
 	})
 
@@ -1217,7 +969,7 @@ func TestMonthlySummary(t *testing.T) {
 			Provider:      "aws",
 			Service:       "rds",
 			TotalSavings:  1500.50,
-			AvgCoverage:   85.5,
+			AvgCoverage:   f64ptr(85.5),
 			SnapshotCount: 720,
 		}
 
@@ -1241,13 +993,14 @@ func TestProviderBreakdown(t *testing.T) {
 			Provider:     "aws",
 			Service:      "rds",
 			TotalSavings: 2500.75,
-			AvgCoverage:  90.5,
+			AvgCoverage:  f64ptr(90.5),
 		}
 
 		assert.Equal(t, "aws", breakdown.Provider)
 		assert.Equal(t, "rds", breakdown.Service)
 		assert.InDelta(t, 2500.75, breakdown.TotalSavings, 0.001)
-		assert.InDelta(t, 90.5, breakdown.AvgCoverage, 0.001)
+		require.NotNil(t, breakdown.AvgCoverage)
+		assert.InDelta(t, 90.5, *breakdown.AvgCoverage, 0.001)
 	})
 
 	t.Run("json marshaling works correctly", func(t *testing.T) {
@@ -1255,7 +1008,7 @@ func TestProviderBreakdown(t *testing.T) {
 			Provider:     "gcp",
 			Service:      "cloudsql",
 			TotalSavings: 1200.00,
-			AvgCoverage:  75.0,
+			AvgCoverage:  f64ptr(75.0),
 		}
 
 		data, err := json.Marshal(breakdown)
@@ -1277,13 +1030,14 @@ func TestServiceBreakdown(t *testing.T) {
 			Service:      "elasticache",
 			Region:       "us-west-2",
 			TotalSavings: 800.25,
-			AvgCoverage:  82.0,
+			AvgCoverage:  f64ptr(82.0),
 		}
 
 		assert.Equal(t, "elasticache", breakdown.Service)
 		assert.Equal(t, "us-west-2", breakdown.Region)
 		assert.InDelta(t, 800.25, breakdown.TotalSavings, 0.001)
-		assert.InDelta(t, 82.0, breakdown.AvgCoverage, 0.001)
+		require.NotNil(t, breakdown.AvgCoverage)
+		assert.InDelta(t, 82.0, *breakdown.AvgCoverage, 0.001)
 	})
 
 	t.Run("json marshaling works correctly", func(t *testing.T) {
@@ -1291,7 +1045,7 @@ func TestServiceBreakdown(t *testing.T) {
 			Service:      "memorystore",
 			Region:       "us-central1",
 			TotalSavings: 450.00,
-			AvgCoverage:  70.0,
+			AvgCoverage:  f64ptr(70.0),
 		}
 
 		data, err := json.Marshal(breakdown)
@@ -1322,7 +1076,7 @@ func TestQuerySavingsRowScanError(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
@@ -1332,14 +1086,14 @@ func TestQuerySavingsRowScanError(t *testing.T) {
 			"id", "account_id", // Missing other columns
 		}).AddRow("snapshot-1", "account-123").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		_, err = store.QuerySavings(context.Background(), req)
@@ -1355,17 +1109,17 @@ func TestQueryMonthlyTotalsRowScanError(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		rows := pgxmock.NewRows([]string{
 			"month", "account_id", // Missing other columns
 		}).AddRow(time.Now(), "account-123").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count`).
-			WithArgs("account-123", 6).
+		mock.ExpectQuery(`SELECT month, account_id`).
+			WithArgs(6, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		_, err = store.QueryMonthlyTotals(context.Background(), "account-123", 6)
+		_, err = store.QueryMonthlyTotals(context.Background(), []string{"account-123"}, nil, 6)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1378,7 +1132,7 @@ func TestQueryByProviderRowScanError(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
@@ -1387,11 +1141,11 @@ func TestQueryByProviderRowScanError(t *testing.T) {
 			"provider", // Missing other columns
 		}).AddRow("aws").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT provider, service, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		_, err = store.QueryByProvider(context.Background(), "account-123", startDate, now)
+		_, err = store.QueryByProvider(context.Background(), []string{"account-123"}, nil, startDate, now)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1404,7 +1158,7 @@ func TestQueryByServiceRowScanError(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
@@ -1413,11 +1167,11 @@ func TestQueryByServiceRowScanError(t *testing.T) {
 			"service", // Missing other columns
 		}).AddRow("rds").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT service, region, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", "aws", startDate, now).
+		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
-		_, err = store.QueryByService(context.Background(), "account-123", "aws", startDate, now)
+		_, err = store.QueryByService(context.Background(), []string{"account-123"}, nil, "aws", startDate, now)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1430,29 +1184,29 @@ func TestRowsErr(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 		metadataJSON, _ := json.Marshal(map[string]interface{}{})
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		}).AddRow(
-			"snapshot-1", "account-123", now, "aws", "rds", "us-east-1",
-			"RI", 100.0, 80.0, 20.0, 80.0, metadataJSON,
+			"snapshot-1", "account-123", strPtr("cloud-1"), now, "aws", "rds", "us-east-1",
+			"RI", 100.0, f64ptr(80.0), 20.0, f64ptr(80.0), metadataJSON,
 		)
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		snapshots, err := store.QuerySavings(context.Background(), req)
@@ -1469,19 +1223,19 @@ func TestQueryMonthlyTotalsRowsErr(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		month := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
-		}).AddRow(month, "account-123", "aws", "rds", 1500.0, 85.0, 720)
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
+		}).AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), 720)
 
-		mock.ExpectQuery(`SELECT month, account_id, provider, service, total_savings, avg_coverage, snapshot_count`).
-			WithArgs("account-123", 6).
+		mock.ExpectQuery(`SELECT month, account_id`).
+			WithArgs(6, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		summaries, err := store.QueryMonthlyTotals(context.Background(), "account-123", 6)
+		summaries, err := store.QueryMonthlyTotals(context.Background(), []string{"account-123"}, nil, 6)
 		require.NoError(t, err)
 		assert.Len(t, summaries, 1)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1495,20 +1249,20 @@ func TestQueryByProviderRowsErr(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
 			"provider", "service", "total_savings", "avg_coverage",
-		}).AddRow("aws", "rds", 2500.0, 85.0)
+		}).AddRow("aws", "rds", 2500.0, f64ptr(85.0))
 
-		mock.ExpectQuery(`SELECT provider, service, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
-		breakdowns, err := store.QueryByProvider(context.Background(), "account-123", startDate, now)
+		breakdowns, err := store.QueryByProvider(context.Background(), []string{"account-123"}, nil, startDate, now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 1)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1522,20 +1276,20 @@ func TestQueryByServiceRowsErr(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
 			"service", "region", "total_savings", "avg_coverage",
-		}).AddRow("rds", "us-east-1", 1800.0, 90.0)
+		}).AddRow("rds", "us-east-1", 1800.0, f64ptr(90.0))
 
-		mock.ExpectQuery(`SELECT service, region, SUM\(total_savings\) as total_savings`).
-			WithArgs("account-123", "aws", startDate, now).
+		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
-		breakdowns, err := store.QueryByService(context.Background(), "account-123", "aws", startDate, now)
+		breakdowns, err := store.QueryByService(context.Background(), []string{"account-123"}, nil, "aws", startDate, now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 1)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1549,25 +1303,25 @@ func TestErrNoRowsHandling(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 
 		now := time.Now().UTC()
 		startDate := now.Add(-24 * time.Hour)
 
 		rows := pgxmock.NewRows([]string{
-			"id", "account_id", "timestamp", "provider", "service", "region",
+			"id", "account_id", "cloud_account_id", "timestamp", "provider", "service", "region",
 			"commitment_type", "total_commitment", "total_usage", "total_savings",
 			"coverage_percentage", "metadata",
 		})
 
-		mock.ExpectQuery(`SELECT id, account_id, timestamp, provider, service, region`).
-			WithArgs("account-123", startDate, now).
+		mock.ExpectQuery(`SELECT id, account_id`).
+			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
 		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: startDate,
-			EndDate:   now,
+			AccountUUIDs: []string{"account-123"},
+			StartDate:    startDate,
+			EndDate:      now,
 		}
 
 		snapshots, err := store.QuerySavings(context.Background(), req)
@@ -1585,7 +1339,7 @@ func TestTestableStoreImplementsInterface(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		var store AnalyticsStore = &testablePostgresAnalyticsStore{mock: mock}
+		var store AnalyticsStore = newTestableStore(mock)
 		assert.NotNil(t, store)
 	})
 }
@@ -1597,7 +1351,7 @@ func TestClose(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		store := &testablePostgresAnalyticsStore{mock: mock}
+		store := newTestableStore(mock)
 		err = store.Close()
 		assert.NoError(t, err)
 	})

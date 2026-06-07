@@ -26,7 +26,14 @@ const (
 	TaskSendNotifications         ScheduledTaskType = "send_notifications"
 	TaskCleanupExpiredRecords     ScheduledTaskType = "cleanup"
 	TaskRefreshAnalytics          ScheduledTaskType = "analytics_refresh"
-	TaskRIExchangeReshape         ScheduledTaskType = "ri_exchange_reshape"
+	// TaskCollectAnalytics runs the savings-snapshot collector end to end:
+	// ensure upcoming partitions, collect a snapshot across all tenants, apply
+	// retention, and refresh the materialized views. Scheduled separately from
+	// TaskRefreshAnalytics (the legacy refresh-only task) so the snapshot
+	// ingestion cadence can differ from a pure view refresh. See issues
+	// #1023 / #1033.
+	TaskCollectAnalytics  ScheduledTaskType = "analytics_collect"
+	TaskRIExchangeReshape ScheduledTaskType = "ri_exchange_reshape"
 	// TaskReapStuckPurchases sweeps purchase_executions stuck in
 	// approved/running longer than PURCHASE_APPROVED_REAP_AFTER and flips
 	// them to "failed" via the existing TransitionExecutionStatus CAS.
@@ -75,6 +82,8 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		return app.handleCleanupExpiredRecords(ctx)
 	case TaskRefreshAnalytics:
 		return app.handleRefreshAnalytics(ctx)
+	case TaskCollectAnalytics:
+		return app.handleCollectAnalytics(ctx)
 	case TaskRIExchangeReshape:
 		return app.handleRIExchangeReshape(ctx)
 	case TaskReapStuckPurchases:
@@ -261,6 +270,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 		return TaskCleanupExpiredRecords, nil
 	case "analytics_refresh":
 		return TaskRefreshAnalytics, nil
+	case "analytics_collect":
+		return TaskCollectAnalytics, nil
 	case "ri_exchange_reshape":
 		return TaskRIExchangeReshape, nil
 	case "reap_stuck_purchases":

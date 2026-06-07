@@ -99,6 +99,10 @@ func (m *mockConfigStoreForHealth) GetAllPurchaseHistory(ctx context.Context, li
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) GetPurchaseHistoryFiltered(ctx context.Context, filter config.PurchaseHistoryFilter) ([]config.PurchaseHistoryRecord, error) {
 	return nil, nil
 }

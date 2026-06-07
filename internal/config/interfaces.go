@@ -93,6 +93,14 @@ type StoreInterface interface {
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error
 	GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error)
 	GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error)
+	// GetActivePurchaseHistory returns every purchase_history row whose commitment
+	// is still within its term at asOf (term > 0 AND timestamp + term years > asOf),
+	// across all accounts, newest-first. Unlike GetAllPurchaseHistory it is not
+	// row-capped: the analytics collector needs the complete active set, and
+	// filtering expired commitments in SQL keeps the result bounded by the number
+	// of live commitments rather than by all history ever recorded (so it cannot
+	// silently truncate older-but-still-active 1y/3y commitments).
+	GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]PurchaseHistoryRecord, error)
 	// GetPurchaseHistoryFiltered reads purchase_history rows matching the
 	// PurchaseHistoryFilter, newest-first, capped at filter.Limit. Each field is
 	// applied independently and only when populated (see PurchaseHistoryFilter).

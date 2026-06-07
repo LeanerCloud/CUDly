@@ -30,139 +30,41 @@ func TestSaveSnapshotMarshalError(t *testing.T) {
 	})
 }
 
-// TestQueryFiltersBuilding verifies the query filter building logic
-func TestQueryFiltersBuilding(t *testing.T) {
-	t.Run("basic query without filters", func(t *testing.T) {
-		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
-		}
+// TestAccountFilterClause exercises the real dual-column scoping clause builder
+// used by every Query* method (replaces the old test that re-implemented the
+// arg-building logic without calling production code).
+func TestAccountFilterClause(t *testing.T) {
+	base := func() []any { return []any{"start", "end"} }
 
-		// Simulate the args building logic from QuerySavings
-		args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-		argIndex := 4
+	t.Run("both empty yields TRUE and unchanged args", func(t *testing.T) {
+		clause, args := accountFilterClause(nil, nil, base())
+		assert.Equal(t, "TRUE", clause)
+		assert.Len(t, args, 2)
+	})
 
-		if req.Provider != "" {
-			args = append(args, req.Provider)
-			argIndex++
-		}
-
-		if req.Service != "" {
-			args = append(args, req.Service)
-			argIndex++
-		}
-
-		if req.Limit > 0 {
-			args = append(args, req.Limit)
-		}
-
+	t.Run("UUIDs only match cloud_account_id", func(t *testing.T) {
+		clause, args := accountFilterClause([]string{"u1", "u2"}, nil, base())
+		assert.Equal(t, "(cloud_account_id = ANY($3))", clause)
 		assert.Len(t, args, 3)
-		assert.Equal(t, 4, argIndex) // No filters added
 	})
 
-	t.Run("query with provider filter adds arg", func(t *testing.T) {
-		req := QueryRequest{
-			AccountID: "account-123",
-			Provider:  "aws",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
-		}
-
-		args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-		argIndex := 4
-
-		if req.Provider != "" {
-			args = append(args, req.Provider)
-			argIndex++
-		}
-
-		if req.Service != "" {
-			args = append(args, req.Service)
-			argIndex++
-		}
-
-		assert.Len(t, args, 4)
-		assert.Equal(t, 5, argIndex)
+	t.Run("external ids are grouped and provider-scoped", func(t *testing.T) {
+		clause, args := accountFilterClause(
+			[]string{"u1"},
+			map[string][]string{"aws": {"123"}, "azure": {"sub-1"}},
+			base(),
+		)
+		// Deterministic, sorted provider order: aws then azure.
+		assert.Equal(t,
+			"(cloud_account_id = ANY($3) OR (provider = $4 AND account_id = ANY($5)) OR (provider = $6 AND account_id = ANY($7)))",
+			clause)
+		assert.Len(t, args, 7)
 	})
 
-	t.Run("query with service filter adds arg", func(t *testing.T) {
-		req := QueryRequest{
-			AccountID: "account-123",
-			Service:   "rds",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
-		}
-
-		args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-		argIndex := 4
-
-		if req.Provider != "" {
-			args = append(args, req.Provider)
-			argIndex++
-		}
-
-		if req.Service != "" {
-			args = append(args, req.Service)
-			argIndex++
-		}
-
-		assert.Len(t, args, 4)
-		assert.Equal(t, 5, argIndex)
-	})
-
-	t.Run("query with both filters adds two args", func(t *testing.T) {
-		req := QueryRequest{
-			AccountID: "account-123",
-			Provider:  "aws",
-			Service:   "rds",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
-		}
-
-		args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-		argIndex := 4
-
-		if req.Provider != "" {
-			args = append(args, req.Provider)
-			argIndex++
-		}
-
-		if req.Service != "" {
-			args = append(args, req.Service)
-			argIndex++
-		}
-
-		assert.Len(t, args, 5)
-		assert.Equal(t, 6, argIndex)
-	})
-
-	t.Run("query with limit adds arg", func(t *testing.T) {
-		req := QueryRequest{
-			AccountID: "account-123",
-			StartDate: time.Now().Add(-24 * time.Hour),
-			EndDate:   time.Now(),
-			Limit:     10,
-		}
-
-		args := []interface{}{req.AccountID, req.StartDate, req.EndDate}
-		argIndex := 4
-
-		if req.Provider != "" {
-			args = append(args, req.Provider)
-			argIndex++
-		}
-
-		if req.Service != "" {
-			args = append(args, req.Service)
-			argIndex++
-		}
-
-		if req.Limit > 0 {
-			args = append(args, req.Limit)
-		}
-
-		assert.Len(t, args, 4)
+	t.Run("empty provider key matches account_id with no provider gate", func(t *testing.T) {
+		clause, args := accountFilterClause(nil, map[string][]string{"": {"123"}}, base())
+		assert.Equal(t, "(account_id = ANY($3))", clause)
+		assert.Len(t, args, 3)
 	})
 }
 
