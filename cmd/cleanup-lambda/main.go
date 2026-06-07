@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
-	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
@@ -30,7 +29,7 @@ func cleanupExpiredRecords(ctx context.Context, event CleanupEvent) (*CleanupRes
 	// A new DB connection is opened per invocation (no connection reuse across warm starts).
 	// This is intentional: the cleanup Lambda runs infrequently and the simpler, stateless
 	// design is preferred over the shared-connection pattern used in cmd/lambda/main.go.
-	db, err := initDB(ctx)
+	db, err := database.OpenFromEnv(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,31 +53,6 @@ func cleanupExpiredRecords(ctx context.Context, event CleanupEvent) (*CleanupRes
 
 	log.Printf("Cleanup job completed: %+v", result)
 	return result, nil
-}
-
-// initDB creates and returns a database connection using env config and optional secret resolution.
-func initDB(ctx context.Context) (*database.Connection, error) {
-	dbConfig, err := database.LoadFromEnv()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load database config: %w", err)
-	}
-
-	var secretResolver database.SecretResolver
-	if dbConfig.PasswordSecret != "" {
-		secretConfig := secrets.LoadConfigFromEnv()
-		resolver, err := secrets.NewResolver(ctx, secretConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create secret resolver: %w", err)
-		}
-		defer resolver.Close()
-		secretResolver = resolver
-	}
-
-	db, err := database.NewConnection(ctx, dbConfig, secretResolver)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-	return db, nil
 }
 
 // dryRunCount counts records that would be deleted without actually deleting them.

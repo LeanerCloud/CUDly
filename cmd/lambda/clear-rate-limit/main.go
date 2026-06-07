@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
-	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
@@ -27,27 +26,9 @@ type Response struct {
 }
 
 func clearRateLimit(ctx context.Context) (Response, error) {
-	// Initialize database connection with secret resolution
-	dbConfig, err := database.LoadFromEnv()
+	db, err := database.OpenFromEnv(ctx)
 	if err != nil {
-		return Response{}, fmt.Errorf("failed to load database config: %w", err)
-	}
-
-	// Create secret resolver if password secret is specified
-	var secretResolver database.SecretResolver
-	if dbConfig.PasswordSecret != "" {
-		secretConfig := secrets.LoadConfigFromEnv()
-		resolver, err := secrets.NewResolver(ctx, secretConfig)
-		if err != nil {
-			return Response{}, fmt.Errorf("failed to create secret resolver: %w", err)
-		}
-		defer resolver.Close()
-		secretResolver = resolver
-	}
-
-	db, err := database.NewConnection(ctx, dbConfig, secretResolver)
-	if err != nil {
-		return Response{}, fmt.Errorf("failed to connect to database: %w", err)
+		return Response{}, err
 	}
 	defer db.Close()
 
