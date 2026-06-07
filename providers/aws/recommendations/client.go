@@ -254,6 +254,44 @@ var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", 
 // throttle on one (term, payment) combo doesn't suppress the others;
 // only an error where every combo fails is propagated. This mirrors
 // the "continue on per-service error" tolerance in GetAllRecommendations.
+// fetchSingleComboRecs fetches recommendations for one (term, payment) pair.
+// If the context is already done before the call, it returns (nil, ctx.Err()).
+// If GetRecommendations returns an error after ctx cancellation, it also
+// returns (nil, ctx.Err()) so the caller exits the sweep immediately. Per-combo
+// errors (throttle, 5xx) return (nil, err) with ctx.Err() == nil, signalling
+// skip-and-continue tolerance in the outer loop.
+func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.ServiceType, term string, payment string) ([]common.Recommendation, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	lookback := c.recLookbackPeriod
+	if lookback == "" {
+		lookback = "7d"
+	}
+	params := common.RecommendationParams{
+		Service:        service,
+		PaymentOption:  payment,
+		Term:           term,
+		LookbackPeriod: lookback,
+		Region:         "",
+	}
+	recs, err := c.GetRecommendations(ctx, params)
+	if err != nil {
+		// A canceled / deadline-exceeded ctx is NOT a per-combo
+		// failure to be tolerated -- every subsequent combo
+		// would just hit the same dead context and waste time
+		// while we accumulate "failures" that hide the real
+		// reason. Short-circuit so the caller sees the ctx
+		// error verbatim. Per-combo errors (throttle, 5xx)
+		// keep the existing skip-and-continue tolerance.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return recs, nil
+}
+
 func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
 	allRecs := make([]common.Recommendation, 0)
 	var lastErr error
@@ -261,30 +299,9 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	attempts := 0
 	for _, term := range defaultDiscoveryTerms {
 		for _, payment := range defaultDiscoveryPaymentOptions {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
 			attempts++
-			lookback := c.recLookbackPeriod
-			if lookback == "" {
-				lookback = "7d"
-			}
-			params := common.RecommendationParams{
-				Service:        service,
-				PaymentOption:  payment,
-				Term:           term,
-				LookbackPeriod: lookback,
-				Region:         "",
-			}
-			recs, err := c.GetRecommendations(ctx, params)
+			recs, err := c.fetchSingleComboRecs(ctx, service, term, payment)
 			if err != nil {
-				// A canceled / deadline-exceeded ctx is NOT a per-combo
-				// failure to be tolerated — every subsequent combo
-				// would just hit the same dead context and waste time
-				// while we accumulate "failures" that hide the real
-				// reason. Short-circuit so the caller sees the ctx
-				// error verbatim. Per-combo errors (throttle, 5xx)
-				// keep the existing skip-and-continue tolerance.
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
