@@ -204,6 +204,14 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
 }
 
+func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx, asOf)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+}
+
 func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter config.PurchaseHistoryFilter) ([]config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {

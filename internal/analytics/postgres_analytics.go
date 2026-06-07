@@ -347,7 +347,7 @@ func (s *PostgresAnalyticsStore) QueryByProvider(ctx context.Context, accountUUI
 
 	// #nosec G201 — accountClause uses only internally-built placeholders.
 	query := `
-		SELECT provider, service, SUM(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
+		SELECT provider, service, AVG(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
 		FROM savings_snapshots
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
@@ -394,7 +394,7 @@ func (s *PostgresAnalyticsStore) QueryByService(ctx context.Context, accountUUID
 
 	// #nosec G201 — accountClause / providerClause use only internally-built placeholders.
 	query := fmt.Sprintf(`
-		SELECT service, region, SUM(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
+		SELECT service, region, AVG(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
 		FROM savings_snapshots
 		WHERE timestamp >= $1
 		  AND timestamp <= $2

@@ -16,13 +16,9 @@ const (
 	// HoursPerYear is the approximate number of hours in a year (365 days).
 	HoursPerYear = 365 * 24
 
-	// HoursPerMonth is the approximate number of hours in a month (30 days).
-	HoursPerMonth = 30 * 24
-
-	// purchaseHistoryFetchLimit caps the number of purchase_history rows the
-	// collector pulls per run. The collector is a periodic aggregator, not a
-	// real-time path; the cap bounds memory and query cost.
-	purchaseHistoryFetchLimit = 100000
+	// MonthsPerYear amortizes an upfront commitment cost into a monthly run-rate
+	// over the commitment term (term is expressed in years).
+	MonthsPerYear = 12
 )
 
 // Collector aggregates savings data and writes point-in-time snapshots to
@@ -89,24 +85,19 @@ func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string {
 func (c *Collector) Collect(ctx context.Context) error {
 	log.Printf("Analytics collector: starting collection")
 
-	purchases, err := c.configStore.GetAllPurchaseHistory(ctx, purchaseHistoryFetchLimit)
-	if err != nil {
-		return fmt.Errorf("failed to get purchase history: %w", err)
-	}
-
-	log.Printf("Analytics collector: processing %d purchases", len(purchases))
-
-	// The single-page fetch is capped at purchaseHistoryFetchLimit. If the
-	// result fills the cap the source set may be truncated, which would silently
-	// undercount snapshots (older-but-still-active 1y/3y commitments are the most
-	// likely to fall off). Surface it loudly so the undercount is observable
-	// until the store gains an active-only / paginated read (tracked follow-up).
-	if len(purchases) >= purchaseHistoryFetchLimit {
-		log.Printf("Analytics collector: WARNING purchase_history hit the %d-row fetch cap; snapshots may undercount active commitments. A paginated/active-only store read is needed.",
-			purchaseHistoryFetchLimit)
-	}
-
 	now := time.Now().UTC()
+
+	// Active-only read: the active filter is pushed into SQL so the result is
+	// bounded by the number of live commitments rather than by all history ever
+	// recorded. This avoids silently truncating older-but-still-active 1y/3y
+	// commitments the way a single capped all-history page did.
+	purchases, err := c.configStore.GetActivePurchaseHistory(ctx, now)
+	if err != nil {
+		return fmt.Errorf("failed to get active purchase history: %w", err)
+	}
+
+	log.Printf("Analytics collector: processing %d active purchases", len(purchases))
+
 	serviceMap, activePurchases, skippedBadTerm, err := aggregatePurchases(ctx, purchases, now)
 	if err != nil {
 		return err
@@ -148,7 +139,7 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 		}
 
 		// H1: a Term <= 0 row would make the amortized-commitment division
-		// (UpfrontCost / (Term*HoursPerYear)) produce +Inf/NaN, which then
+		// (UpfrontCost / (Term*MonthsPerYear)) produce +Inf/NaN, which then
 		// poisons every downstream SUM/AVG and errors at the DECIMAL bind.
 		// Skip it and count it for observability rather than feeding a zero
 		// denominator into the division.
@@ -180,15 +171,18 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 			serviceMap[key] = agg
 		}
 
-		// Hourly savings rate (EstimatedSavings is monthly).
-		agg.savings += p.EstimatedSavings / HoursPerMonth
-		// Amortized hourly commitment cost. Term > 0 guaranteed above.
-		agg.commitment += p.UpfrontCost / (float64(p.Term) * HoursPerYear)
+		// Monthly savings run-rate (EstimatedSavings is already monthly). Stored as
+		// a point-in-time run-rate, not an accrued total, so the monthly trend AVGs
+		// snapshots and stays invariant to the collection schedule (daily vs hourly).
+		agg.savings += p.EstimatedSavings
+		// Upfront commitment amortized to a monthly run-rate over the term.
+		// Term > 0 guaranteed above.
+		agg.commitment += p.UpfrontCost / (float64(p.Term) * MonthsPerYear)
 		// H2: real covered usage from the recurring monthly cost when present.
 		// Nil MonthlyCost (e.g. AWS all-upfront) contributes nothing and leaves
 		// usage unknown rather than implicitly $0.
 		if p.MonthlyCost != nil {
-			agg.usage += *p.MonthlyCost / HoursPerMonth
+			agg.usage += *p.MonthlyCost
 			agg.usageKnown = true
 		}
 		agg.count++

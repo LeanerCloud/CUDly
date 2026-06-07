@@ -23,6 +23,14 @@
 --       account_id only, so a cloud_account_id-scoped query could not read them.
 --       Recreate the views carrying cloud_account_id alongside account_id.
 --
+--   H5  total_savings / total_commitment / total_usage are point-in-time
+--       run-rates (the collector now stores a monthly run-rate per snapshot),
+--       not accrued totals, so SUM-ing them over a window double-counts by the
+--       snapshot frequency: a $720/mo commitment summed over ~30 daily snapshots
+--       read as ~$21,600, and changing the schedule changed the number. Aggregate
+--       these columns with AVG so each period reports the representative monthly
+--       run-rate, invariant to how often the collector runs. coverage stays AVG.
+--
 -- Idempotent throughout: re-running on a partially-applied DB converges to the
 -- target state rather than no-op'ing over a wrong column type (project rule
 -- feedback_migration_full_restore).
@@ -76,10 +84,10 @@ SELECT
     cloud_account_id,
     provider,
     service,
-    SUM(total_savings) as total_savings,
+    AVG(total_savings) as total_savings,
     AVG(coverage_percentage) as avg_coverage,
-    SUM(total_commitment) as total_commitment,
-    SUM(total_usage) as total_usage,
+    AVG(total_commitment) as total_commitment,
+    AVG(total_usage) as total_usage,
     COUNT(*) as snapshot_count,
     MAX(timestamp) as last_updated
 FROM savings_snapshots
@@ -94,17 +102,34 @@ CREATE UNIQUE INDEX idx_monthly_savings_summary_unique
         COALESCE(cloud_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
         provider, service);
 
+-- daily_savings_trend rolls up across services, so it keeps the legitimate SUM
+-- across services but, per H5, replaces the SUM across time with an AVG: the
+-- inner query sums the per-service run-rates into a provider total at each
+-- collection timestamp, and the outer query averages those instant-totals over
+-- the day so the trend is invariant to the collection frequency.
 CREATE MATERIALIZED VIEW daily_savings_trend AS
 SELECT
-    DATE_TRUNC('day', timestamp) as day,
+    day,
     account_id,
     cloud_account_id,
     provider,
-    SUM(total_savings) as daily_savings,
-    AVG(coverage_percentage) as avg_coverage,
-    COUNT(DISTINCT service) as service_count
-FROM savings_snapshots
-GROUP BY DATE_TRUNC('day', timestamp), account_id, cloud_account_id, provider;
+    AVG(ts_savings) as daily_savings,
+    AVG(ts_coverage) as avg_coverage,
+    MAX(ts_service_count) as service_count
+FROM (
+    SELECT
+        DATE_TRUNC('day', timestamp) as day,
+        timestamp,
+        account_id,
+        cloud_account_id,
+        provider,
+        SUM(total_savings) as ts_savings,
+        AVG(coverage_percentage) as ts_coverage,
+        COUNT(DISTINCT service) as ts_service_count
+    FROM savings_snapshots
+    GROUP BY DATE_TRUNC('day', timestamp), timestamp, account_id, cloud_account_id, provider
+) per_ts
+GROUP BY day, account_id, cloud_account_id, provider;
 
 CREATE UNIQUE INDEX idx_daily_savings_trend_unique
     ON daily_savings_trend(
@@ -112,18 +137,33 @@ CREATE UNIQUE INDEX idx_daily_savings_trend_unique
         COALESCE(cloud_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
         provider);
 
+-- provider_savings_summary also rolls up across services: keep the SUM across
+-- services, AVG across time (H5). Inner query = per-timestamp provider totals,
+-- outer query = average of those instant-totals over the 90-day window.
 CREATE MATERIALIZED VIEW provider_savings_summary AS
 SELECT
     provider,
     account_id,
     cloud_account_id,
-    COUNT(DISTINCT service) as service_count,
-    SUM(total_savings) as total_savings,
-    SUM(total_commitment) as total_commitment,
-    AVG(coverage_percentage) as avg_coverage,
+    MAX(ts_service_count) as service_count,
+    AVG(ts_savings) as total_savings,
+    AVG(ts_commitment) as total_commitment,
+    AVG(ts_coverage) as avg_coverage,
     MAX(timestamp) as last_updated
-FROM savings_snapshots
-WHERE timestamp > NOW() - INTERVAL '90 days'
+FROM (
+    SELECT
+        provider,
+        account_id,
+        cloud_account_id,
+        timestamp,
+        SUM(total_savings) as ts_savings,
+        SUM(total_commitment) as ts_commitment,
+        AVG(coverage_percentage) as ts_coverage,
+        COUNT(DISTINCT service) as ts_service_count
+    FROM savings_snapshots
+    WHERE timestamp > NOW() - INTERVAL '90 days'
+    GROUP BY provider, account_id, cloud_account_id, timestamp
+) per_ts
 GROUP BY provider, account_id, cloud_account_id;
 
 CREATE UNIQUE INDEX idx_provider_savings_summary_unique
