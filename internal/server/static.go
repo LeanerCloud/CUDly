@@ -49,6 +49,16 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 	}
 }
 
+// isPathContainedIn reports whether absFile is at or under absDir, using a
+// separator-aware prefix check to prevent sibling-directory confusion.
+// "/srv/static" is a string-prefix of "/srv/static-evil", but
+// "/srv/static/" is not -- so we append the separator before comparing.
+// The absFile == absDir case handles the dir itself (index.html fallback).
+func isPathContainedIn(absFile, absDir string) bool {
+	return absFile == absDir ||
+		strings.HasPrefix(absFile, absDir+string(os.PathSeparator))
+}
+
 // resolveStaticFilePath validates the URL path against directory traversal and
 // resolves the actual file path. Falls back to index.html for extensionless
 // paths (SPA routing). Returns the file path, the clean path used for content
@@ -69,10 +79,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	if err != nil {
 		return "", "", false
 	}
-	// Require the separator after absDir so that a sibling directory whose
-	// name shares a prefix (e.g. /srv/static-evil vs /srv/static) cannot
-	// pass the containment check (04-M6).
-	if !strings.HasPrefix(absFile, absDir+string(os.PathSeparator)) && absFile != absDir {
+	if !isPathContainedIn(absFile, absDir) {
 		return "", "", false
 	}
 
@@ -174,4 +181,3 @@ func isStaticPath(urlPath string) bool {
 	}
 	return true
 }
-

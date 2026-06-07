@@ -99,8 +99,8 @@ type Application struct {
 	// package-level variables so that tests can set them on a specific
 	// Application instance without serialising parallel tests (04-M3).
 	// NewApplicationFromDeps sets them to the package defaults.
-	migrationsTimeout  time.Duration
-	runMigrationsFunc  func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
+	migrationsTimeout time.Duration
+	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
 // ApplicationConfig holds all env-based configuration for the application
@@ -351,6 +351,33 @@ func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Con
 	return scheduledauth.New(saCfg)
 }
 
+// initScheduledAuth loads the scheduledauth config, resolves the bearer
+// secret (failing fast in bearer mode if the resolver errors), builds the
+// validator, and warms up JWKS. Extracted from NewApplicationFromDeps to
+// keep its cyclomatic complexity within the project limit (04-M4).
+func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver secrets.Resolver) (*scheduledauth.Validator, error) {
+	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
+
+	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, *cfg, resolver)
+	if secretErr != nil && saCfg.Mode == scheduledauth.ModeBearer {
+		return nil, fmt.Errorf("failed to resolve scheduled-task secret from %q: %w", cfg.ScheduledTaskSecretName, secretErr)
+	}
+	cfg.ScheduledTaskSecret = resolvedSecret
+
+	v, err := buildScheduledAuthFromConfig(*cfg, saCfg)
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
+
+	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
+	v.Warmup(warmCtx)
+	warmCancel()
+	return v, nil
+}
+
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
 func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
@@ -364,36 +391,13 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		return nil, err
 	}
 
-	// Load the scheduledauth config first so we know the mode before
-	// resolving the secret. Bearer mode requires a non-empty secret, so
-	// a resolution failure must be propagated as a fatal startup error
-	// rather than silently falling back to the empty plaintext env var
-	// and surfacing the misleading "bearer mode requires SCHEDULED_TASK_SECRET"
-	// error downstream (04-M4).
-	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
+	// Wire up the /api/scheduled/* auth validator. initScheduledAuth loads
+	// the mode config, resolves the bearer secret with fail-fast semantics
+	// in bearer mode (04-M4), builds the validator, and warms up JWKS.
+	scheduledAuth, err := initScheduledAuth(ctx, &cfg, deps.SecretResolver)
 	if err != nil {
-		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+		return nil, err
 	}
-
-	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
-	if secretErr != nil && saCfg.Mode == scheduledauth.ModeBearer {
-		return nil, fmt.Errorf("failed to resolve scheduled-task secret from %q: %w", cfg.ScheduledTaskSecretName, secretErr)
-	}
-	cfg.ScheduledTaskSecret = resolvedSecret
-
-	// Build the /api/scheduled/* auth validator from the already-loaded
-	// config. Fail-fast on bad config (empty subjects in oidc mode, etc.)
-	// — better to crash on startup than to silently accept unauthenticated
-	// scheduled-task calls in production.
-	scheduledAuth, err := buildScheduledAuthFromConfig(cfg, saCfg)
-	if err != nil {
-		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
-	}
-	// Best-effort JWKS warmup — surfaces misconfiguration in startup
-	// logs without blocking startup if Google's CDN is unreachable.
-	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
-	scheduledAuth.Warmup(warmCtx)
-	warmCancel()
 
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
