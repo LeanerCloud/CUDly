@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -269,4 +270,46 @@ func TestRegisterProvider(t *testing.T) {
 
 	// Clean up
 	GetRegistry().Unregister(testName)
+}
+
+// TestRegistry_FactoryRunsOutsideLock proves the 10-H4 fix: GetProvider /
+// GetProviderWithConfig / GetAllProviders must NOT hold r.mu while invoking the
+// factory. A factory that does its own registry I/O (here, it takes the write
+// lock via Unregister) would deadlock if the read lock were still held during
+// the factory call. Pre-fix this test hangs (caught by the 5s timeout);
+// post-fix it returns promptly. Done channel + timeout instead of time.Sleep.
+func TestRegistry_FactoryRunsOutsideLock(t *testing.T) {
+	t.Parallel()
+
+	run := func(name string, call func(r *Registry)) {
+		r := NewRegistry()
+		factory := func(config *ProviderConfig) (Provider, error) {
+			// Acquire the write lock from inside the factory. Only safe if the
+			// caller released the read lock before invoking us.
+			r.Unregister(config.Name)
+			return &MockProvider{name: config.Name}, nil
+		}
+		require.NoError(t, r.Register(name, factory))
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			call(r)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s held the registry lock across the factory call (deadlock)", name)
+		}
+	}
+
+	run("getprovider", func(r *Registry) {
+		_, _ = r.GetProvider("getprovider")
+	})
+	run("getproviderwithconfig", func(r *Registry) {
+		_, _ = r.GetProviderWithConfig("getproviderwithconfig", &ProviderConfig{Name: "getproviderwithconfig"})
+	})
+	run("getallproviders", func(r *Registry) {
+		_ = r.GetAllProviders()
+	})
 }

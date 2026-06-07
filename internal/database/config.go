@@ -147,14 +147,10 @@ func (c *Config) validatePoolSettings() error {
 	return nil
 }
 
-// DSN generates a PostgreSQL connection string
-// If passwordOverride is provided, it's used instead of config.Password
-func (c *Config) DSN(passwordOverride string) string {
-	password := c.Password
-	if passwordOverride != "" {
-		password = passwordOverride
-	}
-
+// dsn formats a PostgreSQL connection string with the supplied password. It is
+// the single source of the DSN field layout so DSN and RedactedDSN can never
+// drift (a field added here applies to both the real and the redacted form).
+func (c *Config) dsn(password string) string {
 	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
 		c.Host,
@@ -167,17 +163,19 @@ func (c *Config) DSN(passwordOverride string) string {
 	)
 }
 
+// DSN generates a PostgreSQL connection string
+// If passwordOverride is provided, it's used instead of config.Password
+func (c *Config) DSN(passwordOverride string) string {
+	password := c.Password
+	if passwordOverride != "" {
+		password = passwordOverride
+	}
+	return c.dsn(password)
+}
+
 // RedactedDSN returns a DSN string with the password masked, safe for logging
 func (c *Config) RedactedDSN() string {
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=***** dbname=%s sslmode=%s connect_timeout=%d",
-		c.Host,
-		c.Port,
-		c.User,
-		c.Database,
-		c.SSLMode,
-		int(c.ConnectTimeout.Seconds()),
-	)
+	return c.dsn("*****")
 }
 
 // Helper functions for environment variable parsing

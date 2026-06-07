@@ -1,4 +1,14 @@
 // Package errors provides custom error types for CUDly.
+//
+// Type-level Is matching: every error type in this package implements Is by
+// matching purely on the dynamic type of the target, ignoring the target's
+// struct fields. That makes the zero-value pointer of each type a usable
+// sentinel, e.g. errors.Is(err, &NotFoundError{}) reports whether err is (or
+// wraps) any *NotFoundError. The corollary is that the target's fields are
+// decorative for comparison: errors.Is(someNotFound, &NotFoundError{ID: "x"})
+// is true regardless of whether someNotFound.ID == "x". To assert on specific
+// fields, use errors.As to extract the concrete value and inspect it directly,
+// or one of the Is*Error helpers below (which also use errors.As).
 package errors
 
 import (
@@ -24,7 +34,8 @@ func (e *NotFoundError) Error() string {
 	return fmt.Sprintf("%s not found", e.Resource)
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *NotFoundError) Is(target error) bool {
 	_, ok := target.(*NotFoundError)
 	return ok
@@ -65,7 +76,8 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation error: %s", e.Message)
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *ValidationError) Is(target error) bool {
 	_, ok := target.(*ValidationError)
 	return ok
@@ -98,7 +110,8 @@ func (e *AuthenticationError) Error() string {
 	return "authentication failed"
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *AuthenticationError) Is(target error) bool {
 	_, ok := target.(*AuthenticationError)
 	return ok
@@ -131,7 +144,8 @@ func (e *AuthorizationError) Error() string {
 	return "not authorized"
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *AuthorizationError) Is(target error) bool {
 	_, ok := target.(*AuthorizationError)
 	return ok
@@ -169,7 +183,8 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf("%s already exists", e.Resource)
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *ConflictError) Is(target error) bool {
 	_, ok := target.(*ConflictError)
 	return ok
@@ -202,7 +217,8 @@ func (e *RateLimitError) Error() string {
 	return "rate limit exceeded"
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *RateLimitError) Is(target error) bool {
 	_, ok := target.(*RateLimitError)
 	return ok
@@ -240,7 +256,8 @@ func (e *ServiceError) Unwrap() error {
 	return e.Err
 }
 
-// Is implements error comparison
+// Is reports whether target is the same error type (field-insensitive; see
+// the package doc on type-level Is matching).
 func (e *ServiceError) Is(target error) bool {
 	_, ok := target.(*ServiceError)
 	return ok

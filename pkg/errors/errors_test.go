@@ -36,6 +36,18 @@ func TestNotFoundError(t *testing.T) {
 		assert.True(t, errors.Is(err, target))
 	})
 
+	t.Run("Is is field-insensitive (type-level matching, 10-N4)", func(t *testing.T) {
+		t.Parallel()
+		// Documented contract: Is matches on type only, ignoring the target's
+		// fields. A target with a mismatching ID still reports true.
+		err := NewNotFoundError("User", "123")
+		assert.True(t, errors.Is(err, &NotFoundError{ID: "different"}),
+			"Is must match on type alone, regardless of target fields")
+		assert.True(t, errors.Is(err, &NotFoundError{Resource: "Other", ID: "x", Message: "y"}))
+		// A different type must not match.
+		assert.False(t, errors.Is(err, &ValidationError{}))
+	})
+
 	t.Run("IsNotFoundError helper", func(t *testing.T) {
 		t.Parallel()
 		err := NewNotFoundError("User", "123")

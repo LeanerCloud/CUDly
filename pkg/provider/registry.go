@@ -58,10 +58,15 @@ func (r *Registry) Register(name string, factory ProviderFactory) error {
 // Callers can distinguish the two cases via the returned error message; previously
 // both cases returned nil and callers had no way to surface the factory failure.
 func (r *Registry) GetProvider(name string) (Provider, error) {
+	// Look up the factory under the lock, then release it before invoking the
+	// factory. Factories may perform arbitrary work, including network I/O (the
+	// GCP factory walks Projects.List() when no project ID is configured); calling
+	// them while holding r.mu would block every other registry reader and any
+	// writer (e.g. Unregister) for the duration of that I/O.
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	factory, exists := r.providers[name]
+	r.mu.RUnlock()
+
 	if !exists {
 		return nil, fmt.Errorf("provider %s not registered", name)
 	}
@@ -75,10 +80,11 @@ func (r *Registry) GetProvider(name string) (Provider, error) {
 
 // GetProviderWithConfig creates a provider instance with custom config
 func (r *Registry) GetProviderWithConfig(name string, config *ProviderConfig) (Provider, error) {
+	// Snapshot the factory under the lock, call it lock-free (see GetProvider).
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	factory, exists := r.providers[name]
+	r.mu.RUnlock()
+
 	if !exists {
 		return nil, fmt.Errorf("provider %s not registered", name)
 	}
@@ -88,11 +94,19 @@ func (r *Registry) GetProviderWithConfig(name string, config *ProviderConfig) (P
 
 // GetAllProviders returns instances of all registered providers
 func (r *Registry) GetAllProviders() []Provider {
+	// Copy the name->factory map under the lock, then release it and construct
+	// the providers lock-free. Factories may do network I/O (see GetProvider);
+	// running them under r.mu would serialize every provider's network init and
+	// block other registry users for the whole fan-out.
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	providers := make([]Provider, 0, len(r.providers))
+	factories := make(map[string]ProviderFactory, len(r.providers))
 	for name, factory := range r.providers {
+		factories[name] = factory
+	}
+	r.mu.RUnlock()
+
+	providers := make([]Provider, 0, len(factories))
+	for name, factory := range factories {
 		provider, err := factory(&ProviderConfig{Name: name})
 		if err != nil {
 			log.Printf("provider %q factory error: %v", name, err)

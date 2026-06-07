@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"cloud.google.com/go/compute/apiv1"
 	"cloud.google.com/go/compute/apiv1/computepb"
@@ -266,24 +267,67 @@ func (p *GCPProvider) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-// GetCredentials returns the current GCP credentials information
-func (p *GCPProvider) GetCredentials() (provider.Credentials, error) {
-	if !p.IsConfigured() {
-		return nil, fmt.Errorf("GCP is not configured")
+// detectCredentialSource reports which credential source GCP would use, based on
+// purely local inspection (env vars, the gcloud ADC file location, and whether a
+// project is configured). It performs NO network I/O. The bool is false only
+// when nothing locally indicates a usable credential source.
+//
+// GCP credentials can come from:
+//   - GOOGLE_APPLICATION_CREDENTIALS env var (service account JSON file)
+//   - the gcloud-managed Application Default Credentials file (gcloud auth
+//     application-default login)
+//   - Compute Engine/GKE/Cloud Shell metadata service (the ADC fallback)
+func (p *GCPProvider) detectCredentialSource() (provider.CredentialSource, bool) {
+	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
+		return provider.CredentialSourceFile, true
 	}
+	if adcWellKnownFileExists() {
+		return provider.CredentialSourceCLI, true
+	}
+	// No explicit local credential file. ADC can still resolve via the metadata
+	// server on GCE/GKE/Cloud Shell, but only if a project is configured to act
+	// against. Treat "project configured" as the signal that ADC is usable.
+	if p.projectID != "" {
+		return provider.CredentialSourceADC, true
+	}
+	return provider.CredentialSourceADC, false
+}
 
-	// GCP uses Application Default Credentials (ADC)
-	// The actual credentials could come from:
-	// - GOOGLE_APPLICATION_CREDENTIALS env var (service account JSON file)
-	// - gcloud CLI configuration
-	// - Compute Engine/GKE metadata service
-	// - Cloud Shell
+// adcWellKnownFileExists reports whether the gcloud Application Default
+// Credentials file is present, checked locally without any network call. The
+// path mirrors the Google client libraries' well-known location:
+// $CLOUDSDK_CONFIG/application_default_credentials.json, defaulting to
+// ~/.config/gcloud/application_default_credentials.json (and the Windows
+// %APPDATA%\gcloud equivalent).
+func adcWellKnownFileExists() bool {
+	const adcFile = "application_default_credentials.json"
+	if dir := os.Getenv("CLOUDSDK_CONFIG"); dir != "" {
+		_, err := os.Stat(filepath.Join(dir, adcFile))
+		return err == nil
+	}
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		if _, err := os.Stat(filepath.Join(appData, "gcloud", adcFile)); err == nil {
+			return true
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, ".config", "gcloud", adcFile))
+	return err == nil
+}
 
-	credType := provider.CredentialSourceADC // Application Default Credentials
-
-	// Try to determine the source more specifically
-	if _, ok := os.LookupEnv("GOOGLE_APPLICATION_CREDENTIALS"); ok {
-		credType = provider.CredentialSourceFile
+// GetCredentials returns the current GCP credentials information.
+//
+// This is credential *introspection* (which source is in use), not *validation*
+// (do the credentials work). It deliberately performs NO network call: the
+// source is determined from local inspection only. To verify the credentials
+// actually work, call ValidateCredentials, which issues the GetProject RPC.
+func (p *GCPProvider) GetCredentials() (provider.Credentials, error) {
+	credType, found := p.detectCredentialSource()
+	if !found {
+		return nil, fmt.Errorf("GCP is not configured")
 	}
 
 	return &provider.BaseCredentials{
