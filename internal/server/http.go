@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -34,13 +38,25 @@ func CreateHTTPServer(app *Application, port int) *http.Server {
 	mux.HandleFunc("/version", app.handleVersion)
 	mux.Handle("/api/scheduled/", app.scheduledAuthMiddleware(http.HandlerFunc(app.handleScheduledHTTP)))
 
+	// Intercept OIDC issuer endpoints before both the static-file fallback and
+	// the API router. Mirrors the identical intercept in handleLambdaHTTPEvent
+	// so the two transports cannot drift (D1 / issue #1024). api.HandleOIDC is
+	// auth-less and must sit in front of the SPA handler -- otherwise
+	// STATIC_DIR deployments serve index.html for /oidc/... instead of the
+	// JWKS/discovery JSON, breaking any federated-credential relying party on
+	// Cloud Run or Container Apps.
+	mux.HandleFunc(api.OIDCBasePath+"/", app.handleOIDCHTTP)
+
 	// When STATIC_DIR is set, serve static files for non-API paths
 	// and route only /api/ to the API handler.
 	// When unset, all requests go to the API handler (backward compatible).
-	staticDir := staticDirFromEnv()
-	if staticDir != "" {
+	// Read from app.staticDir (single source of truth set by the constructor)
+	// rather than re-invoking staticDirFromEnv() -- avoids the double-stat and
+	// double-log that M2 identified, and keeps Lambda and HTTP transports
+	// reading the same value.
+	if app.staticDir != "" {
 		mux.HandleFunc("/api/", app.handleHTTPRequest)
-		mux.Handle("/", spaFileServer(staticDir))
+		mux.Handle("/", spaFileServer(app.staticDir))
 	} else {
 		mux.HandleFunc("/", app.handleHTTPRequest)
 	}
@@ -56,11 +72,60 @@ func CreateHTTPServer(app *Application, port int) *http.Server {
 	}
 }
 
-// StartHTTPServer starts the standard HTTP server
+// StartHTTPServer starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
+// It blocks until the server exits cleanly. In container orchestrators (Cloud Run,
+// Container Apps, Fargate) SIGTERM is the normal stop signal; without this wiring
+// the process is killed before deferred app.Close() runs, leaving in-flight
+// requests cut and the DB pool/advisory locks undrained (issue #1025).
 func StartHTTPServer(app *Application, port int) error {
 	server := CreateHTTPServer(app, port)
 	log.Printf("Starting HTTP server on %s", server.Addr)
-	return server.ListenAndServe()
+
+	// Signal context cancels on the first SIGINT or SIGTERM.
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		// ListenAndServe returned before a signal -- hard error (bind failure, etc.).
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-sigCtx.Done():
+		// Received SIGINT or SIGTERM: drain in-flight requests then close the DB.
+		stop() // release signal resources promptly
+		log.Printf("Shutdown signal received; draining HTTP server (30s grace)...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server forced shutdown: %v", err)
+		}
+		return nil
+	}
+}
+
+// handleOIDCHTTP bridges the standard HTTP path to the Lambda-shaped HandleOIDC
+// implementation. Registered at api.OIDCBasePath+"/" so it intercepts all
+// /oidc/... requests before the SPA static handler or the API router, exactly
+// mirroring the intercept in handleLambdaHTTPEvent.
+func (app *Application) handleOIDCHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	lambdaReq := httpToLambdaRequest(r)
+	resp, handled := app.API.HandleOIDC(ctx, lambdaReq)
+	if !handled {
+		// Path matched /oidc/ prefix but is not a recognised OIDC endpoint.
+		http.NotFound(w, r)
+		return
+	}
+	lambdaResponseToHTTP(w, resp)
 }
 
 // htmlCSP is the Content-Security-Policy delivered with every HTML
