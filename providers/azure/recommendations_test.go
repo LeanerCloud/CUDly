@@ -423,16 +423,16 @@ func strPtr(s string) *string {
 // argument order used in GetRecommendations so a reordering of the serviceResult
 // literals will be caught immediately.
 func TestMergeServiceResults_OrderIsStable(t *testing.T) {
-	mkRec := func(svc common.ServiceType) common.Recommendation {
-		return common.Recommendation{Service: svc, Provider: common.ProviderAzure}
+	mkRec := func(svc common.ServiceType, marker string) common.Recommendation {
+		return common.Recommendation{Service: svc, Provider: common.ProviderAzure, ResourceType: marker}
 	}
 
-	computeRec := mkRec(common.ServiceCompute)
-	dbRec := mkRec(common.ServiceRelationalDB)
-	cacheRec := mkRec(common.ServiceCache)
-	cosmosRec := mkRec(common.ServiceNoSQL)
-	spRec := mkRec(common.ServiceSavingsPlans)
-	advisorRec := mkRec(common.ServiceCompute) // Advisor produces Compute recs
+	computeRec := mkRec(common.ServiceCompute, "compute")
+	dbRec := mkRec(common.ServiceRelationalDB, "database")
+	cacheRec := mkRec(common.ServiceCache, "cache")
+	cosmosRec := mkRec(common.ServiceNoSQL, "cosmosdb")
+	spRec := mkRec(common.ServiceSavingsPlans, "savingsplans")
+	advisorRec := mkRec(common.ServiceCompute, "advisor") // Advisor produces Compute recs
 
 	// Replicate the exact call order from GetRecommendations.
 	result := mergeServiceResults(
@@ -445,10 +445,10 @@ func TestMergeServiceResults_OrderIsStable(t *testing.T) {
 	)
 
 	require.Len(t, result, 6, "all six services must be represented")
-	assert.Equal(t, common.ServiceCompute, result[0].Service, "first must be compute")
-	assert.Equal(t, common.ServiceRelationalDB, result[1].Service, "second must be database")
-	assert.Equal(t, common.ServiceCache, result[2].Service, "third must be cache")
-	assert.Equal(t, common.ServiceNoSQL, result[3].Service, "fourth must be cosmosdb")
-	assert.Equal(t, common.ServiceSavingsPlans, result[4].Service, "fifth must be savingsplans")
-	assert.Equal(t, common.ServiceCompute, result[5].Service, "sixth must be advisor (compute-type)")
+	assert.Equal(t, "compute", result[0].ResourceType, "first must be compute")
+	assert.Equal(t, "database", result[1].ResourceType, "second must be database")
+	assert.Equal(t, "cache", result[2].ResourceType, "third must be cache")
+	assert.Equal(t, "cosmosdb", result[3].ResourceType, "fourth must be cosmosdb")
+	assert.Equal(t, "savingsplans", result[4].ResourceType, "fifth must be savingsplans")
+	assert.Equal(t, "advisor", result[5].ResourceType, "sixth must be advisor (compute-type)")
 }
