@@ -278,7 +278,7 @@ func (p *GCPProvider) ValidateCredentials(ctx context.Context) error {
 //     application-default login)
 //   - Compute Engine/GKE/Cloud Shell metadata service (the ADC fallback)
 func (p *GCPProvider) detectCredentialSource() (provider.CredentialSource, bool) {
-	if _, ok := os.LookupEnv("GOOGLE_APPLICATION_CREDENTIALS"); ok {
+	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
 		return provider.CredentialSourceFile, true
 	}
 	if adcWellKnownFileExists() {

@@ -784,3 +784,24 @@ func TestGCPProvider_GetCredentials_WithFileSource(t *testing.T) {
 	assert.Equal(t, provider.CredentialSourceFile, baseCreds.Source)
 	assert.False(t, mockClient.closed, "GetCredentials must not issue a GetProject RPC")
 }
+
+func TestGCPProvider_GetCredentials_EmptyEnvVarNotFile(t *testing.T) {
+	// GOOGLE_APPLICATION_CREDENTIALS set to an empty string must NOT be detected as
+	// CredentialSourceFile. os.LookupEnv returns ok=true for an empty string, so the
+	// check must use os.Getenv(...) != "" instead.
+	clearGCPCredEnv(t)
+	// Explicitly set the variable to an empty string (clearGCPCredEnv unsets it, so
+	// restore it as empty to reproduce the bug scenario).
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+	p := &GCPProvider{projectID: "test-project"}
+
+	creds, err := p.GetCredentials()
+	require.NoError(t, err)
+	baseCreds, ok := creds.(*provider.BaseCredentials)
+	require.True(t, ok)
+	// An empty path is not a file credential; ADC (metadata fallback via projectID)
+	// is the expected source.
+	assert.Equal(t, provider.CredentialSourceADC, baseCreds.Source,
+		"empty GOOGLE_APPLICATION_CREDENTIALS must not be detected as CredentialSourceFile")
+}
