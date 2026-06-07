@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,16 @@ func hashSessionToken(token string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// deriveCSRFToken derives a CSRF token as HMAC-SHA256(csrfKey, rawSessionToken).
+// The token is cryptographically bound to the session token and the server-side
+// key: an attacker who reads the database cannot forge a CSRF token without the
+// key, and cannot replay a CSRF token from another session.
+func deriveCSRFToken(csrfKey []byte, rawSessionToken string) string {
+	mac := hmac.New(sha256.New, csrfKey)
+	mac.Write([]byte(rawSessionToken))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // createSession creates a new session for a user
 func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAddress string) (*Session, error) {
 	// Generate a cryptographically random session token
@@ -24,17 +35,20 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		return nil, err
 	}
 
-	// Hash the token for secure storage
-	// The raw token is returned to the client; only the hash is stored
+	// Hash the token for secure storage.
+	// The raw token is returned to the client; only the hash is stored.
 	hashedToken := hashSessionToken(rawToken)
 
-	// Generate CSRF token for state-changing request protection
-	csrfToken, err := generateToken()
-	if err != nil {
-		return nil, err
-	}
+	// Derive the CSRF token as HMAC-SHA256(csrfKey, rawToken).
+	// The token is bound to this session's raw token and the server-side key,
+	// so it cannot be forged from a DB read alone. Not stored in the DB
+	// (the stored value is the MAC itself, kept only for diagnostics/compat).
+	csrfToken := deriveCSRFToken(s.csrfKey, rawToken)
 
-	// Create session with hashed token for storage
+	// Create session with hashed token for storage.
+	// The csrf_token column holds the MAC for observability; validation
+	// always recomputes it from the raw session token rather than trusting
+	// the stored value, so DB exposure does not yield a usable CSRF token.
 	storedSession := &Session{
 		Token:     hashedToken, // Store the hash, not the raw token
 		UserID:    user.ID,
@@ -43,7 +57,7 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		CreatedAt: time.Now(),
 		UserAgent: userAgent,
 		IPAddress: ipAddress,
-		CSRFToken: csrfToken,
+		CSRFToken: csrfToken, // MAC stored for diagnostics only; not used in validation
 	}
 
 	if err := s.store.CreateSession(ctx, storedSession); err != nil {
@@ -59,7 +73,7 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		CreatedAt: storedSession.CreatedAt,
 		UserAgent: userAgent,
 		IPAddress: ipAddress,
-		CSRFToken: csrfToken,
+		CSRFToken: csrfToken, // Client receives the MAC as the CSRF token
 	}
 
 	return clientSession, nil

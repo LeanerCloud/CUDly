@@ -212,10 +212,18 @@ var _ StoreInterface = (*MockStore)(nil)
 // Verify that MockEmailSender implements EmailSenderInterface
 var _ EmailSenderInterface = (*MockEmailSender)(nil)
 
+// testCSRFKey is a fixed 32-byte key used across all test services so that
+// tests can reproduce the CSRF token derived by deriveCSRFToken without
+// calling a real key-generation path.
+var testCSRFKey = []byte("test-csrf-key-32-bytes-padded---")
+
 // newTestService returns a minimal Service with fast bcrypt for unit tests.
 // It has no store or email sender — use createTestService() for tests that need mocks.
 func newTestService() *Service {
-	return &Service{bcryptCostOverride: bcrypt.MinCost}
+	return &Service{
+		bcryptCostOverride: bcrypt.MinCost,
+		csrfKey:            testCSRFKey,
+	}
 }
 
 // createTestService creates a service with mocks for testing
@@ -226,6 +234,7 @@ func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Servic
 		sessionDuration:    24 * time.Hour,
 		dashboardURL:       "https://dashboard.example.com",
 		bcryptCostOverride: bcrypt.MinCost,
+		csrfKey:            testCSRFKey,
 	}
 }
 

@@ -872,18 +872,22 @@ func TestService_ValidateCSRFToken(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hashedToken := hashSessionToken("session-token")
+		rawToken := "session-token"
+		hashedToken := hashSessionToken(rawToken)
+		// CSRF token is now derived as HMAC-SHA256(csrfKey, rawToken); the value
+		// stored in the session row is irrelevant to validation.
+		correctCSRF := deriveCSRFToken(service.csrfKey, rawToken)
 		session := &Session{
 			UserID:    "user-123",
 			Token:     hashedToken,
-			CSRFToken: "csrf-token-123",
+			CSRFToken: correctCSRF, // stored value matches for observability
 			ExpiresAt: time.Now().Add(1 * time.Hour),
 			CreatedAt: time.Now(),
 		}
 
 		mockStore.On("GetSession", ctx, hashedToken).Return(session, nil)
 
-		err := service.ValidateCSRFToken(ctx, "session-token", "csrf-token-123")
+		err := service.ValidateCSRFToken(ctx, rawToken, correctCSRF)
 		require.NoError(t, err)
 
 		mockStore.AssertExpectations(t)
@@ -914,7 +918,9 @@ func TestService_ValidateCSRFToken(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("fail when session has no CSRF token", func(t *testing.T) {
+	t.Run("fail when CSRF token does not match HMAC", func(t *testing.T) {
+		// Validation recomputes HMAC from the raw session token; any token
+		// that is not the MAC of the session token under csrfKey is rejected.
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
@@ -923,16 +929,16 @@ func TestService_ValidateCSRFToken(t *testing.T) {
 		session := &Session{
 			UserID:    "user-123",
 			Token:     hashedToken,
-			CSRFToken: "",
 			ExpiresAt: time.Now().Add(1 * time.Hour),
 			CreatedAt: time.Now(),
 		}
 
 		mockStore.On("GetSession", ctx, hashedToken).Return(session, nil)
 
-		err := service.ValidateCSRFToken(ctx, "session-token", "csrf-token")
+		// A static string cannot match the HMAC-derived token.
+		err := service.ValidateCSRFToken(ctx, "session-token", "not-a-real-csrf-token")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "re-authentication")
+		assert.Contains(t, err.Error(), "invalid CSRF token")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -946,14 +952,15 @@ func TestService_ValidateCSRFToken(t *testing.T) {
 		session := &Session{
 			UserID:    "user-123",
 			Token:     hashedToken,
-			CSRFToken: "correct-csrf-token",
 			ExpiresAt: time.Now().Add(1 * time.Hour),
 			CreatedAt: time.Now(),
 		}
 
 		mockStore.On("GetSession", ctx, hashedToken).Return(session, nil)
 
-		err := service.ValidateCSRFToken(ctx, "session-token", "wrong-csrf-token")
+		// A token for a different session is rejected even if it is a valid HMAC.
+		wrongCSRF := deriveCSRFToken(service.csrfKey, "different-session-token")
+		err := service.ValidateCSRFToken(ctx, "session-token", wrongCSRF)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid CSRF token")
 
