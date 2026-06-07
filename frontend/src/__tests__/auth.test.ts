@@ -44,6 +44,13 @@ jest.mock('../state', () => ({
 import * as api from '../api';
 import * as state from '../state';
 
+// Mock toast so alert() -> showToast() migrations (finding 11-L3) don't
+// require a real DOM toast implementation in jsdom.
+const mockShowToast = jest.fn();
+jest.mock('../toast', () => ({
+  showToast: (...args: unknown[]) => mockShowToast(...args),
+}));
+
 // Module-level mock time that persists across tests to ensure
 // each test gets a time later than any previous rate limit timestamp
 let globalMockTime = 1000000000000;
@@ -639,7 +646,8 @@ describe('Auth Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(window.alert).toHaveBeenCalledWith('Please enter your current password to save changes');
+      // alert() replaced by showToast() (finding 11-L3).
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Please enter your current password to save changes', kind: 'error' }));
       expect(api.apiRequest).not.toHaveBeenCalled();
     });
 
@@ -815,7 +823,8 @@ describe('Auth Module', () => {
       expect(state.setCurrentUser).toHaveBeenCalledWith(expect.objectContaining({
         email: 'newemail@example.com'
       }));
-      expect(window.alert).toHaveBeenCalledWith('Profile updated successfully');
+      // alert() replaced by showToast() (finding 11-L3).
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Profile updated successfully', kind: 'success' }));
     });
 
     test('save profile handles API errors', async () => {
@@ -839,7 +848,8 @@ describe('Auth Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to update profile: Update failed');
+      // alert() replaced by showToast() (finding 11-L3).
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to update profile: Update failed', kind: 'error' }));
     });
 
     test('save profile includes new password when provided', async () => {

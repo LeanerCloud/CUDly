@@ -7,6 +7,7 @@ import * as state from './state';
 import { escapeHtml } from './utils';
 import { openModal, closeModal } from './modal';
 import { isAdmin as permissionsIsAdmin, canAccess } from './permissions';
+import { showToast } from './toast';
 
 // Login rate limiting
 let lastLoginAttempt = 0;
@@ -1470,7 +1471,8 @@ async function saveProfile(e: Event): Promise<void> {
   }
 
   if (!currentPassword) {
-    alert('Please enter your current password to save changes');
+    // Use showToast instead of blocking alert() (finding 11-L3).
+    showToast({ message: 'Please enter your current password to save changes', kind: 'error' });
     return;
   }
 
@@ -1515,11 +1517,12 @@ async function saveProfile(e: Event): Promise<void> {
     }
 
     closeProfileModal();
-    alert('Profile updated successfully');
+    // Use showToast instead of blocking alert() (finding 11-L3).
+    showToast({ message: 'Profile updated successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to update profile:', error);
     const err = error as Error;
-    alert(`Failed to update profile: ${err.message}`);
+    showToast({ message: `Failed to update profile: ${err.message}`, kind: 'error' });
   }
 }
 

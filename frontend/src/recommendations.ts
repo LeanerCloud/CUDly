@@ -5180,10 +5180,11 @@ function rebuildPaymentOptions(
 export async function refreshRecommendations(): Promise<void> {
   try {
     await api.refreshRecommendations();
-    alert('Recommendation refresh started. This may take a few minutes.');
+    // Use showToast instead of blocking alert() (finding 11-L3).
+    showToast({ message: 'Recommendation refresh started. This may take a few minutes.', kind: 'success', timeout: 8_000 });
     setTimeout(() => void loadRecommendations(), 5000);
   } catch (error) {
     console.error('Failed to refresh recommendations:', error);
-    alert('Failed to start recommendation refresh');
+    showToast({ message: 'Failed to start recommendation refresh', kind: 'error' });
   }
 }

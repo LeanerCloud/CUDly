@@ -245,7 +245,8 @@ async function handleReject(reg: AccountRegistration): Promise<void> {
     await api.rejectRegistration(reg.id, reason || undefined);
     await loadRegistrations();
   } catch {
-    alert('Failed to reject registration.');
+    // Use showToast instead of blocking alert() (finding 11-L3).
+    showToast({ message: 'Failed to reject registration.', kind: 'error' });
   }
 }
 
