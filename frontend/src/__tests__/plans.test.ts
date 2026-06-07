@@ -186,6 +186,9 @@ describe('Plans Module', () => {
     jest.clearAllMocks();
     window.alert = jest.fn();
     window.confirm = jest.fn().mockReturnValue(true);
+    // Default confirmDialog to confirmed so tests that don't override it
+    // behave like the old window.confirm() returning true (finding 11-L2).
+    mockConfirmDialog.mockResolvedValue(true);
     // Reset ramp-handlers install-once guard: DOM is rebuilt each beforeEach,
     // so static modal elements are fresh and need listeners re-attached (H3 fix).
     _resetRampHandlersForTest();
@@ -877,20 +880,22 @@ describe('Plans Module', () => {
     test('run action executes purchase with confirmation', async () => {
       (api.runPlannedPurchase as jest.Mock).mockResolvedValue({});
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.confirm).toHaveBeenCalled();
+      expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.runPlannedPurchase).toHaveBeenCalledWith('purchase-1');
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Purchase executed successfully' }));
     });
 
     test('run action cancelled by user', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(false);
 
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
@@ -919,7 +924,8 @@ describe('Plans Module', () => {
       (api.deletePlannedPurchase as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       // Clear prior getPlans calls from setup so the assertion below only
       // counts the reload triggered by the disable action itself.
@@ -930,7 +936,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.confirm).toHaveBeenCalled();
+      expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.deletePlannedPurchase).toHaveBeenCalledWith('purchase-1');
       // Issue #774: after disable the Plans page must refresh so the toggle
       // reflects the backend's new enabled=false. getPlans is the API call
@@ -939,7 +945,8 @@ describe('Plans Module', () => {
     });
 
     test('disable action cancelled by user', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(false);
 
       const disableBtn = document.querySelector('[data-action="disable"]') as HTMLButtonElement;
       disableBtn?.click();
@@ -1380,6 +1387,61 @@ describe('Plans Module', () => {
           '22222222-2222-2222-2222-222222222222',
         ],
       }));
+    });
+
+    // -------------------------------------------------------------------------
+    // Regression tests for finding 11-M1: plan numeric fields must be validated
+    // with Number.isInteger(Number(raw)) before being sent to the API.
+    // -------------------------------------------------------------------------
+    describe('11-M1: strict integer validation for plan numeric fields', () => {
+      test('rejects fractional target_coverage (2.5 should not truncate to 2)', async () => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '2.5';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('rejects NaN notification_days_before (e.g. empty string after clear)', async () => {
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = 'abc';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('rejects out-of-range notification_days_before (0 is below min 1)', async () => {
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = '0';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('accepts valid integer values and proceeds to API call', async () => {
+        (api.createPlan as jest.Mock).mockResolvedValue({});
+        (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '80';
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = '3';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
+          target_coverage: 80,
+          notification_days_before: 3,
+        }));
+      });
+
+      test('rejects fractional custom_step_percent when ramp is custom', async () => {
+        const customRadio = document.querySelector('input[value="custom"]') as HTMLInputElement;
+        customRadio.checked = true;
+        (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '10.5';
+        (document.getElementById('ramp-interval-days') as HTMLInputElement).value = '7';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
     });
   });
 
@@ -2076,7 +2138,8 @@ describe('Plans Module', () => {
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       (api.deletePlan as jest.Mock).mockResolvedValue({});
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirmDialog() replaces window.confirm() (11-L2); set via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       await loadPlans();
 
@@ -2150,7 +2213,8 @@ describe('Plans Module', () => {
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       (api.deletePlan as jest.Mock).mockRejectedValue(new Error('API Error'));
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirmDialog() replaces window.confirm() (11-L2); set via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
       console.error = jest.fn();
 
       await loadPlans();
