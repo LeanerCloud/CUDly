@@ -506,6 +506,34 @@ func TestComputeClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	assert.Contains(t, err.Error(), "no pricing data found")
 }
 
+// TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption verifies that an
+// unrecognised payment option fails loud rather than being silently billed as
+// all-upfront (owner policy: no silent fallbacks on money-affecting fields).
+// Pricing is fully present, so the failure is solely on the payment-option
+// branch. Pre-fix the default branch set upfrontCost = totalCost and returned a
+// valid OfferingDetails with no error.
+func TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption(t *testing.T) {
+	ctx := context.Background()
+
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(
+		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()),
+		nil,
+	)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		PaymentOption: "weekly-bananas",
+	}
+
+	details, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Nil(t, details)
+	assert.Contains(t, err.Error(), "unsupported payment option")
+}
+
 // TestComputeClient_GetOfferingDetails_NoReservationPricing verifies that when
 // on-demand pricing is present but no reservation line is returned, the client
 // returns an error rather than fabricating a price from the hardcoded 0.62

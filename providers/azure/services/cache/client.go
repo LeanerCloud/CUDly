@@ -405,7 +405,10 @@ func (c *CacheClient) GetOfferingDetails(ctx context.Context, rec common.Recomme
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		upfrontCost = totalCost
+		// Fail loud on an unrecognised payment option rather than silently
+		// billing it as all-upfront (owner policy: no silent fallbacks on
+		// money-affecting fields).
+		return nil, fmt.Errorf("unsupported payment option for Azure Cache for Redis offering details: %q", rec.PaymentOption)
 	}
 
 	return &common.OfferingDetails{
