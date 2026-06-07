@@ -1687,6 +1687,86 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 // QA reproduction scenario from issue #736: start with N approved purchases,
 // observe KPI totals, then add a cancelled execution and assert the totals
 // are unchanged.
+// TestHandler_getHistory_LimitParsing is the 01-M1 regression guard.
+// Prior to the fix, parseHistoryFilters used fmt.Sscanf to parse the limit
+// query param, which silently swallows non-integer input (callers get the
+// default with no feedback) and never returns a 400. strconv.Atoi now
+// rejects non-integer values, and limit < 1 is clamped to default rather
+// than being treated as an override (issue #1061).
+func TestHandler_getHistory_LimitParsing(t *testing.T) {
+	cases := []struct {
+		name       string
+		limitParam string
+		wantCode   int
+		wantLimit  int // only checked on success paths (wantCode == 0)
+	}{
+		{
+			name:       "non-integer limit returns 400",
+			limitParam: "abc",
+			wantCode:   400,
+		},
+		{
+			name:       "float string limit returns 400",
+			limitParam: "1.5",
+			wantCode:   400,
+		},
+		{
+			name:       "negative limit clamps to default",
+			limitParam: "-1",
+			wantCode:   0,
+			wantLimit:  config.DefaultListLimit,
+		},
+		{
+			name:       "zero limit clamps to default",
+			limitParam: "0",
+			wantCode:   0,
+			wantLimit:  config.DefaultListLimit,
+		},
+		{
+			name:       "over-max limit clamps to MaxListLimit",
+			limitParam: "9999",
+			wantCode:   0,
+			wantLimit:  config.MaxListLimit,
+		},
+		{
+			name:       "valid limit accepted",
+			limitParam: "50",
+			wantCode:   0,
+			wantLimit:  50,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockAuth, req := adminHistoryReq(ctx)
+			handler := &Handler{auth: mockAuth, config: mockStore}
+
+			if tc.wantCode != 0 {
+				// Error path: expect a ClientError with wantCode; no store calls.
+				_, err := handler.getHistory(ctx, req, map[string]string{"limit": tc.limitParam})
+				require.Error(t, err, "non-integer limit must return an error")
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "error must be a ClientError, got %T: %v", err, err)
+				assert.Equal(t, tc.wantCode, ce.code)
+				mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
+				mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
+			} else {
+				// Success path: store receives the clamped limit.
+				mockStore.On("GetAllPurchaseHistory", ctx, tc.wantLimit).
+					Return([]config.PurchaseHistoryRecord{}, nil)
+				mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+					Return([]config.PurchaseExecution{}, nil)
+
+				_, err := handler.getHistory(ctx, req, map[string]string{"limit": tc.limitParam})
+				require.NoError(t, err)
+				mockStore.AssertCalled(t, "GetAllPurchaseHistory", ctx, tc.wantLimit)
+			}
+		})
+	}
+}
+
 func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	// Baseline: three approved (completed) rows.
 	baseline := []config.PurchaseHistoryRecord{

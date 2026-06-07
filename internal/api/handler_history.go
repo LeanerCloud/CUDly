@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -61,7 +62,9 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	extra, staleExecs := h.fetchExecutionsAsHistory(ctx, filters)
 	h.expireStaleExecutionsAsync(staleExecs)
 
-	all := append(completed, extra...) //nolint:gocritic // intentional new slice
+	all := make([]config.PurchaseHistoryRecord, 0, len(completed)+len(extra))
+	all = append(all, completed...)
+	all = append(all, extra...)
 
 	all, err = h.filterPurchaseHistoryByAllowedAccounts(ctx, session, all)
 	if err != nil {
@@ -626,9 +629,13 @@ func parseHistoryFilters(params map[string]string) (historyFilters, error) {
 
 	limit := config.DefaultListLimit
 	if s := params["limit"]; s != "" {
-		fmt.Sscanf(s, "%d", &limit)
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return f, NewClientError(400, "invalid limit: must be a positive integer")
+		}
+		limit = n
 	}
-	if limit <= 0 {
+	if limit < 1 {
 		limit = config.DefaultListLimit
 	}
 	if limit > config.MaxListLimit {
@@ -926,7 +933,7 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 		return purchases, nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	filtered := purchases[:0]
+	filtered := make([]config.PurchaseHistoryRecord, 0, len(purchases))
 	for _, p := range purchases {
 		// Empty AccountID: unattributed ambient/multi-account synthesized row.
 		// Pass through so scoped users see in-flight financial actions that
