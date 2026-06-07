@@ -1497,7 +1497,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 	// GetUserByEmail-error path in the real service).
 	mockAuthNotFound := new(MockAuthService)
 	mockAuthNotFound.On("Login", ctx, mock.Anything).
-		Return((*LoginResponse)(nil), errors.New("invalid email or password")).Once()
+		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthNotFound.AssertExpectations(t) })
 
 	handlerNotFound := &Handler{auth: mockAuthNotFound}
@@ -1513,7 +1513,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 	// Path 2: service returns the "wrong password" message (existing user).
 	mockAuthWrongPass := new(MockAuthService)
 	mockAuthWrongPass.On("Login", ctx, mock.Anything).
-		Return((*LoginResponse)(nil), errors.New("invalid email or password")).Once()
+		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthWrongPass.AssertExpectations(t) })
 
 	handlerWrongPass := &Handler{auth: mockAuthWrongPass}
