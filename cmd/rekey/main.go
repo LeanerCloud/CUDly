@@ -36,7 +36,7 @@ func main() {
 	flag.Parse()
 
 	if os.Getenv(safetyEnv) != "1" {
-		log.Fatalf("rekey: refusing to run without %s=1 (see docs/runbooks/rekey-from-zero-key.md)", safetyEnv)
+		log.Fatalf("rekey: refusing to run without %s=1 (see cmd/rekey/README.md)", safetyEnv)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
