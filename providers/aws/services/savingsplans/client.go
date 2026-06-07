@@ -153,36 +153,9 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 		}
 
 		for _, sp := range result.SavingsPlans {
-			if sp.SavingsPlanId == nil {
-				continue
+			if commitment, ok := c.toCommitment(sp, service); ok {
+				commitments = append(commitments, commitment)
 			}
-			if c.planType != "" && sp.SavingsPlanType != c.planType {
-				continue
-			}
-
-			commitment := common.Commitment{
-				Provider:       common.ProviderAWS,
-				CommitmentID:   *sp.SavingsPlanId,
-				CommitmentType: common.CommitmentSavingsPlan,
-				Service:        service,
-				Region:         aws.ToString(sp.Region),
-				ResourceType:   string(sp.SavingsPlanType),
-				Count:          1, // Savings Plans don't have a count
-				State:          string(sp.State),
-			}
-
-			if sp.Start != nil {
-				if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
-					commitment.StartDate = startTime
-				}
-			}
-			if sp.End != nil {
-				if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
-					commitment.EndDate = endTime
-				}
-			}
-
-			commitments = append(commitments, commitment)
 		}
 
 		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
@@ -192,6 +165,44 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	}
 
 	return commitments, nil
+}
+
+// toCommitment converts a single DescribeSavingsPlans entry into a
+// common.Commitment, returning ok=false for entries that should be skipped
+// (missing ID, or a plan type that does not match this client's scope). It is
+// split out of GetExistingCommitments to keep that function under the
+// cyclomatic limit.
+func (c *Client) toCommitment(sp types.SavingsPlan, service common.ServiceType) (common.Commitment, bool) {
+	if sp.SavingsPlanId == nil {
+		return common.Commitment{}, false
+	}
+	if c.planType != "" && sp.SavingsPlanType != c.planType {
+		return common.Commitment{}, false
+	}
+
+	commitment := common.Commitment{
+		Provider:       common.ProviderAWS,
+		CommitmentID:   *sp.SavingsPlanId,
+		CommitmentType: common.CommitmentSavingsPlan,
+		Service:        service,
+		Region:         aws.ToString(sp.Region),
+		ResourceType:   string(sp.SavingsPlanType),
+		Count:          1, // Savings Plans don't have a count
+		State:          string(sp.State),
+	}
+
+	if sp.Start != nil {
+		if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
+			commitment.StartDate = startTime
+		}
+	}
+	if sp.End != nil {
+		if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
+			commitment.EndDate = endTime
+		}
+	}
+
+	return commitment, true
 }
 
 // PurchaseCommitment purchases a Savings Plan
