@@ -418,6 +418,61 @@ func skuMatchesTier(sku *cloudbilling.Sku, tier, region string) bool {
 	return true
 }
 
+// extractResourceTypeFromContent extracts the last path segment of the first
+// non-empty Operation.Resource across all operation groups. Used by all four
+// GCP service converters to set rec.ResourceType from Recommender payloads.
+func extractResourceTypeFromContent(content *recommenderpb.RecommendationContent) string {
+	if content == nil || content.OperationGroups == nil {
+		return ""
+	}
+	for _, opGroup := range content.OperationGroups {
+		for _, op := range opGroup.Operations {
+			if op.Resource == "" {
+				continue
+			}
+			parts := strings.Split(op.Resource, "/")
+			if len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// extractEstimatedSavings returns the negative of the PrimaryImpact cost
+// projection (GCP encodes savings as a negative cost delta).
+func extractEstimatedSavings(gcpRec *recommenderpb.Recommendation) float64 {
+	if gcpRec.PrimaryImpact == nil {
+		return 0
+	}
+	costProj := gcpRec.PrimaryImpact.GetCostProjection()
+	if costProj == nil || costProj.Cost == nil {
+		return 0
+	}
+	cost := costProj.Cost
+	return -(float64(cost.Units) + float64(cost.Nanos)/1e9)
+}
+
+// fillRedisPricing calls getRedisPricing and, on success, writes CommitmentCost,
+// OnDemandCost, SavingsPercentage, and BreakEvenMonths into rec. Pricing
+// failures are logged and do not discard the recommendation.
+func (c *MemorystoreClient) fillRedisPricing(ctx context.Context, rec *common.Recommendation, termYears int) {
+	pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears)
+	if err != nil {
+		log.Printf("memorystore: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		return
+	}
+	rec.CommitmentCost = pricing.CommitmentPrice
+	rec.OnDemandCost = pricing.OnDemandPrice
+	rec.SavingsPercentage = pricing.SavingsPercentage
+	if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+		monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+		if monthlySavings > 0 {
+			rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+		}
+	}
+}
+
 // convertGCPRecommendation converts a GCP Recommender recommendation to common format.
 // It also calls getRedisPricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
 // BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
@@ -439,30 +494,8 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 		PaymentOption:  paymentOption,
 	}
 
-	// Extract resource type from recommendation content
-	if gcpRec.Content != nil {
-		if gcpRec.Content.OperationGroups != nil {
-			for _, opGroup := range gcpRec.Content.OperationGroups {
-				for _, op := range opGroup.Operations {
-					if op.Resource != "" {
-						parts := strings.Split(op.Resource, "/")
-						if len(parts) > 0 {
-							rec.ResourceType = parts[len(parts)-1]
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Extract cost impact
-	if gcpRec.PrimaryImpact != nil {
-		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
-			cost := costProj.Cost
-			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
-			rec.EstimatedSavings = savings
-		}
-	}
+	rec.ResourceType = extractResourceTypeFromContent(gcpRec.Content)
+	rec.EstimatedSavings = extractEstimatedSavings(gcpRec)
 
 	// Thread pricing into the converter so the scorer can rank/filter GCP recs
 	// correctly (issue #1022 C2).
@@ -471,19 +504,7 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 		if rec.Term == "3yr" || rec.Term == "3" {
 			termYears = 3
 		}
-		if pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
-			log.Printf("memorystore: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
-		} else {
-			rec.CommitmentCost = pricing.CommitmentPrice
-			rec.OnDemandCost = pricing.OnDemandPrice
-			rec.SavingsPercentage = pricing.SavingsPercentage
-			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
-				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
-				if monthlySavings > 0 {
-					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
-				}
-			}
-		}
+		c.fillRedisPricing(ctx, rec, termYears)
 	}
 
 	return rec
