@@ -340,21 +340,33 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 		return fmt.Errorf("get token: %w", err)
 	}
 
-	apiVersion := "2021-04-01"
+	const apiVersion = "2021-04-01"
+	state, err := c.fetchCapacityProviderState(ctx, token.Token, apiVersion)
+	if err != nil {
+		return err
+	}
+	if state.RegistrationState == "Registered" {
+		return nil
+	}
+	return c.triggerCapacityProviderRegistration(ctx, token.Token, apiVersion, state.RegistrationState)
+}
+
+// fetchCapacityProviderState queries the ARM providers API and returns the
+// current registration state of Microsoft.Capacity.
+func (c *ComputeClient) fetchCapacityProviderState(ctx context.Context, bearerToken, apiVersion string) (providerRegistrationState, error) {
 	checkURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity?api-version=%s",
 		c.subscriptionID, apiVersion,
 	)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return providerRegistrationState{}, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token.Token)
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("check provider: %w", err)
+		return providerRegistrationState{}, fmt.Errorf("check provider: %w", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -363,19 +375,19 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 		// Non-2xx from the provider check (e.g. 403 permissions, 429 throttle).
 		// Log and return so the purchase attempt can still proceed; a failed
 		// registration check is non-fatal.
-		return fmt.Errorf("check Microsoft.Capacity provider status returned HTTP %d: %s", resp.StatusCode, string(body))
+		return providerRegistrationState{}, fmt.Errorf("check Microsoft.Capacity provider status returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var state providerRegistrationState
 	if err := json.Unmarshal(body, &state); err != nil {
-		return fmt.Errorf("decode provider state: %w", err)
+		return providerRegistrationState{}, fmt.Errorf("decode provider state: %w", err)
 	}
+	return state, nil
+}
 
-	if state.RegistrationState == "Registered" {
-		return nil
-	}
-
-	// Trigger registration
+// triggerCapacityProviderRegistration POSTs to the ARM register endpoint to
+// initiate Microsoft.Capacity provider registration.
+func (c *ComputeClient) triggerCapacityProviderRegistration(ctx context.Context, bearerToken, apiVersion, currentState string) error {
 	registerURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity/register?api-version=%s",
 		c.subscriptionID, apiVersion,
@@ -384,7 +396,8 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("build register request: %w", err)
 	}
-	regReq.Header.Set("Authorization", "Bearer "+token.Token)
+	regReq.Header.Set("Authorization", "Bearer "+bearerToken)
+
 	regResp, err := c.httpClient.Do(regReq)
 	if err != nil {
 		return fmt.Errorf("register provider: %w", err)
@@ -395,7 +408,7 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 		return fmt.Errorf("register Microsoft.Capacity provider returned HTTP %d: %s", regResp.StatusCode, string(regBody))
 	}
 
-	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", state.RegistrationState)
+	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", currentState)
 	return nil
 }
 

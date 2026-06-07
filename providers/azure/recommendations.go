@@ -462,4 +462,3 @@ func shouldIncludeService(params common.RecommendationParams, service common.Ser
 	// Check if this is the requested service
 	return params.Service == service
 }
-
