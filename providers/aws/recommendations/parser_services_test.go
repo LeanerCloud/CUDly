@@ -90,6 +90,24 @@ func TestParseRDSDetails(t *testing.T) {
 			},
 		},
 		{
+			// CR #1085 regression test: an unrecognized DeploymentOption must error
+			// rather than being silently folded into "single-az". The pre-fix code
+			// used an else branch that mapped anything non-"Multi-AZ" to "single-az",
+			// which could cause findOfferingID to query and buy the wrong RI class.
+			name:        "Unknown DeploymentOption errors (CR #1085)",
+			expectError: true,
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					RDSInstanceDetails: &types.RDSInstanceDetails{
+						InstanceType:     aws.String("db.r5.large"),
+						DatabaseEngine:   aws.String("mysql"),
+						Region:           aws.String("us-east-1"),
+						DeploymentOption: aws.String("Multi-AZ-Readable-Standbys"),
+					},
+				},
+			},
+		},
+		{
 			name: "Missing RDS instance details",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{

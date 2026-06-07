@@ -36,10 +36,16 @@ func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, 
 	// The downstream findOfferingID rejects an empty AZConfig with an explicit
 	// error rather than proceeding with a fabricated value (M4 fix).
 	if rdsDetails.DeploymentOption != nil {
-		if *rdsDetails.DeploymentOption == "Multi-AZ" {
+		// Map only the exact CE tokens; an unrecognized value must not be folded
+		// into single-az (which would drive findOfferingID to the wrong RI class
+		// and a mis-buy). Fail loud instead so the bad token surfaces (CR #1085).
+		switch strings.TrimSpace(*rdsDetails.DeploymentOption) {
+		case "Multi-AZ":
 			rdsInfo.AZConfig = "multi-az"
-		} else {
+		case "Single-AZ":
 			rdsInfo.AZConfig = "single-az"
+		default:
+			return fmt.Errorf("unrecognized RDS DeploymentOption %q: expected \"Multi-AZ\" or \"Single-AZ\"", *rdsDetails.DeploymentOption)
 		}
 	}
 

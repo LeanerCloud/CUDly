@@ -307,9 +307,18 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	// different prices and do not cover each other's demand. An empty AZConfig
 	// means the CE recommendation omitted DeploymentOption; guessing single-az
 	// risks buying the wrong RI class. Fail loud so the caller can decide.
-	if details.AZConfig == "" {
+	// Validate the full enum, not just the empty case: a non-empty typo would
+	// otherwise fall through to multiAZ==false in paginateRDSOfferings and
+	// silently drive a single-AZ lookup -- the same mis-buy class as the old
+	// default (CR #1085).
+	switch details.AZConfig {
+	case "single-az", "multi-az":
+		// valid
+	case "":
 		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; " +
 			"refusing to guess single-az vs multi-az (see M4 in 19-hardcoded-fallbacks-aws.md)")
+	default:
+		return "", fmt.Errorf("invalid RDS AZConfig %q: must be single-az or multi-az", details.AZConfig)
 	}
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
 	if err != nil {
@@ -577,14 +586,19 @@ func (c *Client) normalizeEngineName(engine string) (string, error) {
 	if strings.Contains(engineLower, "mariadb") {
 		return "mariadb", nil
 	}
-	if strings.Contains(engineLower, "oracle") {
+	// Only the bare family name is ambiguous (CE returns "Oracle" / "SQL Server"
+	// with no edition). An edition-qualified token like oracle-se2 or
+	// sqlserver-web is already a valid RDS ProductDescription, so pass it through
+	// rather than rejecting it -- rejecting it contradicted the "supply the exact
+	// edition" guidance in this very error message (CR #1085).
+	if engineLower == "oracle" {
 		return "", fmt.Errorf(
 			"ambiguous Oracle engine %q: CE must supply the exact edition "+
 				"(e.g. oracle-se2, oracle-ee); refusing to guess",
 			engine,
 		)
 	}
-	if strings.Contains(engineLower, "sqlserver") || strings.Contains(engineLower, "sql-server") {
+	if engineLower == "sqlserver" || engineLower == "sql-server" {
 		return "", fmt.Errorf(
 			"ambiguous SQL Server engine %q: CE must supply the exact edition "+
 				"(e.g. sqlserver-se, sqlserver-ee, sqlserver-web, sqlserver-ex); refusing to guess",
