@@ -632,7 +632,9 @@ func TestSMTPSender_SendToEmail_ConnectionFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send email via SMTP")
 }
 
-// TestSMTPSender_SendToEmail_ConnectionFails_NoTLS tests with useTLS=false
+// TestSMTPSender_SendToEmail_ConnectionFails_NoTLS tests with useTLS=false and
+// credentials configured. Since 07-H2 the cleartext-auth guard fires before
+// any network dial, so the error message differs from a connection failure.
 func TestSMTPSender_SendToEmail_ConnectionFails_NoTLS(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -642,14 +644,15 @@ func TestSMTPSender_SendToEmail_ConnectionFails_NoTLS(t *testing.T) {
 		fromEmail: "sender@example.com",
 		fromName:  "",
 		useTLS:    false,
+		// allowInsecure intentionally false: the cleartext-auth guard must fire.
 	}
 
 	ctx := context.Background()
 	err := sender.SendToEmail(ctx, "recipient@example.com", "Test Subject", "Test Body")
 
-	// This should fail because there's no SMTP server on that port
+	// 07-H2: guard fires before any network dial.
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to send email via SMTP")
+	assert.Contains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
 }
 
 // TestSMTPSender_SendToEmail_NoAuth tests without authentication
@@ -1305,13 +1308,15 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to publish to SNS")
 	})
 
-	t.Run("ScheduledPurchase_propagates_error", func(t *testing.T) {
+	t.Run("ScheduledPurchase_no_recipient", func(t *testing.T) {
+		// RecipientEmail is empty: must return ErrNoRecipient, not broadcast via SNS.
 		err := sender.SendScheduledPurchaseNotification(ctx, NotificationData{
-			DashboardURL: "https://test.com",
-			PlanName:     "Test",
+			DashboardURL:  "https://test.com",
+			PlanName:      "Test",
+			ApprovalToken: "tok",
+			// RecipientEmail intentionally empty
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to publish to SNS")
+		require.ErrorIs(t, err, ErrNoRecipient)
 	})
 
 	t.Run("PurchaseConfirmation_propagates_error", func(t *testing.T) {

@@ -27,6 +27,12 @@ var (
 	// out. Distinct from ErrNoRecipient so the caller can report which side
 	// of the wire is unconfigured.
 	ErrNoFromEmail = errors.New("email: no from address")
+
+	// ErrTokenInBroadcast is returned by SendNotification when the message
+	// body contains a "token=" query parameter. Broadcasting a body with an
+	// approval token leaks it to every SNS subscriber. Use SendToEmailWithCC
+	// (targeted SES) for any message that carries an approval URL.
+	ErrTokenInBroadcast = errors.New("email: message body contains an approval token; use targeted SES send, not SNS broadcast")
 )
 
 // SenderConfig holds configuration for the email sender
@@ -100,8 +106,26 @@ func NewSenderWithClients(snsClient SNSPublisher, sesClient SESEmailSender, cfg 
 	}
 }
 
-// SendNotification sends a notification email via SNS
+// snsMaxSubjectLen is the maximum byte length SNS accepts for a Subject.
+// Subjects longer than 100 bytes are rejected with InvalidParameter at runtime.
+const snsMaxSubjectLen = 100
+
+// SendNotification sends a notification email via SNS.
+//
+// Guard: messages whose body contains "token=" (case-insensitive) are rejected
+// with ErrTokenInBroadcast. Approval tokens must never reach the SNS broadcast
+// topic because every subscriber would receive a working action link. Use
+// SendToEmailWithCC for any message that carries an approval URL.
+//
+// Subject sanitization (07-M3): the subject is passed through sanitizeHeader
+// (strips CR/LF to prevent SNS parameter injection) and truncated to 100 bytes
+// (SNS limit). Subjects built from user-controlled fields such as PlanName can
+// otherwise cause an InvalidParameter error at publish time.
 func (s *Sender) SendNotification(ctx context.Context, subject, message string) error {
+	if strings.Contains(strings.ToLower(message), "token=") {
+		return ErrTokenInBroadcast
+	}
+
 	if s.topicARN == "" {
 		logging.Debug("No SNS topic configured, skipping email notification")
 		return nil
@@ -111,16 +135,22 @@ func (s *Sender) SendNotification(ctx context.Context, subject, message string) 
 		return fmt.Errorf("SNS client not initialized")
 	}
 
+	// Sanitize and truncate the SNS Subject (07-M3).
+	safeSubject := sanitizeHeader(subject)
+	if len(safeSubject) > snsMaxSubjectLen {
+		safeSubject = safeSubject[:snsMaxSubjectLen]
+	}
+
 	_, err := s.snsClient.Publish(ctx, &sns.PublishInput{
 		TopicArn: aws.String(s.topicARN),
-		Subject:  aws.String(subject),
+		Subject:  aws.String(safeSubject),
 		Message:  aws.String(message),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to publish to SNS: %w", err)
 	}
 
-	logging.Debugf("Sent notification: %s", subject)
+	logging.Debugf("Sent notification: %s", safeSubject)
 	return nil
 }
 
@@ -283,15 +313,26 @@ func (s *Sender) ensureSandboxRecipientVerified(ctx context.Context, toEmail str
 	logging.Warnf("Recipient email %s is not verified in sandbox mode - creating verification request", redactEmail(toEmail))
 	if err := s.createVerificationRequest(ctx, toEmail); err != nil {
 		logging.Warnf("Failed to create verification request: %v", err)
+		// Use the real address in the user-facing message so the recipient
+		// knows which inbox to check; log only the redacted form (07-M2).
 		return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link before trying again", toEmail)
 	}
-	return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent to %s - please check inbox and click the verification link, then try the password reset again", toEmail, toEmail)
+	// The user-facing message intentionally includes the full address so the
+	// recipient can verify the correct inbox. Wrapped errors/logs use the
+	// redacted form per the package's PII stance (07-M2).
+	return fmt.Errorf("recipient email %s is not verified in SES sandbox mode. A verification email has been sent - please check inbox and click the verification link, then try again", toEmail)
 }
 
 // buildSESSendEmailInputMultipart constructs a sesv2.SendEmailInput with
 // both a plain-text and an HTML alternative body. SES handles the
 // multipart/alternative MIME assembly server-side when both Text and Html
 // fields are populated on types.Body.
+//
+// Header injection note (07-M1): SES v2 SendEmail accepts structured fields
+// (Subject.Data, Body.Text.Data, Body.Html.Data) and builds the MIME envelope
+// server-side. CR/LF injection via Subject.Data is not possible through the
+// structured API. Any future raw-MIME path MUST sanitize the subject with
+// sanitizeHeader before composing the header string, matching the SMTP path.
 func buildSESSendEmailInputMultipart(fromEmail, toEmail string, cc []string, subject, textBody, htmlBody string) *sesv2.SendEmailInput {
 	destination := &types.Destination{
 		ToAddresses: []string{toEmail},
@@ -325,6 +366,7 @@ func buildSESSendEmailInputMultipart(fromEmail, toEmail string, cc []string, sub
 
 // buildSESSendEmailInput constructs a sesv2.SendEmailInput with the
 // destination To + (optional) Cc list and a plain-text body.
+// See buildSESSendEmailInputMultipart for the header-injection safety note (07-M1).
 func buildSESSendEmailInput(fromEmail, toEmail string, cc []string, subject, body string) *sesv2.SendEmailInput {
 	destination := &types.Destination{
 		ToAddresses: []string{toEmail},
@@ -464,6 +506,15 @@ type RIExchangeNotificationData struct {
 	Exchanges    []RIExchangeItem
 	Skipped      []SkippedExchange
 	TotalPayment string
+	// RecipientEmail is the primary (To) inbox for the approval-required flow.
+	// Must be set when Exchanges contain ApprovalToken values; leave empty
+	// only for completion/broadcast notifications that carry no tokens.
+	// When non-empty, SendRIExchangePendingApproval routes through targeted
+	// SES (not the SNS broadcast topic). Mirrors NotificationData.RecipientEmail.
+	RecipientEmail string
+	// CCEmails carries additional recipients informed of the pending exchanges
+	// but not the authorised approvers. Deduplicated against RecipientEmail.
+	CCEmails []string
 }
 
 // RIExchangeItem represents a single exchange in an email notification

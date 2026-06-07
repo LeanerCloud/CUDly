@@ -11,14 +11,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tests for containsColon
-func TestContainsColon(t *testing.T) {
-	assert.True(t, containsColon("arn:aws:secretsmanager:us-east-1:123:secret:foo"))
-	assert.True(t, containsColon("a:b"))
-	assert.True(t, containsColon(":"))
-	assert.False(t, containsColon(""))
-	assert.False(t, containsColon("nodivider"))
-	assert.False(t, containsColon("just/a/path"))
+// Tests for isSecretManagerReference (replaces the deleted containsColon helper -- 07-L2/L3)
+func TestIsSecretManagerReference(t *testing.T) {
+	// AWS ARN
+	assert.True(t, isSecretManagerReference("arn:aws:secretsmanager:us-east-1:123:secret:foo"))
+	// GCP resource path
+	assert.True(t, isSecretManagerReference("projects/my-project/secrets/my-secret/versions/latest"))
+	// Azure Key Vault URL
+	assert.True(t, isSecretManagerReference("https://myvault.vault.azure.net/secrets/mysecret"))
+	// Generic slash path
+	assert.True(t, isSecretManagerReference("/my/secret/path"))
+	// Plain API key -- not a reference
+	assert.False(t, isSecretManagerReference("SG.abcdefghijklmnopqrstuvwx"))
+	// Empty string
+	assert.False(t, isSecretManagerReference(""))
+	// Value with colon but not an ARN/Vault URL
+	assert.False(t, isSecretManagerReference("user:password"))
 }
 
 // Tests for warnIfPlaintext – exercising all branches
@@ -26,17 +34,20 @@ func TestWarnIfPlaintext(t *testing.T) {
 	// Empty value: should be a no-op (no panic)
 	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "") })
 
-	// Short value (< 20 chars, no colon, no leading slash) → warning branch
-	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "short") })
+	// Plaintext API key (not a secret-manager reference) -- warning branch
+	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "SG.averylongplaintextpassword") })
 
-	// Long value with colon → secret-manager reference, no warning
+	// AWS ARN -- treated as secret-manager reference, no warning
 	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "arn:aws:secretsmanager:us-east-1:123456789012:secret:mykey") })
 
-	// Long value starting with slash → secret-manager reference, no warning
-	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "/my/secret/path/that/is/long") })
+	// GCP resource path -- treated as secret-manager reference, no warning
+	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "projects/my-project/secrets/my-secret") })
 
-	// Long value without colon and not starting with slash → warning branch
-	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "averylongplaintextpasswordwithnospecialchars") })
+	// Azure Key Vault URL -- treated as secret-manager reference, no warning
+	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "https://myvault.vault.azure.net/secrets/foo") })
+
+	// Generic leading slash path -- treated as secret-manager reference, no warning
+	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "/my/secret/path/that/is/long") })
 }
 
 // Tests for renderTemplate error path
@@ -408,12 +419,14 @@ func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) 
 // Tests for Sender.SendRIExchangePendingApproval, SendRIExchangeCompleted, SendPurchaseApprovalRequest
 // using the mock SNS sender (no SNS topic → no-op path)
 
-func TestSender_SendRIExchangePendingApproval_NoTopic(t *testing.T) {
+func TestSender_SendRIExchangePendingApproval_NoRecipient(t *testing.T) {
+	// When RecipientEmail is empty the send must be rejected — the body carries
+	// per-exchange approval tokens that must not be broadcast via SNS.
 	mockSNS := &mockSNSPublisher{}
 	mockSES := &mockSESEmailSender{}
 	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
-		// TopicARN is empty → SendNotification is a no-op
 		FromEmail: "from@example.com",
+		TopicARN:  "arn:aws:sns:us-east-1:123:topic",
 	})
 
 	data := RIExchangeNotificationData{
@@ -421,12 +434,14 @@ func TestSender_SendRIExchangePendingApproval_NoTopic(t *testing.T) {
 		TotalPayment: "300.00",
 		Exchanges: []RIExchangeItem{
 			{RecordID: "r4", SourceRIID: "ri-4", SourceInstanceType: "m4.large",
-				TargetInstanceType: "m4.xlarge", TargetCount: 1, PaymentDue: "300.00", UtilizationPct: 55.0},
+				TargetInstanceType: "m4.xlarge", TargetCount: 1, PaymentDue: "300.00",
+				ApprovalToken: "secret-token", UtilizationPct: 55.0},
 		},
+		// RecipientEmail intentionally empty
 	}
 
 	err := sender.SendRIExchangePendingApproval(context.Background(), data)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 func TestSender_SendRIExchangeCompleted_NoTopic(t *testing.T) {

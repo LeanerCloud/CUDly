@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -86,6 +87,22 @@ func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
 	}
 }
 
+// isSecretManagerReference reports whether value looks like a secret manager
+// reference rather than a plaintext credential (07-L3). Recognised patterns:
+//   - AWS ARN:       starts with "arn:"
+//   - GCP resource:  starts with "projects/"
+//   - Azure Key Vault secret URL: contains ".vault.azure.net/"
+//   - Generic path:  starts with "/" (local-file or Vault path)
+//
+// A value that does not match any pattern is treated as a potential plaintext
+// credential and triggers a warning via warnIfPlaintext.
+func isSecretManagerReference(value string) bool {
+	return strings.HasPrefix(value, "arn:") ||
+		strings.HasPrefix(value, "projects/") ||
+		strings.Contains(value, ".vault.azure.net/") ||
+		strings.HasPrefix(value, "/")
+}
+
 // warnIfPlaintext logs a warning when a credential value is set as a plaintext
 // environment variable rather than a secret manager reference (ARN/resource name).
 // TODO: migrate all email credentials to AWS Secrets Manager / GCP Secret Manager /
@@ -94,20 +111,9 @@ func warnIfPlaintext(envVar, value string) {
 	if value == "" {
 		return
 	}
-	// Heuristic: secret manager references contain ":" or "/" (ARN, resource path, secret name)
-	if len(value) < 20 || (value[0] != '/' && !containsColon(value)) {
-		logging.Warnf("security: %s is set as a plaintext env var; consider using a Secrets Manager reference instead", envVar)
+	if !isSecretManagerReference(value) {
+		logging.Warnf("security: %s is set as a plaintext env var; consider using a Secrets Manager reference (ARN, projects/..., vault URL, or /path) instead", envVar)
 	}
-}
-
-// containsColon returns true if s contains a colon character.
-func containsColon(s string) bool {
-	for _, c := range s {
-		if c == ':' {
-			return true
-		}
-	}
-	return false
 }
 
 // newGCPSenderFromEnv creates a SendGrid-based email sender from environment variables

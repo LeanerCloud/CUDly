@@ -5,14 +5,27 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
+	texttemplate "text/template"
 )
 
 // templateFuncs provides common functions available in email templates.
+// Both html/template and text/template engines accept the same FuncMap shape;
+// the urlquery func behaves identically in both contexts.
 var templateFuncs = template.FuncMap{
 	"urlquery": url.QueryEscape,
 }
 
-// renderTemplate parses and executes a named template with the given data.
+// textTemplateFuncs mirrors templateFuncs for text/template so plain-text
+// renderers share the same urlquery behaviour without crossing package types.
+var textTemplateFuncs = texttemplate.FuncMap{
+	"urlquery": url.QueryEscape,
+}
+
+// renderTemplate parses and executes a named template with html/template.
+// Use this for HTML email bodies -- html/template performs context-aware
+// escaping that prevents XSS in rendered HTML. Never use it for plain-text
+// bodies: it would HTML-escape ampersands and angle-brackets in data fields
+// (e.g. names, email addresses), corrupting the plain-text output.
 func renderTemplate(name, tmplText string, data any) (string, error) {
 	tmpl, err := template.New(name).Funcs(templateFuncs).Parse(tmplText)
 	if err != nil {
@@ -27,9 +40,26 @@ func renderTemplate(name, tmplText string, data any) (string, error) {
 	return buf.String(), nil
 }
 
-// RenderPasswordResetEmail renders the password reset email template
+// renderTextTemplate parses and executes a named template with text/template.
+// Use this for plain-text email bodies -- text/template emits data verbatim
+// so values like "O'Brien" and "a&b@x.com" are preserved unchanged.
+func renderTextTemplate(name, tmplText string, data any) (string, error) {
+	tmpl, err := texttemplate.New(name).Funcs(textTemplateFuncs).Parse(tmplText)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// RenderPasswordResetEmail renders the plain-text password reset email template.
 func RenderPasswordResetEmail(email, resetURL string) (string, error) {
-	return renderTemplate("reset", passwordResetTemplate, PasswordResetData{
+	return renderTextTemplate("reset", passwordResetTemplate, PasswordResetData{
 		Email:    email,
 		ResetURL: resetURL,
 	})
@@ -45,9 +75,9 @@ func RenderPasswordResetEmailHTML(email, resetURL string) (string, error) {
 	})
 }
 
-// RenderWelcomeEmail renders the welcome email template
+// RenderWelcomeEmail renders the plain-text welcome email template.
 func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
-	return renderTemplate("welcome", welcomeUserTemplate, WelcomeUserData{
+	return renderTextTemplate("welcome", welcomeUserTemplate, WelcomeUserData{
 		Email:        email,
 		DashboardURL: dashboardURL,
 		Role:         role,
@@ -64,9 +94,9 @@ func RenderWelcomeEmailHTML(email, dashboardURL, role string) (string, error) {
 	})
 }
 
-// RenderUserInviteEmail renders the user-invite email template.
+// RenderUserInviteEmail renders the plain-text user-invite email template.
 func RenderUserInviteEmail(email, setupURL string) (string, error) {
-	return renderTemplate("user-invite", userInviteTemplate, UserInviteData{
+	return renderTextTemplate("user-invite", userInviteTemplate, UserInviteData{
 		Email:    email,
 		SetupURL: setupURL,
 	})
@@ -81,42 +111,42 @@ func RenderUserInviteEmailHTML(email, setupURL string) (string, error) {
 	})
 }
 
-// RenderNewRecommendationsEmail renders the new recommendations email template
+// RenderNewRecommendationsEmail renders the plain-text new recommendations email template.
 func RenderNewRecommendationsEmail(data NotificationData) (string, error) {
-	return renderTemplate("recommendations", newRecommendationsTemplate, data)
+	return renderTextTemplate("recommendations", newRecommendationsTemplate, data)
 }
 
-// RenderScheduledPurchaseEmail renders the scheduled purchase email template
+// RenderScheduledPurchaseEmail renders the plain-text scheduled purchase email template.
 func RenderScheduledPurchaseEmail(data NotificationData) (string, error) {
-	return renderTemplate("scheduled", scheduledPurchaseTemplate, data)
+	return renderTextTemplate("scheduled", scheduledPurchaseTemplate, data)
 }
 
-// RenderPurchaseConfirmationEmail renders the purchase confirmation email template
+// RenderPurchaseConfirmationEmail renders the plain-text purchase confirmation email template.
 func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
-	return renderTemplate("confirmation", purchaseConfirmationTemplate, data)
+	return renderTextTemplate("confirmation", purchaseConfirmationTemplate, data)
 }
 
-// RenderPurchaseFailedEmail renders the purchase failed email template
+// RenderPurchaseFailedEmail renders the plain-text purchase failed email template.
 func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
-	return renderTemplate("failed", purchaseFailedTemplate, data)
+	return renderTextTemplate("failed", purchaseFailedTemplate, data)
 }
 
-// RenderRIExchangePendingApprovalEmail renders the RI exchange pending approval email template
+// RenderRIExchangePendingApprovalEmail renders the plain-text RI exchange pending approval email template.
 func RenderRIExchangePendingApprovalEmail(data RIExchangeNotificationData) (string, error) {
-	return renderTemplate("ri-exchange-pending", riExchangePendingApprovalTemplate, data)
+	return renderTextTemplate("ri-exchange-pending", riExchangePendingApprovalTemplate, data)
 }
 
-// RenderRIExchangeCompletedEmail renders the RI exchange completed email template
+// RenderRIExchangeCompletedEmail renders the plain-text RI exchange completed email template.
 func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, error) {
-	return renderTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
+	return renderTextTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
 }
 
 // RenderPurchaseApprovalRequestEmail renders the plain-text purchase
 // approval request email template. Issue #287: this is the multipart
-// `text/plain` half — pair with RenderPurchaseApprovalRequestEmailHTML
+// text/plain half -- pair with RenderPurchaseApprovalRequestEmailHTML
 // for the styled HTML half.
 func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
-	return renderTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
+	return renderTextTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
 }
 
 // RenderPurchaseApprovalRequestEmailHTML renders the HTML half of the
@@ -129,12 +159,12 @@ func RenderPurchaseApprovalRequestEmailHTML(data NotificationData) (string, erro
 	return renderTemplate("purchase-approval-request-html", purchaseApprovalRequestHTMLTemplate, data)
 }
 
-// RenderRegistrationReceivedEmail renders the admin notification for a new registration.
+// RenderRegistrationReceivedEmail renders the plain-text admin notification for a new registration.
 func RenderRegistrationReceivedEmail(data RegistrationNotificationData) (string, error) {
-	return renderTemplate("registration-received", registrationReceivedTemplate, data)
+	return renderTextTemplate("registration-received", registrationReceivedTemplate, data)
 }
 
-// RenderRegistrationDecisionEmail renders the registrant notification for approval/rejection.
+// RenderRegistrationDecisionEmail renders the plain-text registrant notification for approval/rejection.
 func RenderRegistrationDecisionEmail(data RegistrationDecisionData) (string, error) {
-	return renderTemplate("registration-decision", registrationDecisionTemplate, data)
+	return renderTextTemplate("registration-decision", registrationDecisionTemplate, data)
 }

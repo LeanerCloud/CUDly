@@ -73,8 +73,20 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 		return false
 	}
 
+	// Resolve the notification recipient. The rendered body embeds action tokens
+	// and must be delivered via targeted SES, not broadcast via SNS. Log a
+	// warning and skip rather than broadcasting if no recipient is configured.
+	notifyEmail := ""
+	if globalCfg, cfgErr := m.config.GetGlobalConfig(ctx); cfgErr == nil && globalCfg != nil && globalCfg.NotificationEmail != nil {
+		notifyEmail = *globalCfg.NotificationEmail
+	}
+	if notifyEmail == "" {
+		logging.Warnf("Skipping scheduled-purchase notification for plan %s: no notification email configured in global settings", plan.Name)
+		return false
+	}
+
 	// Send notification
-	data := m.buildNotificationData(*plan, execution, daysUntil)
+	data := m.buildNotificationData(*plan, execution, daysUntil, notifyEmail)
 	if err := m.email.SendScheduledPurchaseNotification(ctx, data); err != nil {
 		logging.Errorf("Failed to send notification: %v", err)
 		return false
@@ -127,8 +139,10 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 	return execution, nil
 }
 
-// buildNotificationData creates notification data from plan and execution
-func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int) email.NotificationData {
+// buildNotificationData creates notification data from plan and execution.
+// notifyEmail is the global notification address from GlobalConfig; it is set
+// as RecipientEmail so the token-bearing body routes through targeted SES.
+func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int, notifyEmail string) email.NotificationData {
 	data := email.NotificationData{
 		DashboardURL:      m.dashboardURL,
 		ApprovalToken:     exec.ApprovalToken,
@@ -139,6 +153,7 @@ func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.P
 		PurchaseDate:      exec.ScheduledDate.Format("January 2, 2006"),
 		DaysUntilPurchase: daysUntil,
 		PlanName:          plan.Name,
+		RecipientEmail:    notifyEmail,
 	}
 
 	for _, rec := range exec.Recommendations {

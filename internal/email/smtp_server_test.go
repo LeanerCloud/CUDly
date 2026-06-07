@@ -160,20 +160,23 @@ func TestSMTPSender_SendToEmail_WithMockServer_NoTLS(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendToEmail_WithMockServer_WithAuth tests with auth (no TLS)
+// TestSMTPSender_SendToEmail_WithMockServer_WithAuth tests with auth over a
+// local plaintext SMTP stub. AllowInsecure is required for cleartext-auth
+// stubs in tests (07-H2: production senders must use UseTLS=true).
 func TestSMTPSender_SendToEmail_WithMockServer_WithAuth(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
 	defer server.stop()
 
 	sender := &SMTPSender{
-		host:      "127.0.0.1",
-		port:      server.port,
-		username:  "testuser",
-		password:  "testpass",
-		fromEmail: "sender@test.com",
-		fromName:  "Sender Name",
-		useTLS:    false,
+		host:          "127.0.0.1",
+		port:          server.port,
+		username:      "testuser",
+		password:      "testpass",
+		fromEmail:     "sender@test.com",
+		fromName:      "Sender Name",
+		useTLS:        false,
+		allowInsecure: true, // test-only stub; never set in production
 	}
 
 	ctx := context.Background()
@@ -182,7 +185,46 @@ func TestSMTPSender_SendToEmail_WithMockServer_WithAuth(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestSMTPSender_DispatchSMTP_RefusesAuthOverCleartext asserts that
+// dispatchSMTP returns an error when credentials are configured but TLS is
+// disabled and AllowInsecure is false (07-H2 guard).
+func TestSMTPSender_DispatchSMTP_RefusesAuthOverCleartext(t *testing.T) {
+	sender := &SMTPSender{
+		host:          "127.0.0.1",
+		port:          9999, // unreachable; we expect the guard to fire before connecting
+		username:      "user",
+		password:      "pass",
+		fromEmail:     "sender@test.com",
+		useTLS:        false,
+		allowInsecure: false,
+	}
+	err := sender.dispatchSMTP([]string{"r@example.com"}, []byte("msg"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
+}
+
+// TestSMTPSender_DispatchSMTP_AllowsAuthWithAllowInsecure checks the escape
+// hatch for test-only stubs: AllowInsecure=true should not trigger the guard.
+// The actual send will fail (no server running on port 1), which is expected.
+func TestSMTPSender_DispatchSMTP_AllowsAuthWithAllowInsecure(t *testing.T) {
+	sender := &SMTPSender{
+		host:          "127.0.0.1",
+		port:          1, // unreachable, but guard must not fire
+		username:      "user",
+		password:      "pass",
+		fromEmail:     "sender@test.com",
+		useTLS:        false,
+		allowInsecure: true,
+	}
+	err := sender.dispatchSMTP([]string{"r@example.com"}, []byte("msg"))
+	require.Error(t, err)
+	// Guard error must NOT appear; a connection error is expected instead.
+	assert.NotContains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
+}
+
 // TestSMTPSender_SendToEmail_WithMockServer_AuthFailure tests auth failure
+// against a stub server that rejects AUTH. AllowInsecure is needed because
+// the stub is a local plaintext server (07-H2).
 func TestSMTPSender_SendToEmail_WithMockServer_AuthFailure(t *testing.T) {
 	// Create server that rejects auth
 	server := newMockSMTPServer(t, true)
@@ -190,13 +232,14 @@ func TestSMTPSender_SendToEmail_WithMockServer_AuthFailure(t *testing.T) {
 	defer server.stop()
 
 	sender := &SMTPSender{
-		host:      "127.0.0.1",
-		port:      server.port,
-		username:  "baduser",
-		password:  "badpass",
-		fromEmail: "sender@test.com",
-		fromName:  "",
-		useTLS:    false,
+		host:          "127.0.0.1",
+		port:          server.port,
+		username:      "baduser",
+		password:      "badpass",
+		fromEmail:     "sender@test.com",
+		fromName:      "",
+		useTLS:        false,
+		allowInsecure: true, // test-only stub; never set in production
 	}
 
 	ctx := context.Background()

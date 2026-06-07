@@ -496,3 +496,77 @@ func TestRenderWelcomeEmailHTML(t *testing.T) {
 	assert.Contains(t, html, "Hello carol@example.com,")
 	assert.Contains(t, html, "<strong>admin</strong>")
 }
+
+// TestPlainTextTemplates_NoHTMLEscaping asserts that special characters in data
+// fields (ampersand, apostrophe, angle brackets) survive verbatim in plain-text
+// email bodies. Previously all renderers used html/template which emitted HTML
+// entities (&amp;, &#39;, &lt;) in plain-text output (07-H1 regression).
+func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
+	// RequestedByName with apostrophe and email with ampersand -- classic
+	// html/template escape targets. They must be preserved verbatim in
+	// plain-text bodies so recipients can copy-paste the address.
+	const name = "O'Brien"
+	const email = "a&b@example.com"
+	const reason = "Account name <ACME & Co>"
+
+	t.Run("PasswordReset_email_verbatim", func(t *testing.T) {
+		body, err := RenderPasswordResetEmail(email, "https://example.com/reset")
+		require.NoError(t, err)
+		assert.Contains(t, body, email, "plain-text password reset must preserve & in address")
+		assert.NotContains(t, body, "&amp;")
+	})
+
+	t.Run("UserInvite_email_verbatim", func(t *testing.T) {
+		body, err := RenderUserInviteEmail(email, "https://example.com/setup")
+		require.NoError(t, err)
+		assert.Contains(t, body, email)
+		assert.NotContains(t, body, "&amp;")
+	})
+
+	t.Run("RegistrationDecision_rejection_reason_verbatim", func(t *testing.T) {
+		data := RegistrationDecisionData{
+			AccountName:     "ACME & Co",
+			Decision:        "Rejected",
+			RejectionReason: reason,
+		}
+		body, err := RenderRegistrationDecisionEmail(data)
+		require.NoError(t, err)
+		assert.Contains(t, body, reason, "rejection reason must survive verbatim in plain-text body")
+		assert.NotContains(t, body, "&amp;")
+		assert.NotContains(t, body, "&lt;")
+		assert.NotContains(t, body, "&#39;")
+	})
+
+	t.Run("PurchaseApprovalRequest_requestedByName_verbatim", func(t *testing.T) {
+		data := NotificationData{
+			DashboardURL:     "https://example.com",
+			ApprovalToken:    "tok",
+			ExecutionID:      "exec-1",
+			RequestedByName:  name,
+			RequestedByEmail: email,
+			Recommendations:  []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
+		}
+		body, err := RenderPurchaseApprovalRequestEmail(data)
+		require.NoError(t, err)
+		assert.Contains(t, body, name, "RequestedByName with apostrophe must be verbatim in plain-text approval")
+		assert.Contains(t, body, email, "RequestedByEmail with & must be verbatim in plain-text approval")
+		assert.NotContains(t, body, "&#39;")
+		assert.NotContains(t, body, "&amp;")
+	})
+
+	t.Run("HTML_renderers_still_escape", func(t *testing.T) {
+		// HTML halves MUST still escape data -- that is the XSS defence.
+		// A name with a script tag must not survive literally in the HTML body.
+		const xssName = `<script>alert(1)</script>`
+		data := NotificationData{
+			DashboardURL:    "https://example.com",
+			ApprovalToken:   "tok",
+			ExecutionID:     "exec-2",
+			RequestedByName: xssName,
+			Recommendations: []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
+		}
+		html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+		require.NoError(t, err)
+		assert.NotContains(t, html, xssName, "html/template must escape <script> tags in HTML bodies")
+	})
+}
