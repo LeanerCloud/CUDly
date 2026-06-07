@@ -94,6 +94,13 @@ type Application struct {
 	// scheduledAuthMiddleware helper passes through unmodified in
 	// that case so handler-only tests stay focused.
 	scheduledAuth *scheduledauth.Validator
+
+	// migrationsTimeout and runMigrationsFunc are per-instance instead of
+	// package-level variables so that tests can set them on a specific
+	// Application instance without serialising parallel tests (04-M3).
+	// NewApplicationFromDeps sets them to the package defaults.
+	migrationsTimeout  time.Duration
+	runMigrationsFunc  func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
 // ApplicationConfig holds all env-based configuration for the application
@@ -147,13 +154,11 @@ type ExternalDeps struct {
 // (which is exactly what leaves schema_migrations.dirty = true).
 const defaultMigrationsTimeout = 20 * time.Second
 
-// migrationsTimeout is resolved once at package init time from
-// CUDLY_MIGRATION_TIMEOUT (time.ParseDuration). Declared as a var (not
-// const) so tests can overwrite it inside t.Cleanup to exercise the
-// timeout path with a 50ms budget. Tests that overwrite this MUST NOT
-// call t.Parallel() since there's no synchronisation on the variable.
-var migrationsTimeout = resolveMigrationsTimeout()
-
+// resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
+// It is called once in NewApplicationFromDeps to initialise
+// Application.migrationsTimeout. Because the timeout lives on the struct
+// (not a package-level var), tests can set it on a specific Application
+// instance without serialising parallel tests (04-M3).
 func resolveMigrationsTimeout() time.Duration {
 	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
 	if v == "" {
@@ -166,11 +171,6 @@ func resolveMigrationsTimeout() time.Duration {
 	}
 	return d
 }
-
-// runMigrations is a package-level indirection so tests can swap in a fake
-// that returns error / hangs / succeeds without running real SQL. Same
-// parallel-test restriction as migrationsTimeout.
-var runMigrations = migrations.RunMigrations
 
 // recordMigrationResult stores the outcome of the most recent migration
 // attempt. Takes migrationMu briefly. Called from inside ensureDB which
@@ -191,15 +191,26 @@ func (app *Application) snapshotMigrationState() (err error, finishedAt time.Tim
 	return app.migrationErr, app.migrationFinishedAt
 }
 
-// runMigrationsBounded runs the package-level runMigrations hook in a
-// goroutine bounded by timeout. The returned error is either the runner's
-// own error, a panic wrapped as an error, or a timeout error — never a
-// nil-with-goroutine-still-alive. The goroutine is guaranteed to have
-// exited before this function returns (the timeout branch waits on
-// <-done after cancelling the ctx), so no orphan goroutine survives past
-// this call — critical on Lambda where goroutines freeze between
-// invocations.
-func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string, timeout time.Duration) error {
+// runMigrationsBounded runs app.runMigrationsFunc in a goroutine bounded by
+// app.migrationsTimeout. The returned error is either the runner's own error,
+// a panic wrapped as an error, or a timeout error -- never a
+// nil-with-goroutine-still-alive. The goroutine is guaranteed to have exited
+// before this function returns (the timeout branch waits on <-done after
+// cancelling the ctx), so no orphan goroutine survives past this call --
+// critical on Lambda where goroutines freeze between invocations.
+//
+// Using instance fields (not package globals) makes it safe to call
+// t.Parallel() in tests that override migrationsTimeout or runMigrationsFunc
+// on a specific Application -- no shared mutable global state (04-M3).
+func (app *Application) runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error {
+	return runMigrationsBoundedWith(pool, migrationsPath, adminEmail, adminPassword, app.migrationsTimeout, app.runMigrationsFunc)
+}
+
+// runMigrationsBoundedWith is the underlying implementation used by the
+// Application method and by the package-level tests that pre-date the
+// instance-field migration (04-M3). Tests that want to exercise the
+// timeout/panic/success paths can call this directly with a fake runner.
+func runMigrationsBoundedWith(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string, timeout time.Duration, runner func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error) error {
 	migCtx, cancelMig := context.WithTimeout(context.Background(), timeout)
 	defer cancelMig()
 
@@ -210,7 +221,7 @@ func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminP
 				done <- fmt.Errorf("migration panic: %v", r)
 			}
 		}()
-		done <- runMigrations(migCtx, pool, migrationsPath, adminEmail, adminPassword)
+		done <- runner(migCtx, pool, migrationsPath, adminEmail, adminPassword)
 	}()
 
 	select {
@@ -480,21 +491,23 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	log.Printf("CUDly Server initialization complete")
 
 	return &Application{
-		Config:         deps.ConfigStore,
-		API:            apiHandler,
-		Scheduler:      sched,
-		Purchase:       purchaseManager,
-		Email:          deps.EmailSender,
-		Auth:           authService,
-		RateLimiter:    rateLimiter,
-		Version:        cfg.Version,
-		DB:             nil, // Will be initialized lazily on first request
-		staticDir:      staticDirFromEnv(),
-		dbConfig:       deps.DBConfig,
-		secretResolver: deps.SecretResolver,
-		appConfig:      cfg,
-		signer:         signer,
-		scheduledAuth:  scheduledAuth,
+		Config:            deps.ConfigStore,
+		API:               apiHandler,
+		Scheduler:         sched,
+		Purchase:          purchaseManager,
+		Email:             deps.EmailSender,
+		Auth:              authService,
+		RateLimiter:       rateLimiter,
+		Version:           cfg.Version,
+		DB:                nil, // Will be initialized lazily on first request
+		staticDir:         staticDirFromEnv(),
+		dbConfig:          deps.DBConfig,
+		secretResolver:    deps.SecretResolver,
+		appConfig:         cfg,
+		signer:            signer,
+		scheduledAuth:     scheduledAuth,
+		migrationsTimeout: resolveMigrationsTimeout(),
+		runMigrationsFunc: migrations.RunMigrations,
 	}, nil
 }
 
@@ -591,7 +604,7 @@ func (app *Application) ensureDB(ctx context.Context) error {
 			return err // secret-resolution failure is still fatal — env/config, not a migration runtime error
 		}
 
-		migErr := runMigrationsBounded(dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword, migrationsTimeout)
+		migErr := app.runMigrationsBounded(dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword)
 		app.recordMigrationResult(migErr)
 
 		if migErr != nil {
