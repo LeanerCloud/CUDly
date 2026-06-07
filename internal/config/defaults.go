@@ -2,7 +2,9 @@ package config
 
 import "time"
 
-// DefaultSettings defines the default configuration values for CUDly
+// DefaultSettings defines the default configuration values for CUDly.
+// UpdatedAt is the zero time.Time{} for every entry: these are static
+// compile-time defaults and have never been "updated" by a user.
 var DefaultSettings = []ConfigSetting{
 	// Purchase Defaults
 	{
@@ -11,7 +13,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "purchase_defaults",
 		Description: "Default commitment term in years (1 or 3)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "purchase_defaults.payment_option",
@@ -19,7 +21,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "purchase_defaults",
 		Description: "Default payment option: no-upfront, partial-upfront, all-upfront",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "purchase_defaults.coverage",
@@ -27,7 +29,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "purchase_defaults",
 		Description: "Default coverage percentage (0-100)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "purchase_defaults.ramp_schedule",
@@ -35,7 +37,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "purchase_defaults",
 		Description: "Default ramp schedule: immediate, weekly-25pct, monthly-10pct",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Notification Settings
@@ -45,7 +47,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "notification",
 		Description: "Days before purchase to send notification",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "notification.email_enabled",
@@ -53,7 +55,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "notification",
 		Description: "Enable email notifications for purchases",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "notification.approval_required",
@@ -61,7 +63,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "notification",
 		Description: "Require approval before executing purchases",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "notification.email_from",
@@ -69,7 +71,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "notification",
 		Description: "Email sender address for notifications",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Provider Settings
@@ -79,7 +81,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "providers",
 		Description: "Enable AWS provider for recommendations and purchases",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "providers.azure_enabled",
@@ -87,7 +89,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "providers",
 		Description: "Enable Azure provider for recommendations and purchases",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "providers.gcp_enabled",
@@ -95,7 +97,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "providers",
 		Description: "Enable GCP provider for recommendations and purchases",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Security Settings
@@ -105,7 +107,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "security",
 		Description: "Session duration in hours before re-authentication required",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.lockout_attempts",
@@ -113,7 +115,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "security",
 		Description: "Failed login attempts before account lockout",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.lockout_duration_minutes",
@@ -121,7 +123,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "security",
 		Description: "Account lockout duration in minutes",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.password_min_length",
@@ -129,7 +131,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "security",
 		Description: "Minimum password length requirement",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.password_require_special",
@@ -137,7 +139,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "security",
 		Description: "Require special characters in passwords",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.password_require_number",
@@ -145,7 +147,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "security",
 		Description: "Require numbers in passwords",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "security.password_require_uppercase",
@@ -153,7 +155,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "security",
 		Description: "Require uppercase letters in passwords",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Scheduling Settings
@@ -163,7 +165,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "scheduling",
 		Description: "Automatically collect recommendations on schedule",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "scheduling.collect_schedule",
@@ -171,7 +173,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "scheduling",
 		Description: "Schedule for automatic recommendation collection (EventBridge format)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "scheduling.auto_purchase",
@@ -179,7 +181,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "scheduling",
 		Description: "Automatically execute approved purchase plans",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "scheduling.purchase_schedule",
@@ -187,7 +189,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "scheduling",
 		Description: "Schedule for checking and executing purchase plans (EventBridge format)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// AWS-specific Settings
@@ -197,7 +199,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "aws",
 		Description: "Minimum RDS instance utilization for RI recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.elasticache.min_utilization_percent",
@@ -205,7 +207,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "aws",
 		Description: "Minimum ElastiCache node utilization for RI recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.opensearch.min_utilization_percent",
@@ -213,7 +215,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "aws",
 		Description: "Minimum OpenSearch instance utilization for RI recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.ec2.include_convertible",
@@ -221,7 +223,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "aws",
 		Description: "Include convertible EC2 Reserved Instances in recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.savings_plans.compute_enabled",
@@ -229,7 +231,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "aws",
 		Description: "Include Compute Savings Plans in recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.savings_plans.ec2_enabled",
@@ -237,7 +239,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "aws",
 		Description: "Include EC2 Instance Savings Plans in recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "aws.savings_plans.sagemaker_enabled",
@@ -245,7 +247,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "aws",
 		Description: "Include SageMaker Savings Plans in recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Cost and Savings Thresholds
@@ -255,7 +257,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "thresholds",
 		Description: "Minimum monthly savings ($) to include recommendation",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "thresholds.min_savings_percentage",
@@ -263,7 +265,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "thresholds",
 		Description: "Minimum savings percentage to include recommendation",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "thresholds.max_upfront_cost",
@@ -271,7 +273,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "thresholds",
 		Description: "Maximum upfront cost ($) per purchase (0 = no limit)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// Data Retention
@@ -281,7 +283,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "retention",
 		Description: "Days to retain purchase history (3 years default)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "retention.execution_history_days",
@@ -289,7 +291,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "retention",
 		Description: "Days to retain execution history records",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "retention.recommendation_cache_hours",
@@ -297,7 +299,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "retention",
 		Description: "Hours to cache recommendation data",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// RI Exchange Automation
@@ -307,7 +309,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "ri_exchange",
 		Description: "Master toggle for automated RI exchange",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "ri_exchange.mode",
@@ -315,7 +317,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "string",
 		Category:    "ri_exchange",
 		Description: "Exchange mode: manual (email approval) or auto (fully automated)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "ri_exchange.utilization_threshold",
@@ -323,7 +325,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "ri_exchange",
 		Description: "Utilization percentage below which an RI triggers exchange consideration",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "ri_exchange.max_payment_per_exchange_usd",
@@ -331,7 +333,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "ri_exchange",
 		Description: "Maximum payment per single exchange in USD (0 = refuse any payment)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "ri_exchange.max_payment_daily_usd",
@@ -339,7 +341,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "float",
 		Category:    "ri_exchange",
 		Description: "Maximum total daily exchange spend in USD (0 = refuse any payment)",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "ri_exchange.lookback_days",
@@ -347,7 +349,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "ri_exchange",
 		Description: "Days of utilization data to consider for exchange recommendations",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 
 	// API Rate Limiting
@@ -357,7 +359,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "api",
 		Description: "Maximum API requests per minute per user",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "api.rate_limit_enabled",
@@ -365,7 +367,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "bool",
 		Category:    "api",
 		Description: "Enable API rate limiting",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 	{
 		Key:         "api.timeout_seconds",
@@ -373,7 +375,7 @@ var DefaultSettings = []ConfigSetting{
 		Type:        "int",
 		Category:    "api",
 		Description: "Default API request timeout in seconds",
-		UpdatedAt:   time.Now(),
+		UpdatedAt:   time.Time{},
 	},
 }
 
