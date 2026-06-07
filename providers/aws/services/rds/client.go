@@ -308,7 +308,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	// means the CE recommendation omitted DeploymentOption; guessing single-az
 	// risks buying the wrong RI class. Fail loud so the caller can decide.
 	if details.AZConfig == "" {
-		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; "+
+		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; " +
 			"refusing to guess single-az vs multi-az (see M4 in 19-hardcoded-fallbacks-aws.md)")
 	}
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
@@ -316,6 +316,44 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		return "", fmt.Errorf("invalid payment option: %w", err)
 	}
 	return c.paginateRDSOfferings(ctx, rec, details, offeringType, execID)
+}
+
+// rdsOfferingPageResult holds the outcome of a single DescribeReservedDBInstancesOfferings page.
+type rdsOfferingPageResult struct {
+	id     string  // non-empty when a match was found
+	marker *string // pagination cursor for the next page; nil when exhausted
+}
+
+// fetchRDSOfferingPage calls DescribeReservedDBInstancesOfferings for one page and
+// scans the results. It returns a match ID when found, a non-nil marker when more
+// pages remain, or an error on API/offering-validation failure.
+func (c *Client) fetchRDSOfferingPage(ctx context.Context, baseInput *rds.DescribeReservedDBInstancesOfferingsInput, marker *string, rec common.Recommendation, offeringType string, tag string, page int, t0 time.Time) (rdsOfferingPageResult, error) {
+	input := *baseInput
+	input.Marker = marker
+
+	pageStart := time.Now()
+	result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, &input)
+	if err != nil {
+		log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
+			tag, page, time.Since(pageStart), time.Since(t0), err)
+		return rdsOfferingPageResult{}, fmt.Errorf("failed to describe offerings: %w", err)
+	}
+	log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
+		tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
+
+	id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType)
+	if scanErr != nil {
+		return rdsOfferingPageResult{}, scanErr
+	}
+	if id != "" {
+		log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total", tag, page, time.Since(t0))
+		return rdsOfferingPageResult{id: id}, nil
+	}
+	var nextMarker *string
+	if result.Marker != nil && aws.ToString(result.Marker) != "" {
+		nextMarker = result.Marker
+	}
+	return rdsOfferingPageResult{marker: nextMarker}, nil
 }
 
 // paginateRDSOfferings walks DescribeReservedDBInstancesOfferings pages and returns
@@ -337,51 +375,39 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 	log.Printf("purchase[%s]: RDS findOfferingID starting (class=%s engine=%s multi-az=%v duration=%s payment=%s)",
 		tag, rec.ResourceType, normalizedEngine, multiAZ, duration, offeringType)
 
+	baseInput := &rds.DescribeReservedDBInstancesOfferingsInput{
+		DBInstanceClass:    aws.String(rec.ResourceType),
+		ProductDescription: aws.String(normalizedEngine),
+		MultiAZ:            aws.Bool(multiAZ),
+		Duration:           aws.String(duration),
+		OfferingType:       aws.String(offeringType),
+		MaxRecords:         aws.Int32(100),
+	}
+
 	var marker *string
-	page := 0
-	for {
+	for page := 1; ; page++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		page++
 		if page > maxOfferingPages {
 			return "", fmt.Errorf("pagination cap reached after %d pages for RDS %s %s multi-az=%v %s (issue #688)",
 				maxOfferingPages, rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption)
 		}
-		input := &rds.DescribeReservedDBInstancesOfferingsInput{
-			DBInstanceClass:    aws.String(rec.ResourceType),
-			ProductDescription: aws.String(normalizedEngine),
-			MultiAZ:            aws.Bool(multiAZ),
-			Duration:           aws.String(duration),
-			OfferingType:       aws.String(offeringType),
-			MaxRecords:         aws.Int32(100),
-			Marker:             marker,
-		}
-		pageStart := time.Now()
-		result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
+		pr, err := c.fetchRDSOfferingPage(ctx, baseInput, marker, rec, offeringType, tag, page, t0)
 		if err != nil {
-			log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
-				tag, page, time.Since(pageStart), time.Since(t0), err)
-			return "", fmt.Errorf("failed to describe offerings: %w", err)
+			return "", err
 		}
-		log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
-			tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
-		if id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType); scanErr != nil {
-			return "", scanErr
-		} else if id != "" {
-			log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total",
-				tag, page, time.Since(t0))
-			return id, nil
+		if pr.id != "" {
+			return pr.id, nil
 		}
-		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+		if pr.marker == nil {
 			break
 		}
-		marker = result.Marker
+		marker = pr.marker
 	}
-	log.Printf("purchase[%s]: RDS findOfferingID exhausted %d page(s) in %s -- no match",
-		tag, page, time.Since(t0))
+	log.Printf("purchase[%s]: RDS findOfferingID exhausted pages in %s -- no match", tag, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for RDS %s %s multi-az=%v %s after %d page(s) (issue #688)",
-		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, page)
+		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, maxOfferingPages)
 }
 
 // scanRDSOfferingPage finds a matching offering in a single page of results.

@@ -262,6 +262,57 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	return result, nil
 }
 
+// resolveSPPlanType resolves the effective plan type for an offering lookup.
+// When the client is scoped to a specific plan type (post-split), it validates
+// that the recommendation matches and returns c.planType. Umbrella/legacy
+// clients (c.planType == "") fall back to spDetails.PlanType.
+func (c *Client) resolveSPPlanType(spPlanType string) (types.SavingsPlanType, error) {
+	planType, convErr := convertPlanType(spPlanType)
+	if c.planType == "" {
+		// Legacy umbrella client: accept any convertible plan type.
+		return planType, convErr
+	}
+	// Scoped client: reject mismatches to prevent buying the wrong product.
+	if convErr != nil {
+		return "", convErr
+	}
+	if planType != c.planType {
+		return "", fmt.Errorf(
+			"recommendation plan type %q does not match client scope %q",
+			spPlanType, c.planType,
+		)
+	}
+	return c.planType, nil
+}
+
+// buildSPOfferingsInput constructs the DescribeSavingsPlansOfferings request,
+// adding a region filter for EC2Instance plans when the client region is known.
+func (c *Client) buildSPOfferingsInput(planType types.SavingsPlanType, termSeconds int64, paymentOption types.SavingsPlanPaymentOption, tag string) *savingsplans.DescribeSavingsPlansOfferingsInput {
+	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
+		PlanTypes:      []types.SavingsPlanType{planType},
+		Durations:      []int64{termSeconds},
+		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
+		// Pin to USD so non-USD currency offerings are excluded server-side.
+		Currencies: []types.CurrencyCode{types.CurrencyCodeUsd},
+	}
+	// EC2Instance SPs are region-scoped; add a region filter so only the
+	// offering for the client's region is returned. Compute, SageMaker, and
+	// Database SPs are global and do not carry a region property.
+	if planType == types.SavingsPlanTypeEc2Instance {
+		if c.region == "" {
+			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
+		} else {
+			input.Filters = []types.SavingsPlanOfferingFilterElement{
+				{
+					Name:   types.SavingsPlanOfferingFilterAttributeRegion,
+					Values: []string{c.region},
+				},
+			}
+		}
+	}
+	return input
+}
+
 // findOfferingID finds the appropriate Savings Plans offering ID.
 // execID is the purchase execution UUID for log correlation; pass "" when
 // calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
@@ -271,27 +322,10 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		return "", fmt.Errorf("invalid service details for Savings Plans")
 	}
 
-	// Per-plan-type client (post-split): the client's planType is the
-	// source of truth. Reject mismatched recommendations rather than
-	// silently buying the wrong product. Umbrella legacy clients
-	// (c.planType == "") fall back to rec.Details.PlanType to preserve
-	// pre-split behaviour.
-	planType, convErr := convertPlanType(spDetails.PlanType)
-	if c.planType != "" {
-		if convErr != nil {
-			return "", convErr
-		}
-		if planType != c.planType {
-			return "", fmt.Errorf(
-				"recommendation plan type %q does not match client scope %q",
-				spDetails.PlanType, c.planType,
-			)
-		}
-		planType = c.planType
-	} else if convErr != nil {
-		return "", convErr
+	planType, err := c.resolveSPPlanType(spDetails.PlanType)
+	if err != nil {
+		return "", err
 	}
-
 	termSeconds, err := convertTermToSeconds(rec.Term)
 	if err != nil {
 		return "", err
@@ -310,29 +344,7 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
 		tag, planType, rec.Term, rec.PaymentOption)
 
-	// Pin to USD so non-USD currency offerings are excluded server-side.
-	// EC2Instance SPs are region-scoped; add a region filter so only the
-	// offering for the client's region is returned. Compute, SageMaker, and
-	// Database SPs are global and do not carry a region property.
-	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
-		PlanTypes:      []types.SavingsPlanType{planType},
-		Durations:      []int64{termSeconds},
-		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
-		Currencies:     []types.CurrencyCode{types.CurrencyCodeUsd},
-	}
-	if planType == types.SavingsPlanTypeEc2Instance {
-		if c.region == "" {
-			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
-		} else {
-			input.Filters = []types.SavingsPlanOfferingFilterElement{
-				{
-					Name:   types.SavingsPlanOfferingFilterAttributeRegion,
-					Values: []string{c.region},
-				},
-			}
-		}
-	}
-
+	input := c.buildSPOfferingsInput(planType, termSeconds, paymentOption, tag)
 	offeringID, err := c.lookupOfferingID(ctx, input)
 	if err != nil {
 		log.Printf("purchase[%s]: SavingsPlans findOfferingID failed after %s: %v", tag, time.Since(t0), err)
