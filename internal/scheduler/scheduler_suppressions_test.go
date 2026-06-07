@@ -197,5 +197,44 @@ func TestApplySuppressions_NilAccountIDNormalised(t *testing.T) {
 	assert.Equal(t, 3, recs[0].Count, "5 - 2 = 3 (nil account matched to empty-string suppression)")
 }
 
+// TestApplySuppressionIndex_DoesNotMutateCallerSlice asserts that
+// applySuppressionIndex allocates a fresh output slice and never writes back
+// into the caller's backing array (05-M1).
+//
+// Pre-fix: out := recs[:0] shared the caller's backing array, so any append
+// inside the function would overwrite elements that the caller still expected
+// at their original positions. The fix allocates make([]T, 0, len(recs)).
+func TestApplySuppressionIndex_DoesNotMutateCallerSlice(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+	// Two recs; only the second is suppressed and therefore dropped.
+	recs := []config.RecommendationRecord{
+		{ID: "keep", Provider: "aws", Service: "ec2", Region: "us-east-1",
+			ResourceType: "t4g.nano", Count: 5, CloudAccountID: strPtr("acct-1")},
+		{ID: "drop", Provider: "aws", Service: "ec2", Region: "us-east-2",
+			ResourceType: "t4g.nano", Count: 5, CloudAccountID: strPtr("acct-1")},
+	}
+	// Keep a copy of the original IDs so we can detect mutations.
+	originalIDs := []string{recs[0].ID, recs[1].ID}
+
+	sups := []config.PurchaseSuppression{
+		{ExecutionID: "e1", AccountID: "acct-1", Provider: "aws",
+			Service: "ec2", Region: "us-east-2", ResourceType: "t4g.nano",
+			SuppressedCount: 5, ExpiresAt: future},
+	}
+	index := aggregateSuppressions(sups)
+	out := applySuppressionIndex(recs, index)
+
+	// The survivor set must contain only the non-suppressed rec.
+	require.Len(t, out, 1)
+	assert.Equal(t, "keep", out[0].ID)
+
+	// The original slice must be unchanged: both elements at their
+	// original positions with the original IDs (pre-fix: recs[1].ID
+	// would be overwritten by "keep" since out alias the same array).
+	require.Len(t, recs, 2, "original slice length must not change")
+	assert.Equal(t, originalIDs[0], recs[0].ID, "recs[0] must not be mutated")
+	assert.Equal(t, originalIDs[1], recs[1].ID, "recs[1] must not be mutated")
+}
+
 // Suppress unused-import warning in case this is the only file that imports pgx.
 var _ pgx.Tx = (pgx.Tx)(nil)
