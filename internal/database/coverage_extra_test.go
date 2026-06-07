@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,28 @@ func TestRedactedDSN(t *testing.T) {
 	assert.Contains(t, dsn, "cudly")
 	assert.Contains(t, dsn, "require")
 	assert.NotContains(t, dsn, "supersecret")
+}
+
+// TestRedactedDSN_SharesLayoutWithDSN guards the 06-N2 dedup: RedactedDSN and
+// DSN both derive from the single dsn() formatter, so the redacted string must
+// equal the real DSN with only the password swapped for "*****". If a future
+// field is added to dsn(), this stays green; if someone re-forks the format
+// string for only one of the two, it fails.
+func TestRedactedDSN_SharesLayoutWithDSN(t *testing.T) {
+	cfg := &Config{
+		Host:           "db.example.com",
+		Port:           5432,
+		User:           "admin",
+		Password:       "supersecret",
+		Database:       "cudly",
+		SSLMode:        "require",
+		ConnectTimeout: 10 * time.Second,
+	}
+
+	real := cfg.DSN("")
+	redacted := cfg.RedactedDSN()
+	expected := strings.Replace(real, "password=supersecret", "password=*****", 1)
+	assert.Equal(t, expected, redacted)
 }
 
 // Tests for extractPasswordFromSecret
