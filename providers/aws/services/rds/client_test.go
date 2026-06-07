@@ -845,13 +845,14 @@ func TestFindOfferingID_EmptyAZConfig_Errors(t *testing.T) {
 // TestNormalizeEngineName_AmbiguousErrors is the M6 regression test:
 // normalizeEngineName must error for Oracle, SQL Server, and bare "aurora"
 // inputs rather than silently guessing an edition.
+// CE returns "Oracle" (title-case) for any Oracle engine; the normalizer must
+// refuse to pick an edition (SE2, EE, etc.) because they are different products.
 func TestNormalizeEngineName_AmbiguousErrors(t *testing.T) {
 	client := &Client{}
 
 	ambiguous := []string{
 		"oracle",
 		"Oracle",
-		"oracle-se2",   // paradoxically exact, but contains "oracle" -- verify it errors
 		"Oracle-EE",
 		"sqlserver",
 		"SQLServer",
@@ -864,19 +865,7 @@ func TestNormalizeEngineName_AmbiguousErrors(t *testing.T) {
 	for _, engine := range ambiguous {
 		t.Run(engine, func(t *testing.T) {
 			_, err := client.normalizeEngineName(engine)
-			// oracle-se2 IS unambiguous -- it already contains "oracle" so the
-			// ambiguous oracle branch catches it. The engine string that the CE
-			// recommendation returns for SE2 is "Oracle" (title-case), not
-			// "oracle-se2"; the API value "oracle-se2" passes through the
-			// final else-return at the bottom. Let the sub-test declare its
-			// expectation explicitly rather than force all to error.
-			switch engine {
-			case "oracle-se2": // would pass through (no "oracle" substring match on lower)
-				// actually strings.Contains("oracle-se2", "oracle") IS true, so this errors
-				assert.Error(t, err, "engine %q must error (ambiguous oracle)", engine)
-			default:
-				assert.Error(t, err, "engine %q must error (M6)", engine)
-			}
+			assert.Error(t, err, "engine %q must error (M6 regression guard)", engine)
 		})
 	}
 }
