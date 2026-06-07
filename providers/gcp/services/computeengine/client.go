@@ -36,21 +36,25 @@ const maxCommitmentsPages = 50
 // maxMachineTypeItems caps GCP machine types iteration (one item per Next() call).
 const maxMachineTypeItems = 20
 
-// memMBPerVCPU is the memory-per-vCPU ratio (in MB) for GCP general-purpose
-// committed-use discounts. GCP requires both a VCPU and a MEMORY resource (the
-// memory Amount is expressed in MB) in a single commitments.insert call; the
-// ratio is fixed at 4096 MB per vCPU for
-// GENERAL_PURPOSE commitments.
-const memMBPerVCPU = 4096
 
-// termPlan converts a term string ("1yr"/"3yr"/"3") to the GCP Compute API
-// commitment plan value ("TWELVE_MONTH" or "THIRTY_SIX_MONTH"). Unrecognised
-// terms default to TWELVE_MONTH.
-func termPlan(term string) string {
-	if term == "3yr" || term == "3" {
-		return "THIRTY_SIX_MONTH"
+// termPlan converts a commitment term string to the canonical GCP Compute API
+// commitment plan value derived from the SDK enum constants.
+//
+// Accepted forms:
+//   - 1-year: "1yr", "1", "12mo"
+//   - 3-year: "3yr", "3", "36mo"
+//
+// An empty or unrecognised term returns an error rather than silently defaulting
+// to 12 months; a silent mis-default can purchase the wrong term and waste money.
+func termPlan(term string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(term)) {
+	case "3yr", "3", "36mo":
+		return computepb.Commitment_THIRTY_SIX_MONTH.String(), nil
+	case "1yr", "1", "12mo":
+		return computepb.Commitment_TWELVE_MONTH.String(), nil
+	default:
+		return "", fmt.Errorf("termPlan: unrecognised commitment term %q (accepted: 1yr/1/12mo or 3yr/3/36mo)", term)
 	}
-	return "TWELVE_MONTH"
 }
 
 // CommitmentsService interface for commitments operations (enables mocking)
@@ -377,12 +381,16 @@ type CommitmentRequest struct {
 // GroupCommitments groups recommendations by project+region+term into CommitmentRequests.
 // GCP requires both a VCPU and a MEMORY resource (memory Amount in MB) in a
 // single commitments.insert call.
-// Each recommendation's Count is treated as vCPU count; memory is estimated at 4 GB per vCPU.
+// Each recommendation's Count is treated as vCPU count; the memory Amount is
+// read from ComputeDetails.MemoryGB (populated by extractMemoryMBFromRecommendation).
+// Recommendations with an unrecognised term or missing memory are skipped with a
+// log warning so a bad rec never contaminates an otherwise valid group.
 func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 	type key struct{ account, region, term string }
 	type agg struct {
-		vcpus int64
-		plan  string
+		vcpus    int64
+		memoryMB int64
+		plan     string
 	}
 	groups := make(map[key]*agg)
 
@@ -390,11 +398,22 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 		if rec.Service != common.ServiceCompute || rec.Provider != common.ProviderGCP {
 			continue
 		}
+		plan, err := termPlan(rec.Term)
+		if err != nil {
+			log.Printf("GroupCommitments: skipping recommendation with unrecognised term %q: %v", rec.Term, err)
+			continue
+		}
+		recMemMB, err := memoryMBFromDetails(rec)
+		if err != nil {
+			log.Printf("GroupCommitments: skipping recommendation missing memory amount: %v", err)
+			continue
+		}
 		k := key{account: rec.Account, region: rec.Region, term: rec.Term}
 		if _, ok := groups[k]; !ok {
-			groups[k] = &agg{plan: termPlan(rec.Term)}
+			groups[k] = &agg{plan: plan}
 		}
 		groups[k].vcpus += int64(rec.Count)
+		groups[k].memoryMB += recMemMB
 	}
 
 	result := make([]CommitmentRequest, 0, len(groups))
@@ -409,7 +428,7 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 				{Type: "VCPU", Amount: a.vcpus},
 				// "MEMORY" is the GCP ResourceCommitment.Type enum member; the
 				// Amount is in MB (see buildInsertRequest, issue #1022).
-				{Type: "MEMORY", Amount: a.vcpus * memMBPerVCPU},
+				{Type: "MEMORY", Amount: a.memoryMB},
 			},
 		})
 		counter++
@@ -572,10 +591,13 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 		return nil, "", fmt.Errorf("buildInsertRequest: rec.Count must be > 0 (got %d); a zero-vCPU commitment is invalid (issue #1022)", rec.Count)
 	}
 
-	plan := termPlan(rec.Term)
+	plan, err := termPlan(rec.Term)
+	if err != nil {
+		return nil, "", fmt.Errorf("buildInsertRequest: %w", err)
+	}
 
 	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
-	// client exposes no SetLabels call — CUDs cannot be tagged or labeled via
+	// client exposes no SetLabels call -- CUDs cannot be tagged or labeled via
 	// the API. Encode the source into Description so customers can still filter
 	// with `gcloud compute commitments list --filter="description:..."`.
 	description := fmt.Sprintf("CUD for %s", rec.ResourceType)
@@ -584,6 +606,17 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 	}
 
 	commitmentName := idempotentCommitmentName(opts.IdempotencyToken)
+
+	// Derive the memory Amount from the Recommender payload (stored in
+	// ComputeDetails.MemoryGB by extractMemoryMBFromRecommendation). Using the
+	// real payload value is required for non-standard families (e.g. high-memory
+	// N2 uses 6 GB/vCPU rather than the GENERAL_PURPOSE 4 GB). We fail loud when
+	// the payload omits memory rather than silently falling back to a ratio that
+	// would produce an incorrect commitment for any non-standard family.
+	memMB, err := memoryMBFromDetails(rec)
+	if err != nil {
+		return nil, "", err
+	}
 
 	// GCP requires both a VCPU and a MEMORY resource (memory Amount in MB) in a
 	// single commitment insert.
@@ -603,7 +636,7 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 				// MB). Sending "MEMORY_MB" is an invalid enum value and GCP rejects
 				// the commitments.insert, failing the purchase (issue #1022).
 				Type:   stringPtr("MEMORY"),
-				Amount: int64Ptr(int64(rec.Count) * memMBPerVCPU),
+				Amount: int64Ptr(memMB),
 			},
 		},
 	}
@@ -863,6 +896,8 @@ func skuMatchesMachineType(sku *cloudbilling.Sku, machineType, region string) bo
 // BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
 // (issue #1022 C2). Pricing failures are logged but do not discard the recommendation:
 // EstimatedSavings from the Recommender payload is the authoritative savings signal.
+// Returns nil when the params.Term is unrecognised so the caller skips an
+// unroutable recommendation rather than queuing a purchase with an invalid plan.
 func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
 	// GCP CUDs are billed monthly with no upfront option; force "monthly"
 	// unconditionally and log any non-monthly input so scheduler
@@ -874,6 +909,17 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 	}
 	paymentOption := "monthly"
 
+	// H-3: propagate params.Term (default "1yr") and validate it so an
+	// unrecognised term fails loud here rather than reaching buildInsertRequest.
+	term := params.Term
+	if term == "" {
+		term = "1yr"
+	}
+	if _, err := termPlan(term); err != nil {
+		log.Printf("computeengine: skipping recommendation with unrecognised term %q: %v", term, err)
+		return nil
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCompute,
@@ -881,13 +927,14 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 		Region:         c.region,
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
+		Term:           term,
 		PaymentOption:  paymentOption,
 	}
 
 	extractResourceTypeFromRecommendation(gcpRec, rec)
 	extractCostImpactFromRecommendation(gcpRec, rec)
 	extractVCPUCountFromRecommendation(gcpRec, rec)
+	extractMemoryMBFromRecommendation(gcpRec, rec)
 
 	// Thread pricing into the converter so the scorer can rank/filter GCP recs
 	// correctly (issue #1022 C2). If the billing catalog lacks a commitment SKU
@@ -1024,8 +1071,8 @@ func vcpuCountFromOperationGroups(content *recommenderpb.RecommendationContent) 
 //   - Operation.Value: a structpb.Value whose numeric value is the amount, with
 //     Operation.Path indicating the resource type (e.g. "/resources/0/amount").
 //     Operations with ResourceType "compute.googleapis.com/Commitment" and a path
-//     containing "amount" carry the VCPU count; the sibling MEMORY_MB amount is
-//     always 4096 * vcpuCount for general-purpose commitments.
+//     containing "amount" carry the VCPU count; the sibling MEMORY amount is
+//     extracted by extractMemoryMBFromRecommendation.
 //   - RecommendationContent.Overview: a JSON struct with a "numericValue" field.
 //
 // We prefer the operation-value path because it is structured and unambiguous.
@@ -1048,6 +1095,62 @@ func extractVCPUCountFromRecommendation(gcpRec *recommenderpb.Recommendation, re
 			}
 		}
 	}
+}
+
+// memoryMBFromOperationGroups walks the commitment operation groups and returns
+// the MEMORY resource amount (in MB) encoded in the operation's numeric value,
+// or 0 if none is found. It is the sibling of vcpuCountFromOperationGroups:
+// both look at "compute.googleapis.com/Commitment" operations whose Path
+// contains "amount", but this function selects only those where isMemoryAmountOp
+// returns true (i.e. the path_filter type is MEMORY or MEMORY_MB).
+func memoryMBFromOperationGroups(content *recommenderpb.RecommendationContent) int64 {
+	for _, opGroup := range content.GetOperationGroups() {
+		for _, op := range opGroup.GetOperations() {
+			if !strings.Contains(strings.ToLower(op.GetResourceType()), "commitment") {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(op.GetPath()), "amount") {
+				continue
+			}
+			if !isMemoryAmountOp(op) {
+				continue
+			}
+			if v := op.GetValue(); v != nil {
+				if nv, ok := v.GetKind().(*structpb.Value_NumberValue); ok && nv.NumberValue > 0 {
+					return int64(nv.NumberValue)
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// extractMemoryMBFromRecommendation extracts the MEMORY resource amount (in MB)
+// from the Recommender payload and stores it in rec.Details as ComputeDetails.MemoryGB.
+// This allows buildInsertRequest to use the payload-sourced amount rather than the
+// general-purpose ratio approximation. No-op when the payload carries no MEMORY op.
+func extractMemoryMBFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) {
+	if gcpRec.Content == nil {
+		return
+	}
+	memMB := memoryMBFromOperationGroups(gcpRec.Content)
+	if memMB <= 0 {
+		return
+	}
+	// Store as ComputeDetails.MemoryGB (MB -> GB conversion). GCP memory amounts
+	// are always whole multiples of at least 256 MB, so the float64 roundtrip is
+	// exact: memMB / 1024 * 1024 == memMB for any value divisible by 1.
+	rec.Details = common.ComputeDetails{MemoryGB: float64(memMB) / 1024.0}
+}
+
+// memoryMBFromDetails reads the MEMORY amount (in MB) from rec.Details when it
+// was populated by extractMemoryMBFromRecommendation. Returns an error when the
+// field is absent or zero -- callers must not silently fall back to a ratio.
+func memoryMBFromDetails(rec common.Recommendation) (int64, error) {
+	if cd, ok := rec.Details.(common.ComputeDetails); ok && cd.MemoryGB > 0 {
+		return int64(cd.MemoryGB * 1024), nil
+	}
+	return 0, fmt.Errorf("memoryMBFromDetails: MEMORY resource amount absent from recommendation Details (no MEMORY op in Recommender payload); cannot build CUD insert without explicit memory")
 }
 
 // idempotentNameTokenLen is how many leading hex characters of the idempotency

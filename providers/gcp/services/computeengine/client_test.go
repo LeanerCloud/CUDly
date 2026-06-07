@@ -473,6 +473,7 @@ func TestComputeEngineClient_PurchaseCommitment_WithMock(t *testing.T) {
 		Term:           "1yr",
 		CommitmentCost: 1000.0,
 		Count:          5,
+		Details:        common.ComputeDetails{MemoryGB: 20.0}, // 5 vCPU * 4 GB
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
@@ -489,7 +490,12 @@ func TestComputeEngineClient_PurchaseCommitment_EncodesSourceInDescription(t *te
 	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        1,
+		Details:      common.ComputeDetails{MemoryGB: 4.0}, // 1 vCPU * 4 GB
+	}
 
 	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
 	require.NoError(t, err)
@@ -506,7 +512,12 @@ func TestComputeEngineClient_PurchaseCommitment_OmitsTagWhenSourceEmpty(t *testi
 	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        1,
+		Details:      common.ComputeDetails{MemoryGB: 4.0},
+	}
 
 	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
@@ -528,7 +539,12 @@ func TestComputeEngineClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) 
 	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 5}
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        5,
+		Details:      common.ComputeDetails{MemoryGB: 20.0}, // 5 vCPU * 4 GB
+	}
 	token := common.DeriveIdempotencyToken("exec-654", 0)
 	opts := common.PurchaseOptions{Source: common.PurchaseSourceWeb, IdempotencyToken: token}
 
@@ -569,7 +585,12 @@ func TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID(t *testing
 	mockService := &MockCommitmentsService{operation: &MockOperation{err: nil}}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Term: "1yr", Count: 1}
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        1,
+		Details:      common.ComputeDetails{MemoryGB: 4.0},
+	}
 
 	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	require.NoError(t, err)
@@ -593,6 +614,7 @@ func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
 		ResourceType: "n1-standard-1",
 		Term:         "3yr",
 		Count:        4, // must be > 0 after issue #1022 guard
+		Details:      common.ComputeDetails{MemoryGB: 16.0}, // 4 vCPU * 4 GB
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
@@ -609,8 +631,14 @@ func TestComputeEngineClient_PurchaseCommitment_InsertError(t *testing.T) {
 	}
 	client.SetCommitmentsService(mockService)
 
-	// Count must be > 0 so the guard passes and the insert error is exercised.
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Count: 2}
+	// Count must be > 0, Term must be valid, and Details.MemoryGB must be set so
+	// all pre-insert guards pass and the insert error is exercised.
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        2,
+		Details:      common.ComputeDetails{MemoryGB: 8.0},
+	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
@@ -627,8 +655,14 @@ func TestComputeEngineClient_PurchaseCommitment_WaitError(t *testing.T) {
 	}
 	client.SetCommitmentsService(mockService)
 
-	// Count must be > 0 so the guard passes and the wait error is exercised.
-	rec := common.Recommendation{ResourceType: "n1-standard-1", Count: 2}
+	// Count must be > 0, Term must be valid, and Details.MemoryGB must be set so
+	// all pre-insert guards pass and the wait error is exercised.
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-1",
+		Term:         "1yr",
+		Count:        2,
+		Details:      common.ComputeDetails{MemoryGB: 8.0},
+	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
@@ -911,15 +945,22 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 }
 
 // realisticCUDRecommendation builds a realistic GCP Commitment Recommender payload
-// for a 4-vCPU n1-standard-4 commitment in us-central1. The operation group has two ops:
+// for a 4-vCPU n1-standard-4 commitment in us-central1. The operation groups have
+// three ops:
 //  1. A machine-type op whose resource path ends in the machine type (n1-standard-4) --
 //     used by extractResourceTypeFromOperations to set rec.ResourceType.
-//  2. A commitment resource op whose numeric Value is the VCPU count --
-//     used by extractVCPUCountFromRecommendation to set rec.Count.
+//  2. A VCPU commitment resource op whose numeric Value is the VCPU count --
+//     used by extractVCPUCountFromRecommendation to set rec.Count = 4.
+//  3. A MEMORY commitment resource op whose numeric Value is 6144 MB --
+//     used by extractMemoryMBFromRecommendation to set rec.Details.MemoryGB = 6.
+//     Using 6144 MB (1536 MB/vCPU) intentionally tests a non-4096-ratio case to
+//     confirm the value is read from the payload rather than computed from a ratio.
 //
-// This mirrors the GCP CUD Recommender format (issue #1022 C1).
+// This mirrors the GCP CUD Recommender format (issue #1022 C1 + memory fix).
 func realisticCUDRecommendation() *recommenderpb.Recommendation {
 	vcpuVal, _ := structpb.NewValue(4.0)
+	memVal, _ := structpb.NewValue(6144.0) // 6144 MB = 6 GB; ratio is 1536 MB/vCPU, NOT 4096
+	memTypeFilter, _ := structpb.NewValue("MEMORY")
 	return &recommenderpb.Recommendation{
 		Name: "projects/test/locations/us-central1/recommenders/google.billing.CostInsight.commitmentRecommender/recommendations/rec-001",
 		PrimaryImpact: &recommenderpb.Impact{
@@ -949,13 +990,26 @@ func realisticCUDRecommendation() *recommenderpb.Recommendation {
 				{
 					Operations: []*recommenderpb.Operation{
 						{
-							// Commitment resource op: carries the VCPU amount as a numeric value.
+							// VCPU op: carries the vCPU count as a numeric value.
 							// extractVCPUCountFromRecommendation reads this and sets rec.Count = 4.
 							Action:       "add",
 							ResourceType: "compute.googleapis.com/Commitment",
 							Resource:     "//compute.googleapis.com/projects/test/regions/us-central1/commitments/cud-001",
 							Path:         "/resources/0/amount",
 							PathValue:    &recommenderpb.Operation_Value{Value: vcpuVal},
+						},
+						{
+							// MEMORY op: carries the memory amount in MB as a numeric value.
+							// extractMemoryMBFromRecommendation reads this (path_filter type=MEMORY)
+							// and sets rec.Details = ComputeDetails{MemoryGB: 6.0}.
+							Action:       "add",
+							ResourceType: "compute.googleapis.com/Commitment",
+							Resource:     "//compute.googleapis.com/projects/test/regions/us-central1/commitments/cud-001",
+							Path:         "/resources/1/amount",
+							PathValue:    &recommenderpb.Operation_Value{Value: memVal},
+							PathFilters: map[string]*structpb.Value{
+								"/resources/1/type": memTypeFilter,
+							},
 						},
 					},
 				},
@@ -1017,24 +1071,33 @@ func mockBillingWithCommitment() *MockBillingService {
 // for issue #1022 C1. It exercises the full converter->purchase path with a
 // realistic Recommender payload and asserts:
 //   - converter sets Count > 0 (extracted from the operation's numeric value)
-//   - buildInsertRequest produces a non-zero VCPU Amount in the resulting commitment
+//   - converter extracts the MEMORY amount from the payload (not a ratio)
+//   - buildInsertRequest produces the exact VCPU and MEMORY Amounts
 //
-// This test FAILS on the pre-fix code where convertGCPRecommendation never set Count.
+// The payload uses 6144 MB for 4 vCPUs (1536 MB/vCPU, NOT 4096). An old ratio-
+// based implementation would produce 4*4096 = 16384 MB; the correct value is
+// 6144 MB. This assertion fails on pre-fix ratio-based code.
 func TestConverterToInsert_CountNonZero_VCPUAmountSet(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 	client.SetBillingService(mockBillingWithCommitment())
 
-	gcpRec := realisticCUDRecommendation()
+	gcpRec := realisticCUDRecommendation() // 4 vCPU, 6144 MB (from payload)
 	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 
 	// C1: Count must be > 0 so that buildInsertRequest produces non-zero VCPU Amount.
 	require.Greater(t, rec.Count, 0, "convertGCPRecommendation must set Count > 0 from the Recommender payload (issue #1022 C1)")
 
-	// Verify the insert request carries the correct VCPU count.
+	// Memory must be extracted from the payload and stored in Details.
+	cd, ok := rec.Details.(common.ComputeDetails)
+	require.True(t, ok, "convertGCPRecommendation must populate ComputeDetails (memory extracted from payload)")
+	assert.Equal(t, 6.0, cd.MemoryGB,
+		"MEMORY amount from payload is 6144 MB = 6 GB; ratio-based code would produce 16 GB (4*4096 MB)")
+
+	// Verify the insert request carries the correct VCPU and MEMORY amounts.
 	insertReq, _, buildErr := client.buildInsertRequest(*rec, common.PurchaseOptions{})
-	require.NoError(t, buildErr, "buildInsertRequest must not error when Count > 0")
+	require.NoError(t, buildErr, "buildInsertRequest must not error when Count > 0 and memory is present")
 	require.NotNil(t, insertReq)
 	require.NotNil(t, insertReq.CommitmentResource)
 
@@ -1055,8 +1118,10 @@ func TestConverterToInsert_CountNonZero_VCPUAmountSet(t *testing.T) {
 		}
 	}
 	assert.Empty(t, sawInvalidType, "insert request must use only valid ResourceCommitment.Type enum members; got %q (issue #1022)", sawInvalidType)
-	assert.Greater(t, vcpuAmount, int64(0), "VCPU Amount in the insert request must be > 0 (issue #1022 C1)")
-	assert.Greater(t, memoryAmount, int64(0), "MEMORY Amount in the insert request must be > 0 (issue #1022 C1)")
+	assert.Equal(t, int64(4), vcpuAmount, "VCPU Amount in the insert request must equal the extracted count")
+	// Exact memory check: payload says 6144 MB; old ratio (4*4096=16384 MB) would fail.
+	assert.Equal(t, int64(6144), memoryAmount,
+		"MEMORY Amount must match the payload's 6144 MB (not ratio-derived 4*4096=16384 MB)")
 }
 
 // TestConverterFillsPricingForScorer is the regression test for issue #1022 C2.
@@ -1205,7 +1270,14 @@ func TestConvertGCPRecommendation_ParamPaymentOptionRespected(t *testing.T) {
 // member "MEMORY" (Amount in MB), not the invalid "MEMORY_MB" string that GCP
 // rejects on commitments.insert. Fails on the pre-fix code that emitted
 // "MEMORY_MB".
+// The memory amount is read from ComputeDetails.MemoryGB (set by the converter);
+// recommendations without Details are skipped.
 func TestGroupCommitments_UsesValidMemoryEnum(t *testing.T) {
+	// 4 vCPU, 24 GB memory (non-4096-ratio to confirm the value is read from
+	// Details, not computed from the old ratio).
+	const wantMemoryGB = 24.0
+	const wantMemoryMB = int64(wantMemoryGB * 1024)
+
 	recs := []common.Recommendation{
 		{
 			Provider: common.ProviderGCP,
@@ -1214,6 +1286,7 @@ func TestGroupCommitments_UsesValidMemoryEnum(t *testing.T) {
 			Region:   "us-central1",
 			Term:     "1yr",
 			Count:    4,
+			Details:  common.ComputeDetails{MemoryGB: wantMemoryGB},
 		},
 	}
 
@@ -1228,13 +1301,33 @@ func TestGroupCommitments_UsesValidMemoryEnum(t *testing.T) {
 			assert.Equal(t, int64(4), r.Amount, "VCPU amount must equal the summed Count")
 		case "MEMORY":
 			sawMemory = true
-			assert.Equal(t, int64(4*memMBPerVCPU), r.Amount, "MEMORY amount must be 4096 MB per vCPU")
+			assert.Equal(t, wantMemoryMB, r.Amount, "MEMORY amount must equal the payload-sourced MB (issue #1022)")
 		default:
 			t.Fatalf("invalid ResourceCommitment.Type %q (issue #1022): must be VCPU/MEMORY/LOCAL_SSD/ACCELERATOR", r.Type)
 		}
 	}
 	assert.True(t, sawVCPU, "GroupCommitments must include a VCPU resource")
 	assert.True(t, sawMemory, "GroupCommitments must include a MEMORY resource (issue #1022)")
+}
+
+// TestGroupCommitments_SkipsRecsWithoutMemory verifies that GroupCommitments skips
+// recommendations that have no Details.MemoryGB (payload omitted memory) rather
+// than producing a zero-memory commitment that GCP would reject.
+func TestGroupCommitments_SkipsRecsWithoutMemory(t *testing.T) {
+	recs := []common.Recommendation{
+		{
+			Provider: common.ProviderGCP,
+			Service:  common.ServiceCompute,
+			Account:  "test-project",
+			Region:   "us-central1",
+			Term:     "1yr",
+			Count:    4,
+			// No Details: memory is absent from the payload.
+		},
+	}
+
+	groups := GroupCommitments(recs)
+	assert.Empty(t, groups, "GroupCommitments must skip recs without payload memory, not produce a zero-memory commitment")
 }
 
 // TestConvertGCPRecommendation_NonMonthlyPaymentOptionForcedToMonthly is a
@@ -1280,4 +1373,131 @@ func TestIsMemoryAmountOp_MatchesBothSpellings(t *testing.T) {
 		PathFilters: map[string]*structpb.Value{"/resources/*/type": svVCPU},
 	}
 	assert.False(t, isMemoryAmountOp(vcpuOp), "isMemoryAmountOp must not skip a VCPU op")
+}
+
+// TestBuildInsertRequest_RefusesMissingMemory is the regression test for the
+// "fail loud" policy on missing memory: buildInsertRequest must return an error
+// when rec.Details does not carry a ComputeDetails.MemoryGB value (i.e. the
+// Recommender payload omitted the MEMORY op). A silent fallback to a fixed ratio
+// would produce incorrect commitments for non-standard machine families.
+//
+// This test fails on pre-fix code that silently used memMBPerVCPU as a fallback.
+func TestBuildInsertRequest_RefusesMissingMemory(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-4",
+		Term:         "1yr",
+		Count:        4,
+		// No Details: memory absent from Recommender payload.
+	}
+
+	_, _, err := client.buildInsertRequest(rec, common.PurchaseOptions{})
+	require.Error(t, err, "buildInsertRequest must refuse when memory is absent from the payload")
+	assert.Contains(t, err.Error(), "MEMORY resource amount absent",
+		"error must name the cause so operators can diagnose the missing Recommender field")
+
+	// PurchaseCommitment must surface the error and not call Insert.
+	mockSvc := &MockCommitmentsService{operation: &MockOperation{}}
+	client.SetCommitmentsService(mockSvc)
+	result, purchaseErr := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.Error(t, purchaseErr)
+	assert.False(t, result.Success)
+	assert.Empty(t, mockSvc.insertReqs, "Insert must not be called when memory is absent")
+}
+
+// TestTermPlan_UsesSdkEnumConstants verifies that termPlan returns the exact string
+// produced by the SDK enum's String() method (not a hand-written literal), so any
+// future SDK rename propagates automatically.
+func TestTermPlan_UsesSdkEnumConstants(t *testing.T) {
+	plan12, err := termPlan("1yr")
+	require.NoError(t, err)
+	assert.Equal(t, computepb.Commitment_TWELVE_MONTH.String(), plan12,
+		"1yr must map to the SDK TWELVE_MONTH constant, not a string literal")
+
+	plan36, err := termPlan("3yr")
+	require.NoError(t, err)
+	assert.Equal(t, computepb.Commitment_THIRTY_SIX_MONTH.String(), plan36,
+		"3yr must map to the SDK THIRTY_SIX_MONTH constant, not a string literal")
+}
+
+// TestTermPlan_RejectsUnknownTerm is the regression test for the "fail loud" policy:
+// termPlan must return an error rather than silently defaulting to 12 months when
+// given an unrecognised or empty term. A silent mis-default can purchase the wrong
+// duration and waste money.
+//
+// This test fails on pre-fix code that silently returned TWELVE_MONTH for any
+// unrecognised input.
+func TestTermPlan_RejectsUnknownTerm(t *testing.T) {
+	for _, badTerm := range []string{"", "2yr", "invalid", "24mo", "forever"} {
+		_, err := termPlan(badTerm)
+		require.Error(t, err, "termPlan must reject unrecognised term %q (no silent 12-month default)", badTerm)
+		assert.Contains(t, err.Error(), "unrecognised commitment term",
+			"error for term %q must identify the bad input", badTerm)
+	}
+}
+
+// TestTermPlan_AcceptsAllDocumentedForms asserts that termPlan accepts all
+// documented 1-year and 3-year input forms.
+func TestTermPlan_AcceptsAllDocumentedForms(t *testing.T) {
+	for _, form := range []string{"1yr", "1", "12mo"} {
+		got, err := termPlan(form)
+		require.NoError(t, err, "termPlan must accept 1-year form %q", form)
+		assert.Equal(t, computepb.Commitment_TWELVE_MONTH.String(), got,
+			"1-year form %q must map to TWELVE_MONTH", form)
+	}
+	for _, form := range []string{"3yr", "3", "36mo"} {
+		got, err := termPlan(form)
+		require.NoError(t, err, "termPlan must accept 3-year form %q", form)
+		assert.Equal(t, computepb.Commitment_THIRTY_SIX_MONTH.String(), got,
+			"3-year form %q must map to THIRTY_SIX_MONTH", form)
+	}
+}
+
+// TestConvertGCPRecommendation_PropagatesParamsTerm asserts that convertGCPRecommendation
+// propagates params.Term to rec.Term (H-3 audit finding). Pre-fix code hardcoded
+// "1yr" regardless of params.Term, so callers requesting "3yr" silently received
+// 1-year recommendations and 1-year pricing.
+//
+// This test FAILS on the pre-fix code that hardcoded Term: "1yr".
+func TestConvertGCPRecommendation_PropagatesParamsTerm(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	// 3yr must be propagated.
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{Term: "3yr"})
+	require.NotNil(t, rec)
+	assert.Equal(t, "3yr", rec.Term,
+		"params.Term=3yr must be propagated to rec.Term (H-3 fix); pre-fix code hardcoded 1yr")
+
+	// 1yr explicit must be propagated.
+	rec = client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{Term: "1yr"})
+	require.NotNil(t, rec)
+	assert.Equal(t, "1yr", rec.Term)
+
+	// Empty term must default to "1yr".
+	rec = client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+	assert.Equal(t, "1yr", rec.Term,
+		"empty params.Term must default to 1yr")
+}
+
+// TestConvertGCPRecommendation_RejectsUnknownTerm asserts that convertGCPRecommendation
+// returns nil when given an unrecognised params.Term (e.g. "5yr"). An unroutable
+// recommendation must be dropped before it can reach buildInsertRequest and attempt
+// to insert a commitment with an invalid plan.
+//
+// This test FAILS on the pre-fix code that either silently used "1yr" or panicked.
+func TestConvertGCPRecommendation_RejectsUnknownTerm(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{Term: "5yr"})
+	assert.Nil(t, rec,
+		"convertGCPRecommendation must return nil for unrecognised term (not silently default to 12 months)")
 }
