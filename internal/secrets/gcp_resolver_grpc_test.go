@@ -212,13 +212,19 @@ func TestGCPResolverReal_ListSecrets_Success(t *testing.T) {
 	assert.Equal(t, "secret-3", result[2])
 }
 
-func TestGCPResolverReal_ListSecrets_WithFilter(t *testing.T) {
+// TestGCPResolverReal_ListSecrets_HasPrefixFilter is the regression test for
+// 03-M3: the API request carries no Filter expression; client-side HasPrefix
+// is applied to the short name so the behavior matches the Resolver interface doc.
+func TestGCPResolverReal_ListSecrets_HasPrefixFilter(t *testing.T) {
 	mock := &mockSecretManagerServer{
 		listSecretsFn: func(ctx context.Context, req *secretmanagerpb.ListSecretsRequest) (*secretmanagerpb.ListSecretsResponse, error) {
-			assert.Equal(t, "labels.env=prod", req.Filter)
+			// The Filter field must be empty; prefix matching is client-side.
+			assert.Empty(t, req.Filter, "GCPResolver must NOT pass filter to the API")
 			return &secretmanagerpb.ListSecretsResponse{
 				Secrets: []*secretmanagerpb.Secret{
 					{Name: "projects/test-project/secrets/prod-secret-1"},
+					{Name: "projects/test-project/secrets/dev-secret-1"},
+					{Name: "projects/test-project/secrets/prod-secret-2"},
 				},
 			}, nil
 		},
@@ -228,11 +234,14 @@ func TestGCPResolverReal_ListSecrets_WithFilter(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	result, err := resolver.ListSecrets(ctx, "labels.env=prod")
+	result, err := resolver.ListSecrets(ctx, "prod-")
 
 	require.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Contains(t, result[0], "prod-secret-1")
+	// Only the two "prod-" secrets must be returned.
+	assert.Len(t, result, 2)
+	assert.Contains(t, result, "prod-secret-1")
+	assert.Contains(t, result, "prod-secret-2")
+	assert.NotContains(t, result, "dev-secret-1", "dev prefix must be filtered out client-side")
 }
 
 func TestGCPResolverReal_ListSecrets_Error(t *testing.T) {

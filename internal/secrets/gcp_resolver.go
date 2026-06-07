@@ -104,15 +104,21 @@ func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[s
 	return result, nil
 }
 
-// ListSecrets lists secrets in GCP Secret Manager
+// ListSecrets lists secrets in GCP Secret Manager whose short name has the given
+// prefix. The Resolver interface documents GCP as using prefix matching
+// (strings.HasPrefix); to honour that contract the filter is applied client-side
+// after listing, because GCP's ListSecrets.Filter field accepts an expression
+// language (not a simple name prefix) and the two semantics are incompatible.
+// The API request is sent without a Filter so we always get the full list; for
+// projects with very large numbers of secrets callers should prefer GetSecret by
+// exact name.
 func (r *GCPResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
 	req := &secretmanagerpb.ListSecretsRequest{
 		Parent: fmt.Sprintf("projects/%s", r.projectID),
-		Filter: filter,
 	}
 
 	it := r.client.ListSecrets(ctx, req)
-	secrets := make([]string, 0)
+	var secrets []string
 
 	for {
 		secret, err := it.Next()
@@ -125,7 +131,10 @@ func (r *GCPResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 
 		// Extract the short name from the full resource path.
 		// Format: projects/{project}/secrets/{secret}
-		secrets = append(secrets, path.Base(secret.Name))
+		name := path.Base(secret.Name)
+		if filter == "" || strings.HasPrefix(name, filter) {
+			secrets = append(secrets, name)
+		}
 	}
 
 	return secrets, nil

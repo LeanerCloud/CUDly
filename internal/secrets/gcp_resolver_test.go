@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -91,13 +93,14 @@ func (r *testableGCPResolver) GetSecretJSON(ctx context.Context, secretID string
 }
 
 func (r *testableGCPResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
+	// Mirror the real GCPResolver.ListSecrets: no Filter in the API request;
+	// client-side HasPrefix applied to the short name extracted via path.Base.
 	req := &secretmanagerpb.ListSecretsRequest{
 		Parent: "projects/" + r.projectID,
-		Filter: filter,
 	}
 
 	it := r.mockClient.ListSecrets(ctx, req)
-	secrets := make([]string, 0)
+	var secrets []string
 
 	for {
 		secret, err := it.Next()
@@ -108,7 +111,10 @@ func (r *testableGCPResolver) ListSecrets(ctx context.Context, filter string) ([
 			return nil, errors.New("failed to list secrets: " + err.Error())
 		}
 
-		secrets = append(secrets, secret.Name)
+		name := path.Base(secret.Name)
+		if filter == "" || strings.HasPrefix(name, filter) {
+			secrets = append(secrets, name)
+		}
 	}
 
 	return secrets, nil
@@ -221,17 +227,18 @@ func TestGCPResolver_ListSecrets_Success(t *testing.T) {
 	mockClient := new(MockGCPSecretManagerClient)
 	resolver := &testableGCPResolver{mockClient: mockClient, projectID: "my-project"}
 
-	secretNames := []string{
+	rawSecretNames := []string{
 		"projects/my-project/secrets/secret-1",
 		"projects/my-project/secrets/secret-2",
 		"projects/my-project/secrets/secret-3",
 	}
 
-	secrets := make([]*secretmanagerpb.Secret, len(secretNames))
-	for i, name := range secretNames {
+	secrets := make([]*secretmanagerpb.Secret, len(rawSecretNames))
+	for i, name := range rawSecretNames {
 		secrets[i] = &secretmanagerpb.Secret{Name: name}
 	}
 
+	// Filter field must NOT be set; client-side HasPrefix is used instead.
 	mockClient.On("ListSecrets", ctx, mock.MatchedBy(func(req *secretmanagerpb.ListSecretsRequest) bool {
 		return req.Parent == "projects/my-project" && req.Filter == ""
 	})).Return(&MockSecretIterator{secrets: secrets})
@@ -239,28 +246,39 @@ func TestGCPResolver_ListSecrets_Success(t *testing.T) {
 	result, err := resolver.ListSecrets(ctx, "")
 
 	require.NoError(t, err)
-	assert.Equal(t, secretNames, result)
+	// Short names (path.Base) are returned, not full resource paths.
+	assert.Equal(t, []string{"secret-1", "secret-2", "secret-3"}, result)
 	mockClient.AssertExpectations(t)
 }
 
-func TestGCPResolver_ListSecrets_WithFilter(t *testing.T) {
+// TestGCPResolver_ListSecrets_HasPrefixFilter verifies the client-side HasPrefix
+// contract documented on Resolver.ListSecrets (03-M3): only secrets whose short
+// name has the given prefix are returned; the GCP API request carries no Filter.
+func TestGCPResolver_ListSecrets_HasPrefixFilter(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockGCPSecretManagerClient)
 	resolver := &testableGCPResolver{mockClient: mockClient, projectID: "my-project"}
 
-	secrets := []*secretmanagerpb.Secret{
-		{Name: "projects/my-project/secrets/prod-secret"},
+	// Six secrets with different prefixes.
+	allSecrets := []*secretmanagerpb.Secret{
+		{Name: "projects/my-project/secrets/prod-db"},
+		{Name: "projects/my-project/secrets/prod-cache"},
+		{Name: "projects/my-project/secrets/dev-db"},
+		{Name: "projects/my-project/secrets/staging-db"},
+		{Name: "projects/my-project/secrets/prod-app"},
+		{Name: "projects/my-project/secrets/other"},
 	}
 
+	// API is called without a Filter expression.
 	mockClient.On("ListSecrets", ctx, mock.MatchedBy(func(req *secretmanagerpb.ListSecretsRequest) bool {
-		return req.Filter == "labels.env=prod"
-	})).Return(&MockSecretIterator{secrets: secrets})
+		return req.Filter == ""
+	})).Return(&MockSecretIterator{secrets: allSecrets})
 
-	result, err := resolver.ListSecrets(ctx, "labels.env=prod")
+	result, err := resolver.ListSecrets(ctx, "prod-")
 
 	require.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Contains(t, result[0], "prod-secret")
+	// Only the three "prod-" secrets must be returned, in iteration order.
+	assert.Equal(t, []string{"prod-db", "prod-cache", "prod-app"}, result)
 	mockClient.AssertExpectations(t)
 }
 
