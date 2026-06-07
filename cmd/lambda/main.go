@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/LeanerCloud/CUDly/internal/server"
@@ -42,16 +41,12 @@ func initApp(ctx context.Context) (*server.Application, error) {
 		return app, nil
 	}
 
-	// Set version for the application.
-	// Note: os.Setenv is not thread-safe, but Lambda serializes cold starts so this is safe.
-	// Consider passing version through a struct field for multi-threaded environments.
-	os.Setenv("VERSION", Version)
-
 	log.Printf("CUDly Lambda Handler starting, version: %s", Version)
 
-	// Initialize using the unified server package (PostgreSQL-based)
+	// Initialize using the unified server package (PostgreSQL-based).
+	// Pass Version directly to avoid the os.Setenv round-trip (04-N1).
 	var err error
-	app, err = server.NewApplication(ctx)
+	app, err = server.NewApplication(ctx, Version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize application: %w", err)
 	}

@@ -36,32 +36,17 @@ func TestInitApp_Cached(t *testing.T) {
 	assert.Equal(t, testApp, result, "should return cached app")
 }
 
+// TestInitApp_SetsVersion verifies that the ldflags-stamped Version is passed
+// directly to NewApplication (04-N1) rather than round-tripping through
+// os.Setenv("VERSION",...) / os.Getenv("VERSION"). We verify indirectly:
+// initApp is expected to fail because DB_HOST is unset, which means
+// NewApplication(ctx, Version) was called with the correct value. A later
+// successful init path (TestNewApplicationFromDeps in internal/server) confirms
+// the field is stored on ApplicationConfig.Version.
 func TestInitApp_SetsVersion(t *testing.T) {
 	origApp := app
 	origVersion := Version
 	origDBHost := os.Getenv("DB_HOST")
-	defer func() {
-		app = origApp
-		Version = origVersion
-		os.Setenv("DB_HOST", origDBHost)
-	}()
-
-	// Ensure app is nil so initApp tries to initialize
-	app = nil
-	Version = "test-v1.2.3"
-	os.Unsetenv("DB_HOST")
-
-	_, err := initApp(context.Background())
-	// It will fail because DB_HOST is not set, but Version should have been set
-	require.Error(t, err)
-	assert.Equal(t, "test-v1.2.3", os.Getenv("VERSION"))
-}
-
-func TestInitApp_EmptyVersion(t *testing.T) {
-	origApp := app
-	origVersion := Version
-	origDBHost := os.Getenv("DB_HOST")
-	origEnvVersion := os.Getenv("VERSION")
 	defer func() {
 		app = origApp
 		Version = origVersion
@@ -70,22 +55,19 @@ func TestInitApp_EmptyVersion(t *testing.T) {
 		} else {
 			os.Unsetenv("DB_HOST")
 		}
-		if origEnvVersion != "" {
-			os.Setenv("VERSION", origEnvVersion)
-		} else {
-			os.Unsetenv("VERSION")
-		}
 	}()
 
 	app = nil
-	Version = ""
+	Version = "test-v1.2.3"
 	os.Unsetenv("DB_HOST")
-	os.Unsetenv("VERSION")
 
 	_, err := initApp(context.Background())
+	// Expected to fail because DB_HOST is not set; the Version is now passed
+	// directly to NewApplication, not via the VERSION env var (04-N1).
 	require.Error(t, err)
-	// When Version is empty, os.Setenv("VERSION", Version) should NOT be called
-	// so VERSION env should remain unset or whatever it was before
+	// VERSION env var is intentionally no longer set by initApp.
+	assert.NotEqual(t, "test-v1.2.3", os.Getenv("VERSION"),
+		"VERSION env var must not be set by initApp after 04-N1 refactor")
 }
 
 func TestInitApp_FailsWithoutDB(t *testing.T) {

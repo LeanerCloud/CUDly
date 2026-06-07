@@ -483,9 +483,15 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	}, nil
 }
 
-// NewApplication creates and initializes a new Application instance
-func NewApplication(ctx context.Context) (*Application, error) {
+// NewApplication creates and initializes a new Application instance.
+// version overrides the VERSION env var when non-empty, so cmd entrypoints
+// can pass the ldflags-stamped value directly instead of round-tripping
+// through os.Setenv / os.Getenv (04-N1). Pass "" to fall back to the env.
+func NewApplication(ctx context.Context, version string) (*Application, error) {
 	cfg := LoadApplicationConfig()
+	if version != "" {
+		cfg.Version = version
+	}
 
 	if err := cfg.Analytics.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid analytics configuration: %w", err)

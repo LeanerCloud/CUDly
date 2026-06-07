@@ -31,16 +31,17 @@ func main() {
 	// Print version info
 	log.Printf("CUDly Server v%s (git: %s, built: %s)", Version, GitSHA, BuildTime)
 
-	// Export build metadata to the environment so the api package can read it
-	// without importing main (which would create an import cycle).
-	os.Setenv("VERSION", Version)
+	// Export BUILD_TIME and GIT_SHA to the environment so the api package can
+	// read them without importing main (import cycle). VERSION is passed
+	// directly to NewApplication to avoid the env round-trip (04-N1).
 	os.Setenv("BUILD_TIME", BuildTime)
 	os.Setenv("GIT_SHA", GitSHA)
 
 	ctx := context.Background()
 
-	// Initialize application
-	app, err := server.NewApplication(ctx)
+	// Initialize application; pass Version directly so it is stamped on
+	// ApplicationConfig without going through os.Setenv("VERSION",...).
+	app, err := server.NewApplication(ctx, Version)
 	if err != nil {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
