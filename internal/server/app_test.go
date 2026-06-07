@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
+	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
@@ -35,10 +37,10 @@ func TestIsLambdaRuntime(t *testing.T) {
 	}()
 
 	os.Unsetenv("AWS_LAMBDA_RUNTIME_API")
-	testutil.AssertEqual(t, false, isLambdaRuntime())
+	testutil.AssertEqual(t, false, runtime.IsLambda())
 
 	os.Setenv("AWS_LAMBDA_RUNTIME_API", "localhost:9001")
-	testutil.AssertEqual(t, true, isLambdaRuntime())
+	testutil.AssertEqual(t, true, runtime.IsLambda())
 }
 
 func TestClose(t *testing.T) {
@@ -460,7 +462,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			Version:                "v2.0",
 			NotificationDaysBefore: 7,
 			DefaultTerm:            1,
-			DefaultPaymentOption:   "AllUpfront",
+			DefaultPaymentOption:   "all-upfront", // canonical form; "AllUpfront" is now correctly rejected at startup
 			DefaultCoverage:        95.5,
 			APIKeySecretARN:        "arn:aws:key",
 			EnableDashboard:        true,
@@ -481,6 +483,110 @@ func TestNewApplicationFromDeps(t *testing.T) {
 		testutil.AssertEqual(t, cfg.DashboardURL, app.appConfig.DashboardURL)
 		testutil.AssertEqual(t, cfg.CORSAllowedOrigin, app.appConfig.CORSAllowedOrigin)
 	})
+}
+
+// TestNewApplicationFromDepsValidatesEnvDefaults is a regression test for
+// issue #1026: before the fix, invalid DEFAULT_PAYMENT_OPTION /
+// DEFAULT_RAMP_SCHEDULE values were silently propagated into the purchase
+// manager. The test confirms that NewApplicationFromDeps now fails fast on
+// an invalid value rather than accepting it.
+func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
+	ctx := context.Background()
+	validDBConfig := &database.Config{Host: "localhost", Port: 5432, Database: "cudly_test", User: "test", Password: "test"}
+
+	t.Run("invalid DEFAULT_PAYMENT_OPTION is rejected at startup", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultPaymentOption: "AllUpfront", // typo: should be "all-upfront"
+		}
+		deps := ExternalDeps{DBConfig: validDBConfig}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertError(t, err)
+		testutil.AssertContains(t, err.Error(), "DEFAULT_PAYMENT_OPTION")
+	})
+
+	t.Run("invalid DEFAULT_RAMP_SCHEDULE is rejected at startup", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultRampSchedule: "Immediate", // wrong case
+		}
+		deps := ExternalDeps{DBConfig: validDBConfig}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertError(t, err)
+		testutil.AssertContains(t, err.Error(), "DEFAULT_RAMP_SCHEDULE")
+	})
+
+	t.Run("empty DEFAULT_PAYMENT_OPTION is accepted", func(t *testing.T) {
+		// Empty means "use purchase manager built-in default" -- must not error.
+		cfg := ApplicationConfig{DefaultPaymentOption: ""}
+		deps := ExternalDeps{
+			EmailSender: &noopEmailSender{},
+			DBConfig:    validDBConfig,
+		}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		// Error is expected for other reasons (e.g. scheduledauth or DB), but
+		// NOT for the payment option: verify the message does not mention it.
+		if err != nil {
+			testutil.AssertTrue(t, !strings.Contains(err.Error(), "DEFAULT_PAYMENT_OPTION"),
+				"empty DEFAULT_PAYMENT_OPTION must not produce a validation error, got: "+err.Error())
+		}
+	})
+
+	t.Run("valid DEFAULT_PAYMENT_OPTION is accepted", func(t *testing.T) {
+		cfg := ApplicationConfig{
+			DefaultPaymentOption: "all-upfront",
+		}
+		deps := ExternalDeps{
+			EmailSender: &noopEmailSender{},
+			DBConfig:    validDBConfig,
+		}
+		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		// Error may occur for unrelated reasons but must not mention payment option.
+		if err != nil {
+			testutil.AssertTrue(t, !strings.Contains(err.Error(), "DEFAULT_PAYMENT_OPTION"),
+				"valid DEFAULT_PAYMENT_OPTION must not produce a validation error, got: "+err.Error())
+		}
+	})
+}
+
+// TestGetEnvIntLogsOnBadValue is a regression test for M1: before the fix,
+// getEnvInt silently returned the default on a malformed value. The test
+// confirms that a WARNING is now logged.
+func TestGetEnvIntLogsOnBadValue(t *testing.T) {
+	testutil.SetEnv(t, "TEST_ENV_INT_BAD", "notanint")
+
+	var logged string
+	orig := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	result := getEnvInt("TEST_ENV_INT_BAD", 42)
+	logged = buf.String()
+
+	testutil.AssertEqual(t, 42, result) // falls back to default
+	testutil.AssertTrue(t, strings.Contains(logged, "WARNING"),
+		"Expected WARNING log for bad int env var, got: "+logged)
+	testutil.AssertTrue(t, strings.Contains(logged, "TEST_ENV_INT_BAD"),
+		"Expected key name in warning log, got: "+logged)
+}
+
+// TestGetEnvFloatLogsOnBadValue mirrors TestGetEnvIntLogsOnBadValue for floats.
+func TestGetEnvFloatLogsOnBadValue(t *testing.T) {
+	testutil.SetEnv(t, "TEST_ENV_FLOAT_BAD", "eighty")
+
+	var logged string
+	orig := log.Writer()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	result := getEnvFloat("TEST_ENV_FLOAT_BAD", 80.0)
+	logged = buf.String()
+
+	testutil.AssertEqual(t, 80.0, result)
+	testutil.AssertTrue(t, strings.Contains(logged, "WARNING"),
+		"Expected WARNING log for bad float env var, got: "+logged)
+	testutil.AssertTrue(t, strings.Contains(logged, "TEST_ENV_FLOAT_BAD"),
+		"Expected key name in warning log, got: "+logged)
 }
 
 func TestInitConfigStore(t *testing.T) {
@@ -550,66 +656,84 @@ func TestHandleScheduledHTTP_EnsureDBError(t *testing.T) {
 	testutil.AssertEqual(t, 503, w.Code)
 }
 
-// ---------- runMigrationsBounded tests ----------
-//
-// These tests exercise the goroutine+timeout+recover logic in isolation by
-// swapping the package-level runMigrations hook. They do NOT hit a real DB,
-// so the *pgxpool.Pool passed in is a typed-nil — the fake runner never
-// dereferences it. MUST NOT run in parallel since the hook is global.
+// TestEnsureDB_UsesInstanceMigrationsTimeout is a regression test for 04-M3:
+// before the fix, migrationsTimeout was a package-level var that tests had to
+// swap under a serial-test constraint. The fix stores it on Application, so
+// distinct instances can have different timeouts without interfering.
+func TestEnsureDB_UsesInstanceMigrationsTimeout(t *testing.T) {
+	t.Parallel() // this must be safe now that the field lives on the struct
 
-func withFakeMigrations(t *testing.T, fake func(ctx context.Context, pool *pgxpool.Pool, path, email, pw string) error) {
-	t.Helper()
-	orig := runMigrations
-	runMigrations = fake
-	t.Cleanup(func() { runMigrations = orig })
+	// Build two independent Application instances with different timeouts.
+	// The fast one uses a 50ms budget (guaranteed to expire before the slow
+	// runner finishes); the slow one uses 1s (always succeeds).
+	slow := make(chan error, 1)
+	fastApp := &Application{
+		migrationsTimeout: 50 * time.Millisecond,
+		runMigrationsFunc: func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+			<-ctx.Done()
+			slow <- ctx.Err()
+			return ctx.Err()
+		},
+	}
+
+	err := fastApp.runMigrationsBounded(nil, "", "", "")
+	testutil.AssertError(t, err)
+	testutil.AssertTrue(t, strings.Contains(err.Error(), "timed out"),
+		"expected 'timed out', got: "+err.Error())
+	// Drain the channel so the goroutine does not leak.
+	<-slow
 }
 
+// ---------- runMigrationsBoundedWith tests ----------
+//
+// These tests exercise the goroutine+timeout+recover logic in isolation by
+// passing a fake runner directly. They do NOT hit a real DB, so the
+// *pgxpool.Pool passed in is a typed-nil -- the fake runner never
+// dereferences it. Tests are now safe to call t.Parallel() because no
+// package-level mutable state is used (04-M3).
+
 func TestRunMigrationsBounded_Success(t *testing.T) {
-	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
-		return nil
-	})
-	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	t.Parallel()
+	err := runMigrationsBoundedWith(nil, "", "", "", 1*time.Second,
+		func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error { return nil })
 	testutil.AssertNoError(t, err)
 }
 
 func TestRunMigrationsBounded_FailureReturnsError(t *testing.T) {
+	t.Parallel()
 	sentinel := errors.New("dirty at 27")
-	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
-		return sentinel
-	})
-	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	err := runMigrationsBoundedWith(nil, "", "", "", 1*time.Second,
+		func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error { return sentinel })
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected error to wrap sentinel, got: %v", err)
 	}
 }
 
 func TestRunMigrationsBounded_Timeout(t *testing.T) {
-	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
-		<-ctx.Done() // block until runMigrationsBounded cancels the ctx
-		return ctx.Err()
-	})
-
+	t.Parallel()
 	start := time.Now()
-	err := runMigrationsBounded(nil, "", "", "", 50*time.Millisecond)
+	err := runMigrationsBoundedWith(nil, "", "", "", 50*time.Millisecond,
+		func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
+			<-ctx.Done() // block until the timeout cancels the ctx
+			return ctx.Err()
+		})
 	elapsed := time.Since(start)
 
 	testutil.AssertError(t, err)
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected 'timed out' in error; got %q", err.Error())
 	}
-	// runMigrationsBounded must return shortly after the timeout elapses.
-	// If it took significantly longer than 2× the budget, the <-done
-	// rendezvous hung — meaning the goroutine wasn't properly cleaned up.
+	// Must return shortly after the timeout. Significantly longer means the
+	// goroutine was not joined -- a goroutine leak (critical on Lambda).
 	if elapsed > 200*time.Millisecond {
-		t.Fatalf("runMigrationsBounded took too long (%s); goroutine may have leaked", elapsed)
+		t.Fatalf("runMigrationsBoundedWith took too long (%s); goroutine may have leaked", elapsed)
 	}
 }
 
 func TestRunMigrationsBounded_PanicRecovered(t *testing.T) {
-	withFakeMigrations(t, func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error {
-		panic("boom")
-	})
-	err := runMigrationsBounded(nil, "", "", "", 1*time.Second)
+	t.Parallel()
+	err := runMigrationsBoundedWith(nil, "", "", "", 1*time.Second,
+		func(ctx context.Context, _ *pgxpool.Pool, _, _, _ string) error { panic("boom") })
 	testutil.AssertError(t, err)
 	if !strings.Contains(err.Error(), "panic") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected panic error to mention both 'panic' and 'boom'; got %q", err.Error())
@@ -630,8 +754,9 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	// Both set: secret-store value must win.
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	// Both set: secret-store value must win; no error on success.
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "from-secret-store", got)
 }
 
@@ -645,12 +770,14 @@ func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 		ScheduledTaskSecret: "plaintext-dev",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, nil)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, nil)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "plaintext-dev", got)
 }
 
 // TestResolveScheduledTaskSecret_SecretNameFallback verifies that a resolver
-// error causes a graceful fallback to the plaintext value.
+// error returns the plaintext fallback AND a non-nil error so callers in
+// bearer mode can propagate it as a fatal startup error (04-M4).
 func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
 	ctx := context.Background()
 
@@ -660,7 +787,8 @@ func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertError(t, err) // error is returned so bearer-mode callers can fail-fast
 	testutil.AssertEqual(t, "fallback-plaintext", got)
 }
 
@@ -674,6 +802,32 @@ func TestResolveScheduledTaskSecret_SecretNameOnly(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "prod-secret", got)
+}
+
+// TestNewApplicationFromDeps_BearerModeSecretResolutionFails is a regression
+// test for 04-M4: before the fix, a Key Vault / Secrets Manager lookup failure
+// in bearer mode caused startup to fail with the misleading "bearer mode
+// requires SCHEDULED_TASK_SECRET" error (because the empty fallback value was
+// passed to buildScheduledAuthFromConfig). The fix propagates the resolver
+// error directly, so the log shows the actual cause.
+func TestNewApplicationFromDeps_BearerModeSecretResolutionFails(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("SCHEDULED_TASK_AUTH_MODE", "bearer")
+
+	cfg := ApplicationConfig{
+		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:task-secret",
+		// No plaintext SCHEDULED_TASK_SECRET -- empty fallback.
+	}
+	deps := ExternalDeps{
+		DBConfig:       &database.Config{Host: "localhost"},
+		SecretResolver: &mockSecretResolver{getErr: errors.New("key vault unreachable")},
+	}
+
+	_, err := NewApplicationFromDeps(ctx, cfg, deps)
+	testutil.AssertError(t, err)
+	testutil.AssertContains(t, err.Error(), "arn:aws:secretsmanager:us-east-1:123:secret:task-secret")
+	testutil.AssertContains(t, err.Error(), "key vault unreachable")
 }

@@ -379,3 +379,63 @@ func TestCreateHTTPServer(t *testing.T) {
 		testutil.AssertEqual(t, ":3000", srv.Addr)
 	})
 }
+
+// TestHTTPTransportServesOIDCEndpoints is a regression test for issue #1024:
+// before the fix, requests to /oidc/.well-known/openid-configuration in
+// HTTP/container mode were served by the SPA file server (returning HTML or
+// 404) because the mux had no explicit OIDC registration. The test confirms
+// that the HTTP transport correctly intercepts OIDC paths and returns a JSON
+// response (not HTML/404).
+func TestHTTPTransportServesOIDCEndpoints(t *testing.T) {
+	// A nil signer means HandleOIDC returns a 404 JSON body rather than the
+	// real discovery document -- but critically it is *JSON* and the path is
+	// *handled* rather than falling through to the SPA/404 fallback.
+	apiHandler := api.NewHandler(api.HandlerConfig{})
+	app := &Application{
+		API: apiHandler,
+	}
+
+	srv := CreateHTTPServer(app, 19099)
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	for _, path := range []string{
+		"/oidc/.well-known/openid-configuration",
+		"/oidc/.well-known/jwks.json",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + path)
+			testutil.AssertNoError(t, err)
+			defer resp.Body.Close()
+
+			// Must be handled (not SPA-fallback 200 with HTML nor a net/http 404 text/plain).
+			ct := resp.Header.Get("Content-Type")
+			testutil.AssertTrue(t, strings.HasPrefix(ct, "application/json"),
+				"Expected Content-Type application/json for "+path+", got: "+ct)
+
+			// With no signer configured HandleOIDC returns 404 JSON (not an
+			// SPA-served HTML 200); assert the concrete status so the test
+			// fails loudly if the path ever falls through to the SPA fallback.
+			testutil.AssertEqual(t, http.StatusNotFound, resp.StatusCode)
+		})
+	}
+}
+
+// TestHandleOIDCHTTP verifies that handleOIDCHTTP correctly bridges to
+// api.Handler.HandleOIDC and returns JSON (not HTML).
+func TestHandleOIDCHTTP(t *testing.T) {
+	app := &Application{
+		API: api.NewHandler(api.HandlerConfig{}),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/oidc/.well-known/openid-configuration", nil)
+	w := httptest.NewRecorder()
+
+	app.handleOIDCHTTP(w, req)
+
+	// Without a signer the response is 404 JSON -- must not be HTML.
+	ct := w.Header().Get("Content-Type")
+	testutil.AssertTrue(t, strings.HasPrefix(ct, "application/json"),
+		"handleOIDCHTTP must return application/json, got: "+ct)
+}

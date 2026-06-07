@@ -173,8 +173,14 @@ $$ LANGUAGE plpgsql;
 -- Create partitions for current month + 3 months ahead
 SELECT create_future_savings_partitions(3);
 
--- Initial refresh of materialized views (will be empty at first)
-SELECT refresh_savings_materialized_views();
+-- Initial (non-concurrent) refresh of materialized views.
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY cannot run inside a transaction
+-- block and is unnecessary here because the views are empty at migration
+-- time (06-M4). Reserve CONCURRENTLY for the scheduled runtime refresh
+-- invoked via refresh_savings_materialized_views() outside any transaction.
+REFRESH MATERIALIZED VIEW monthly_savings_summary;
+REFRESH MATERIALIZED VIEW daily_savings_trend;
+REFRESH MATERIALIZED VIEW provider_savings_summary;
 
 -- Add comment explaining partition maintenance
 COMMENT ON FUNCTION create_savings_snapshot_partition IS

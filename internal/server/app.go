@@ -94,6 +94,13 @@ type Application struct {
 	// scheduledAuthMiddleware helper passes through unmodified in
 	// that case so handler-only tests stay focused.
 	scheduledAuth *scheduledauth.Validator
+
+	// migrationsTimeout and runMigrationsFunc are per-instance instead of
+	// package-level variables so that tests can set them on a specific
+	// Application instance without serialising parallel tests (04-M3).
+	// NewApplicationFromDeps sets them to the package defaults.
+	migrationsTimeout time.Duration
+	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
 // ApplicationConfig holds all env-based configuration for the application
@@ -140,13 +147,6 @@ type ExternalDeps struct {
 	STSClient      purchase.STSClient
 }
 
-// isLambdaRuntime is a thin wrapper over runtime.IsLambda so existing
-// call sites stay unchanged. New code should call runtime.IsLambda
-// directly.
-func isLambdaRuntime() bool {
-	return runtime.IsLambda()
-}
-
 // defaultMigrationsTimeout bounds how long ensureDB waits for migrations
 // before giving up and proceeding. Deliberately shorter than the default
 // Lambda timeout (30s at this writing) so a runaway migration gets
@@ -154,13 +154,11 @@ func isLambdaRuntime() bool {
 // (which is exactly what leaves schema_migrations.dirty = true).
 const defaultMigrationsTimeout = 20 * time.Second
 
-// migrationsTimeout is resolved once at package init time from
-// CUDLY_MIGRATION_TIMEOUT (time.ParseDuration). Declared as a var (not
-// const) so tests can overwrite it inside t.Cleanup to exercise the
-// timeout path with a 50ms budget. Tests that overwrite this MUST NOT
-// call t.Parallel() since there's no synchronisation on the variable.
-var migrationsTimeout = resolveMigrationsTimeout()
-
+// resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
+// It is called once in NewApplicationFromDeps to initialise
+// Application.migrationsTimeout. Because the timeout lives on the struct
+// (not a package-level var), tests can set it on a specific Application
+// instance without serialising parallel tests (04-M3).
 func resolveMigrationsTimeout() time.Duration {
 	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
 	if v == "" {
@@ -173,11 +171,6 @@ func resolveMigrationsTimeout() time.Duration {
 	}
 	return d
 }
-
-// runMigrations is a package-level indirection so tests can swap in a fake
-// that returns error / hangs / succeeds without running real SQL. Same
-// parallel-test restriction as migrationsTimeout.
-var runMigrations = migrations.RunMigrations
 
 // recordMigrationResult stores the outcome of the most recent migration
 // attempt. Takes migrationMu briefly. Called from inside ensureDB which
@@ -198,15 +191,26 @@ func (app *Application) snapshotMigrationState() (err error, finishedAt time.Tim
 	return app.migrationErr, app.migrationFinishedAt
 }
 
-// runMigrationsBounded runs the package-level runMigrations hook in a
-// goroutine bounded by timeout. The returned error is either the runner's
-// own error, a panic wrapped as an error, or a timeout error — never a
-// nil-with-goroutine-still-alive. The goroutine is guaranteed to have
-// exited before this function returns (the timeout branch waits on
-// <-done after cancelling the ctx), so no orphan goroutine survives past
-// this call — critical on Lambda where goroutines freeze between
-// invocations.
-func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string, timeout time.Duration) error {
+// runMigrationsBounded runs app.runMigrationsFunc in a goroutine bounded by
+// app.migrationsTimeout. The returned error is either the runner's own error,
+// a panic wrapped as an error, or a timeout error -- never a
+// nil-with-goroutine-still-alive. The goroutine is guaranteed to have exited
+// before this function returns (the timeout branch waits on <-done after
+// cancelling the ctx), so no orphan goroutine survives past this call --
+// critical on Lambda where goroutines freeze between invocations.
+//
+// Using instance fields (not package globals) makes it safe to call
+// t.Parallel() in tests that override migrationsTimeout or runMigrationsFunc
+// on a specific Application -- no shared mutable global state (04-M3).
+func (app *Application) runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error {
+	return runMigrationsBoundedWith(pool, migrationsPath, adminEmail, adminPassword, app.migrationsTimeout, app.runMigrationsFunc)
+}
+
+// runMigrationsBoundedWith is the underlying implementation used by the
+// Application method and by the package-level tests that pre-date the
+// instance-field migration (04-M3). Tests that want to exercise the
+// timeout/panic/success paths can call this directly with a fake runner.
+func runMigrationsBoundedWith(pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string, timeout time.Duration, runner func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error) error {
 	migCtx, cancelMig := context.WithTimeout(context.Background(), timeout)
 	defer cancelMig()
 
@@ -217,7 +221,7 @@ func runMigrationsBounded(pool *pgxpool.Pool, migrationsPath, adminEmail, adminP
 				done <- fmt.Errorf("migration panic: %v", r)
 			}
 		}()
-		done <- runMigrations(migCtx, pool, migrationsPath, adminEmail, adminPassword)
+		done <- runner(migCtx, pool, migrationsPath, adminEmail, adminPassword)
 	}()
 
 	select {
@@ -268,23 +272,44 @@ func LoadApplicationConfig() ApplicationConfig {
 		// NewApplicationFromDeps resolves it via the SecretResolver at init.
 		ScheduledTaskSecret:     os.Getenv("SCHEDULED_TASK_SECRET"),
 		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
-		IsLambda:                isLambdaRuntime(),
+		IsLambda:                runtime.IsLambda(),
 		Analytics:               LoadAnalyticsConfig(),
 	}
+}
+
+// validateAppConfigEnvDefaults validates the money-moving env-sourced defaults
+// at the startup boundary. Both DEFAULT_PAYMENT_OPTION and DEFAULT_RAMP_SCHEDULE
+// flow into the purchase manager as system-wide defaults; a typo propagates
+// silently into every purchase unless we reject it here (issue #1026).
+// Empty values are always valid (means "use the purchase manager's built-in default").
+func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
+	if err := config.ValidatePaymentOptionEnv(cfg.DefaultPaymentOption); err != nil {
+		return fmt.Errorf("invalid DEFAULT_PAYMENT_OPTION: %w", err)
+	}
+	if err := config.ValidateRampScheduleEnv(cfg.DefaultRampSchedule); err != nil {
+		return fmt.Errorf("invalid DEFAULT_RAMP_SCHEDULE: %w", err)
+	}
+	return nil
 }
 
 // resolveScheduledTaskSecret resolves SCHEDULED_TASK_SECRET_NAME to its real
 // value via the configured SecretResolver (Azure Key Vault / AWS Secrets
 // Manager) when possible. Falls back to cfg.ScheduledTaskSecret (plaintext
 // SCHEDULED_TASK_SECRET env var) if the resolver is absent or the lookup
-// fails. Pulled out of NewApplicationFromDeps to keep it under the
-// cyclomatic limit.
+// fails.
+//
+// The second return value is non-nil only when a SecretName was configured
+// AND the resolver failed. Callers in bearer mode MUST propagate this error
+// so startup fails with the real cause (e.g. "failed to resolve
+// scheduled-task secret from <name>: <err>") rather than the misleading
+// downstream "bearer mode requires SCHEDULED_TASK_SECRET" that would
+// otherwise surface when the empty fallback reaches buildScheduledAuth (04-M4).
 //
 // Security note: if both SCHEDULED_TASK_SECRET (plaintext) and
 // SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
 // because the plaintext value is visible in Lambda env / Terraform state.
 // The secret-store path is always preferred when both are present.
-func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) string {
+func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) {
 	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
 		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
 			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
@@ -293,14 +318,14 @@ func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, reso
 	}
 
 	if cfg.ScheduledTaskSecretName == "" || resolver == nil {
-		return cfg.ScheduledTaskSecret
+		return cfg.ScheduledTaskSecret, nil
 	}
 	resolved, err := resolver.GetSecret(ctx, cfg.ScheduledTaskSecretName)
 	if err != nil {
 		log.Printf("scheduled task secret resolution failed for %q: %v (falling back to SCHEDULED_TASK_SECRET)", cfg.ScheduledTaskSecretName, err)
-		return cfg.ScheduledTaskSecret
+		return cfg.ScheduledTaskSecret, err
 	}
-	return resolved
+	return resolved, nil
 }
 
 // envSourceOS implements scheduledauth.EnvSource against os.Getenv. The
@@ -310,17 +335,11 @@ type envSourceOS struct{}
 
 func (envSourceOS) Get(key string) string { return os.Getenv(key) }
 
-// buildScheduledAuth wires up the /api/scheduled/* validator. It pulls
-// mode + OIDC params from env (they're per-deployment Terraform inputs)
-// but injects the bearer secret from cfg — that path goes through the
-// SecretResolver (Key Vault) for production deployments and never lives
-// in a container env var. Returns ErrConfigInvalid on misconfig so the
-// container fails fast rather than silently accepting everything.
-func buildScheduledAuth(cfg ApplicationConfig) (*scheduledauth.Validator, error) {
-	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
-	if err != nil {
-		return nil, err
-	}
+// buildScheduledAuthFromConfig wires up the /api/scheduled/* validator from
+// a pre-loaded scheduledauth.Config. The bearer secret is injected from cfg
+// rather than re-read from env — in production cfg.ScheduledTaskSecret was
+// already resolved from Key Vault / Secrets Manager by the caller.
+func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) {
 	// In bearer mode, override the env-supplied secret with the one
 	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
 	// directly which is fine for local dev where the env carries the
@@ -332,6 +351,33 @@ func buildScheduledAuth(cfg ApplicationConfig) (*scheduledauth.Validator, error)
 	return scheduledauth.New(saCfg)
 }
 
+// initScheduledAuth loads the scheduledauth config, resolves the bearer
+// secret (failing fast in bearer mode if the resolver errors), builds the
+// validator, and warms up JWKS. Extracted from NewApplicationFromDeps to
+// keep its cyclomatic complexity within the project limit (04-M4).
+func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver secrets.Resolver) (*scheduledauth.Validator, error) {
+	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
+
+	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, *cfg, resolver)
+	if secretErr != nil && saCfg.Mode == scheduledauth.ModeBearer {
+		return nil, fmt.Errorf("failed to resolve scheduled-task secret from %q: %w", cfg.ScheduledTaskSecretName, secretErr)
+	}
+	cfg.ScheduledTaskSecret = resolvedSecret
+
+	v, err := buildScheduledAuthFromConfig(*cfg, saCfg)
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
+
+	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
+	v.Warmup(warmCtx)
+	warmCancel()
+	return v, nil
+}
+
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
 func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
@@ -339,21 +385,19 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}
 
-	cfg.ScheduledTaskSecret = resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
-
-	// Build the /api/scheduled/* auth validator. Fail-fast on bad
-	// config (empty subjects in oidc mode, unknown mode, etc.) — better
-	// to crash on startup than to silently accept unauthenticated
-	// scheduled-task calls in production.
-	scheduledAuth, err := buildScheduledAuth(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	// Validate money-moving env defaults at the startup boundary -- consistent with the
+	// fail-fast posture used for scheduledauth mode and ADMIN_PASSWORD_SECRET (issue #1026).
+	if err := validateAppConfigEnvDefaults(cfg); err != nil {
+		return nil, err
 	}
-	// Best-effort JWKS warmup — surfaces misconfiguration in startup
-	// logs without blocking startup if Google's CDN is unreachable.
-	warmCtx, warmCancel := context.WithTimeout(ctx, 5*time.Second)
-	scheduledAuth.Warmup(warmCtx)
-	warmCancel()
+
+	// Wire up the /api/scheduled/* auth validator. initScheduledAuth loads
+	// the mode config, resolves the bearer secret with fail-fast semantics
+	// in bearer mode (04-M4), builds the validator, and warms up JWKS.
+	scheduledAuth, err := initScheduledAuth(ctx, &cfg, deps.SecretResolver)
+	if err != nil {
+		return nil, err
+	}
 
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
@@ -405,7 +449,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
 		STSClient:       deps.STSClient,
-		IsLambda:        isLambdaRuntime(),
+		IsLambda:        runtime.IsLambda(),
 	})
 
 	// Auth store will be initialized lazily after DB connection
@@ -453,27 +497,35 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	log.Printf("CUDly Server initialization complete")
 
 	return &Application{
-		Config:         deps.ConfigStore,
-		API:            apiHandler,
-		Scheduler:      sched,
-		Purchase:       purchaseManager,
-		Email:          deps.EmailSender,
-		Auth:           authService,
-		RateLimiter:    rateLimiter,
-		Version:        cfg.Version,
-		DB:             nil, // Will be initialized lazily on first request
-		staticDir:      staticDirFromEnv(),
-		dbConfig:       deps.DBConfig,
-		secretResolver: deps.SecretResolver,
-		appConfig:      cfg,
-		signer:         signer,
-		scheduledAuth:  scheduledAuth,
+		Config:            deps.ConfigStore,
+		API:               apiHandler,
+		Scheduler:         sched,
+		Purchase:          purchaseManager,
+		Email:             deps.EmailSender,
+		Auth:              authService,
+		RateLimiter:       rateLimiter,
+		Version:           cfg.Version,
+		DB:                nil, // Will be initialized lazily on first request
+		staticDir:         staticDirFromEnv(),
+		dbConfig:          deps.DBConfig,
+		secretResolver:    deps.SecretResolver,
+		appConfig:         cfg,
+		signer:            signer,
+		scheduledAuth:     scheduledAuth,
+		migrationsTimeout: resolveMigrationsTimeout(),
+		runMigrationsFunc: migrations.RunMigrations,
 	}, nil
 }
 
-// NewApplication creates and initializes a new Application instance
-func NewApplication(ctx context.Context) (*Application, error) {
+// NewApplication creates and initializes a new Application instance.
+// version overrides the VERSION env var when non-empty, so cmd entrypoints
+// can pass the ldflags-stamped value directly instead of round-tripping
+// through os.Setenv / os.Getenv (04-N1). Pass "" to fall back to the env.
+func NewApplication(ctx context.Context, version string) (*Application, error) {
 	cfg := LoadApplicationConfig()
+	if version != "" {
+		cfg.Version = version
+	}
 
 	if err := cfg.Analytics.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid analytics configuration: %w", err)
@@ -558,7 +610,7 @@ func (app *Application) ensureDB(ctx context.Context) error {
 			return err // secret-resolution failure is still fatal — env/config, not a migration runtime error
 		}
 
-		migErr := runMigrationsBounded(dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword, migrationsTimeout)
+		migErr := app.runMigrationsBounded(dbConn.Pool(), app.dbConfig.MigrationsPath, adminEmail, adminPassword)
 		app.recordMigrationResult(migErr)
 
 		if migErr != nil {
@@ -850,18 +902,24 @@ func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Conf
 
 func getEnvInt(key string, defaultVal int) int {
 	if val := os.Getenv(key); val != "" {
-		if result, err := strconv.Atoi(val); err == nil {
-			return result
+		result, err := strconv.Atoi(val)
+		if err != nil {
+			log.Printf("WARNING: %s=%q is not a valid integer; using default %d", key, val, defaultVal)
+			return defaultVal
 		}
+		return result
 	}
 	return defaultVal
 }
 
 func getEnvFloat(key string, defaultVal float64) float64 {
 	if val := os.Getenv(key); val != "" {
-		if result, err := strconv.ParseFloat(val, 64); err == nil {
-			return result
+		result, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultVal)
+			return defaultVal
 		}
+		return result
 	}
 	return defaultVal
 }

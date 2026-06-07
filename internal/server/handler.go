@@ -215,11 +215,15 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 		"partitions_dropped": 0,
 	}
 
-	// Refresh materialized views if analytics store is available
+	// Refresh materialized views if analytics store is available.
+	// Include the error in the result map so API callers (and the operator
+	// reading the scheduled-task response body) can see it, not only the
+	// server-side log (06-M4 error-visibility).
 	if app.Analytics != nil {
 		if err := app.Analytics.RefreshMaterializedViews(ctx); err != nil {
 			log.Printf("Warning: failed to refresh materialized views: %v", err)
 			result["status"] = "partial"
+			result["views_error"] = err.Error()
 		} else {
 			result["views_refreshed"] = 1
 			log.Println("Materialized views refreshed successfully")

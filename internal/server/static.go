@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io/fs"
 	"log"
 	"mime"
 	"net/http"
@@ -23,36 +22,16 @@ type spaHandler struct {
 }
 
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Clean the path to prevent directory traversal
-	urlPath := path.Clean(r.URL.Path)
-	if urlPath == "/" {
-		urlPath = "/index.html"
-	}
-
-	// Try to serve the requested file
-	filePath := filepath.Join(h.dir, filepath.FromSlash(urlPath))
-
-	info, err := os.Stat(filePath)
-	if err == nil && !info.IsDir() {
-		setCacheHeaders(w, urlPath)
-		http.ServeFile(w, r, filePath)
-		return
-	}
-
-	// File not found: if path has an extension, return 404
-	if path.Ext(urlPath) != "" {
+	// Delegate path resolution to resolveStaticFilePath, which provides the
+	// same separator-aware containment check used by the Lambda static path.
+	// This closes the drift between the two static-serving paths (04-M6).
+	filePath, cleanPath, ok := resolveStaticFilePath(h.dir, r.URL.Path)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-
-	// SPA fallback: serve index.html for extensionless paths
-	indexPath := filepath.Join(h.dir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	setCacheHeaders(w, "/index.html")
-	http.ServeFile(w, r, indexPath)
+	setCacheHeaders(w, cleanPath)
+	http.ServeFile(w, r, filePath)
 }
 
 // setCacheHeaders sets Cache-Control based on file type.
@@ -68,6 +47,16 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 	default:
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}
+}
+
+// isPathContainedIn reports whether absFile is at or under absDir, using a
+// separator-aware prefix check to prevent sibling-directory confusion.
+// "/srv/static" is a string-prefix of "/srv/static-evil", but
+// "/srv/static/" is not -- so we append the separator before comparing.
+// The absFile == absDir case handles the dir itself (index.html fallback).
+func isPathContainedIn(absFile, absDir string) bool {
+	return absFile == absDir ||
+		strings.HasPrefix(absFile, absDir+string(os.PathSeparator))
 }
 
 // resolveStaticFilePath validates the URL path against directory traversal and
@@ -90,7 +79,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	if err != nil {
 		return "", "", false
 	}
-	if !strings.HasPrefix(absFile, absDir) {
+	if !isPathContainedIn(absFile, absDir) {
 		return "", "", false
 	}
 
@@ -191,14 +180,4 @@ func isStaticPath(urlPath string) bool {
 		return false
 	}
 	return true
-}
-
-// hasFileContent checks if the static dir contains at least one file,
-// used during startup to validate the STATIC_DIR configuration.
-func hasFileContent(dir string) bool {
-	entries, err := fs.ReadDir(os.DirFS(dir), ".")
-	if err != nil {
-		return false
-	}
-	return len(entries) > 0
 }

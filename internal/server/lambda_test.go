@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/api"
@@ -266,6 +267,24 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleLambdaEvent_UnknownEventReturnsError is a regression test for
+// 04-N4: before the fix, unrecognised payloads were silently routed to
+// handleLambdaScheduledEvent, which then failed with "unknown scheduled task
+// action" -- masking the real root cause. The fix returns a distinct error
+// so callers (and logs) see "unrecognised Lambda event shape" instead.
+func TestHandleLambdaEvent_UnknownEventReturnsError(t *testing.T) {
+	ctx := testutil.TestContext(t)
+
+	app := &Application{
+		API: api.NewHandler(api.HandlerConfig{}),
+	}
+
+	_, err := app.HandleLambdaEvent(ctx, json.RawMessage(`{"unknown": "event"}`))
+	testutil.AssertError(t, err)
+	testutil.AssertTrue(t, strings.Contains(err.Error(), "unrecognised"),
+		"expected 'unrecognised' in error, got: "+err.Error())
 }
 
 func TestHandleLambdaEvent(t *testing.T) {

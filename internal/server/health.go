@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 )
@@ -58,12 +59,15 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 	// The actual health status is in the JSON body. "degraded" means the app is
 	// running but some dependencies (like DB) aren't connected yet - this is
 	// expected during cold starts with lazy DB initialization.
-	statusCode := http.StatusOK
 
 	// Write response with security headers and CORS
 	setHealthResponseHeaders(w, app.appConfig.CORSAllowedOrigin)
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+		// Body write failed after headers are sent; log for parity with
+		// handleScheduledHTTP which already logs its encode error (04-L4).
+		log.Printf("health: failed to encode response: %v", err)
+	}
 }
 
 // checkMigrations reports the outcome of the most recent migration run.
