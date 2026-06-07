@@ -192,6 +192,12 @@ func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params commo
 			return nil, fmt.Errorf("memorystore: iterate recommendations: %w", err)
 		}
 
+		// Skip non-ACTIVE recommendations (CLAIMED/SUCCEEDED/FAILED/DISMISSED).
+		// See computeengine.GetRecommendations for the full rationale.
+		if rec.GetStateInfo().GetState() != recommenderpb.RecommendationStateInfo_ACTIVE {
+			continue
+		}
+
 		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)

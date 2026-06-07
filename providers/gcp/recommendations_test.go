@@ -160,6 +160,81 @@ func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancel
 		"GetRecommendations must propagate the parent ctx error")
 }
 
+// TestRegionResult_HasCacheAndStorageFields is a compile-time regression test
+// for H-2 (GCP broad audit): regionResult must carry cache and storage slices
+// so collectRegion can fan out to memorystore and cloudstorage in addition to
+// compute and cloudsql. If this test stops compiling, the wiring was reverted.
+func TestRegionResult_HasCacheAndStorageFields(t *testing.T) {
+	recs := []common.Recommendation{{Provider: common.ProviderGCP}}
+
+	// Field access verifies that regionResult has the full four-service shape.
+	result := regionResult{
+		compute: recs,
+		sql:     recs,
+		cache:   recs,
+		storage: recs,
+	}
+
+	assert.Len(t, result.compute, 1, "compute field must be present on regionResult")
+	assert.Len(t, result.sql, 1, "sql field must be present on regionResult")
+	assert.Len(t, result.cache, 1, "cache field must be present on regionResult (H-2)")
+	assert.Len(t, result.storage, 1, "storage field must be present on regionResult (H-2)")
+}
+
+// TestShouldIncludeService_Cache_Storage verifies that shouldIncludeService
+// correctly routes ServiceCache and ServiceStorage requests, which is a
+// prerequisite for H-2 (wiring them into collectRegion).
+func TestShouldIncludeService_Cache_Storage(t *testing.T) {
+	tests := []struct {
+		name     string
+		params   common.RecommendationParams
+		service  common.ServiceType
+		expected bool
+	}{
+		{
+			name:     "all services includes Cache",
+			params:   common.RecommendationParams{},
+			service:  common.ServiceCache,
+			expected: true,
+		},
+		{
+			name:     "all services includes Storage",
+			params:   common.RecommendationParams{},
+			service:  common.ServiceStorage,
+			expected: true,
+		},
+		{
+			name:     "Cache-scoped request includes Cache",
+			params:   common.RecommendationParams{Service: common.ServiceCache},
+			service:  common.ServiceCache,
+			expected: true,
+		},
+		{
+			name:     "Cache-scoped request excludes Storage",
+			params:   common.RecommendationParams{Service: common.ServiceCache},
+			service:  common.ServiceStorage,
+			expected: false,
+		},
+		{
+			name:     "Storage-scoped request includes Storage",
+			params:   common.RecommendationParams{Service: common.ServiceStorage},
+			service:  common.ServiceStorage,
+			expected: true,
+		},
+		{
+			name:     "Storage-scoped request excludes Compute",
+			params:   common.RecommendationParams{Service: common.ServiceStorage},
+			service:  common.ServiceCompute,
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, shouldIncludeService(tt.params, tt.service))
+		})
+	}
+}
+
 // TestGCPRegionConcurrency pins the env-knob parsing for
 // CUDLY_GCP_REGION_PARALLELISM.
 func TestGCPRegionConcurrency(t *testing.T) {

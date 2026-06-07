@@ -259,6 +259,14 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 			return nil, fmt.Errorf("computeengine: iterate recommendations: %w", err)
 		}
 
+		// Skip non-ACTIVE recommendations (CLAIMED/SUCCEEDED/FAILED/DISMISSED).
+		// The GCP Recommender returns all states unless filtered at the API layer;
+		// acting on an already-CLAIMED or SUCCEEDED recommendation is a
+		// cross-run double-purchase vector and inflates actionable rec counts.
+		if rec.GetStateInfo().GetState() != recommenderpb.RecommendationStateInfo_ACTIVE {
+			continue
+		}
+
 		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)

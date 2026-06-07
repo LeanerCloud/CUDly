@@ -583,7 +583,8 @@ func TestCloudSQLClient_GetRecommendations_WithMock(t *testing.T) {
 	mockIterator := &MockRecommenderIterator{
 		recommendations: []*recommenderpb.Recommendation{
 			{
-				Name: "recommendation-1",
+				Name:      "recommendation-1",
+				StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 				PrimaryImpact: &recommenderpb.Impact{
 					Category: recommenderpb.Impact_COST,
 					Projection: &recommenderpb.Impact_CostProjection{

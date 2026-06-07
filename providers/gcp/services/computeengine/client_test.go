@@ -761,7 +761,8 @@ func TestComputeEngineClient_GetRecommendations_WithMock(t *testing.T) {
 	mockIterator := &MockRecommenderIterator{
 		recommendations: []*recommenderpb.Recommendation{
 			{
-				Name: "recommendation-1",
+				Name:      "recommendation-1",
+				StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 				PrimaryImpact: &recommenderpb.Impact{
 					Category: recommenderpb.Impact_COST,
 					Projection: &recommenderpb.Impact_CostProjection{
@@ -1500,4 +1501,95 @@ func TestConvertGCPRecommendation_RejectsUnknownTerm(t *testing.T) {
 	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{Term: "5yr"})
 	assert.Nil(t, rec,
 		"convertGCPRecommendation must return nil for unrecognised term (not silently default to 12 months)")
+}
+
+// TestGetRecommendations_FiltersNonActiveStates is a regression test for H-1
+// (GCP broad audit): the Recommender API returns recommendations in all states
+// (ACTIVE/CLAIMED/SUCCEEDED/FAILED/DISMISSED); only ACTIVE ones must be surfaced
+// as actionable. Acting on an already-CLAIMED or SUCCEEDED recommendation is a
+// cross-run double-purchase vector and inflates actionable rec counts.
+//
+// This test FAILS on the pre-fix code that converted all recommendations
+// regardless of state.
+func TestGetRecommendations_FiltersNonActiveStates(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	stateActive := recommenderpb.RecommendationStateInfo_ACTIVE
+	stateClaimed := recommenderpb.RecommendationStateInfo_CLAIMED
+	stateSucceeded := recommenderpb.RecommendationStateInfo_SUCCEEDED
+	stateFailed := recommenderpb.RecommendationStateInfo_FAILED
+	stateDismissed := recommenderpb.RecommendationStateInfo_DISMISSED
+
+	recs := []*recommenderpb.Recommendation{
+		{
+			Name:      "active-rec",
+			StateInfo: &recommenderpb.RecommendationStateInfo{State: stateActive},
+			PrimaryImpact: &recommenderpb.Impact{
+				Category: recommenderpb.Impact_COST,
+				Projection: &recommenderpb.Impact_CostProjection{
+					CostProjection: &recommenderpb.CostProjection{
+						Cost: &money.Money{Units: -100, CurrencyCode: "USD"},
+					},
+				},
+			},
+		},
+		{
+			Name:      "claimed-rec",
+			StateInfo: &recommenderpb.RecommendationStateInfo{State: stateClaimed},
+		},
+		{
+			Name:      "succeeded-rec",
+			StateInfo: &recommenderpb.RecommendationStateInfo{State: stateSucceeded},
+		},
+		{
+			Name:      "failed-rec",
+			StateInfo: &recommenderpb.RecommendationStateInfo{State: stateFailed},
+		},
+		{
+			Name:      "dismissed-rec",
+			StateInfo: &recommenderpb.RecommendationStateInfo{State: stateDismissed},
+		},
+	}
+
+	mockIterator := &MockRecommenderIterator{recommendations: recs}
+	mockClient := &MockRecommenderClient{iterator: mockIterator}
+	client.SetRecommenderClient(mockClient)
+
+	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.NoError(t, err)
+	require.Len(t, results, 1,
+		"only the ACTIVE recommendation must be returned; CLAIMED/SUCCEEDED/FAILED/DISMISSED must be filtered (H-1)")
+	assert.Equal(t, common.ProviderGCP, results[0].Provider)
+}
+
+// TestGetRecommendations_ActiveRecIncluded is the positive-case complement of
+// TestGetRecommendations_FiltersNonActiveStates: a recommendation explicitly
+// marked ACTIVE must pass the state filter.
+func TestGetRecommendations_ActiveRecIncluded(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	mockIterator := &MockRecommenderIterator{
+		recommendations: []*recommenderpb.Recommendation{
+			{
+				Name:      "active-only",
+				StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
+				PrimaryImpact: &recommenderpb.Impact{
+					Category: recommenderpb.Impact_COST,
+					Projection: &recommenderpb.Impact_CostProjection{
+						CostProjection: &recommenderpb.CostProjection{
+							Cost: &money.Money{Units: -50, CurrencyCode: "USD"},
+						},
+					},
+				},
+			},
+		},
+	}
+	mockClient := &MockRecommenderClient{iterator: mockIterator}
+	client.SetRecommenderClient(mockClient)
+
+	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	require.NoError(t, err)
+	require.Len(t, results, 1, "an ACTIVE recommendation must be included")
 }

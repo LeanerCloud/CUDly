@@ -531,7 +531,8 @@ func TestMemorystoreClient_GetRecommendations_WithMockClient(t *testing.T) {
 			name: "returns recommendations successfully",
 			recommendations: []*recommenderpb.Recommendation{
 				{
-					Name: "projects/test/locations/us-central1/recommenders/google.memorystore.redis.PerformanceRecommender/recommendations/rec-1",
+					Name:      "projects/test/locations/us-central1/recommenders/google.memorystore.redis.PerformanceRecommender/recommendations/rec-1",
+					StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 					Content: &recommenderpb.RecommendationContent{
 						OperationGroups: []*recommenderpb.OperationGroup{
 							{
