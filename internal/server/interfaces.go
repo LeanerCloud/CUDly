@@ -35,7 +35,21 @@ type PurchaseManagerInterface interface {
 	ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*purchase.ReapResult, error)
 }
 
-// AnalyticsStoreInterface defines the methods required for analytics storage
+// AnalyticsStoreInterface defines the methods required for analytics storage.
+// Beyond the materialized-view refresh, the scheduled analytics task also keeps
+// monthly partitions provisioned ahead of time and applies retention.
 type AnalyticsStoreInterface interface {
 	RefreshMaterializedViews(ctx context.Context) error
+	// CreateFuturePartitions ensures partitions exist for the current month
+	// plus monthsAhead months ahead (M3: partitions otherwise stop after the
+	// seeded months and every insert falls into the catch-all default).
+	CreateFuturePartitions(ctx context.Context, monthsAhead int) error
+	// DropOldPartitions drops partitions older than retentionMonths (retention).
+	DropOldPartitions(ctx context.Context, retentionMonths int) error
+}
+
+// AnalyticsCollectorInterface aggregates current savings into a point-in-time
+// snapshot row per (tenant, provider, service, region, commitment_type) bucket.
+type AnalyticsCollectorInterface interface {
+	Collect(ctx context.Context) error
 }
