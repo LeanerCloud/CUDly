@@ -613,7 +613,7 @@ func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "n1-standard-1",
 		Term:         "3yr",
-		Count:        4, // must be > 0 after issue #1022 guard
+		Count:        4,                                     // must be > 0 after issue #1022 guard
 		Details:      common.ComputeDetails{MemoryGB: 16.0}, // 4 vCPU * 4 GB
 	}
 

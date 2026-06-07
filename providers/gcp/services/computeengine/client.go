@@ -36,7 +36,6 @@ const maxCommitmentsPages = 50
 // maxMachineTypeItems caps GCP machine types iteration (one item per Next() call).
 const maxMachineTypeItems = 20
 
-
 // termPlan converts a commitment term string to the canonical GCP Compute API
 // commitment plan value derived from the SDK enum constants.
 //
@@ -944,35 +943,43 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 	extractVCPUCountFromRecommendation(gcpRec, rec)
 	extractMemoryMBFromRecommendation(gcpRec, rec)
 
-	// Thread pricing into the converter so the scorer can rank/filter GCP recs
-	// correctly (issue #1022 C2). If the billing catalog lacks a commitment SKU
-	// we propagate the error as a log line rather than dropping the rec entirely
-	// -- the Recommender-derived EstimatedSavings is still valid.
-	if rec.ResourceType != "" {
-		termYears := 1
-		if rec.Term == "3yr" || rec.Term == "3" {
-			termYears = 3
-		}
-		if pricing, err := c.getComputePricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
-			log.Printf("computeengine: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
-		} else {
-			rec.CommitmentCost = pricing.CommitmentPrice
-			rec.OnDemandCost = pricing.OnDemandPrice
-			rec.SavingsPercentage = pricing.SavingsPercentage
-			// BreakEvenMonths: months of accrued savings required to cover the
-			// commitment cost (conservative: treats the whole period cost as sunk,
-			// which is accurate for all-upfront and overestimates for monthly CUDs).
-			// monthlySavings = monthly spend difference between on-demand and CUD.
-			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
-				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
-				if monthlySavings > 0 {
-					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
-				}
-			}
-		}
-	}
+	c.enrichRecWithPricing(ctx, rec)
 
 	return rec
+}
+
+// enrichRecWithPricing fills CommitmentCost, OnDemandCost, SavingsPercentage,
+// and BreakEvenMonths on rec by querying the billing catalog. Extracted from
+// convertGCPRecommendation to keep that function's cyclomatic complexity under
+// the gocyclo gate. A missing or invalid pricing entry is logged but does not
+// discard the recommendation -- the Recommender-derived EstimatedSavings is
+// still the authoritative savings signal (issue #1022 C2).
+func (c *ComputeEngineClient) enrichRecWithPricing(ctx context.Context, rec *common.Recommendation) {
+	if rec.ResourceType == "" {
+		return
+	}
+	termYears := 1
+	if rec.Term == "3yr" || rec.Term == "3" {
+		termYears = 3
+	}
+	pricing, err := c.getComputePricing(ctx, rec.ResourceType, c.region, termYears)
+	if err != nil {
+		log.Printf("computeengine: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		return
+	}
+	rec.CommitmentCost = pricing.CommitmentPrice
+	rec.OnDemandCost = pricing.OnDemandPrice
+	rec.SavingsPercentage = pricing.SavingsPercentage
+	// BreakEvenMonths: months of accrued savings required to cover the
+	// commitment cost (conservative: treats the whole period cost as sunk,
+	// which is accurate for all-upfront and overestimates for monthly CUDs).
+	// monthlySavings = monthly spend difference between on-demand and CUD.
+	if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+		monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+		if monthlySavings > 0 {
+			rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+		}
+	}
 }
 
 // extractResourceTypeFromRecommendation extracts the resource type from a GCP recommendation

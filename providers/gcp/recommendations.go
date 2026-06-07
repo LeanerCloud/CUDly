@@ -163,15 +163,70 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	return allRecommendations, nil
 }
 
+// collectComputeRecs fetches Compute Engine CUD recommendations for one region.
+// Handles semaphore acquire/release and client construction so these branches
+// are not counted toward collectRegion's cyclomatic complexity.
+func (r *RecommendationsClientAdapter) collectComputeRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := computeengine.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectSQLRecs fetches Cloud SQL CUD recommendations for one region.
+func (r *RecommendationsClientAdapter) collectSQLRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := cloudsql.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectCacheRecs fetches Memorystore recommendations for one region.
+func (r *RecommendationsClientAdapter) collectCacheRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := memorystore.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectStorageRecs fetches Cloud Storage recommendations for one region.
+func (r *RecommendationsClientAdapter) collectStorageRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := cloudstorage.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
 // collectRegion fetches recommendations for all four GCP services
 // (Compute Engine, Cloud SQL, Memorystore, Cloud Storage) for a single region
 // concurrently. Per-service errors are logged at WARN with the region+service
-// tag and never propagate — the previous silent-skip-on-err shape is preserved
+// tag and never propagate -- the previous silent-skip-on-err shape is preserved
 // (so a misconfigured project doesn't error out the whole recommendations
-// refresh) but errors are now observable in logs. Extracted from
-// GetRecommendations to keep that function under the gocyclo gate
-// (.golangci.yml min-complexity: 15) after the post-Wait ctx.Err() block was
-// added.
+// refresh) but errors are now observable in logs. The per-service fetch logic
+// (semaphore, client construction, GetRecommendations call) is delegated to
+// dedicated helpers (collectComputeRecs, collectSQLRecs, collectCacheRecs,
+// collectStorageRecs) to keep this function's cyclomatic complexity under the
+// gocyclo gate.
 //
 // Note: memorystore and cloudstorage PurchaseCommitment paths are advisory-only
 // (no programmatic purchase API exists for either); their recommendations are
@@ -184,76 +239,27 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	// Per-(region, service) goroutines are leaves — they issue the actual
-	// Recommender API call. Acquire bounds aggregate concurrent IO across
-	// the whole recommendations-collection fan-out tree at the shared
-	// semaphore's cap (CUDLY_MAX_PARALLELISM, default 20); Release returns
-	// the slot. Without this bound the per-region fan-out (cap 10) x
-	// per-service sub-fan-out (4) x accounts x providers can produce
-	// hundreds of concurrent gRPC clients that exhaust Lambda memory. If
-	// no semaphore is on ctx (CLI tools, unit tests), Acquire/Release are
-	// no-ops. See pkg/concurrency.
 	if shouldIncludeService(params, common.ServiceCompute) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				computeErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := computeengine.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				computeErr = err
-				return nil
-			}
-			computeRecs, computeErr = client.GetRecommendations(gctx, params)
+			computeRecs, computeErr = r.collectComputeRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				sqlErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := cloudsql.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				sqlErr = err
-				return nil
-			}
-			sqlRecs, sqlErr = client.GetRecommendations(gctx, params)
+			sqlRecs, sqlErr = r.collectSQLRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceCache) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				cacheErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := memorystore.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				cacheErr = err
-				return nil
-			}
-			cacheRecs, cacheErr = client.GetRecommendations(gctx, params)
+			cacheRecs, cacheErr = r.collectCacheRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceStorage) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				storageErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := cloudstorage.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				storageErr = err
-				return nil
-			}
-			storageRecs, storageErr = client.GetRecommendations(gctx, params)
+			storageRecs, storageErr = r.collectStorageRecs(gctx, params, region)
 			return nil
 		})
 	}
