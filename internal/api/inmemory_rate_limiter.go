@@ -4,9 +4,17 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
+
+// inMemoryRateLimitMaxEntries is the hard cap on the number of live entries in
+// InMemoryRateLimiter. When reached, expired entries are evicted first; if the
+// map is still at or above the cap, the oldest live entries (by resetTime) are
+// removed until the count falls to 80% of the cap. This prevents unbounded
+// memory growth from rotating attacker source IPs (02-M3).
+const inMemoryRateLimitMaxEntries = 500
 
 // InMemoryRateLimiter provides in-memory rate limiting for single-instance deployments (Fargate, ECS)
 // This implementation should NOT be used for Lambda (multi-instance) - use DBRateLimiter instead
@@ -65,11 +73,34 @@ func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint s
 	now := time.Now()
 	entry, exists := rl.attempts[id]
 
-	// Clean up expired entries periodically (simple garbage collection)
-	if len(rl.attempts) > 1000 {
+	// evictEntries enforces a hard cap (inMemoryRateLimitMaxEntries) on the map
+	// to prevent unbounded memory growth from rotating attacker IPs (02-M3).
+	//
+	// Step 1: purge already-expired entries (free, always useful).
+	// Step 2: if still over cap after step 1, evict the oldest live entries
+	//         (smallest resetTime first) until we are back at 80% of cap.
+	if len(rl.attempts) >= inMemoryRateLimitMaxEntries {
 		for k, v := range rl.attempts {
 			if now.After(v.resetTime) {
 				delete(rl.attempts, k)
+			}
+		}
+		if len(rl.attempts) >= inMemoryRateLimitMaxEntries {
+			// Collect remaining keys sorted by resetTime ascending.
+			type kv struct {
+				key string
+				t   time.Time
+			}
+			pairs := make([]kv, 0, len(rl.attempts))
+			for k, v := range rl.attempts {
+				pairs = append(pairs, kv{k, v.resetTime})
+			}
+			sort.Slice(pairs, func(i, j int) bool {
+				return pairs[i].t.Before(pairs[j].t)
+			})
+			target := inMemoryRateLimitMaxEntries * 4 / 5 // evict down to 80%
+			for i := 0; len(rl.attempts) > target && i < len(pairs); i++ {
+				delete(rl.attempts, pairs[i].key)
 			}
 		}
 	}

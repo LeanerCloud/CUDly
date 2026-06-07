@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -338,5 +339,36 @@ func TestNewInMemoryRateLimiter_ReadyImmediately(t *testing.T) {
 	}
 	if blocked {
 		t.Errorf("expected login to be blocked after %d attempts; rate limiter was not enforcing (regression of #420)", loginLimit.MaxAttempts)
+	}
+}
+
+// Regression test for 02-M3: the in-memory rate limiter must not grow without
+// bound even when entries are within their active window (not yet expired).
+// Previously only expired entries were purged, allowing an attacker rotating
+// source IPs to cause unbounded memory growth.
+//
+// Strategy: inject exactly cap+2 unique IPs with a long window. The (cap+1)-th
+// call sees len==cap, triggers eviction to 80% of cap, then adds one entry.
+// The (cap+2)-th call adds one more. Final count is ~(80%*cap)+2, which is
+// strictly less than cap. A pre-fix run would reach cap+2.
+func TestInMemoryRateLimiter_EntriesCapEnforced(t *testing.T) {
+	rl := NewInMemoryRateLimiter()
+	ctx := context.Background()
+
+	// Fill to just above the cap so exactly one eviction cycle fires.
+	total := inMemoryRateLimitMaxEntries + 2
+	for i := 0; i < total; i++ {
+		ip := fmt.Sprintf("10.%d.%d.%d", i/65536%256, i/256%256, i%256)
+		_, _ = rl.AllowWithIP(ctx, ip, "login")
+	}
+
+	rl.mu.Lock()
+	count := len(rl.attempts)
+	rl.mu.Unlock()
+
+	// After eviction the count must be strictly less than cap.
+	if count >= inMemoryRateLimitMaxEntries {
+		t.Errorf("entry count %d is >= cap %d after %d calls: eviction did not fire (02-M3 regression)",
+			count, inMemoryRateLimitMaxEntries, total)
 	}
 }
