@@ -108,12 +108,12 @@ func NewSenderWithClients(snsClient SNSPublisher, sesClient SESEmailSender, cfg 
 
 // SendNotification sends a notification email via SNS.
 //
-// Guard: messages whose body contains "token=" are rejected with
-// ErrTokenInBroadcast. Approval tokens must never reach the SNS broadcast
+// Guard: messages whose body contains "token=" (case-insensitive) are rejected
+// with ErrTokenInBroadcast. Approval tokens must never reach the SNS broadcast
 // topic because every subscriber would receive a working action link. Use
 // SendToEmailWithCC for any message that carries an approval URL.
 func (s *Sender) SendNotification(ctx context.Context, subject, message string) error {
-	if strings.Contains(message, "token=") {
+	if strings.Contains(strings.ToLower(message), "token=") {
 		return ErrTokenInBroadcast
 	}
 

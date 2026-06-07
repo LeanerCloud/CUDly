@@ -46,7 +46,6 @@ func TestSender_SendNewRecommendationsNotification_Success(t *testing.T) {
 func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
 	// Scheduled purchase notifications carry approval tokens and must be
 	// delivered via targeted SES, not the SNS broadcast topic.
-	t.Cleanup(func() {})
 	mockSES := new(MockSESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)

@@ -902,6 +902,11 @@ func TestSendNotification_RejectsTokenBearingBody(t *testing.T) {
 		"Review: https://app.example.com/approve?token=abc123",
 		"token=somesecret",
 		"?token=xyz&action=pause",
+		// Mixed-case variants: the guard is case-insensitive so future
+		// template changes that capitalize the query param can't slip a
+		// token-bearing body past the broadcast guard.
+		"Review: https://app.example.com/approve?Token=abc123",
+		"?TOKEN=xyz&action=pause",
 	}
 	for _, body := range tokenBodies {
 		err := sender.SendNotification(ctx, "Test", body)

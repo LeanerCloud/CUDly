@@ -152,10 +152,17 @@ func (app *Application) sendExchangeNotification(ctx context.Context, result *ex
 		return
 	}
 
-	data := buildExchangeNotificationData(result, app.appConfig.DashboardURL, notifyEmail)
+	// RecipientEmail is only meaningful for the pending-approval branch:
+	// SendRIExchangePendingApproval routes token-bearing emails to a specific
+	// inbox and rejects an empty recipient with ErrNoRecipient. The completed
+	// path (SendRIExchangeCompleted) ignores RecipientEmail and is
+	// transport-driven (SNS broadcast / SMTP notifyEmail), so leave it empty
+	// there to keep the struct contract honest.
+	data := buildExchangeNotificationData(result, app.appConfig.DashboardURL, "")
 
 	var err error
 	if result.Mode == "manual" && len(result.Pending) > 0 {
+		data.RecipientEmail = notifyEmail
 		err = app.Email.SendRIExchangePendingApproval(ctx, data)
 	} else if len(result.Completed)+len(result.Failed) > 0 {
 		err = app.Email.SendRIExchangeCompleted(ctx, data)
@@ -171,9 +178,10 @@ func exchangeHasResults(result *exchange.AutoExchangeResult) bool {
 }
 
 // buildExchangeNotificationData converts AutoExchangeResult into email notification data.
-// notifyEmail is the global notification address from GlobalConfig; it is set as
-// RecipientEmail so token-bearing pending-approval emails route to a specific inbox
-// rather than the SNS broadcast topic.
+// notifyEmail populates RecipientEmail. Callers should pass it only for the
+// pending-approval branch (where token-bearing emails must route to a specific
+// inbox rather than the SNS broadcast topic) and pass "" for the completed
+// branch, which is transport-driven and ignores RecipientEmail.
 func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboardURL, notifyEmail string) email.RIExchangeNotificationData {
 	data := email.RIExchangeNotificationData{
 		DashboardURL:   dashboardURL,

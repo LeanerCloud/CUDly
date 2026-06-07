@@ -322,6 +322,69 @@ func TestSendExchangeNotification_AutoCompleted(t *testing.T) {
 	}
 }
 
+// TestSendExchangeNotification_PendingSetsRecipientEmail verifies that a
+// configured notification address is routed to the pending-approval branch as
+// RecipientEmail, so the token-bearing approval email is delivered to a
+// specific inbox rather than the SNS broadcast topic.
+func TestSendExchangeNotification_PendingSetsRecipientEmail(t *testing.T) {
+	var gotRecipient string
+	approvalSent := false
+	app := &Application{
+		Email: &mockEmailSender{
+			sendApprovalFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+				approvalSent = true
+				gotRecipient = data.RecipientEmail
+				return nil
+			},
+		},
+	}
+
+	result := &exchange.AutoExchangeResult{
+		Mode: "manual",
+		Pending: []exchange.ExchangeOutcome{
+			{SourceRIID: "ri-1"},
+		},
+	}
+	app.sendExchangeNotification(context.Background(), result, "admin@example.com")
+
+	if !approvalSent {
+		t.Fatal("expected approval email to be sent")
+	}
+	testutil.AssertEqual(t, "admin@example.com", gotRecipient)
+}
+
+// TestSendExchangeNotification_CompletedOmitsRecipientEmail verifies that the
+// completed/failed branch leaves RecipientEmail empty even when a notification
+// address is configured: that path is transport-driven (SNS broadcast / SMTP
+// notifyEmail) and ignores RecipientEmail, so populating it would misrepresent
+// the struct contract.
+func TestSendExchangeNotification_CompletedOmitsRecipientEmail(t *testing.T) {
+	var gotRecipient string
+	completedSent := false
+	app := &Application{
+		Email: &mockEmailSender{
+			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+				completedSent = true
+				gotRecipient = data.RecipientEmail
+				return nil
+			},
+		},
+	}
+
+	result := &exchange.AutoExchangeResult{
+		Mode: "auto",
+		Completed: []exchange.ExchangeOutcome{
+			{SourceRIID: "ri-1", ExchangeID: "exch-1"},
+		},
+	}
+	app.sendExchangeNotification(context.Background(), result, "admin@example.com")
+
+	if !completedSent {
+		t.Fatal("expected completed email to be sent")
+	}
+	testutil.AssertEqual(t, "", gotRecipient)
+}
+
 func TestSendExchangeNotification_EmailFailure(t *testing.T) {
 	app := &Application{
 		Email: &mockEmailSender{
