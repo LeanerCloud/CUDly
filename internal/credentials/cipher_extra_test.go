@@ -132,22 +132,22 @@ func TestLoadKey_IDPath(t *testing.T) {
 	assert.Equal(t, "cudly-credential-encryption-key", r.asked[0])
 }
 
-// TestLoadKey_Precedence confirms ARN beats NAME beats ID beats raw KEY when
-// multiple are set. A WARN is logged but the first in priority order wins.
-func TestLoadKey_Precedence(t *testing.T) {
+// TestLoadKey_MultipleVars_Rejected verifies that setting more than one key-source
+// env var is now a hard error (03-M2). Previously it was a warn + first-wins.
+func TestLoadKey_MultipleVars_Rejected(t *testing.T) {
 	resetKeyCacheForTest()
 	clearAllKeyEnvs(t)
 	t.Setenv(EnvSecretARN, "the-arn")
 	t.Setenv(EnvSecretName, "the-name")
-	t.Setenv(EnvSecretID, "the-id")
-	t.Setenv(EnvRawKey, validHexKey)
 
 	r := &fakeResolver{value: validHexKey}
-	_, source, err := LoadKey(context.Background(), r)
-	require.NoError(t, err)
-	assert.Equal(t, EnvSecretARN, source, "ARN should win precedence")
-	require.Len(t, r.asked, 1)
-	assert.Equal(t, "the-arn", r.asked[0])
+	_, _, err := LoadKey(context.Background(), r)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrMultipleKeys), "expected ErrMultipleKeys, got %v", err)
+	assert.Contains(t, err.Error(), EnvSecretARN)
+	assert.Contains(t, err.Error(), EnvSecretName)
+	// Resolver must NOT have been called.
+	assert.Empty(t, r.asked, "resolver must not be called when config is ambiguous")
 }
 
 // TestLoadKey_RawHexKey exercises the bare CREDENTIAL_ENCRYPTION_KEY path
@@ -218,12 +218,29 @@ func TestDecodeHexKey_DoesNotLeakBadByte(t *testing.T) {
 	assert.Contains(t, err.Error(), "length=")
 }
 
-// TestEncrypt_InvalidKeyLength preserves the existing behavior coverage.
+// TestEncrypt_InvalidKeyLength verifies that a non-32-byte key is rejected before
+// reaching aes.NewCipher — preventing silent AES-128/192 downgrade (03-M1).
 func TestEncrypt_InvalidKeyLength(t *testing.T) {
-	shortKey := []byte("tooshort")
-	_, err := Encrypt(shortKey, []byte("payload"))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "create cipher")
+	for _, key := range [][]byte{[]byte("tooshort"), make([]byte, 16), make([]byte, 24)} {
+		key := key
+		_, err := Encrypt(key, []byte("payload"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes", "error must name the expected length, got: %v", err)
+	}
+}
+
+// TestDecrypt_InvalidKeyLength_ExplicitGuard verifies the explicit guard in Decrypt
+// rejects non-32-byte keys before any cipher construction (03-M1).
+func TestDecrypt_InvalidKeyLength_ExplicitGuard(t *testing.T) {
+	blob, err := Encrypt(testKey, []byte("hello"))
+	require.NoError(t, err)
+
+	for _, key := range [][]byte{[]byte("tooshort"), make([]byte, 16), make([]byte, 24)} {
+		key := key
+		_, err = Decrypt(key, blob)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "32 bytes", "error must name the expected length, got: %v", err)
+	}
 }
 
 // TestDecrypt_BadBase64Ciphertext preserves existing coverage.
@@ -239,16 +256,6 @@ func TestDecrypt_BadBase64Ciphertext(t *testing.T) {
 	assert.Contains(t, err.Error(), "decode ciphertext")
 }
 
-// TestDecrypt_InvalidKeyLength preserves existing coverage.
-func TestDecrypt_InvalidKeyLength(t *testing.T) {
-	blob, err := Encrypt(testKey, []byte("hello"))
-	require.NoError(t, err)
-
-	shortKey := []byte("tooshort")
-	_, err = Decrypt(shortKey, blob)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "create cipher")
-}
 
 // TestDecodeHexKey_ExactlyCorrect preserves existing coverage.
 func TestDecodeHexKey_ExactlyCorrect(t *testing.T) {

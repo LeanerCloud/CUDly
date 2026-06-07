@@ -29,6 +29,12 @@ const devKeyHex = "0000000000000000000000000000000000000000000000000000000000000
 // CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY is not set.
 var ErrNoKey = errors.New("credentials: no credential encryption key configured")
 
+// ErrMultipleKeys is returned by LoadKey when more than one key-source env var
+// is set simultaneously. Ambiguous key selection is treated as a hard startup
+// error so misconfiguration is caught immediately rather than silently using the
+// first-priority source.
+var ErrMultipleKeys = errors.New("credentials: multiple encryption-key env vars set; configure exactly one")
+
 // Env var names used by LoadKey, in priority order.
 const (
 	EnvSecretARN  = "CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN"  // AWS Secrets Manager ARN
@@ -85,8 +91,8 @@ func loadKey(ctx context.Context, resolver secrets.Resolver) ([]byte, string, er
 		}
 	}
 	if len(set) > 1 {
-		log.Printf("WARN: credentials: multiple encryption-key env vars set (%s); using first in priority order",
-			strings.Join(set, ", "))
+		return nil, "", fmt.Errorf("%w (%s); unset all but one before starting",
+			ErrMultipleKeys, strings.Join(set, ", "))
 	}
 
 	if arn := os.Getenv(EnvSecretARN); arn != "" {
@@ -143,6 +149,9 @@ func decodeHexKey(hexKey string) ([]byte, error) {
 // Encrypt encrypts plaintext using AES-256-GCM.
 // Returns a string in the format "<base64url(nonce)>.<base64url(ciphertext)>".
 func Encrypt(key, plaintext []byte) (string, error) {
+	if len(key) != 32 {
+		return "", fmt.Errorf("credentials: key must be 32 bytes for AES-256, got %d", len(key))
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("credentials: create cipher: %w", err)
@@ -166,6 +175,9 @@ func Encrypt(key, plaintext []byte) (string, error) {
 
 // Decrypt reverses Encrypt. Returns the original plaintext.
 func Decrypt(key []byte, blob string) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("credentials: key must be 32 bytes for AES-256, got %d", len(key))
+	}
 	parts := strings.SplitN(blob, ".", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("credentials: malformed blob (expected nonce.ciphertext)")
