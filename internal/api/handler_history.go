@@ -53,7 +53,13 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// here (in-memory against the synthesised row's recommendations and
 	// scheduled_date) so the two halves of the merged response are
 	// consistently scoped (issue #701).
-	extra := h.fetchExecutionsAsHistory(ctx, filters)
+	//
+	// Stale pending/notified executions are expired asynchronously AFTER the
+	// response is assembled so the GET handler is a pure read (issue #1032):
+	// the caller sees current DB state; the transitions fire in a goroutine
+	// and the next History load reflects the updated status.
+	extra, staleExecs := h.fetchExecutionsAsHistory(ctx, filters)
+	h.expireStaleExecutionsAsync(staleExecs)
 
 	all := append(completed, extra...) //nolint:gocritic // intentional new slice
 
@@ -116,28 +122,28 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // to "multiple" because a single execution can span providers. The approver
 // address is looked up from global config once and attached to pending/
 // notified rows so the UI can tell the user exactly whose inbox holds the
-// approval link. Pending executions older than approvalExpiryWindow are
-// lazily transitioned to "expired" in the store so a stale approval link
-// can't be clicked and the History badge reflects reality. A listing error
-// is logged and skipped — completed history must still render.
+// approval link. Stale pending/notified executions are expired asynchronously
+// after this call returns (see expireStaleExecutionsAsync) so the GET is a
+// pure read: the response rows carry the pre-transition status and the
+// next request sees the updated state. A listing error is logged and
+// skipped — completed history must still render.
 //
 // The filter set (issue #701) is applied in Go against the synthetic row:
 // provider via the recs' collapsed provider, account via CloudAccountID,
-// date via ScheduledDate. Filtering after expireIfStale so a row that
-// transitioned to expired during this request still gets evaluated against
-// the same predicates as a DB row.
-func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) []config.PurchaseHistoryRecord {
+// date via ScheduledDate.
+func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution) {
 	executions, err := h.config.GetExecutionsByStatuses(ctx, historyExecutionStatuses, config.DefaultListLimit)
 	if err != nil {
 		logging.Warnf("history: failed to load non-completed executions: %v", err)
-		return nil
+		return nil, nil
 	}
 	if len(executions) == 0 {
-		return nil
+		return nil, nil
 	}
 	approver := h.resolvePendingApproverEmail(ctx)
 	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
+	var staleExecs []config.PurchaseExecution
 	for _, exec := range executions {
 		// Dedup: a normal completed execution is already represented by its
 		// purchase_history rows. Skip it here so it shows exactly once. Only
@@ -147,7 +153,13 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		if exec.Status == "completed" && exec.Error == "" {
 			continue
 		}
-		exec = h.expireIfStale(ctx, exec)
+		// Collect stale pending/notified executions for the post-response
+		// async expire sweep. We do NOT mutate status here to keep the GET
+		// read-only: the response reflects current DB state; the background
+		// goroutine fires the transition so the next request sees "expired".
+		if isStaleExecution(exec) {
+			staleExecs = append(staleExecs, exec)
+		}
 		if !filters.matchesExecution(exec) {
 			continue
 		}
@@ -157,7 +169,46 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		}
 		out = append(out, executionToHistoryRow(exec, approver, createdByEmail))
 	}
-	return out
+	return out, staleExecs
+}
+
+// isStaleExecution reports whether the execution is a pending/notified
+// approval older than approvalExpiryWindow that should be transitioned to
+// "expired". Extracted so both fetchExecutionsAsHistory and the async sweep
+// share one staleness check.
+func isStaleExecution(exec config.PurchaseExecution) bool {
+	if exec.Status != "pending" && exec.Status != "notified" {
+		return false
+	}
+	return time.Since(exec.ScheduledDate) >= approvalExpiryWindow
+}
+
+// expireStaleExecutionsAsync fires TransitionExecutionStatus for each stale
+// execution in a best-effort goroutine that outlives the request context.
+// Using context.Background() ensures the transitions are not cancelled when
+// the HTTP handler returns. Errors are logged and skipped — a missed
+// transition leaves the row "pending" until the next History load, which is
+// better than blocking the read response.
+//
+// The goroutine is idempotent per execution ID: TransitionExecutionStatus is
+// guarded by the FROM-status list ("pending","notified"), so a concurrent
+// caller that wins the race causes the loser's update to affect 0 rows and
+// return an error, which is already handled by the Warnf below. Two
+// simultaneous GET requests can both spawn a goroutine for the same stale
+// row; only one transition commits — this is safe and expected.
+func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecution) {
+	if len(staleExecs) == 0 {
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		for _, exec := range staleExecs {
+			_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired")
+			if err != nil {
+				logging.Warnf("history: async expire of execution %s failed: %v", exec.ExecutionID, err)
+			}
+		}
+	}()
 }
 
 // resolveUserEmails builds a map of user-ID to email by calling GetUser once
@@ -183,25 +234,6 @@ func (h *Handler) resolveUserEmails(ctx context.Context, executions []config.Pur
 		out[uid] = user.Email
 	}
 	return out
-}
-
-// expireIfStale transitions a pending/notified execution to "expired" when
-// its ScheduledDate is older than approvalExpiryWindow. Returns the possibly-
-// updated execution. Transition failures are non-fatal — the row still
-// renders, just with its original status.
-func (h *Handler) expireIfStale(ctx context.Context, exec config.PurchaseExecution) config.PurchaseExecution {
-	if exec.Status != "pending" && exec.Status != "notified" {
-		return exec
-	}
-	if time.Since(exec.ScheduledDate) < approvalExpiryWindow {
-		return exec
-	}
-	updated, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired")
-	if err != nil {
-		logging.Warnf("history: failed to expire execution %s: %v", exec.ExecutionID, err)
-		return exec
-	}
-	return *updated
 }
 
 // resolvePendingApproverEmail returns the notification email the approval
@@ -875,6 +907,16 @@ func appendMissing(dst []string, vals ...string) []string {
 // filterPurchaseHistoryByAllowedAccounts drops records whose AccountID/Name
 // is outside the session's allowed_accounts. Admin/unrestricted sessions pass
 // through unchanged.
+//
+// Rows with an empty AccountID are exempt from the drop for scoped users
+// (issue #1032, regression of #621). An empty AccountID means the execution
+// was ambient (exec.CloudAccountID == nil) AND its recommendations carry no
+// common account. These are in-flight financial actions the user owns that
+// cannot be attributed to a specific cloud account — dropping them silently
+// re-introduces the #621 disappearance bug for non-admin users. Passing them
+// through is safe: the session's allowed_accounts gate already ensures the
+// user has view:purchases permission, and unattributed rows carry no
+// account-specific data that would violate cross-tenant isolation.
 func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, session *Session, purchases []config.PurchaseHistoryRecord) ([]config.PurchaseHistoryRecord, error) {
 	allowed, err := h.getAllowedAccounts(ctx, session)
 	if err != nil {
@@ -886,6 +928,13 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := purchases[:0]
 	for _, p := range purchases {
+		// Empty AccountID: unattributed ambient/multi-account synthesized row.
+		// Pass through so scoped users see in-flight financial actions that
+		// cannot be pinned to a single account (issue #1032 / #621 regression).
+		if p.AccountID == "" {
+			filtered = append(filtered, p)
+			continue
+		}
 		if auth.MatchesAccount(allowed, p.AccountID, nameByID[p.AccountID]) {
 			filtered = append(filtered, p)
 		}

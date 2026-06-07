@@ -174,17 +174,18 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestHandler_getHistory_ExpireIfStale exercises the lazy approval-window
-// transition in expireIfStale. The History render seeds two non-completed
-// executions: one fresh (left untouched) and one with ScheduledDate older than
-// the 7-day approvalExpiryWindow. The stale row must be transitioned to
-// "expired" via a single TransitionExecutionStatus call against its ID, and
-// the rendered row must reflect the new status + the canonical
-// "approval link expired …" StatusDescription. The fresh row stays pending
-// and proves expireIfStale's age guard short-circuits before touching the
-// store for non-stale rows. A second sub-test covers the error fallback:
-// when TransitionExecutionStatus returns an error the original pending row
-// must still render (no panic, no row dropped, status stays pending).
+// TestHandler_getHistory_ExpireIfStale exercises the async approval-window
+// expiry sweep (issue #1032). The History read fires a best-effort background
+// goroutine to transition stale pending/notified executions to "expired" so
+// the GET handler itself is a pure read. The goroutine runs AFTER the response
+// is assembled, so the response shows the pre-transition status ("pending");
+// the next History load sees "expired" from the DB.
+//
+// Each sub-test wires a done channel into the mock's Run callback to
+// synchronize with the async goroutine — no time.Sleep per project memory.
+// The fresh-row sub-test asserts TransitionExecutionStatus is never called for
+// a non-stale execution (the staleness guard short-circuits before enqueueing
+// the ID).
 //
 // Closes the gap flagged in known_issues/32_history_lazy_expire_test.md.
 func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
@@ -207,7 +208,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 	}
 
 	// Stale: ScheduledDate older than approvalExpiryWindow (7 days) → must
-	// trigger TransitionExecutionStatus once with the row's ID.
+	// trigger TransitionExecutionStatus once with the row's ID (asynchronously).
 	staleExec := func(status string) config.PurchaseExecution {
 		return config.PurchaseExecution{
 			ExecutionID:      staleID,
@@ -221,18 +222,29 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		}
 	}
 
-	t.Run("transitions stale pending row to expired", func(t *testing.T) {
+	// waitForCall returns a Run option that signals done when the mock is
+	// called. Use it to synchronize with the background goroutine without
+	// sleeping.
+	waitForCall := func(done chan<- struct{}) func(mock.Arguments) {
+		return func(_ mock.Arguments) { close(done) }
+	}
+
+	t.Run("async expire fires for stale pending row; response shows pre-transition status", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
 
 		expired := staleExec("pending")
 		expired.Status = "expired"
+		done := make(chan struct{})
 
 		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{freshExec(), staleExec("pending")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+		// The goroutine uses context.Background(); context.Background() == ctx in
+		// this test, so the matcher fires correctly.
+		mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired").
+			Run(waitForCall(done)).
 			Return(&expired, nil).Once()
 
 		mockAuth, req := adminHistoryReq(ctx)
@@ -241,9 +253,17 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		result, err := handler.getHistory(ctx, req, map[string]string{})
 		require.NoError(t, err)
 
-		// Single Transition call, only for the stale row.
+		// Wait for the background goroutine to complete before asserting the
+		// call count. No sleep: we block on the done channel.
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("TransitionExecutionStatus goroutine did not fire within 5s")
+		}
+
+		// Exactly one Transition call, only for the stale row.
 		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
-		mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired")
+		mockStore.AssertCalled(t, "TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired")
 
 		historyResp := result.(HistoryResponse)
 		require.Len(t, historyResp.Purchases, 2, "both executions must render as history rows")
@@ -260,26 +280,28 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		require.NotNil(t, staleRow, "stale execution must render as a history row")
 		require.NotNil(t, freshRow, "fresh execution must render as a history row")
 
-		assert.Equal(t, "expired", staleRow.Status, "stale row must reflect the expired transition")
-		assert.NotEmpty(t, staleRow.StatusDescription, "expired row must carry an explanatory description")
-		assert.Contains(t, staleRow.StatusDescription, "approval link expired",
-			"expired description must use the canonical user-facing wording")
-
-		assert.Equal(t, "pending", freshRow.Status, "fresh row must stay pending — age guard short-circuits the transition")
+		// The GET is now a pure read: the response reflects the pre-transition
+		// status ("pending"). The background goroutine fires the transition so
+		// the NEXT History load sees "expired". This is the post-fix invariant.
+		assert.Equal(t, "pending", staleRow.Status,
+			"issue #1032: GET must not mutate state — stale row shows pre-transition status in this response")
+		assert.Equal(t, "pending", freshRow.Status, "fresh row must stay pending — staleness guard short-circuits enqueue")
 	})
 
-	t.Run("transitions stale notified row to expired", func(t *testing.T) {
+	t.Run("async expire fires for stale notified row; response shows pre-transition status", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
 
 		expired := staleExec("notified")
 		expired.Status = "expired"
+		done := make(chan struct{})
 
 		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec("notified")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+		mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired").
+			Run(waitForCall(done)).
 			Return(&expired, nil).Once()
 
 		mockAuth, req := adminHistoryReq(ctx)
@@ -288,47 +310,234 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		result, err := handler.getHistory(ctx, req, map[string]string{})
 		require.NoError(t, err)
 
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("TransitionExecutionStatus goroutine did not fire within 5s")
+		}
 		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
 
 		historyResp := result.(HistoryResponse)
 		require.Len(t, historyResp.Purchases, 1)
-		assert.Equal(t, "expired", historyResp.Purchases[0].Status,
-			"stale notified rows must transition the same as stale pending rows")
-		assert.Equal(t, 1, historyResp.Summary.TotalExpired,
-			"expired transition must be reflected in the summary bucket")
-		assert.Equal(t, 0, historyResp.Summary.TotalPending)
+		// Response shows pre-transition status; the DB is updated asynchronously.
+		assert.Equal(t, "notified", historyResp.Purchases[0].Status,
+			"issue #1032: GET must not mutate — stale notified row shows pre-transition status in this response")
+		assert.Equal(t, 1, historyResp.Summary.TotalPending,
+			"pre-transition stale notified row counts as pending in this response")
+		assert.Equal(t, 0, historyResp.Summary.TotalExpired,
+			"the expired state is not visible in this response; next load will reflect it")
 	})
 
-	t.Run("transition error falls back to pending row without panic", func(t *testing.T) {
+	t.Run("async expire error is non-fatal; response and row visibility are unaffected", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		done := make(chan struct{})
 
 		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec("pending")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired").
+		mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired").
+			Run(waitForCall(done)).
 			Return(nil, errors.New("simulated store failure")).Once()
 
 		mockAuth, req := adminHistoryReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
-		// The whole point: a Transition error is non-fatal. No panic, no
-		// dropped row, status stays pending so the user still sees the
-		// approval in the history view.
+		// A Transition error must be non-fatal. No panic, no dropped row —
+		// the stale row still renders (with its pre-transition status) so the
+		// user can see the pending approval even when the background expire fails.
 		result, err := handler.getHistory(ctx, req, map[string]string{})
 		require.NoError(t, err)
 
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("TransitionExecutionStatus goroutine did not fire within 5s")
+		}
 		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
 
 		historyResp := result.(HistoryResponse)
-		require.Len(t, historyResp.Purchases, 1, "fallback must render the original row, not drop it")
+		require.Len(t, historyResp.Purchases, 1, "transition error must not drop the row")
 		assert.Equal(t, staleID, historyResp.Purchases[0].PurchaseID)
 		assert.Equal(t, "pending", historyResp.Purchases[0].Status,
-			"transition failure must leave the row in its original status")
-		assert.Equal(t, 1, historyResp.Summary.TotalPending, "summary must reflect the un-transitioned status")
+			"row is visible with pre-transition status; the transition failed so next load may retry it")
+		assert.Equal(t, 1, historyResp.Summary.TotalPending, "stale row counts as pending since transition failed")
 		assert.Equal(t, 0, historyResp.Summary.TotalExpired)
 	})
+
+	t.Run("fresh row does not trigger TransitionExecutionStatus", func(t *testing.T) {
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+
+		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
+			Return([]config.PurchaseExecution{freshExec()}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+
+		mockAuth, req := adminHistoryReq(ctx)
+		handler := &Handler{auth: mockAuth, config: mockStore}
+
+		result, err := handler.getHistory(ctx, req, map[string]string{})
+		require.NoError(t, err)
+
+		// No goroutine should have been spawned — assert zero calls directly.
+		// There is no done channel because the goroutine must not exist.
+		mockStore.AssertNumberOfCalls(t, "TransitionExecutionStatus", 0)
+
+		historyResp := result.(HistoryResponse)
+		require.Len(t, historyResp.Purchases, 1)
+		assert.Equal(t, freshID, historyResp.Purchases[0].PurchaseID)
+		assert.Equal(t, "pending", historyResp.Purchases[0].Status)
+	})
+}
+
+// TestHandler_getHistory_GetIsReadOnly is the issue #1032 defect-1 regression
+// guard. The GET /api/history handler must not call TransitionExecutionStatus
+// synchronously — it must not block on or return from a write. Pre-fix the
+// transition was inlined in fetchExecutionsAsHistory, so the handler wrote DB
+// state on every call for any stale pending row, racing concurrent loads.
+//
+// This test seeds one stale pending execution. It wires the
+// TransitionExecutionStatus mock behind a channel gate and asserts that
+// getHistory returns BEFORE the goroutine releases the gate — i.e. the
+// response is produced without waiting for the write to complete.
+//
+// Fails pre-fix: the old inline expireIfStale runs synchronously so the
+// handler blocks until TransitionExecutionStatus returns; opening the gate
+// AFTER getHistory returns would mean the mock was never called in the first
+// place (0 calls, but the mock has Once() and the close() never fires, so
+// AssertNumberOfCalls panics on the missed expectation).
+func TestHandler_getHistory_GetIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	approverEmail := "ops@example.com"
+
+	stale := config.PurchaseExecution{
+		ExecutionID:   "stale-ro-exec",
+		Status:        "pending",
+		ScheduledDate: time.Now().Add(-8 * 24 * time.Hour),
+		Recommendations: []config.RecommendationRecord{
+			{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+		},
+	}
+
+	// gate blocks the TransitionExecutionStatus mock until the test releases it.
+	// Pre-fix: the handler blocks on this gate and returns only after it is
+	// closed — proving the write was synchronous. Post-fix: the handler returns
+	// immediately and the goroutine blocks on the gate independently.
+	gate := make(chan struct{})
+	transitionCalled := make(chan struct{})
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{stale}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "stale-ro-exec", []string{"pending", "notified"}, "expired").
+		Run(func(_ mock.Arguments) {
+			close(transitionCalled) // signal that the goroutine reached the transition
+			<-gate                  // block until the test releases it
+		}).
+		Return(nil, nil).Maybe()
+
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	// getHistory must return without waiting for TransitionExecutionStatus.
+	result, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err, "handler must not error even when the background expire has not run yet")
+
+	// At this point the handler has returned. The transition goroutine may or
+	// may not have started yet — we do NOT assert its call count here. We assert
+	// the response shape (the read-only view): the row is present with its
+	// pre-transition status, not dropped.
+	resp := result.(HistoryResponse)
+	require.Len(t, resp.Purchases, 1, "stale execution must appear in response (pre-transition status)")
+	assert.Equal(t, "pending", resp.Purchases[0].Status,
+		"issue #1032: GET must return current DB state without waiting for the expire write")
+
+	// Now wait for the goroutine to call the transition, then release the gate
+	// so the test teardown can complete cleanly.
+	select {
+	case <-transitionCalled:
+	case <-time.After(5 * time.Second):
+		// If we timed out it means the goroutine never fired — that would be a
+		// bug (the expire must still happen, just not synchronously).
+		t.Fatal("expire goroutine did not call TransitionExecutionStatus within 5s")
+	}
+	close(gate) // unblock the goroutine so it can finish
+}
+
+// TestHandler_getHistory_ScopedUserSeesEmptyAccountRows is the issue #1032
+// defect-2 / #621 regression guard. An execution with CloudAccountID == nil
+// and no common per-rec account (accountID == "") must remain visible to a
+// scoped (non-admin) user. Pre-fix, filterPurchaseHistoryByAllowedAccounts
+// called auth.MatchesAccount(allowed, "", "") == false for any non-empty
+// allowed list, silently dropping the row — re-introducing the #621
+// disappearance bug for non-admins. Post-fix the filter passes empty-AccountID
+// rows through unconditionally (they carry no account-specific data that could
+// violate cross-tenant isolation).
+//
+// Fails pre-fix: the empty-account execution row is dropped and
+// resp.Purchases is empty, causing the require.Len assertion to fail.
+func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
+	ctx := context.Background()
+
+	// Ambient execution: CloudAccountID == nil, recommendations also have no
+	// account — this is the multi-account/ambient-credentials path.
+	ambientExec := config.PurchaseExecution{
+		ExecutionID:   "ambient-exec-1",
+		Status:        "pending",
+		ScheduledDate: time.Now(),
+		Recommendations: []config.RecommendationRecord{
+			// No CloudAccountID on either rec → collapseRecommendationAccount
+			// returns "" → executionToHistoryRow sets AccountID = "".
+			{Provider: "aws", Service: "ec2", Region: "us-east-1"},
+			{Provider: "aws", Service: "rds", Region: "us-east-1"},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	approverEmail := "ops@example.com"
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{ambientExec}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+	// resolveAccountNamesByID must not error — return an empty accounts list
+	// so MatchesAccount falls back to ID-only matching (safe for our assertions).
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+
+	// Scoped user: only allowed to access one specific account UUID.
+	scopedUser := &Session{
+		UserID: "scoped-user-id",
+		Email:  "scoped@example.com",
+	}
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(scopedUser, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "scoped-user-id", "view", "purchases").Return(true, nil)
+	// allowed_accounts is non-empty → user is scoped (not unrestricted).
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "scoped-user-id").Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)
+
+	handler := &Handler{
+		auth:   mockAuth,
+		config: mockStore,
+	}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer scoped-token"},
+	}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	result, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp := result.(HistoryResponse)
+	require.Len(t, resp.Purchases, 1,
+		"issue #1032 / #621 regression: a scoped user must see in-flight ambient-account executions; dropping them re-creates the financial-action-vanishes bug")
+	assert.Equal(t, "ambient-exec-1", resp.Purchases[0].PurchaseID)
+	assert.Equal(t, "", resp.Purchases[0].AccountID,
+		"the AccountID is empty (ambient execution) and must remain visible to scoped users")
+	assert.Equal(t, "pending", resp.Purchases[0].Status)
+	assert.Equal(t, 1, resp.Summary.TotalPending)
 }
 
 // TestHandler_getHistory_PermissionDenied asserts that a non-admin user without
