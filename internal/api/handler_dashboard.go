@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,7 +173,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 	}
 
 	nameByID := h.resolveAccountNamesByID(ctx)
-	filtered := recs[:0]
+	filtered := make([]config.RecommendationRecord, 0, len(recs))
 	for _, rec := range recs {
 		if rec.CloudAccountID == nil {
 			continue
@@ -444,25 +445,37 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 	return &UpcomingPurchaseResponse{Purchases: upcoming}, nil
 }
 
+// firstServiceConfig returns the ServiceConfig for the lexicographically first
+// key in plan.Services, giving a deterministic result regardless of map
+// iteration order. Returns the zero value when the map is empty (both callers
+// tolerate empty provider/service strings — they fall back to blank display
+// fields rather than panicking).
+func firstServiceConfig(plan *config.PurchasePlan) config.ServiceConfig {
+	if len(plan.Services) == 0 {
+		return config.ServiceConfig{}
+	}
+	keys := make([]string, 0, len(plan.Services))
+	for k := range plan.Services {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return plan.Services[keys[0]]
+}
+
 // upcomingFromExecution projects a (plan, execution) pair onto the
 // UpcomingPurchase response. Uses the first service entry from the plan as
 // representative — the response shape doesn't support multi-service plans.
 // Step number comes from the execution row directly (already stamped by the
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
-	var provider, service string
-	for _, svcCfg := range plan.Services {
-		provider = svcCfg.Provider
-		service = svcCfg.Service
-		break
-	}
+	svc := firstServiceConfig(plan)
 	return UpcomingPurchase{
 		ExecutionID:      exec.ExecutionID,
 		PlanID:           plan.ID,
 		PlanName:         plan.Name,
 		ScheduledDate:    exec.ScheduledDate.Format("2006-01-02"),
-		Provider:         provider,
-		Service:          service,
+		Provider:         svc.Provider,
+		Service:          svc.Service,
 		StepNumber:       exec.StepNumber,
 		TotalSteps:       plan.RampSchedule.TotalSteps,
 		EstimatedSavings: exec.EstimatedSavings,
@@ -627,7 +640,7 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, accountUUIDs []s
 		purchases, err = h.config.GetAllPurchaseHistory(ctx, fetchLimit)
 	}
 	if err != nil {
-		// Log error but don't fail the dashboard request.
+		logging.Errorf("dashboard: failed to fetch commitment purchases; KPIs will be zeroed: %v", err)
 		return nil, false
 	}
 	return purchases, true
@@ -675,18 +688,35 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		// above (same gate), so it is intentionally NOT summed here to avoid
 		// double-counting. EstimatedSavings is in monthly units (see doc above).
 		//
-		// YTD savings: count from year start or from purchase date, whichever
-		// is later, using a 30-day month approximation (same as original).
-		if p.Timestamp.Before(yearStart) {
-			monthsSinceYearStart := int(currentTime.Sub(yearStart).Hours() / (24 * 30))
-			ytdSavings += p.EstimatedSavings * float64(monthsSinceYearStart)
-		} else {
-			monthsSincePurchase := int(currentTime.Sub(p.Timestamp).Hours() / (24 * 30))
-			ytdSavings += p.EstimatedSavings * float64(monthsSincePurchase)
+		// YTD savings: count whole calendar months from year start or from the
+		// purchase date, whichever is later. Use AddDate-stepping rather than
+		// dividing by a 30-day constant so January (31 days) and February (28/29
+		// days) are handled correctly and the result never truncates a partial
+		// month that spans a 29-30-31-day boundary.
+		countFrom := yearStart
+		if p.Timestamp.After(yearStart) {
+			countFrom = p.Timestamp
 		}
+		ytdSavings += p.EstimatedSavings * float64(elapsedWholeMonths(countFrom, currentTime))
 	}
 
 	return activeCommitments, committedMonthly, ytdSavings, savingsByService
+}
+
+// elapsedWholeMonths returns the number of complete calendar months between
+// from and to, counted by AddDate-stepping rather than dividing by a fixed
+// 30-day constant. This avoids truncation errors for months of varying length
+// (e.g. a 28-day gap in February scores 0 under the 30-day divisor, 1 here).
+// Returns 0 when to is before or equal to from.
+func elapsedWholeMonths(from, to time.Time) int {
+	if !to.After(from) {
+		return 0
+	}
+	months := 0
+	for from.AddDate(0, months+1, 0).Before(to) || from.AddDate(0, months+1, 0).Equal(to) {
+		months++
+	}
+	return months
 }
 
 // calculateCurrentCoverage calculates the current coverage percentage

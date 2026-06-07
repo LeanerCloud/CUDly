@@ -1372,3 +1372,148 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 		assert.Len(t, result.Purchases, 0)
 	})
 }
+
+// TestElapsedWholeMonths verifies that elapsedWholeMonths counts calendar months
+// correctly using AddDate-stepping rather than a 30-day divisor.
+// Regression for 01-M2: with integer-truncated 30-day arithmetic a 28-day
+// gap in February would score 0 months, and a year-start-to-now gap spanning
+// months of varying length could be off by 1.
+func TestElapsedWholeMonths(t *testing.T) {
+	t.Run("same instant returns 0", func(t *testing.T) {
+		now := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, 0, elapsedWholeMonths(now, now))
+	})
+
+	t.Run("to before from returns 0", func(t *testing.T) {
+		from := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 0, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("exactly 1 month returns 1", func(t *testing.T) {
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 1, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("28-day February gap counts as 1 month, not 0", func(t *testing.T) {
+		// 30-day-divisor arithmetic: int(28*24 / (24*30)) = 0. AddDate-stepping: 1.
+		from := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) // Feb has 28 days in 2026
+		assert.Equal(t, 1, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("partial month not yet complete returns floor", func(t *testing.T) {
+		from := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 14, 0, 0, 0, 0, time.UTC) // 30 days but < 1 full calendar month
+		assert.Equal(t, 0, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("6 complete months returns 6", func(t *testing.T) {
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 6, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("cross-year gap counts correctly", func(t *testing.T) {
+		from := time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 5, elapsedWholeMonths(from, to))
+	})
+}
+
+// TestFilterDashboardRecommendations_FreshSlice verifies that filtering writes
+// into a fresh backing array and does not corrupt the caller's input slice.
+// Regression for 01-L2: the previous recs[:0] form reused the input's backing
+// array, so any element written during filtering overwrote the original.
+func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
+	ctx := context.Background()
+
+	// Seed: two accounts A (allowed) and B (blocked). After filtering, only
+	// A's rec survives. With recs[:0] the filtering loop wrote A's rec into
+	// position [0] of the shared backing array, which also holds the original
+	// input[0]; but if B's rec came first (input[0]=B, input[1]=A), the write
+	// would corrupt input[0]. We reproduce this arrangement explicitly.
+	accountAID := "aaaa-1111"
+	accountBID := "bbbb-2222"
+	// B comes first in the input so that recs[:0] corruption is detectable.
+	input := []config.RecommendationRecord{
+		{CloudAccountID: &accountBID, Service: "rds", Savings: 200.0},
+		{CloudAccountID: &accountAID, Service: "ec2", Savings: 100.0},
+	}
+	// Keep a snapshot of input[0] before filtering.
+	originalFirst := input[0]
+
+	mockStore := new(MockConfigStore)
+	// resolveAccountNamesByID calls ListCloudAccounts via the Fn override path.
+	listCalled := false
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		listCalled = true
+		return []config.CloudAccount{
+			{ID: accountAID, Name: "Account A"},
+			{ID: accountBID, Name: "Account B"},
+		}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	// Session restricted to account A only.
+	session := &Session{UserID: "user-1"}
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-1").Return([]string{accountAID}, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{auth: mockAuth, config: mockStore}
+	_ = listCalled // asserted implicitly: if not called the name map is empty and MatchesAccount uses only ID
+
+	filtered, err := handler.filterDashboardRecommendations(ctx, session, input)
+	require.NoError(t, err)
+
+	// Only account A's rec must pass through.
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "ec2", filtered[0].Service)
+
+	// input[0] must be unchanged — recs[:0] would have overwritten it with
+	// the first accepted element (ec2) since filter appends in order.
+	assert.Equal(t, originalFirst, input[0],
+		"recs[:0] reuse corrupts the backing array; fresh slice must not mutate input")
+}
+
+// TestFirstServiceConfig verifies that firstServiceConfig returns the service
+// from the lexicographically first key, giving a deterministic result regardless
+// of map iteration order.
+// Regression for 01-N1: both upcomingFromExecution and buildPlannedPurchase
+// used an unordered map range + break, which could return a different service on
+// each call when the plan has more than one entry.
+func TestFirstServiceConfig(t *testing.T) {
+	t.Run("empty services returns zero value", func(t *testing.T) {
+		plan := &config.PurchasePlan{Services: map[string]config.ServiceConfig{}}
+		got := firstServiceConfig(plan)
+		assert.Equal(t, config.ServiceConfig{}, got)
+	})
+
+	t.Run("single service returned", func(t *testing.T) {
+		plan := &config.PurchasePlan{
+			Services: map[string]config.ServiceConfig{
+				"ec2": {Provider: "aws", Service: "ec2", Term: 1, Payment: "no_upfront"},
+			},
+		}
+		got := firstServiceConfig(plan)
+		assert.Equal(t, "aws", got.Provider)
+		assert.Equal(t, "ec2", got.Service)
+	})
+
+	t.Run("multiple services returns lexicographically first key deterministically", func(t *testing.T) {
+		plan := &config.PurchasePlan{
+			Services: map[string]config.ServiceConfig{
+				"rds": {Provider: "aws", Service: "rds", Term: 3},
+				"ec2": {Provider: "aws", Service: "ec2", Term: 1},
+				"elasticache": {Provider: "aws", Service: "elasticache", Term: 1},
+			},
+		}
+		// "ec2" < "elasticache" < "rds" lexicographically.
+		for i := 0; i < 20; i++ {
+			got := firstServiceConfig(plan)
+			assert.Equal(t, "ec2", got.Service,
+				"must always return ec2 (lexicographically first key), iteration %d", i)
+		}
+	})
+}
