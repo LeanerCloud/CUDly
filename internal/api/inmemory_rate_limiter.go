@@ -48,65 +48,76 @@ func (rl *InMemoryRateLimiter) SetLimit(endpoint string, config RateLimitConfig)
 	rl.limits[endpoint] = config
 }
 
-// Allow checks if a request should be allowed based on rate limits
-// The key should be formatted as "IP#{ip}" or "EMAIL#{email}"
-// The endpoint identifies which rate limit configuration to use
+// configFor returns the rate limit configuration for an endpoint, falling back
+// to the api_general bucket when no specific entry exists.
+func (rl *InMemoryRateLimiter) configFor(endpoint string) RateLimitConfig {
+	if cfg, ok := rl.limits[endpoint]; ok {
+		return cfg
+	}
+	return rl.limits["api_general"]
+}
+
+// evictIfAtCap enforces the hard cap on the attempts map (02-M3).
+//
+// Step 1: purge already-expired entries (free, always useful).
+// Step 2: if still over cap, evict the oldest live entries (smallest
+// resetTime first) until the count falls to 80% of the cap.
+//
+// Must be called with rl.mu held.
+func (rl *InMemoryRateLimiter) evictIfAtCap(now time.Time) {
+	if len(rl.attempts) < inMemoryRateLimitMaxEntries {
+		return
+	}
+	for k, v := range rl.attempts {
+		if now.After(v.resetTime) {
+			delete(rl.attempts, k)
+		}
+	}
+	if len(rl.attempts) < inMemoryRateLimitMaxEntries {
+		return
+	}
+	rl.evictOldest()
+}
+
+// evictOldest removes the oldest live entries until the map is at 80% of cap.
+// Must be called with rl.mu held.
+func (rl *InMemoryRateLimiter) evictOldest() {
+	type kv struct {
+		key string
+		t   time.Time
+	}
+	pairs := make([]kv, 0, len(rl.attempts))
+	for k, v := range rl.attempts {
+		pairs = append(pairs, kv{k, v.resetTime})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].t.Before(pairs[j].t)
+	})
+	target := inMemoryRateLimitMaxEntries * 4 / 5
+	for i := 0; len(rl.attempts) > target && i < len(pairs); i++ {
+		delete(rl.attempts, pairs[i].key)
+	}
+}
+
+// Allow checks if a request should be allowed based on rate limits.
+// The key should be formatted as "IP#{ip}" or "EMAIL#{email}".
+// The endpoint identifies which rate limit configuration to use.
 func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
-	// Handle nil rate limiter (for testing or when not configured)
 	if rl == nil {
 		return true, nil
 	}
 
-	// Get the rate limit configuration for this endpoint
-	config, exists := rl.limits[endpoint]
-	if !exists {
-		// Default to general API limits if endpoint not specifically configured
-		config = rl.limits["api_general"]
-	}
-
-	// Create the unique identifier combining the key and endpoint
+	config := rl.configFor(endpoint)
 	id := fmt.Sprintf("%s#ENDPOINT#%s", key, endpoint)
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	rl.evictIfAtCap(now)
+
 	entry, exists := rl.attempts[id]
-
-	// evictEntries enforces a hard cap (inMemoryRateLimitMaxEntries) on the map
-	// to prevent unbounded memory growth from rotating attacker IPs (02-M3).
-	//
-	// Step 1: purge already-expired entries (free, always useful).
-	// Step 2: if still over cap after step 1, evict the oldest live entries
-	//         (smallest resetTime first) until we are back at 80% of cap.
-	if len(rl.attempts) >= inMemoryRateLimitMaxEntries {
-		for k, v := range rl.attempts {
-			if now.After(v.resetTime) {
-				delete(rl.attempts, k)
-			}
-		}
-		if len(rl.attempts) >= inMemoryRateLimitMaxEntries {
-			// Collect remaining keys sorted by resetTime ascending.
-			type kv struct {
-				key string
-				t   time.Time
-			}
-			pairs := make([]kv, 0, len(rl.attempts))
-			for k, v := range rl.attempts {
-				pairs = append(pairs, kv{k, v.resetTime})
-			}
-			sort.Slice(pairs, func(i, j int) bool {
-				return pairs[i].t.Before(pairs[j].t)
-			})
-			target := inMemoryRateLimitMaxEntries * 4 / 5 // evict down to 80%
-			for i := 0; len(rl.attempts) > target && i < len(pairs); i++ {
-				delete(rl.attempts, pairs[i].key)
-			}
-		}
-	}
-
 	if !exists || now.After(entry.resetTime) {
-		// No entry or window expired - create new/reset
 		rl.attempts[id] = &inMemoryRateLimitEntry{
 			count:     1,
 			resetTime: now.Add(config.Window),
@@ -114,13 +125,10 @@ func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint s
 		return true, nil
 	}
 
-	// Window is still active, check if limit exceeded
 	if entry.count >= config.MaxAttempts {
-		// Limit exceeded
 		return false, nil
 	}
 
-	// Increment the counter
 	entry.count++
 	return true, nil
 }
