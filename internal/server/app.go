@@ -285,14 +285,20 @@ func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
 // value via the configured SecretResolver (Azure Key Vault / AWS Secrets
 // Manager) when possible. Falls back to cfg.ScheduledTaskSecret (plaintext
 // SCHEDULED_TASK_SECRET env var) if the resolver is absent or the lookup
-// fails. Pulled out of NewApplicationFromDeps to keep it under the
-// cyclomatic limit.
+// fails.
+//
+// The second return value is non-nil only when a SecretName was configured
+// AND the resolver failed. Callers in bearer mode MUST propagate this error
+// so startup fails with the real cause (e.g. "failed to resolve
+// scheduled-task secret from <name>: <err>") rather than the misleading
+// downstream "bearer mode requires SCHEDULED_TASK_SECRET" that would
+// otherwise surface when the empty fallback reaches buildScheduledAuth (04-M4).
 //
 // Security note: if both SCHEDULED_TASK_SECRET (plaintext) and
 // SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
 // because the plaintext value is visible in Lambda env / Terraform state.
 // The secret-store path is always preferred when both are present.
-func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) string {
+func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) {
 	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
 		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
 			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
@@ -301,14 +307,14 @@ func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, reso
 	}
 
 	if cfg.ScheduledTaskSecretName == "" || resolver == nil {
-		return cfg.ScheduledTaskSecret
+		return cfg.ScheduledTaskSecret, nil
 	}
 	resolved, err := resolver.GetSecret(ctx, cfg.ScheduledTaskSecretName)
 	if err != nil {
 		log.Printf("scheduled task secret resolution failed for %q: %v (falling back to SCHEDULED_TASK_SECRET)", cfg.ScheduledTaskSecretName, err)
-		return cfg.ScheduledTaskSecret
+		return cfg.ScheduledTaskSecret, err
 	}
-	return resolved
+	return resolved, nil
 }
 
 // envSourceOS implements scheduledauth.EnvSource against os.Getenv. The
@@ -318,17 +324,11 @@ type envSourceOS struct{}
 
 func (envSourceOS) Get(key string) string { return os.Getenv(key) }
 
-// buildScheduledAuth wires up the /api/scheduled/* validator. It pulls
-// mode + OIDC params from env (they're per-deployment Terraform inputs)
-// but injects the bearer secret from cfg — that path goes through the
-// SecretResolver (Key Vault) for production deployments and never lives
-// in a container env var. Returns ErrConfigInvalid on misconfig so the
-// container fails fast rather than silently accepting everything.
-func buildScheduledAuth(cfg ApplicationConfig) (*scheduledauth.Validator, error) {
-	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
-	if err != nil {
-		return nil, err
-	}
+// buildScheduledAuthFromConfig wires up the /api/scheduled/* validator from
+// a pre-loaded scheduledauth.Config. The bearer secret is injected from cfg
+// rather than re-read from env — in production cfg.ScheduledTaskSecret was
+// already resolved from Key Vault / Secrets Manager by the caller.
+func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) {
 	// In bearer mode, override the env-supplied secret with the one
 	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
 	// directly which is fine for local dev where the env carries the
@@ -353,13 +353,28 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		return nil, err
 	}
 
-	cfg.ScheduledTaskSecret = resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
+	// Load the scheduledauth config first so we know the mode before
+	// resolving the secret. Bearer mode requires a non-empty secret, so
+	// a resolution failure must be propagated as a fatal startup error
+	// rather than silently falling back to the empty plaintext env var
+	// and surfacing the misleading "bearer mode requires SCHEDULED_TASK_SECRET"
+	// error downstream (04-M4).
+	saCfg, err := scheduledauth.LoadConfig(envSourceOS{})
+	if err != nil {
+		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
+	}
 
-	// Build the /api/scheduled/* auth validator. Fail-fast on bad
-	// config (empty subjects in oidc mode, unknown mode, etc.) — better
-	// to crash on startup than to silently accept unauthenticated
+	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, cfg, deps.SecretResolver)
+	if secretErr != nil && saCfg.Mode == scheduledauth.ModeBearer {
+		return nil, fmt.Errorf("failed to resolve scheduled-task secret from %q: %w", cfg.ScheduledTaskSecretName, secretErr)
+	}
+	cfg.ScheduledTaskSecret = resolvedSecret
+
+	// Build the /api/scheduled/* auth validator from the already-loaded
+	// config. Fail-fast on bad config (empty subjects in oidc mode, etc.)
+	// — better to crash on startup than to silently accept unauthenticated
 	// scheduled-task calls in production.
-	scheduledAuth, err := buildScheduledAuth(cfg)
+	scheduledAuth, err := buildScheduledAuthFromConfig(cfg, saCfg)
 	if err != nil {
 		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
 	}

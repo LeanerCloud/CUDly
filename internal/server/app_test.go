@@ -736,8 +736,9 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	// Both set: secret-store value must win.
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	// Both set: secret-store value must win; no error on success.
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "from-secret-store", got)
 }
 
@@ -751,12 +752,14 @@ func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 		ScheduledTaskSecret: "plaintext-dev",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, nil)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, nil)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "plaintext-dev", got)
 }
 
 // TestResolveScheduledTaskSecret_SecretNameFallback verifies that a resolver
-// error causes a graceful fallback to the plaintext value.
+// error returns the plaintext fallback AND a non-nil error so callers in
+// bearer mode can propagate it as a fatal startup error (04-M4).
 func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
 	ctx := context.Background()
 
@@ -766,7 +769,8 @@ func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertError(t, err) // error is returned so bearer-mode callers can fail-fast
 	testutil.AssertEqual(t, "fallback-plaintext", got)
 }
 
@@ -780,6 +784,32 @@ func TestResolveScheduledTaskSecret_SecretNameOnly(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "prod-secret", got)
+}
+
+// TestNewApplicationFromDeps_BearerModeSecretResolutionFails is a regression
+// test for 04-M4: before the fix, a Key Vault / Secrets Manager lookup failure
+// in bearer mode caused startup to fail with the misleading "bearer mode
+// requires SCHEDULED_TASK_SECRET" error (because the empty fallback value was
+// passed to buildScheduledAuthFromConfig). The fix propagates the resolver
+// error directly, so the log shows the actual cause.
+func TestNewApplicationFromDeps_BearerModeSecretResolutionFails(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("SCHEDULED_TASK_AUTH_MODE", "bearer")
+
+	cfg := ApplicationConfig{
+		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:task-secret",
+		// No plaintext SCHEDULED_TASK_SECRET -- empty fallback.
+	}
+	deps := ExternalDeps{
+		DBConfig:       &database.Config{Host: "localhost"},
+		SecretResolver: &mockSecretResolver{getErr: errors.New("key vault unreachable")},
+	}
+
+	_, err := NewApplicationFromDeps(ctx, cfg, deps)
+	testutil.AssertError(t, err)
+	testutil.AssertContains(t, err.Error(), "arn:aws:secretsmanager:us-east-1:123:secret:task-secret")
+	testutil.AssertContains(t, err.Error(), "key vault unreachable")
 }
