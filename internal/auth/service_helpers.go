@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"time"
 )
@@ -79,14 +80,15 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 	return clientSession, nil
 }
 
-// generateToken generates a cryptographically secure random token
+// generateToken generates a cryptographically secure random token by encoding
+// 32 random bytes as base64url. Hashing CSPRNG output through SHA-256 adds
+// nothing -- the raw bytes already carry 256 bits of entropy (03-N4).
 func generateToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	hash := sha256.Sum256(bytes)
-	return hex.EncodeToString(hash[:]), nil
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // containsAny checks if any element from requested is in allowed
