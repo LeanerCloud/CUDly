@@ -107,16 +107,44 @@ func (c *Collector) Collect(ctx context.Context) error {
 	}
 
 	now := time.Now().UTC()
-	serviceMap := make(map[string]*aggregateData)
-	activePurchases := 0
-	skippedBadTerm := 0
+	serviceMap, activePurchases, skippedBadTerm, err := aggregatePurchases(ctx, purchases, now)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Analytics collector: %d active, %d unique buckets, %d skipped (term<=0)",
+		activePurchases, len(serviceMap), skippedBadTerm)
+
+	snapshots := buildSnapshots(serviceMap, now)
+	if len(snapshots) == 0 {
+		log.Printf("Analytics collector: no active purchases to snapshot")
+		return nil
+	}
+
+	if err := c.store.BulkInsertSnapshots(ctx, snapshots); err != nil {
+		// Surface context cancellation distinctly so the caller doesn't retry a
+		// genuinely cancelled run as a transient failure.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("collection cancelled during write: %w", err)
+		}
+		return fmt.Errorf("failed to save snapshots: %w", err)
+	}
+
+	log.Printf("Analytics collector: saved %d snapshots", len(snapshots))
+	return nil
+}
+
+// aggregatePurchases folds the active purchases into a per-bucket aggregation
+// map keyed by aggKey. It skips Term<=0 rows (H1, counted as skippedBadTerm) and
+// expired commitments, and treats context cancellation as terminal so a partial
+// snapshot set is never written (feedback_ctx_cancel_terminal). Extracted from
+// Collect to keep each function within the cyclomatic-complexity budget.
+func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryRecord, now time.Time) (serviceMap map[string]*aggregateData, activePurchases, skippedBadTerm int, err error) {
+	serviceMap = make(map[string]*aggregateData)
 
 	for _, p := range purchases {
-		// Context cancellation is terminal in this fan-out loop: stop and
-		// surface it rather than silently writing a partial snapshot set
-		// (feedback_ctx_cancel_terminal).
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("collection cancelled after %d rows: %w", activePurchases, err)
+			return nil, 0, 0, fmt.Errorf("collection cancelled after %d rows: %w", activePurchases, err)
 		}
 
 		// H1: a Term <= 0 row would make the amortized-commitment division
@@ -166,26 +194,7 @@ func (c *Collector) Collect(ctx context.Context) error {
 		agg.count++
 	}
 
-	log.Printf("Analytics collector: %d active, %d unique buckets, %d skipped (term<=0)",
-		activePurchases, len(serviceMap), skippedBadTerm)
-
-	snapshots := buildSnapshots(serviceMap, now)
-	if len(snapshots) == 0 {
-		log.Printf("Analytics collector: no active purchases to snapshot")
-		return nil
-	}
-
-	if err := c.store.BulkInsertSnapshots(ctx, snapshots); err != nil {
-		// Surface context cancellation distinctly so the caller doesn't retry a
-		// genuinely cancelled run as a transient failure.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("collection cancelled during write: %w", err)
-		}
-		return fmt.Errorf("failed to save snapshots: %w", err)
-	}
-
-	log.Printf("Analytics collector: saved %d snapshots", len(snapshots))
-	return nil
+	return serviceMap, activePurchases, skippedBadTerm, nil
 }
 
 // commitmentTypeFor maps a service to its commitment_type. SavingsPlans is the
