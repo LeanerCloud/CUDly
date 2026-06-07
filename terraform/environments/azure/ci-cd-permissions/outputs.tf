@@ -22,3 +22,13 @@ output "tenant_id" {
   description = "Azure AD tenant ID — use as AZURE_TENANT_ID in GitHub Actions"
   value       = azuread_service_principal.cudly_deploy.application_tenant_id
 }
+
+output "reservation_role_definition_id" {
+  description = "Full ARM resource ID of the host-side custom reservation-purchaser role definition created by this bootstrap. The runtime container-apps deploy looks the role up by name and assigns it."
+  value       = module.cudly_reservation_role.role_definition_resource_id
+}
+
+output "reservation_role_definition_name" {
+  description = "Display name of the host-side custom reservation-purchaser role definition. The runtime container-apps module resolves the role by this exact name via data.azurerm_role_definition."
+  value       = module.cudly_reservation_role.role_definition_name
+}

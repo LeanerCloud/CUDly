@@ -262,20 +262,39 @@ resource "azurerm_role_assignment" "subscription_reader" {
 # Custom reservation-purchaser role: same role as customer-side but scoped to
 # the host subscription. The built-in Reservation Purchaser lacks
 # reservationOrders/purchase/action (same gap fixed customer-side by PR #744).
-# The role definition is factored into a shared module so both sides stay in
-# lockstep with the ARM template.
-module "cudly_reservation_role" {
-  source      = "../../../iam/azure/cudly-reservation-role"
-  scope       = data.azurerm_subscription.current.id
-  name_suffix = data.azurerm_subscription.current.subscription_id
+#
+# BOOTSTRAP-vs-RUNTIME SPLIT: the role *definition* is created by the
+# human-applied bootstrap module
+# (terraform/environments/azure/ci-cd-permissions/reservation_role.tf), NOT
+# here. Creating an azurerm_role_definition needs
+# Microsoft.Authorization/roleDefinitions/write, which the runtime CI deploy
+# service principal intentionally lacks. This runtime module only looks the
+# definition up and creates the *assignment* (roleAssignments/write, which the
+# deploy SP does have).
+#
+# The lookup name MUST stay in lockstep with
+# terraform/modules/iam/azure/cudly-reservation-role (its role_definition_name
+# output / local.role_definition_name). If the bootstrap has not been
+# (re-)applied, this data source fails loudly with "Role Definition ... was not
+# found" -- the signal to re-run the ci-cd-permissions bootstrap, NOT to grant
+# roleDefinitions/write to the deploy SP.
+data "azurerm_role_definition" "cudly_reservation_purchaser" {
+  name  = "CUDly Reservation Purchaser (custom) - ${data.azurerm_subscription.current.subscription_id}"
+  scope = data.azurerm_subscription.current.id
 }
 
 resource "azurerm_role_assignment" "reservations_purchaser" {
-  scope              = data.azurerm_subscription.current.id
-  role_definition_id = module.cudly_reservation_role.role_definition_resource_id
+  scope = data.azurerm_subscription.current.id
+  # .id is the full scoped ARM resource ID of the role definition
+  # (/subscriptions/<sub>/providers/Microsoft.Authorization/roleDefinitions/<guid>),
+  # the same form the bootstrap exposes via role_definition_resource_id and what
+  # azurerm_role_assignment.role_definition_id expects.
+  role_definition_id = data.azurerm_role_definition.cudly_reservation_purchaser.id
   principal_id       = azurerm_user_assigned_identity.container_app.principal_id
 
-  depends_on = [module.cudly_reservation_role]
+  # RBAC propagation: the bootstrap-created role definition can take time to be
+  # readable at assignment time; the data dependency below also gates this.
+  depends_on = [data.azurerm_role_definition.cudly_reservation_purchaser]
 }
 
 # Key Vault Crypto User: allows the container app's managed identity
