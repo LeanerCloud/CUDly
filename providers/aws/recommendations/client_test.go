@@ -819,3 +819,53 @@ func TestGetRecommendations_RI_PaginationCapError(t *testing.T) {
 	assert.Equal(t, maxRecommendationPages, mock.calls,
 		"must stop exactly at the cap, not one page later")
 }
+
+// TestMergeServiceResults_AllFailIsError is the 08-H4 regression test at the
+// locus of the fix. When EVERY per-service collection errored (e.g. a sustained
+// Cost Explorer throttle that exhausts each service's per-combo retries),
+// mergeServiceResults must return a non-nil error so GetAllRecommendations
+// surfaces "the whole run failed" rather than (emptyRecs, nil) -- which an
+// operator reads as "no savings available". Tested directly because exercising
+// it through the six concurrent goroutines of GetAllRecommendations would race
+// on the shared *RateLimiter (a separate, out-of-scope issue, 08-C1).
+//
+// Pre-fix mergeServiceResults returned only []common.Recommendation and dropped
+// every error to a WARN log; this test asserts the new (recs, error) contract.
+func TestMergeServiceResults_AllFailIsError(t *testing.T) {
+	throttle := newThrottleError()
+
+	// All services failed -> error, nil recs.
+	recs, err := mergeServiceResults(
+		serviceResult{name: "EC2", err: throttle},
+		serviceResult{name: "RDS", err: throttle},
+		serviceResult{name: "ElastiCache", err: throttle},
+		serviceResult{name: "OpenSearch", err: throttle},
+		serviceResult{name: "Redshift", err: throttle},
+		serviceResult{name: "SavingsPlans", err: throttle},
+	)
+	require.Error(t, err, "all-services-failed must surface an error, not look like 'no recs'")
+	assert.Contains(t, err.Error(), "all", "error should signal that every service failed")
+	assert.Nil(t, recs)
+
+	// Partial failure is still tolerated: surviving service's recs returned, nil error.
+	ec2Rec := common.Recommendation{Service: common.ServiceEC2}
+	recs, err = mergeServiceResults(
+		serviceResult{name: "EC2", recs: []common.Recommendation{ec2Rec}},
+		serviceResult{name: "RDS", err: throttle},
+		serviceResult{name: "ElastiCache", err: throttle},
+		serviceResult{name: "OpenSearch", err: throttle},
+		serviceResult{name: "Redshift", err: throttle},
+		serviceResult{name: "SavingsPlans", err: throttle},
+	)
+	require.NoError(t, err, "a single surviving service must keep the run successful")
+	assert.Len(t, recs, 1)
+	assert.Equal(t, common.ServiceEC2, recs[0].Service)
+
+	// No failures at all: empty-but-successful run stays nil error.
+	recs, err = mergeServiceResults(
+		serviceResult{name: "EC2"},
+		serviceResult{name: "RDS"},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, recs)
+}
