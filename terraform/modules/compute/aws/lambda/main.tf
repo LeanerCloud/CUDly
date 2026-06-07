@@ -600,3 +600,44 @@ resource "aws_lambda_permission" "eventbridge_reap_stuck_purchases" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.reap_stuck_purchases[0].arn
 }
+
+# ==============================================
+# EventBridge Rule for Savings-Snapshot Collection (#1023 / #1033)
+# ==============================================
+#
+# Periodic run of the analytics_collect task: ensure upcoming monthly
+# partitions exist, write a point-in-time savings snapshot across all
+# tenants, apply retention, then refresh the materialized views. The
+# handler is advisory-lock guarded so overlapping invocations are safe.
+
+resource "aws_cloudwatch_event_rule" "analytics_collect" {
+  count = var.enable_analytics_collect_schedule ? 1 : 0
+
+  name                = "${var.stack_name}-analytics-collect"
+  description         = "Trigger savings-snapshot analytics collection (issues #1023/#1033)"
+  schedule_expression = var.analytics_collect_schedule
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "analytics_collect" {
+  count = var.enable_analytics_collect_schedule ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.analytics_collect[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.main.arn
+
+  input = jsonencode({
+    action = "analytics_collect"
+  })
+}
+
+resource "aws_lambda_permission" "eventbridge_analytics_collect" {
+  count = var.enable_analytics_collect_schedule ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeAnalyticsCollect"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.main.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.analytics_collect[0].arn
+}

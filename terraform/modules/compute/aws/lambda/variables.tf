@@ -177,6 +177,18 @@ variable "reap_stuck_purchases_schedule" {
   default     = "rate(5 minutes)"
 }
 
+variable "enable_analytics_collect_schedule" {
+  description = "Enable the scheduled savings-snapshot analytics collection (issues #1023/#1033). When true, EventBridge periodically invokes the analytics_collect task (snapshot + partition maintenance + retention + view refresh)."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "EventBridge schedule for the analytics_collect task. The collector aggregates point-in-time savings snapshots, so a daily cadence captures a clean coverage/utilization time-series without excess write volume. rate() starts from deployment time; use cron() for fixed clock times."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 variable "purchase_approved_reap_after" {
   description = "Threshold age for the stuck-purchase reaper. Any execution sitting in approved/running longer than this gets flipped to failed on the next sweep. Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
   type        = string
