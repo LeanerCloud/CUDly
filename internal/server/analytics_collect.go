@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/analytics"
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -30,6 +31,13 @@ type AnalyticsConfig struct {
 const (
 	defaultAnalyticsRetentionMonths = 24
 	defaultAnalyticsPartitionsAhead = 3
+
+	// analyticsDDLTimeout bounds each long-running partition/retention/refresh
+	// DDL step. RDS Proxy does not honour a session statement_timeout, so a
+	// runaway DDL (e.g. a CONCURRENTLY refresh blocked on a lock) could hang the
+	// whole scheduled run indefinitely; a per-step deadline guarantees the
+	// pipeline makes forward progress or fails fast (06-N3).
+	analyticsDDLTimeout = 5 * time.Minute
 )
 
 // LoadAnalyticsConfig reads the collector knobs from env, falling back to
@@ -39,9 +47,26 @@ const (
 func LoadAnalyticsConfig() AnalyticsConfig {
 	return AnalyticsConfig{
 		Enabled:         getEnvBool("ANALYTICS_COLLECTION_ENABLED", true),
-		RetentionMonths: getEnvInt("ANALYTICS_RETENTION_MONTHS", defaultAnalyticsRetentionMonths),
-		PartitionsAhead: getEnvInt("ANALYTICS_PARTITIONS_AHEAD", defaultAnalyticsPartitionsAhead),
+		RetentionMonths: loadAnalyticsInt("ANALYTICS_RETENTION_MONTHS", defaultAnalyticsRetentionMonths),
+		PartitionsAhead: loadAnalyticsInt("ANALYTICS_PARTITIONS_AHEAD", defaultAnalyticsPartitionsAhead),
 	}
+}
+
+// loadAnalyticsInt reads an integer collector knob from env. An unset/blank
+// value falls back to defaultVal; a set-but-unparseable value is preserved as a
+// 0 sentinel (rather than silently defaulting like getEnvInt) so Validate
+// rejects the misconfiguration at startup instead of running with a default the
+// operator never asked for (fail-fast at the boundary, feedback_strict_int_parse).
+func loadAnalyticsInt(key string, defaultVal int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return defaultVal
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0 // out-of-range sentinel: Validate() rejects it (must be >= 1)
+	}
+	return val
 }
 
 // Validate rejects out-of-range analytics knobs so a misconfiguration fails
@@ -55,6 +80,15 @@ func (c AnalyticsConfig) Validate() error {
 		return fmt.Errorf("ANALYTICS_PARTITIONS_AHEAD must be >= 1, got %d", c.PartitionsAhead)
 	}
 	return nil
+}
+
+// withDDLTimeout runs an analytics DDL step that takes a single int arg under a
+// bounded child context so it cannot hang the scheduled pipeline when no
+// statement_timeout is enforced (e.g. under RDS Proxy, 06-N3).
+func withDDLTimeout(ctx context.Context, fn func(context.Context, int) error, arg int) error {
+	stepCtx, cancel := context.WithTimeout(ctx, analyticsDDLTimeout)
+	defer cancel()
+	return fn(stepCtx, arg)
 }
 
 // getEnvBool parses a boolean env var, returning defaultVal when unset or
@@ -105,7 +139,7 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 
 	// 1. Ensure upcoming partitions exist BEFORE writing so the snapshot lands
 	//    in a real monthly partition rather than the catch-all default (M3).
-	if err := app.Analytics.CreateFuturePartitions(ctx, cfg.PartitionsAhead); err != nil {
+	if err := withDDLTimeout(ctx, app.Analytics.CreateFuturePartitions, cfg.PartitionsAhead); err != nil {
 		log.Printf("Warning: failed to ensure future partitions: %v", err)
 		result["status"] = "partial"
 	} else {
@@ -125,7 +159,7 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 	}
 
 	// 3. Apply retention.
-	if err := app.Analytics.DropOldPartitions(ctx, cfg.RetentionMonths); err != nil {
+	if err := withDDLTimeout(ctx, app.Analytics.DropOldPartitions, cfg.RetentionMonths); err != nil {
 		log.Printf("Warning: failed to drop old partitions: %v", err)
 		result["status"] = "partial"
 	} else {
@@ -133,7 +167,10 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 	}
 
 	// 4. Refresh materialized views over the fresh snapshot data.
-	if err := app.Analytics.RefreshMaterializedViews(ctx); err != nil {
+	refreshCtx, cancelRefresh := context.WithTimeout(ctx, analyticsDDLTimeout)
+	err := app.Analytics.RefreshMaterializedViews(refreshCtx)
+	cancelRefresh()
+	if err != nil {
 		log.Printf("Warning: failed to refresh materialized views: %v", err)
 		result["status"] = "partial"
 	} else {

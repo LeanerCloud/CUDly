@@ -53,18 +53,26 @@ type mockAnalyticsStore struct {
 	dropOldPartErr         error
 	createFuturePartMonths int
 	dropOldPartRetention   int
+	// *HadDeadline capture whether each DDL step ran under a bounded context, so
+	// the 06-N3 fix (per-step timeouts under RDS Proxy) is positively asserted.
+	createFuturePartHadDeadline bool
+	dropOldPartHadDeadline      bool
+	refreshHadDeadline          bool
 }
 
 func (m *mockAnalyticsStore) RefreshMaterializedViews(ctx context.Context) error {
+	_, m.refreshHadDeadline = ctx.Deadline()
 	return m.refreshErr
 }
 
 func (m *mockAnalyticsStore) CreateFuturePartitions(ctx context.Context, monthsAhead int) error {
+	_, m.createFuturePartHadDeadline = ctx.Deadline()
 	m.createFuturePartMonths = monthsAhead
 	return m.createFuturePartErr
 }
 
 func (m *mockAnalyticsStore) DropOldPartitions(ctx context.Context, retentionMonths int) error {
+	_, m.dropOldPartHadDeadline = ctx.Deadline()
 	m.dropOldPartRetention = retentionMonths
 	return m.dropOldPartErr
 }
