@@ -139,19 +139,52 @@ func TestExtract_MissingCostsReadAsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
 }
 
-func TestExtract_Legacy_RecurringMonthlyCostIsZeroPointer(t *testing.T) {
-	// Azure reservations are always all-upfront (single payment, no monthly
-	// recurring charge). RecurringMonthlyCost must be a non-nil pointer to 0
-	// so the frontend renders "$0" instead of "—" (which would mean unknown).
+func TestExtract_Legacy_RecurringMonthlyCostIsCoveredCost(t *testing.T) {
+	// RecurringMonthlyCost is the covered/effective cost (what you pay WITH
+	// the reservation) = TotalCostWithReservedInstances, NOT 0 (which would
+	// make the GUI fall back to displaying the on-demand spend).
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithRegion("eastus"),
 		mocks.WithNormalizedSize("Standard_D2s_v3"),
-		mocks.WithCosts(100, 70, 30),
+		mocks.WithCosts(100, 70, 30), // on-demand, total-with-RI, net savings
 	)
 	f := Extract(rec)
 	require.NotNil(t, f)
-	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure reservations")
-	assert.InDelta(t, 0.0, *f.RecurringMonthlyCost, 1e-9)
+	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be populated from the covered cost")
+	assert.InDelta(t, 70.0, *f.RecurringMonthlyCost, 1e-9,
+		"covered cost must equal TotalCostWithReservedInstances, not 0")
+}
+
+func TestExtract_Legacy_RecurringMonthlyCostReconstructedWhenTotalAbsent(t *testing.T) {
+	// TotalCostWithReservedInstances absent → reconstruct covered cost as
+	// on-demand minus net savings (120 - 45 = 75), still never 0.
+	withOnDemandAndSavingsOnly := func(_ *armconsumption.LegacyReservationRecommendation, props *armconsumption.LegacyReservationRecommendationProperties) {
+		onDemand := 120.0
+		savings := 45.0
+		props.CostWithNoReservedInstances = &onDemand
+		props.NetSavings = &savings
+		props.TotalCostWithReservedInstances = nil
+	}
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		withOnDemandAndSavingsOnly,
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	require.NotNil(t, f.RecurringMonthlyCost, "covered cost must be reconstructed when total-with-RI is absent")
+	assert.InDelta(t, 75.0, *f.RecurringMonthlyCost, 1e-9)
+}
+
+func TestExtract_Legacy_RecurringMonthlyCostNilWhenSourcesAbsent(t *testing.T) {
+	// Neither total-with-RI nor a complete (on-demand, net-savings) pair →
+	// RecurringMonthlyCost must be nil ("data not available"), NEVER 0.
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithNormalizedSize("Standard_D2s_v3"),
+		// no WithCosts → all three cost pointers nil
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Nil(t, f.RecurringMonthlyCost, "covered cost must be nil (absent), not a fabricated 0")
 }
 
 // --- Modern (MCA billing account) ----------------------------------------
@@ -226,19 +259,52 @@ func TestExtract_Modern_MissingCostAmountsReadAsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, f.EstimatedSavings, 1e-9)
 }
 
-func TestExtract_Modern_RecurringMonthlyCostIsZeroPointer(t *testing.T) {
-	// Azure Reservation recommendations are always all-upfront regardless
-	// of billing account type. RecurringMonthlyCost must be a non-nil pointer
-	// to 0 for both Legacy and Modern response shapes.
+func TestExtract_Modern_RecurringMonthlyCostIsCoveredCost(t *testing.T) {
+	// Same covered-cost semantics as Legacy: RecurringMonthlyCost equals
+	// TotalCostWithReservedInstances, not 0.
 	rec := mocks.BuildModernReservationRecommendation(
 		mocks.WithModernRegion("westeurope"),
 		mocks.WithModernSKUName("Standard_D4s_v5"),
-		mocks.WithModernCosts(400, 260, 140),
+		mocks.WithModernCosts(400, 260, 140), // on-demand, total-with-RI, net savings
 	)
 	f := Extract(rec)
 	require.NotNil(t, f)
-	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil for Azure reservations")
-	assert.InDelta(t, 0.0, *f.RecurringMonthlyCost, 1e-9)
+	require.NotNil(t, f.RecurringMonthlyCost, "RecurringMonthlyCost must be populated from the covered cost")
+	assert.InDelta(t, 260.0, *f.RecurringMonthlyCost, 1e-9,
+		"covered cost must equal TotalCostWithReservedInstances, not 0")
+}
+
+func TestExtract_Modern_RecurringMonthlyCostReconstructedWhenTotalAbsent(t *testing.T) {
+	// TotalCostWithReservedInstances absent → covered = on-demand - net
+	// savings (500 - 180 = 320). amountValuePtr must preserve the nil for
+	// the absent *Amount so the fallback engages.
+	currency := "USD"
+	withModernOnDemandAndSavingsOnly := func(_ *armconsumption.ModernReservationRecommendation, props *armconsumption.ModernReservationRecommendationProperties) {
+		onDemand := 500.0
+		savings := 180.0
+		props.CostWithNoReservedInstances = &armconsumption.Amount{Currency: &currency, Value: &onDemand}
+		props.NetSavings = &armconsumption.Amount{Currency: &currency, Value: &savings}
+		props.TotalCostWithReservedInstances = nil
+	}
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernSKUName("Standard_D4s_v5"),
+		withModernOnDemandAndSavingsOnly,
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	require.NotNil(t, f.RecurringMonthlyCost, "covered cost must be reconstructed when total-with-RI is absent")
+	assert.InDelta(t, 320.0, *f.RecurringMonthlyCost, 1e-9)
+}
+
+func TestExtract_Modern_RecurringMonthlyCostNilWhenSourcesAbsent(t *testing.T) {
+	// No cost *Amount fields at all → RecurringMonthlyCost nil, never 0.
+	rec := mocks.BuildModernReservationRecommendation(
+		mocks.WithModernSKUName("Standard_D4s_v5"),
+		// no WithModernCosts → all three *Amount fields nil
+	)
+	f := Extract(rec)
+	require.NotNil(t, f)
+	assert.Nil(t, f.RecurringMonthlyCost, "covered cost must be nil (absent), not a fabricated 0")
 }
 
 // --- ExpandPaymentVariants --------------------------------------------------
