@@ -34,6 +34,13 @@ const (
 	maxPasswordLength       = 128 // Maximum password length to prevent bcrypt DoS
 	passwordHistorySize     = 5   // Number of previous passwords to remember
 	sequentialCharThreshold = 3   // Number of identical consecutive characters to reject
+
+	// PasswordResetRateLimit is the minimum interval between password reset requests
+	// for the same email address. A second request within this window is silently
+	// dropped (the existing token remains valid) to prevent a griefing vector where
+	// an attacker repeatedly requests resets to perpetually invalidate the victim's
+	// legitimate link.
+	PasswordResetRateLimit = 1 * time.Minute
 )
 
 // commonPasswords is a list of commonly used weak passwords to reject
@@ -265,6 +272,19 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		// Don't reveal if email exists
 		logging.Debugf("Password reset requested for non-existent email: %s", redactEmail(email))
 		return nil
+	}
+
+	// Rate-limit: if a reset token was issued recently (within PasswordResetRateLimit),
+	// silently return so the existing token stays valid. This prevents a griefing
+	// attack where an adversary who knows the victim's email repeatedly requests
+	// resets to perpetually invalidate the victim's legitimate link.
+	if user.PasswordResetExpiry != nil {
+		tokenAge := PasswordResetExpiry - time.Until(*user.PasswordResetExpiry)
+		if tokenAge < PasswordResetRateLimit {
+			logging.Debugf("Password reset rate-limited for %s (token age %s < %s)",
+				redactEmail(email), tokenAge.Round(time.Second), PasswordResetRateLimit)
+			return nil
+		}
 	}
 
 	// Generate reset token
