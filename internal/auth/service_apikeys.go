@@ -269,13 +269,21 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, err
 	}
 
-	// Update last used timestamp (async to avoid blocking)
+	// Update last used timestamp asynchronously to avoid blocking the
+	// authentication hot path. singleflight.Group ensures at most one
+	// in-flight DB write per keyID at any moment: subsequent concurrent
+	// requests for the same key are deduplicated rather than spawning an
+	// unbounded number of goroutines (DoS amplifier on a revoked key).
+	keyID := key.ID
 	go func() {
-		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.UpdateLastUsed(updateCtx, key.ID); err != nil {
-			logging.Warnf("Failed to update API key last used timestamp: %v", err)
-		}
+		_, _, _ = s.lastUsedSFG.Do(keyID, func() (any, error) {
+			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.UpdateLastUsed(updateCtx, keyID); err != nil {
+				logging.Debugf("Failed to update API key last used timestamp for key %s: %v", keyID, err)
+			}
+			return nil, nil
+		})
 	}()
 
 	return key, user, nil
