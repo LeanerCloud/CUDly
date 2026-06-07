@@ -274,6 +274,10 @@ func TestGetDefaultRateLimits_RegisterHasDedicatedBucket(t *testing.T) {
 		t.Fatal("register key missing from default rate limits (issue #1016): add it to getDefaultRateLimits()")
 	}
 
+	// Contract from #1016: 5 attempts per 15 minutes.
+	assert.Equal(t, 5, cfg.MaxAttempts, "register max attempts must be 5 per issue #1016")
+	assert.Equal(t, 15*time.Minute, cfg.Window, "register window must be 15 minutes per issue #1016")
+
 	// register must be far stricter than api_general (300/min).
 	apiGeneral := limits["api_general"]
 	if cfg.MaxAttempts >= apiGeneral.MaxAttempts {
