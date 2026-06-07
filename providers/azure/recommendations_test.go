@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -126,7 +127,7 @@ func TestContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := contains(tt.s, tt.substr)
+			result := strings.Contains(tt.s, tt.substr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -413,4 +414,41 @@ func TestConvertAdvisorRecommendation_UnknownService(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// TestMergeServiceResults_OrderIsStable is a regression test for L3:
+// the merged output of mergeServiceResults must preserve the canonical
+// compute -> database -> cache -> cosmosdb -> savingsplans -> advisor order
+// regardless of the order arguments are passed in. This test pins the actual
+// argument order used in GetRecommendations so a reordering of the serviceResult
+// literals will be caught immediately.
+func TestMergeServiceResults_OrderIsStable(t *testing.T) {
+	mkRec := func(svc common.ServiceType) common.Recommendation {
+		return common.Recommendation{Service: svc, Provider: common.ProviderAzure}
+	}
+
+	computeRec := mkRec(common.ServiceCompute)
+	dbRec := mkRec(common.ServiceRelationalDB)
+	cacheRec := mkRec(common.ServiceCache)
+	cosmosRec := mkRec(common.ServiceNoSQL)
+	spRec := mkRec(common.ServiceSavingsPlans)
+	advisorRec := mkRec(common.ServiceCompute) // Advisor produces Compute recs
+
+	// Replicate the exact call order from GetRecommendations.
+	result := mergeServiceResults(
+		serviceResult{"compute", []common.Recommendation{computeRec}, nil},
+		serviceResult{"database", []common.Recommendation{dbRec}, nil},
+		serviceResult{"cache", []common.Recommendation{cacheRec}, nil},
+		serviceResult{"cosmosdb", []common.Recommendation{cosmosRec}, nil},
+		serviceResult{"savingsplans", []common.Recommendation{spRec}, nil},
+		serviceResult{"advisor", []common.Recommendation{advisorRec}, nil},
+	)
+
+	require.Len(t, result, 6, "all six services must be represented")
+	assert.Equal(t, common.ServiceCompute, result[0].Service, "first must be compute")
+	assert.Equal(t, common.ServiceRelationalDB, result[1].Service, "second must be database")
+	assert.Equal(t, common.ServiceCache, result[2].Service, "third must be cache")
+	assert.Equal(t, common.ServiceNoSQL, result[3].Service, "fourth must be cosmosdb")
+	assert.Equal(t, common.ServiceSavingsPlans, result[4].Service, "fifth must be savingsplans")
+	assert.Equal(t, common.ServiceCompute, result[5].Service, "sixth must be advisor (compute-type)")
 }

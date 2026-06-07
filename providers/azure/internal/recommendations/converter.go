@@ -40,7 +40,15 @@ type ExtractedFields struct {
 	CommitmentCost   float64
 	EstimatedSavings float64
 	Term             string
-	Scope            string
+	// Scope is populated from the API response ("Shared" or a subscription ID)
+	// but is not yet threaded into the purchase body. All service clients
+	// currently hardcode "appliedScopeType": "Shared", which is correct because
+	// the recommendation filter in recommendations.go already asserts
+	// "properties/scope eq 'Shared'" — only Shared-scope recommendations are
+	// ever requested. This field is retained for future wiring if single-
+	// subscription scoped recommendations are ever requested. See finding M1/M2
+	// in docs/code-review/09-provider-azure.md.
+	Scope string
 	// RecurringMonthlyCost is the monthly recurring charge for this
 	// commitment. Azure Reservation recommendations are all all-upfront
 	// (a single payment, no recurring monthly charge), so this is always

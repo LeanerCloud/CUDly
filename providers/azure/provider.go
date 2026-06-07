@@ -165,6 +165,15 @@ func (p *AzureProvider) DisplayName() string {
 }
 
 // IsConfigured checks if Azure credentials are available. Thread-safe via sync.Once.
+//
+// Sticky-failure contract: when ambient credential resolution fails (e.g. a
+// transient IMDS timeout during startup), the error is memoised under
+// sync.Once. Subsequent calls return false for the process lifetime with no
+// retry. For long-lived server deployments this means a transient auth failure
+// at boot requires a process restart to recover. This is acceptable for the
+// current Lambda/container deployment model where restarts are cheap; if a
+// long-lived daemon pattern is introduced, replace the sync.Once with a
+// time-bounded cache or single-flight retry.
 func (p *AzureProvider) IsConfigured() bool {
 	// If credential was injected via SetCredential, skip the Once path.
 	if p.cred != nil {
@@ -191,7 +200,7 @@ func (p *AzureProvider) IsConfigured() bool {
 // GetCredentials returns Azure credentials
 func (p *AzureProvider) GetCredentials() (provider.Credentials, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
 	// DefaultAzureCredential can use multiple sources
@@ -206,7 +215,7 @@ func (p *AzureProvider) GetCredentials() (provider.Credentials, error) {
 // ValidateCredentials validates that Azure credentials are working
 func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 	if !p.IsConfigured() {
-		return fmt.Errorf("Azure is not configured")
+		return fmt.Errorf("azure provider is not configured")
 	}
 
 	// Use injected client if available (for testing)
@@ -227,7 +236,7 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 	_, err := pager.NextPage(ctx)
 	if err != nil {
 		logging.Errorf("purchase[Azure]: subscriptions.NextPage failed after %s: %v", time.Since(t0), err)
-		return fmt.Errorf("Azure credentials validation failed: %w", err)
+		return fmt.Errorf("azure credentials validation failed: %w", err)
 	}
 	logging.Infof("purchase[Azure]: subscriptions.NextPage returned in %s", time.Since(t0))
 	return nil
@@ -242,7 +251,7 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 //     where the STS-identified account is always the default).
 func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
 	// Use injected client if available (for testing)
@@ -437,7 +446,7 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 // an extra GetAccounts round-trip per iteration.
 func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.ServiceType, region string) (provider.ServiceClient, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
 	// Use explicit subscription ID if configured; otherwise resolve from accounts.
@@ -458,7 +467,7 @@ func (p *AzureProvider) GetServiceClient(ctx context.Context, service common.Ser
 // returned by GetAccounts to avoid O(n) redundant API calls.
 func (p *AzureProvider) GetServiceClientForAccount(ctx context.Context, service common.ServiceType, region, subscriptionID string) (provider.ServiceClient, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 	if subscriptionID == "" {
 		return nil, fmt.Errorf("subscriptionID must not be empty")
@@ -499,7 +508,7 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 // GetRecommendationsClientForAccount.
 func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 
 	// Use explicit subscription ID if configured; otherwise resolve from accounts.
@@ -520,7 +529,7 @@ func (p *AzureProvider) GetRecommendationsClient(ctx context.Context) (provider.
 // returned by GetAccounts to avoid O(n) redundant API calls.
 func (p *AzureProvider) GetRecommendationsClientForAccount(ctx context.Context, subscriptionID string) (provider.RecommendationsClient, error) {
 	if !p.IsConfigured() {
-		return nil, fmt.Errorf("Azure is not configured")
+		return nil, fmt.Errorf("azure provider is not configured")
 	}
 	if subscriptionID == "" {
 		return nil, fmt.Errorf("subscriptionID must not be empty")

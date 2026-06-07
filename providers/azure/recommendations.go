@@ -236,7 +236,11 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			logging.Warnf("Azure Advisor pagination error (partial results may be returned): %v", err)
+			// Advisor partial-OK is intentional: per-service reservation results
+			// (compute, database, etc.) remain useful on their own when Advisor
+			// pagination fails mid-stream. Warnf with the accumulated count so
+			// operators can assess the completeness of the Advisor slice.
+			logging.Warnf("Azure Advisor pagination error after %d recommendations (partial results returned): %v", len(recommendations), err)
 			break
 		}
 		recommendations = r.appendAdvisorPageRecs(params, page, recommendations)
@@ -378,13 +382,13 @@ func serviceFromImpactedField(field *string) string {
 	}
 	f := *field
 	switch {
-	case contains(f, "Microsoft.Compute"):
+	case strings.Contains(f, "Microsoft.Compute"):
 		return string(common.ServiceCompute)
-	case contains(f, "Microsoft.Sql"):
+	case strings.Contains(f, "Microsoft.Sql"):
 		return string(common.ServiceRelationalDB)
-	case contains(f, "Microsoft.Cache"):
+	case strings.Contains(f, "Microsoft.Cache"):
 		return string(common.ServiceCache)
-	case contains(f, "Microsoft.DBforMySQL"), contains(f, "Microsoft.DBforPostgreSQL"):
+	case strings.Contains(f, "Microsoft.DBforMySQL"), strings.Contains(f, "Microsoft.DBforPostgreSQL"):
 		return string(common.ServiceRelationalDB)
 	}
 	return ""
@@ -459,7 +463,3 @@ func shouldIncludeService(params common.RecommendationParams, service common.Ser
 	return params.Service == service
 }
 
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
