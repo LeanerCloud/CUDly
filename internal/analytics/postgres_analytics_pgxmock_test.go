@@ -66,7 +66,7 @@ func TestPostgresAnalyticsStore_SaveSnapshot_ExecError(t *testing.T) {
 		WithArgs(anyArgs(13)...).
 		WillReturnError(errors.New("db error"))
 
-	snap := &SavingsSnapshot{AccountID: "acct1", Timestamp: time.Now()}
+	snap := &SavingsSnapshot{AccountID: "acct1", Timestamp: time.Now(), CommitmentType: "RI"}
 	err := store.SaveSnapshot(ctx, snap)
 	assert.ErrorContains(t, err, "failed to save savings snapshot")
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -81,10 +81,11 @@ func TestPostgresAnalyticsStore_SaveSnapshot_WithMetadata(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	snap := &SavingsSnapshot{
-		ID:        "preset-id",
-		AccountID: "acct1",
-		Timestamp: time.Now(),
-		Metadata:  map[string]any{"env": "prod"},
+		ID:             "preset-id",
+		AccountID:      "acct1",
+		Timestamp:      time.Now(),
+		CommitmentType: "SavingsPlan",
+		Metadata:       map[string]any{"env": "prod"},
 	}
 	err := store.SaveSnapshot(ctx, snap)
 	require.NoError(t, err)

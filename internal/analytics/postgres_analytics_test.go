@@ -120,11 +120,12 @@ func TestSaveSnapshot(t *testing.T) {
 		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "", // empty ID
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
+			ID:             "", // empty ID
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			CommitmentType: "RI",
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
@@ -145,12 +146,13 @@ func TestSaveSnapshot(t *testing.T) {
 		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "test-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
-			Metadata:  nil,
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			CommitmentType: "SavingsPlan",
+			Metadata:       nil,
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
@@ -170,9 +172,10 @@ func TestSaveSnapshot(t *testing.T) {
 		store := newTestableStore(mock)
 
 		snapshot := &SavingsSnapshot{
-			ID:        "test-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "RI",
 		}
 
 		mock.ExpectExec(`INSERT INTO savings_snapshots`).
@@ -182,6 +185,29 @@ func TestSaveSnapshot(t *testing.T) {
 		err = store.SaveSnapshot(context.Background(), snapshot)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects invalid commitment_type before any DB call", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		store := newTestableStore(mock)
+
+		snapshot := &SavingsSnapshot{
+			ID:             "test-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "bogus",
+		}
+
+		// No mock expectations set: if the DB were contacted the test would fail
+		// with an unexpected call, proving the guard fires client-side.
+		err = store.SaveSnapshot(context.Background(), snapshot)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid commitment_type")
+		assert.Contains(t, err.Error(), "bogus")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
@@ -213,23 +239,6 @@ func TestBulkInsertSnapshots(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to acquire connection")
 	})
 
-	t.Run("non-empty slice errors when connection acquire fails", func(t *testing.T) {
-		mock, err := pgxmock.NewPool()
-		require.NoError(t, err)
-		defer mock.Close()
-
-		store := newTestableStore(mock)
-
-		// pgxmock.Acquire is unimplemented, so the COPY builder (where the
-		// commitment_type guard lives) is reached only after a real connection in
-		// production. This path therefore asserts the acquire-failure behaviour,
-		// not the type guard; the guard itself is covered by
-		// TestValidateCommitmentType below and exercised against a real DB in the
-		// integration suite.
-		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{{CommitmentType: "RI"}})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to acquire connection")
-	})
 }
 
 // TestValidateCommitmentType directly exercises the commitment_type guard that

@@ -94,6 +94,9 @@ func sortedProviderKeys(m map[string][]string) []string {
 
 // SaveSnapshot stores a single savings snapshot.
 func (s *PostgresAnalyticsStore) SaveSnapshot(ctx context.Context, snapshot *SavingsSnapshot) error {
+	if err := validateCommitmentType(snapshot.CommitmentType); err != nil {
+		return fmt.Errorf("invalid savings snapshot: %w", err)
+	}
 	if snapshot.ID == "" {
 		snapshot.ID = uuid.New().String()
 	}

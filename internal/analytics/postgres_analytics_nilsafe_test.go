@@ -36,12 +36,13 @@ func TestPostgresAnalyticsStore_SaveSnapshot_MetadataMarshalError(t *testing.T) 
 
 	t.Run("returns error when metadata contains un-marshallable value", func(t *testing.T) {
 		snapshot := &SavingsSnapshot{
-			ID:        "existing-id",
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
-			Provider:  "aws",
-			Service:   "rds",
-			Region:    "us-east-1",
+			ID:             "existing-id",
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			Provider:       "aws",
+			Service:        "rds",
+			Region:         "us-east-1",
+			CommitmentType: "RI",
 			// A channel is not JSON-serialisable, so json.Marshal will fail.
 			Metadata: map[string]any{
 				"bad_field": make(chan int),
@@ -57,9 +58,10 @@ func TestPostgresAnalyticsStore_SaveSnapshot_MetadataMarshalError(t *testing.T) 
 		// When ID is empty, a UUID is generated. The un-marshallable metadata
 		// error is still returned, but the ID field on the snapshot is set first.
 		snapshot := &SavingsSnapshot{
-			ID:        "", // will be populated
-			AccountID: "account-123",
-			Timestamp: time.Now().UTC(),
+			ID:             "", // will be populated
+			AccountID:      "account-123",
+			Timestamp:      time.Now().UTC(),
+			CommitmentType: "SavingsPlan",
 			Metadata: map[string]any{
 				"bad_field": make(chan int),
 			},
