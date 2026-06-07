@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -104,21 +105,13 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 	return []common.Recommendation{}, nil
 }
 
-// GetExistingCommitments retrieves existing Savings Plans
+// GetExistingCommitments retrieves existing Savings Plans across all pages.
+// DescribeSavingsPlans is paginated (NextToken on both input and output); the
+// original single-call implementation silently truncated to the first page,
+// causing CUDly to under-report existing SPs and recommend redundant purchases
+// (issue #1019). The loop mirrors the NextToken accumulator used in the
+// MemoryDB and OpenSearch commitment fetches.
 func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	input := &savingsplans.DescribeSavingsPlansInput{
-		States: []types.SavingsPlanState{
-			types.SavingsPlanStateActive,
-			types.SavingsPlanStatePendingReturn,
-			types.SavingsPlanStateQueued,
-		},
-	}
-
-	result, err := c.client.DescribeSavingsPlans(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
-	}
-
 	// Each client is scoped to one plan type, so partition the API result by
 	// SavingsPlanType and only return commitments matching this client's type.
 	// The provider registers four SP services and calls GetExistingCommitments
@@ -128,43 +121,89 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	// `case common.ServiceSavingsPlans` branch in provider.go's
 	// GetServiceClient): in that mode, return every commitment unfiltered
 	// to match pre-split behaviour. Per-plan-type clients still partition.
-	commitments := make([]common.Commitment, 0, len(result.SavingsPlans))
+	commitments := make([]common.Commitment, 0)
 	service := c.GetServiceType()
+	page := 0
+	var nextToken *string
 
-	for _, sp := range result.SavingsPlans {
-		if sp.SavingsPlanId == nil {
-			continue
-		}
-		if c.planType != "" && sp.SavingsPlanType != c.planType {
-			continue
-		}
-
-		commitment := common.Commitment{
-			Provider:       common.ProviderAWS,
-			CommitmentID:   *sp.SavingsPlanId,
-			CommitmentType: common.CommitmentSavingsPlan,
-			Service:        service,
-			Region:         aws.ToString(sp.Region),
-			ResourceType:   string(sp.SavingsPlanType),
-			Count:          1, // Savings Plans don't have a count
-			State:          string(sp.State),
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
-		if sp.Start != nil {
-			if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
-				commitment.StartDate = startTime
+		page++
+		if page > maxCommitmentPages {
+			log.Printf("WARNING: savingsplans.GetExistingCommitments reached page cap (%d) — returning partial results (issue #1019)",
+				maxCommitmentPages)
+			break
+		}
+
+		input := &savingsplans.DescribeSavingsPlansInput{
+			States: []types.SavingsPlanState{
+				types.SavingsPlanStateActive,
+				types.SavingsPlanStatePendingReturn,
+				types.SavingsPlanStateQueued,
+			},
+			NextToken:  nextToken,
+			MaxResults: aws.Int32(100),
+		}
+
+		result, err := c.client.DescribeSavingsPlans(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
+		}
+
+		for _, sp := range result.SavingsPlans {
+			if commitment, ok := c.toCommitment(sp, service); ok {
+				commitments = append(commitments, commitment)
 			}
 		}
-		if sp.End != nil {
-			if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
-				commitment.EndDate = endTime
-			}
-		}
 
-		commitments = append(commitments, commitment)
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
 	}
 
 	return commitments, nil
+}
+
+// toCommitment converts a single DescribeSavingsPlans entry into a
+// common.Commitment, returning ok=false for entries that should be skipped
+// (missing ID, or a plan type that does not match this client's scope). It is
+// split out of GetExistingCommitments to keep that function under the
+// cyclomatic limit.
+func (c *Client) toCommitment(sp types.SavingsPlan, service common.ServiceType) (common.Commitment, bool) {
+	if sp.SavingsPlanId == nil {
+		return common.Commitment{}, false
+	}
+	if c.planType != "" && sp.SavingsPlanType != c.planType {
+		return common.Commitment{}, false
+	}
+
+	commitment := common.Commitment{
+		Provider:       common.ProviderAWS,
+		CommitmentID:   *sp.SavingsPlanId,
+		CommitmentType: common.CommitmentSavingsPlan,
+		Service:        service,
+		Region:         aws.ToString(sp.Region),
+		ResourceType:   string(sp.SavingsPlanType),
+		Count:          1, // Savings Plans don't have a count
+		State:          string(sp.State),
+	}
+
+	if sp.Start != nil {
+		if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
+			commitment.StartDate = startTime
+		}
+	}
+	if sp.End != nil {
+		if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
+			commitment.EndDate = endTime
+		}
+	}
+
+	return commitment, true
 }
 
 // PurchaseCommitment purchases a Savings Plan
@@ -265,10 +304,27 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
 		tag, planType, rec.Term, rec.PaymentOption)
 
+	// Pin to USD so non-USD currency offerings are excluded server-side.
+	// EC2Instance SPs are region-scoped; add a region filter so only the
+	// offering for the client's region is returned. Compute, SageMaker, and
+	// Database SPs are global and do not carry a region property.
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termSeconds},
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
+		Currencies:     []types.CurrencyCode{types.CurrencyCodeUsd},
+	}
+	if planType == types.SavingsPlanTypeEc2Instance {
+		if c.region == "" {
+			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
+		} else {
+			input.Filters = []types.SavingsPlanOfferingFilterElement{
+				{
+					Name:   types.SavingsPlanOfferingFilterAttributeRegion,
+					Values: []string{c.region},
+				},
+			}
+		}
 	}
 
 	offeringID, err := c.lookupOfferingID(ctx, input)
@@ -327,13 +383,24 @@ func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
 // instead of timing out the Lambda budget (issue #688).
 const maxOfferingPages = 5
 
+// maxCommitmentPages is the maximum number of DescribeSavingsPlans pages to
+// walk when listing existing commitments. 100 pages * 100 items/page = 10,000
+// SPs, which is a realistic upper bound for even large enterprise accounts.
+// Exceeding the cap logs a warning but still returns the commitments collected
+// so far, consistent with the #691 guidance (data loss is worse than a
+// truncation warning for the commitment path).
+const maxCommitmentPages = 100
+
 // lookupOfferingID performs the API call(s) to find the offering ID.
-// DescribeSavingsPlansOfferings already accepts PlanTypes/Durations/PaymentOptions
-// filters that narrow the result set, so only a handful of results are expected
-// on the first page. Pagination with a cap is added as a safety net.
+// DescribeSavingsPlansOfferings accepts PlanTypes/Durations/PaymentOptions/
+// Currencies/Filters that narrow the result set to at most a handful of
+// results. All pages are accumulated so the caller receives a stable,
+// lexicographically-sorted first offering rather than a result that depends
+// on AWS response ordering (finding 08-L1).
 func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
 	t0 := time.Now()
 	page := 0
+	var offeringIDs []string
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -358,7 +425,7 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 			if offering.OfferingId == nil {
 				continue
 			}
-			return *offering.OfferingId, nil
+			offeringIDs = append(offeringIDs, *offering.OfferingId)
 		}
 
 		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
@@ -367,7 +434,13 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 		input.NextToken = result.NextToken
 	}
 
-	return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
+	if len(offeringIDs) == 0 {
+		return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
+	}
+	// Sort for a stable, deterministic tie-break when multiple offerings
+	// survive the server-side filters. The first ID after sorting is returned.
+	sort.Strings(offeringIDs)
+	return offeringIDs[0], nil
 }
 
 // ValidateOffering checks if a Savings Plans offering exists
