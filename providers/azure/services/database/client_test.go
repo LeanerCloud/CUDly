@@ -118,7 +118,7 @@ func createSampleSQLPricingResponse() string {
 				"unitOfMeasure": "1 DTU/Hour",
 				"type": "Reservation",
 				"armSkuName": "Standard_S0",
-				"reservationTerm": "1 Years"
+				"reservationTerm": "1 Year"
 			},
 			{
 				"currencyCode": "USD",

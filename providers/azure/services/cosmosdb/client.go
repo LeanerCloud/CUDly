@@ -586,10 +586,20 @@ func (c *CosmosDBClient) fetchAzurePricing(ctx context.Context, filter string) (
 	return &AzureRetailPrice{Items: items}, nil
 }
 
+// azureTermString returns the Retail Prices API ReservationTerm string for the
+// given number of years. The API uses the singular form "1 Year" for one year
+// and the plural form "N Years" for two or more years.
+func azureTermString(termYears int) string {
+	if termYears == 1 {
+		return "1 Year"
+	}
+	return fmt.Sprintf("%d Years", termYears)
+}
+
 // extractCosmosPricing extracts on-demand and reservation pricing from price items
 func extractCosmosPricing(items []CosmosRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
-	termStr := fmt.Sprintf("%d Years", termYears)
+	termStr := azureTermString(termYears)
 
 	for _, item := range items {
 		if item.CurrencyCode != "" {

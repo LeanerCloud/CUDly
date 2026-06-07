@@ -220,7 +220,7 @@ func CreateSampleVMPricingResponse() string {
 				"productName": "Virtual Machines D Series",
 				"serviceName": "Virtual Machines",
 				"armSkuName": "Standard_D2s_v3",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			},
 			{

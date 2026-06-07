@@ -133,7 +133,7 @@ func createSampleCosmosPricingResponse() string {
 				"serviceName": "Azure Cosmos DB",
 				"skuName": "100RU",
 				"meterName": "100 RU/s",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			},
 			{

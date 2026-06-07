@@ -107,7 +107,7 @@ func samplePricingJSON() string {
 				"serviceName": "Azure Cache for Redis",
 				"armSkuName": "Premium_P1",
 				"meterName": "P1 Instance",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			},
 			{
@@ -541,7 +541,7 @@ func TestGetOfferingDetails_Paginated(t *testing.T) {
 				"serviceName": "Azure Cache for Redis",
 				"armSkuName": "Premium_P1",
 				"meterName": "P1 Instance",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			}
 		],

@@ -120,7 +120,7 @@ func createSampleSearchPricingResponse() string {
 				"serviceName": "Azure Cognitive Search",
 				"armSkuName": "Standard_S1",
 				"meterName": "S1 Search Unit",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			},
 			{

@@ -1316,6 +1316,54 @@ func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
 	assert.Contains(t, err.Error(), "403", "error must surface the HTTP status code")
 }
 
+// TestExtractVMPricing_SingularOneYear verifies that extractVMPricing correctly
+// recognises the "1 Year" singular form returned by the Azure Retail Prices API
+// for 1-year reservation terms. Before the fix, the extractor used "%d Years"
+// unconditionally, so the 1-year reservation line was silently skipped and
+// reservationPrice remained 0, causing a false "no reservation pricing found"
+// error even when the pricing row was present.
+func TestExtractVMPricing_SingularOneYear(t *testing.T) {
+	items := []AzureRetailPriceItem{
+		{
+			CurrencyCode:    "USD",
+			RetailPrice:     0.096,
+			UnitPrice:       0.096,
+			ArmRegionName:   "eastus",
+			ArmSKUName:      "Standard_D2s_v3",
+			Type:            "Consumption",
+		},
+		{
+			CurrencyCode:    "USD",
+			RetailPrice:     730.0,
+			ArmRegionName:   "eastus",
+			ArmSKUName:      "Standard_D2s_v3",
+			ReservationTerm: "1 Year",
+			Type:            "Reservation",
+		},
+	}
+
+	onDemand, reservation, currency := extractVMPricing(items, 1)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.096, onDemand, "on-demand price must be extracted")
+	assert.Equal(t, 730.0, reservation, "reservation price for '1 Year' term must be extracted")
+}
+
+// TestExtractVMPricing_PluralThreeYears verifies that the plural form "3 Years"
+// continues to work for multi-year terms.
+func TestExtractVMPricing_PluralThreeYears(t *testing.T) {
+	items := []AzureRetailPriceItem{
+		{CurrencyCode: "USD", RetailPrice: 0.096, UnitPrice: 0.096, Type: "Consumption"},
+		{CurrencyCode: "USD", RetailPrice: 1900.0, ReservationTerm: "3 Years", Type: "Reservation"},
+	}
+
+	onDemand, reservation, currency := extractVMPricing(items, 3)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.096, onDemand)
+	assert.Equal(t, 1900.0, reservation, "reservation price for '3 Years' term must be extracted")
+}
+
 // TestComputeClient_PurchaseCommitment_ZeroCountRejected is a regression test
 // for M6: PurchaseCommitment must reject Count==0 before any HTTP call.
 func TestComputeClient_PurchaseCommitment_ZeroCountRejected(t *testing.T) {
