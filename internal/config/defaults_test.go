@@ -2,7 +2,6 @@ package config
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -369,12 +368,13 @@ func TestGetAllCategories(t *testing.T) {
 	}
 }
 
-func TestDefaultSettings_UpdatedAtSet(t *testing.T) {
+func TestDefaultSettings_UpdatedAtIsZero(t *testing.T) {
+	// Static defaults have never been "updated" by a user; UpdatedAt must be
+	// the zero time so callers can distinguish them from DB-persisted settings.
 	for _, setting := range DefaultSettings {
-		assert.False(t, setting.UpdatedAt.IsZero(), "UpdatedAt should be set for key %s", setting.Key)
-		// UpdatedAt should be reasonably recent (within last 10 years)
-		assert.True(t, setting.UpdatedAt.After(time.Now().AddDate(-10, 0, 0)),
-			"UpdatedAt should be recent for key %s", setting.Key)
+		assert.True(t, setting.UpdatedAt.IsZero(),
+			"DefaultSettings entry %q must have zero UpdatedAt (it is a static default, not a user update)",
+			setting.Key)
 	}
 }
 
