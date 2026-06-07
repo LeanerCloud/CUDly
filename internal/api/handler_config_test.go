@@ -117,6 +117,12 @@ func TestHandler_updateConfig_InvalidBody(t *testing.T) {
 func TestHandler_getServiceConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
 
 	serviceCfg := &config.ServiceConfig{
 		Provider: "aws",
@@ -126,11 +132,16 @@ func TestHandler_getServiceConfig(t *testing.T) {
 		Coverage: 80,
 	}
 
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(serviceCfg, nil)
 
-	handler := &Handler{config: mockStore}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	result, err := handler.getServiceConfig(ctx, "aws/rds")
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "aws/rds")
 	require.NoError(t, err)
 
 	cfg := result.(*config.ServiceConfig)
@@ -140,9 +151,17 @@ func TestHandler_getServiceConfig(t *testing.T) {
 
 func TestHandler_getServiceConfig_InvalidFormat(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{corsAllowedOrigin: "*"}
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
-	result, err := handler.getServiceConfig(ctx, "invalid-format")
+	handler := &Handler{corsAllowedOrigin: "*", auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "invalid-format")
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid service path")
@@ -151,12 +170,19 @@ func TestHandler_getServiceConfig_InvalidFormat(t *testing.T) {
 func TestHandler_getServiceConfig_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
 
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "unknown").Return(nil, nil)
 
-	handler := &Handler{config: mockStore}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	result, err := handler.getServiceConfig(ctx, "aws/unknown")
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "aws/unknown")
 	require.NoError(t, err)
 
 	// Returns empty response for not found
@@ -333,12 +359,18 @@ func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 func TestHandler_getConfig_GlobalConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
 
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, assert.AnError)
 
-	handler := &Handler{config: mockStore}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	req := &events.LambdaFunctionURLRequest{}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
 	result, err := handler.getConfig(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -347,6 +379,11 @@ func TestHandler_getConfig_GlobalConfigError(t *testing.T) {
 func TestHandler_getConfig_ListServiceConfigsError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
 	globalCfg := &config.GlobalConfig{
 		EnabledProviders: []string{"aws"},
@@ -355,9 +392,11 @@ func TestHandler_getConfig_ListServiceConfigsError(t *testing.T) {
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("ListServiceConfigs", ctx).Return(nil, assert.AnError)
 
-	handler := &Handler{config: mockStore}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	req := &events.LambdaFunctionURLRequest{}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
 	result, err := handler.getConfig(ctx, req)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -396,7 +435,12 @@ func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 	})
 
 	t.Run("regression #407: non-admin does not receive SourceIdentity", func(t *testing.T) {
-		mockAuth.On("HasPermissionAPI", ctx, "regular-user", mock.Anything, mock.Anything).Return(false, nil)
+		// The regular user has view:config permission (passes requirePermission)
+		// but does not hold admin:* (requireAdmin fails), so SourceIdentity is
+		// withheld. We match the specific permission verbs so the admin:* call
+		// (action="admin", resource="*") still returns false.
+		mockAuth.On("HasPermissionAPI", ctx, "regular-user", "view", "config").Return(true, nil)
+		mockAuth.On("HasPermissionAPI", ctx, "regular-user", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(false, nil).Maybe()
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer user-token"},
 		}
@@ -410,12 +454,19 @@ func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 func TestHandler_getServiceConfig_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
 
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, assert.AnError)
 
-	handler := &Handler{config: mockStore}
+	handler := &Handler{config: mockStore, auth: mockAuth}
 
-	result, err := handler.getServiceConfig(ctx, "aws/rds")
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "aws/rds")
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
@@ -521,9 +572,17 @@ func TestHandler_updateServiceConfig_SaveError(t *testing.T) {
 
 func TestHandler_getServiceConfig_InvalidProvider(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{}
+	mockAuth := new(MockAuthService)
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
 
-	result, err := handler.getServiceConfig(ctx, "invalid/rds")
+	handler := &Handler{auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "invalid/rds")
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid provider")
@@ -650,4 +709,62 @@ func TestHandler_updateConfig_PropagationListError(t *testing.T) {
 	result, err := handler.updateConfig(ctx, req)
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Status)
+}
+
+// Regression tests for 02-M4: GET /api/config and GET /api/config/service/*
+// must enforce requirePermission("view","config") and return 403 to callers
+// who lack that permission, even though the route is only AuthUser-gated.
+
+func TestHandler_getConfig_ViewConfigPermission_Enforced(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	userSession := &Session{
+		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		Email:  "viewer@example.com",
+	}
+	// User has a valid session but view:config is revoked.
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "view", "config").Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+	}
+	result, err := handler.getConfig(ctx, req)
+	require.Error(t, err, "must be rejected when view:config is revoked")
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code, "expected 403, got %d", ce.code)
+	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+}
+
+func TestHandler_getServiceConfig_ViewConfigPermission_Enforced(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	userSession := &Session{
+		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		Email:  "viewer@example.com",
+	}
+	// User has a valid session but view:config is revoked.
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "view", "config").Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+	}
+	result, err := handler.getServiceConfig(ctx, req, "aws/rds")
+	require.Error(t, err, "must be rejected when view:config is revoked")
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code, "expected 403, got %d", ce.code)
+	mockStore.AssertNotCalled(t, "GetServiceConfig", mock.Anything, mock.Anything, mock.Anything)
 }

@@ -1915,3 +1915,32 @@ func (m *mockConfigStoreAccounts) SavePurchaseExecutionTx(ctx context.Context, _
 func (m *mockConfigStoreAccounts) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
+
+// Regression test for 02-M5: testAccountCredentials must gate on update:accounts
+// (not view:accounts) to match its write-class side effect. A caller holding only
+// view:accounts must be rejected with 403.
+func TestTestAccountCredentials_RequiresUpdateAccounts(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+
+	viewOnlySession := &Session{
+		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		Email:  "viewonly@example.com",
+	}
+
+	// The caller has a valid session and view:accounts, but NOT update:accounts.
+	mockAuth.On("ValidateSession", ctx, "view-token").Return(viewOnlySession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, viewOnlySession.UserID, "update", "accounts").Return(false, nil)
+
+	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer view-token"},
+	}
+	result, err := handler.testAccountCredentials(ctx, req, "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err, "view-only caller must be rejected")
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code, "expected 403, got %d", ce.code)
+}

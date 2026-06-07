@@ -751,11 +751,14 @@ func awsAmbientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 }
 
 // testAccountCredentials handles POST /api/accounts/:id/test.
+// This operation performs live outbound cloud API calls / credential probing,
+// which is a write-class side effect. Gate on update:accounts (not view:accounts)
+// so the handler is self-protecting if the route Auth level is ever relaxed (02-M5).
 func (h *Handler) testAccountCredentials(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
 	}
-	session, err := h.requirePermission(ctx, req, "view", "accounts")
+	session, err := h.requirePermission(ctx, req, "update", "accounts")
 	if err != nil {
 		return nil, err
 	}
