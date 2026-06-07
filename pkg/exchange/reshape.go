@@ -670,9 +670,11 @@ func termMatchesIfKnown(src RIInfo, off OfferingOption, hasSrc bool) bool {
 // leave NormalizationFactor at zero (e.g. tests, partial RIInfo
 // constructions). A zero NF here would reject every alternative even
 // when InstanceType is parseable. Derive NF from the instance size when
-// it's missing; if the size doesn't match the AWS canonical table,
-// NormalizationFactorForSize returns 1.0 — degrades to "no NF
-// adjustment" rather than a hard reject.
+// it's missing. If the size is not in the AWS canonical table,
+// NormalizationFactorForSize returns 0 (map miss), which causes
+// passesDollarUnitsCheck to reject the alternative (srcNF <= 0 path).
+// This is fail-closed: an unrecognised size excludes the offering rather
+// than silently bypassing the dollar-units check.
 func pricingGatePasses(src RIInfo, off OfferingOption, hasSrc bool) bool {
 	if !hasSrc || src.MonthlyCost <= 0 {
 		return true

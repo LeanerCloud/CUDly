@@ -106,9 +106,7 @@ type ExchangeExecuteRequest struct {
 
 // targetConfigs returns the ec2types slice to pass to the EC2 API.
 // Prefers r.Targets when set; otherwise falls back to the legacy
-// TargetOfferingID / TargetCount singleton. Empty or negative Count
-// values default to 1 so a caller that forgets to populate Count still
-// gets a usable request — matches the prior singleton behaviour.
+// TargetOfferingID / TargetCount singleton.
 func (r *ExchangeQuoteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
 	return buildTargetConfigs(r.Targets, r.TargetOfferingID, r.TargetCount)
 }
@@ -121,40 +119,39 @@ func buildTargetConfigs(targets []TargetConfig, legacyOfferingID string, legacyC
 	if len(targets) > 0 {
 		out := make([]ec2types.TargetConfigurationRequest, 0, len(targets))
 		for _, t := range targets {
-			count := t.Count
-			if count <= 0 {
-				count = 1
-			}
 			out = append(out, ec2types.TargetConfigurationRequest{
 				OfferingId:    sdkaws.String(t.OfferingID),
-				InstanceCount: sdkaws.Int32(count),
+				InstanceCount: sdkaws.Int32(t.Count),
 			})
 		}
 		return out
 	}
-	count := legacyCount
-	if count <= 0 {
-		count = 1
-	}
 	return []ec2types.TargetConfigurationRequest{{
 		OfferingId:    sdkaws.String(legacyOfferingID),
-		InstanceCount: sdkaws.Int32(count),
+		InstanceCount: sdkaws.Int32(legacyCount),
 	}}
 }
 
 // validateTargets returns a non-nil error if neither the Targets slice
-// nor the legacy singleton fields carry a usable target offering.
-func validateTargets(targets []TargetConfig, legacyOfferingID string) error {
+// nor the legacy singleton fields carry a usable target offering, or if
+// any target has a non-positive Count.
+func validateTargets(targets []TargetConfig, legacyOfferingID string, legacyCount int32) error {
 	if len(targets) > 0 {
 		for i, t := range targets {
 			if strings.TrimSpace(t.OfferingID) == "" {
 				return fmt.Errorf("targets[%d].offering_id must be non-empty", i)
+			}
+			if t.Count <= 0 {
+				return fmt.Errorf("targets[%d].count must be >= 1, got %d", i, t.Count)
 			}
 		}
 		return nil
 	}
 	if strings.TrimSpace(legacyOfferingID) == "" {
 		return fmt.Errorf("must provide target offering ID (either targets[] or target_offering_id)")
+	}
+	if legacyCount <= 0 {
+		return fmt.Errorf("target_count must be >= 1, got %d", legacyCount)
 	}
 	return nil
 }
@@ -196,8 +193,8 @@ func (c *ExchangeClient) Execute(ctx context.Context, req ExchangeExecuteRequest
 }
 
 func loadCfg(ctx context.Context, region string) (sdkaws.Config, error) {
-	if region == "" {
-		region = "us-east-1"
+	if strings.TrimSpace(region) == "" {
+		return sdkaws.Config{}, fmt.Errorf("region must be specified explicitly; refusing to default to us-east-1 on an RI exchange path")
 	}
 	return config.LoadDefaultConfig(ctx, config.WithRegion(region))
 }
@@ -234,7 +231,7 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 	if len(req.ReservedIDs) == 0 {
 		return nil, fmt.Errorf("must provide at least one reserved instance ID")
 	}
-	if err := validateTargets(req.Targets, req.TargetOfferingID); err != nil {
+	if err := validateTargets(req.Targets, req.TargetOfferingID, req.TargetCount); err != nil {
 		return nil, err
 	}
 
@@ -302,13 +299,52 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 	return executeWithAPI(ctx, ec2.NewFromConfig(cfg), req)
 }
 
+// resolvePaymentDue returns the quote's PaymentDueUSD, treating nil as zero.
+// AWS may omit PaymentDue for zero-cost exchanges (e.g., same-RI-type conversions).
+func resolvePaymentDue(q *ExchangeQuoteSummary) *big.Rat {
+	if q.PaymentDueUSD != nil {
+		return q.PaymentDueUSD
+	}
+	return new(big.Rat)
+}
+
+// checkInitialQuote returns an error if the quote is invalid or exceeds the spend cap.
+func checkInitialQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+	if !q.IsValidExchange {
+		return fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
+	}
+	paymentDue := resolvePaymentDue(q)
+	if paymentDue.Cmp(maxPayment) == 1 {
+		return fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), maxPayment.FloatString(2))
+	}
+	return nil
+}
+
+// checkReQuote returns an error if the pre-accept re-quote is invalid or exceeds the cap.
+// It is called immediately before AcceptReservedInstancesExchangeQuote to narrow the
+// race window between pricing changes.
+func checkReQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+	if !q.IsValidExchange {
+		return fmt.Errorf("exchange no longer valid at accept time: %s", q.ValidationFailureReason)
+	}
+	paymentDue := resolvePaymentDue(q)
+	if paymentDue.Cmp(maxPayment) == 1 {
+		return fmt.Errorf(
+			"aborting exchange: re-quoted payment %s USD exceeds cap %s USD (pricing changed between initial quote and accept)",
+			paymentDue.FloatString(2),
+			maxPayment.FloatString(2),
+		)
+	}
+	return nil
+}
+
 // executeWithAPI performs the exchange using an injected EC2ExchangeAPI.
 func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
 	if req.MaxPaymentDueUSD == nil {
 		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
 	}
 
-	q, err := getQuoteWithAPI(ctx, client, ExchangeQuoteRequest{
+	quoteReq := ExchangeQuoteRequest{
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
@@ -316,39 +352,36 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 		TargetOfferingID: req.TargetOfferingID,
 		TargetCount:      req.TargetCount,
 		DryRun:           false,
-	})
+	}
+
+	q, err := getQuoteWithAPI(ctx, client, quoteReq)
 	if err != nil {
 		return "", nil, err
 	}
-
-	if !q.IsValidExchange {
-		return "", q, fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
+	if err := checkInitialQuote(q, req.MaxPaymentDueUSD); err != nil {
+		return "", q, err
 	}
 
-	// AWS may return an empty PaymentDue for zero-cost exchanges (e.g., same-RI-type
-	// conversions). Treat nil as zero cost so valid zero-cost exchanges are not refused.
-	paymentDue := q.PaymentDueUSD
-	if paymentDue == nil {
-		paymentDue = new(big.Rat)
+	// Re-quote immediately before accepting to narrow the window between quote and
+	// accept. The AWS API has no atomic quote+accept operation, so server-side
+	// pricing can change between the two calls. This second quote reduces -- but
+	// does not eliminate -- the race window. If the fresh quote now exceeds the
+	// cap, abort before the irreversible accept call.
+	freshQ, err := getQuoteWithAPI(ctx, client, quoteReq)
+	if err != nil {
+		return "", q, fmt.Errorf("pre-accept re-quote failed: %w", err)
+	}
+	if err := checkReQuote(freshQ, req.MaxPaymentDueUSD); err != nil {
+		return "", freshQ, err
 	}
 
-	// paymentDue > max => refuse
-	if paymentDue.Cmp(req.MaxPaymentDueUSD) == 1 {
-		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), req.MaxPaymentDueUSD.FloatString(2))
-	}
-
-	// NOTE: The AWS RI exchange API has no atomic quote+accept operation. The
-	// AcceptReservedInstancesExchangeQuote call re-evaluates pricing server-side,
-	// so in rare cases the actual payment could differ from the quoted amount
-	// (e.g., due to RI valuation changes between GetQuote and Accept).
-	// This is a known API limitation and not something we can prevent here.
 	out, err := client.AcceptReservedInstancesExchangeQuote(ctx, &ec2.AcceptReservedInstancesExchangeQuoteInput{
 		ReservedInstanceIds:  req.ReservedIDs,
 		TargetConfigurations: req.targetConfigs(),
 	})
 	if err != nil {
-		return "", q, err
+		return "", freshQ, err
 	}
 
-	return sdkaws.ToString(out.ExchangeId), q, nil
+	return sdkaws.ToString(out.ExchangeId), freshQ, nil
 }
