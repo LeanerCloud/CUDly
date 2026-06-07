@@ -775,3 +775,48 @@ func TestClient_PurchaseCommitment_NameTagInCreateTagsRequest(t *testing.T) {
 
 	mockEC2.AssertExpectations(t)
 }
+
+// TestBuildEC2OfferingQuery_EmptyPlatformErrors is the M2/M3 regression test:
+// buildEC2OfferingQuery must return an error when Platform is empty rather than
+// silently substituting "Linux/UNIX". On the purchase path the CE parser always
+// populates Platform from the recommendation payload; an empty value signals a
+// malformed rec, not a value to be fabricated.
+func TestBuildEC2OfferingQuery_EmptyPlatformErrors(t *testing.T) {
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			InstanceType: "m5.large",
+			Platform:     "", // intentionally empty
+			Tenancy:      "default",
+			Scope:        "Region",
+		},
+	}
+	details := rec.Details.(*common.ComputeDetails)
+
+	_, err := buildEC2OfferingQuery(rec, details, OneYearSeconds)
+	assert.Error(t, err, "buildEC2OfferingQuery must error when Platform is empty (M2/M3 fix)")
+	assert.Contains(t, err.Error(), "Platform")
+}
+
+// TestBuildEC2OfferingQuery_ValidPlatform asserts the happy path still works.
+func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			InstanceType: "m5.large",
+			Platform:     "Linux/UNIX",
+			Tenancy:      "default",
+			Scope:        "Region",
+		},
+	}
+	details := rec.Details.(*common.ComputeDetails)
+
+	q, err := buildEC2OfferingQuery(rec, details, OneYearSeconds)
+	assert.NoError(t, err)
+	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
+	assert.Equal(t, types.Tenancy("default"), q.tenancy)
+}

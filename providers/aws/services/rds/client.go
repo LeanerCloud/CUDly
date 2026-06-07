@@ -303,6 +303,14 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
 	}
+	// AZConfig must be explicitly set: single-AZ and multi-AZ RDS RIs have
+	// different prices and do not cover each other's demand. An empty AZConfig
+	// means the CE recommendation omitted DeploymentOption; guessing single-az
+	// risks buying the wrong RI class. Fail loud so the caller can decide.
+	if details.AZConfig == "" {
+		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; "+
+			"refusing to guess single-az vs multi-az (see M4 in 19-hardcoded-fallbacks-aws.md)")
+	}
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", fmt.Errorf("invalid payment option: %w", err)
@@ -315,7 +323,10 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 // timeout exhaustion (issue #688).
 func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string, execID string) (string, error) {
 	multiAZ := details.AZConfig == "multi-az"
-	normalizedEngine := c.normalizeEngineName(details.Engine)
+	normalizedEngine, err := c.normalizeEngineName(details.Engine)
+	if err != nil {
+		return "", fmt.Errorf("cannot look up RDS offering: %w", err)
+	}
 	duration := c.getDurationString(rec.Term)
 
 	tag := execID
@@ -504,38 +515,58 @@ func (c *Client) convertPaymentOption(option string) (string, error) {
 	}
 }
 
-// normalizeEngineName converts engine names to AWS API format
-func (c *Client) normalizeEngineName(engine string) string {
+// normalizeEngineName maps an RDS engine string to the exact product-description
+// value required by DescribeReservedDBInstancesOfferings. It returns an error
+// for engine names that are ambiguous (Oracle, SQL Server -- multiple editions
+// exist at different prices) or that contain "aurora" without specifying a
+// database engine (aurora-mysql vs aurora-postgresql), so the caller never
+// silently buys an offering for the wrong engine edition.
+//
+// Unambiguous engines (mysql, postgresql, mariadb) are returned verbatim after
+// case-normalisation. Engine strings that are already in the canonical
+// lower-case AWS form (e.g. "aurora-mysql") pass through unchanged.
+func (c *Client) normalizeEngineName(engine string) (string, error) {
 	engineLower := strings.ToLower(engine)
 
 	if strings.Contains(engineLower, "aurora") {
 		if strings.Contains(engineLower, "mysql") {
-			return "aurora-mysql"
+			return "aurora-mysql", nil
 		}
 		if strings.Contains(engineLower, "postgres") {
-			return "aurora-postgresql"
+			return "aurora-postgresql", nil
 		}
-		log.Printf("WARNING: Unknown Aurora variant %q, defaulting to aurora-mysql", engine)
-		return "aurora-mysql"
+		return "", fmt.Errorf(
+			"ambiguous Aurora engine %q: CE must supply the specific variant "+
+				"(aurora-mysql or aurora-postgresql); refusing to guess",
+			engine,
+		)
 	}
 
 	if strings.Contains(engineLower, "mysql") {
-		return "mysql"
+		return "mysql", nil
 	}
 	if strings.Contains(engineLower, "postgres") {
-		return "postgresql"
+		return "postgresql", nil
 	}
 	if strings.Contains(engineLower, "mariadb") {
-		return "mariadb"
+		return "mariadb", nil
 	}
 	if strings.Contains(engineLower, "oracle") {
-		return "oracle-se2"
+		return "", fmt.Errorf(
+			"ambiguous Oracle engine %q: CE must supply the exact edition "+
+				"(e.g. oracle-se2, oracle-ee); refusing to guess",
+			engine,
+		)
 	}
 	if strings.Contains(engineLower, "sqlserver") || strings.Contains(engineLower, "sql-server") {
-		return "sqlserver-se"
+		return "", fmt.Errorf(
+			"ambiguous SQL Server engine %q: CE must supply the exact edition "+
+				"(e.g. sqlserver-se, sqlserver-ee, sqlserver-web, sqlserver-ex); refusing to guess",
+			engine,
+		)
 	}
 
-	return engineLower
+	return engineLower, nil
 }
 
 // createPurchaseTags creates standard tags for the purchase. The tag shape

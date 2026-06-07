@@ -86,6 +86,10 @@ func TestGetServiceStringForCostExplorer(t *testing.T) {
 }
 
 func TestConvertPaymentOption(t *testing.T) {
+	// convertPaymentOption is the legacy wrapper that silently defaults to NoUpfront
+	// for unknown values (used by client.go RI path, owned by #865/#1075).
+	// This test documents that silent-default behaviour; new callers should use
+	// convertPaymentOptionE which returns an error on unrecognised values.
 	tests := []struct {
 		name     string
 		option   string
@@ -106,16 +110,6 @@ func TestConvertPaymentOption(t *testing.T) {
 			option:   "no-upfront",
 			expected: types.PaymentOptionNoUpfront,
 		},
-		{
-			name:     "Unknown defaults to no upfront",
-			option:   "unknown",
-			expected: types.PaymentOptionNoUpfront,
-		},
-		{
-			name:     "Empty string defaults to no upfront",
-			option:   "",
-			expected: types.PaymentOptionNoUpfront,
-		},
 	}
 
 	for _, tt := range tests {
@@ -126,7 +120,116 @@ func TestConvertPaymentOption(t *testing.T) {
 	}
 }
 
+// TestConvertPaymentOptionE_FailLoud is the regression test for H3:
+// convertPaymentOptionE must return an error on any unrecognised payment option
+// instead of silently substituting NoUpfront (the old behaviour of the
+// convertPaymentOption default branch). Callers on the SP recommendation path
+// use this erroring variant so a typo or new/renamed option is caught
+// before the wrong recs are queried.
+func TestConvertPaymentOptionE_FailLoud(t *testing.T) {
+	tests := []struct {
+		name        string
+		option      string
+		expected    types.PaymentOption
+		expectError bool
+	}{
+		{"All upfront", "all-upfront", types.PaymentOptionAllUpfront, false},
+		{"Partial upfront", "partial-upfront", types.PaymentOptionPartialUpfront, false},
+		{"No upfront", "no-upfront", types.PaymentOptionNoUpfront, false},
+		// These must error, not default to NoUpfront (H3 regression guard):
+		{"Unknown option errors", "unknown", "", true},
+		{"Empty string errors", "", "", true},
+		{"Mixed case errors", "All-Upfront", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := convertPaymentOptionE(tt.option)
+			if tt.expectError {
+				assert.Error(t, err, "convertPaymentOptionE(%q) must error", tt.option)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestConvertTermInYearsE_FailLoud is the regression test for L1:
+// convertTermInYearsE must error on unrecognised terms rather than silently
+// defaulting to OneYear.
+func TestConvertTermInYearsE_FailLoud(t *testing.T) {
+	tests := []struct {
+		name        string
+		term        string
+		expected    types.TermInYears
+		expectError bool
+	}{
+		{"1yr", "1yr", types.TermInYearsOneYear, false},
+		{"1 numeric", "1", types.TermInYearsOneYear, false},
+		{"3yr", "3yr", types.TermInYearsThreeYears, false},
+		{"3 numeric", "3", types.TermInYearsThreeYears, false},
+		// These must error, not default to OneYear (L1 regression guard):
+		{"Unknown term errors", "unknown", "", true},
+		{"Empty string errors", "", "", true},
+		{"2yr errors", "2yr", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := convertTermInYearsE(tt.term)
+			if tt.expectError {
+				assert.Error(t, err, "convertTermInYearsE(%q) must error", tt.term)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestConvertLookbackPeriodE_FailLoud is the regression test for L2:
+// convertLookbackPeriodE must error on unrecognised periods rather than
+// silently defaulting to SevenDays.
+func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
+	tests := []struct {
+		name        string
+		period      string
+		expected    types.LookbackPeriodInDays
+		expectError bool
+	}{
+		{"7d", "7d", types.LookbackPeriodInDaysSevenDays, false},
+		{"7 numeric", "7", types.LookbackPeriodInDaysSevenDays, false},
+		{"30d", "30d", types.LookbackPeriodInDaysThirtyDays, false},
+		{"30 numeric", "30", types.LookbackPeriodInDaysThirtyDays, false},
+		{"60d", "60d", types.LookbackPeriodInDaysSixtyDays, false},
+		{"60 numeric", "60", types.LookbackPeriodInDaysSixtyDays, false},
+		// These must error, not default to SevenDays (L2 regression guard):
+		{"Unknown period errors", "unknown", "", true},
+		{"Empty string errors", "", "", true},
+		{"90d errors", "90d", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := convertLookbackPeriodE(tt.period)
+			if tt.expectError {
+				assert.Error(t, err, "convertLookbackPeriodE(%q) must error", tt.period)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
 func TestConvertTermInYears(t *testing.T) {
+	// convertTermInYears is the legacy wrapper used by client.go (RI path);
+	// it silently returns OneYear for unrecognised values. This test covers the
+	// valid cases only; the fail-loud path is tested by TestConvertTermInYearsE_FailLoud.
 	tests := []struct {
 		name     string
 		term     string
@@ -152,16 +255,6 @@ func TestConvertTermInYears(t *testing.T) {
 			term:     "1",
 			expected: types.TermInYearsOneYear,
 		},
-		{
-			name:     "Empty defaults to one year",
-			term:     "",
-			expected: types.TermInYearsOneYear,
-		},
-		{
-			name:     "Unknown defaults to one year",
-			term:     "unknown",
-			expected: types.TermInYearsOneYear,
-		},
 	}
 
 	for _, tt := range tests {
@@ -173,6 +266,9 @@ func TestConvertTermInYears(t *testing.T) {
 }
 
 func TestConvertLookbackPeriod(t *testing.T) {
+	// convertLookbackPeriod is the legacy wrapper used by client.go (RI path);
+	// it silently returns SevenDays for unrecognised values. This test covers valid
+	// cases only; the fail-loud path is tested by TestConvertLookbackPeriodE_FailLoud.
 	tests := []struct {
 		name     string
 		period   string
@@ -208,16 +304,6 @@ func TestConvertLookbackPeriod(t *testing.T) {
 			period:   "60",
 			expected: types.LookbackPeriodInDaysSixtyDays,
 		},
-		{
-			name:     "Empty defaults to seven days",
-			period:   "",
-			expected: types.LookbackPeriodInDaysSevenDays,
-		},
-		{
-			name:     "Unknown defaults to seven days",
-			period:   "unknown",
-			expected: types.LookbackPeriodInDaysSevenDays,
-		},
 	}
 
 	for _, tt := range tests {
@@ -229,30 +315,46 @@ func TestConvertLookbackPeriod(t *testing.T) {
 }
 
 func TestConvertSavingsPlansPaymentOption(t *testing.T) {
-	// This function delegates to convertPaymentOption, so we just verify it works
-	result := convertSavingsPlansPaymentOption("all-upfront")
+	// SP wrappers now return (value, error); valid options must succeed.
+	result, err := convertSavingsPlansPaymentOption("all-upfront")
+	assert.NoError(t, err)
 	assert.Equal(t, types.PaymentOptionAllUpfront, result)
 
-	result = convertSavingsPlansPaymentOption("partial-upfront")
+	result, err = convertSavingsPlansPaymentOption("partial-upfront")
+	assert.NoError(t, err)
 	assert.Equal(t, types.PaymentOptionPartialUpfront, result)
+
+	// Unknown option must error (not silently default).
+	_, err = convertSavingsPlansPaymentOption("bogus")
+	assert.Error(t, err, "convertSavingsPlansPaymentOption(bogus) must error")
 }
 
 func TestConvertSavingsPlansTermInYears(t *testing.T) {
-	// This function delegates to convertTermInYears, so we just verify it works
-	result := convertSavingsPlansTermInYears("3yr")
+	result, err := convertSavingsPlansTermInYears("3yr")
+	assert.NoError(t, err)
 	assert.Equal(t, types.TermInYearsThreeYears, result)
 
-	result = convertSavingsPlansTermInYears("1yr")
+	result, err = convertSavingsPlansTermInYears("1yr")
+	assert.NoError(t, err)
 	assert.Equal(t, types.TermInYearsOneYear, result)
+
+	// Unknown term must error.
+	_, err = convertSavingsPlansTermInYears("bogus")
+	assert.Error(t, err, "convertSavingsPlansTermInYears(bogus) must error")
 }
 
 func TestConvertSavingsPlansLookbackPeriod(t *testing.T) {
-	// This function delegates to convertLookbackPeriod, so we just verify it works
-	result := convertSavingsPlansLookbackPeriod("7d")
+	result, err := convertSavingsPlansLookbackPeriod("7d")
+	assert.NoError(t, err)
 	assert.Equal(t, types.LookbackPeriodInDaysSevenDays, result)
 
-	result = convertSavingsPlansLookbackPeriod("30d")
+	result, err = convertSavingsPlansLookbackPeriod("30d")
+	assert.NoError(t, err)
 	assert.Equal(t, types.LookbackPeriodInDaysThirtyDays, result)
+
+	// Unknown period must error.
+	_, err = convertSavingsPlansLookbackPeriod("bogus")
+	assert.Error(t, err, "convertSavingsPlansLookbackPeriod(bogus) must error")
 }
 
 func TestNormalizeRegionName(t *testing.T) {

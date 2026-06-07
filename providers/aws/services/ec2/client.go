@@ -341,6 +341,13 @@ func canonicalizeEC2Scope(s string) string {
 // of timing out the Lambda budget (issue #688).
 const maxOfferingPages = 5
 
+// defaultEC2Platform is the EC2 RI product-description value for Linux/UNIX instances.
+// Used as a fallback in exchange-package helpers (FindConvertibleOffering,
+// ListTargetOfferings) where callers may legitimately omit the platform; never
+// used as a silent fallback on the purchase path (see M2/M3 in
+// 19-hardcoded-fallbacks-aws.md).
+const defaultEC2Platform = "Linux/UNIX"
+
 // convertEC2PaymentOption maps a rec payment-option slug to the AWS
 // DescribeReservedInstancesOfferings OfferingType enum value.
 func convertEC2PaymentOption(option string) (types.OfferingTypeValues, error) {
@@ -367,11 +374,17 @@ type ec2OfferingQuery struct {
 }
 
 // buildEC2OfferingQuery resolves the typed lookup parameters from a rec,
-// canonicalising legacy tenancy/scope values and applying API defaults.
-func buildEC2OfferingQuery(rec common.Recommendation, details *common.ComputeDetails, duration int64) ec2OfferingQuery {
-	platform := details.Platform
-	if platform == "" {
-		platform = "Linux/UNIX"
+// canonicalising legacy tenancy/scope values. Returns an error when Platform is
+// empty: on the purchase path the CE parser always populates it from the
+// recommendation payload, so an empty Platform signals a malformed rec rather
+// than a value that should be fabricated (M2/M3 fix, see 19-hardcoded-fallbacks-aws.md).
+func buildEC2OfferingQuery(rec common.Recommendation, details *common.ComputeDetails, duration int64) (ec2OfferingQuery, error) {
+	if details.Platform == "" {
+		return ec2OfferingQuery{}, fmt.Errorf(
+			"EC2 recommendation for %s is missing Platform: "+
+				"refusing to fabricate a product-description for the RI offering lookup",
+			rec.ResourceType,
+		)
 	}
 	tenancy := canonicalizeEC2Tenancy(details.Tenancy)
 	if tenancy == "" {
@@ -383,11 +396,11 @@ func buildEC2OfferingQuery(rec common.Recommendation, details *common.ComputeDet
 	}
 	return ec2OfferingQuery{
 		instanceType: types.InstanceType(rec.ResourceType),
-		productDesc:  types.RIProductDescription(platform),
+		productDesc:  types.RIProductDescription(details.Platform),
 		tenancy:      types.Tenancy(tenancy),
 		scope:        scope,
 		duration:     duration,
-	}
+	}, nil
 }
 
 // describeInputFromQuery builds the SDK request struct for one page of the
@@ -424,7 +437,10 @@ func (c *Client) buildEC2QueryFromRec(rec common.Recommendation) (ec2OfferingQue
 	if err != nil {
 		return ec2OfferingQuery{}, err
 	}
-	q := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
+	q, err := buildEC2OfferingQuery(rec, details, c.getDurationValue(rec.Term))
+	if err != nil {
+		return ec2OfferingQuery{}, err
+	}
 	q.wantOfferingType = wantOfferingType
 	return q, nil
 }
@@ -658,7 +674,7 @@ func (c *Client) ListConvertibleReservedInstances(ctx context.Context) ([]Conver
 			},
 			{
 				Name:   aws.String("offering-class"),
-				Values: []string{"convertible"},
+				Values: []string{string(types.OfferingClassTypeConvertible)},
 			},
 		},
 	}
@@ -726,7 +742,7 @@ func (c *Client) FindConvertibleOffering(ctx context.Context, params FindConvert
 	}
 	productDesc := params.ProductDescription
 	if productDesc == "" {
-		productDesc = "Linux/UNIX"
+		productDesc = defaultEC2Platform
 	}
 
 	filters := []types.Filter{
@@ -735,7 +751,7 @@ func (c *Client) FindConvertibleOffering(ctx context.Context, params FindConvert
 		{Name: aws.String("instance-tenancy"), Values: []string{tenancy}},
 		{Name: aws.String("scope"), Values: []string{scope}},
 		{Name: aws.String("duration"), Values: []string{fmt.Sprintf("%d", duration)}},
-		{Name: aws.String("offering-class"), Values: []string{"convertible"}},
+		{Name: aws.String("offering-class"), Values: []string{string(types.OfferingClassTypeConvertible)}},
 	}
 
 	input := &ec2.DescribeReservedInstancesOfferingsInput{
@@ -804,7 +820,7 @@ func normalizeTargetOfferingsParams(p ListTargetOfferingsParams) (tenancy, scope
 	}
 	productDesc = p.ProductDescription
 	if productDesc == "" {
-		productDesc = "Linux/UNIX"
+		productDesc = defaultEC2Platform
 	}
 	// OfferingType: typed field when non-empty; empty string means "all
 	// payment options" (the caller didn't specify). Leave unset so AWS

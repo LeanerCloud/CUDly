@@ -37,11 +37,23 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 	var allRecommendations []common.Recommendation
 
 	for _, planType := range planTypes {
+		paymentOption, err := convertSavingsPlansPaymentOption(params.PaymentOption)
+		if err != nil {
+			return nil, fmt.Errorf("invalid payment option for Savings Plans recommendation: %w", err)
+		}
+		termInYears, err := convertSavingsPlansTermInYears(params.Term)
+		if err != nil {
+			return nil, fmt.Errorf("invalid term for Savings Plans recommendation: %w", err)
+		}
+		lookbackPeriod, err := convertSavingsPlansLookbackPeriod(params.LookbackPeriod)
+		if err != nil {
+			return nil, fmt.Errorf("invalid lookback period for Savings Plans recommendation: %w", err)
+		}
 		input := &costexplorer.GetSavingsPlansPurchaseRecommendationInput{
 			SavingsPlansType:     planType,
-			PaymentOption:        convertSavingsPlansPaymentOption(params.PaymentOption),
-			TermInYears:          convertSavingsPlansTermInYears(params.Term),
-			LookbackPeriodInDays: convertSavingsPlansLookbackPeriod(params.LookbackPeriod),
+			PaymentOption:        paymentOption,
+			TermInYears:          termInYears,
+			LookbackPeriodInDays: lookbackPeriod,
 			AccountScope:         types.AccountScopeLinked,
 		}
 

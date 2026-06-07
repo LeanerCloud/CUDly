@@ -1,6 +1,7 @@
 package recommendations
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
@@ -28,55 +29,102 @@ func getServiceStringForCostExplorer(service common.ServiceType) string {
 	}
 }
 
-// convertPaymentOption converts payment option string to AWS type
+// convertPaymentOption converts payment option string to AWS type.
+//
+// Deprecated: this function silently defaults to NoUpfront for unrecognized
+// values and is retained only for the legacy RI recommendation-fetch path in
+// client.go (owned by #865/#1075). New callers must use convertPaymentOptionE
+// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
 func convertPaymentOption(option string) types.PaymentOption {
+	v, _ := convertPaymentOptionE(option)
+	return v
+}
+
+// convertPaymentOptionE converts a payment option string to the AWS Cost Explorer
+// typed enum, returning an error for any value not in the known set.
+// Known values: "all-upfront", "partial-upfront", "no-upfront".
+func convertPaymentOptionE(option string) (types.PaymentOption, error) {
 	switch option {
 	case "all-upfront":
-		return types.PaymentOptionAllUpfront
+		return types.PaymentOptionAllUpfront, nil
 	case "partial-upfront":
-		return types.PaymentOptionPartialUpfront
+		return types.PaymentOptionPartialUpfront, nil
 	case "no-upfront":
-		return types.PaymentOptionNoUpfront
+		return types.PaymentOptionNoUpfront, nil
 	default:
-		return types.PaymentOptionNoUpfront
+		return "", fmt.Errorf("unsupported payment option %q: must be one of all-upfront, partial-upfront, no-upfront", option)
 	}
 }
 
-// convertTermInYears converts term string to AWS type
+// convertTermInYearsE converts a term string to the AWS Cost Explorer typed enum,
+// returning an error for any value not in the known set.
+// Known values: "1yr", "1", "3yr", "3".
+func convertTermInYearsE(term string) (types.TermInYears, error) {
+	switch term {
+	case "1yr", "1":
+		return types.TermInYearsOneYear, nil
+	case "3yr", "3":
+		return types.TermInYearsThreeYears, nil
+	default:
+		return "", fmt.Errorf("unsupported term %q: must be one of 1yr, 1, 3yr, 3", term)
+	}
+}
+
+// convertTermInYears converts term string to AWS type.
+//
+// Deprecated: this function silently defaults to OneYear for unrecognized
+// values and is retained only for the legacy RI recommendation-fetch path in
+// client.go (owned by #865/#1075). New callers must use convertTermInYearsE
+// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
 func convertTermInYears(term string) types.TermInYears {
-	if term == "3yr" || term == "3" {
-		return types.TermInYearsThreeYears
-	}
-	return types.TermInYearsOneYear
+	v, _ := convertTermInYearsE(term)
+	return v
 }
 
-// convertLookbackPeriod converts lookback period string to AWS type
-func convertLookbackPeriod(period string) types.LookbackPeriodInDays {
+// convertLookbackPeriodE converts a lookback period string to the AWS Cost Explorer
+// typed enum, returning an error for any value not in the known set.
+// Known values: "7d", "7", "30d", "30", "60d", "60".
+func convertLookbackPeriodE(period string) (types.LookbackPeriodInDays, error) {
 	switch period {
 	case "7d", "7":
-		return types.LookbackPeriodInDaysSevenDays
+		return types.LookbackPeriodInDaysSevenDays, nil
 	case "30d", "30":
-		return types.LookbackPeriodInDaysThirtyDays
+		return types.LookbackPeriodInDaysThirtyDays, nil
 	case "60d", "60":
-		return types.LookbackPeriodInDaysSixtyDays
+		return types.LookbackPeriodInDaysSixtyDays, nil
 	default:
-		return types.LookbackPeriodInDaysSevenDays
+		return "", fmt.Errorf("unsupported lookback period %q: must be one of 7d, 30d, 60d", period)
 	}
 }
 
-// convertSavingsPlansPaymentOption converts payment option for Savings Plans
-func convertSavingsPlansPaymentOption(option string) types.PaymentOption {
-	return convertPaymentOption(option)
+// convertLookbackPeriod converts lookback period string to AWS type.
+//
+// Deprecated: this function silently defaults to SevenDays for unrecognized
+// values and is retained only for the legacy RI recommendation-fetch path in
+// client.go (owned by #865/#1075). New callers must use convertLookbackPeriodE
+// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
+func convertLookbackPeriod(period string) types.LookbackPeriodInDays {
+	v, _ := convertLookbackPeriodE(period)
+	return v
 }
 
-// convertSavingsPlansTermInYears converts term for Savings Plans
-func convertSavingsPlansTermInYears(term string) types.TermInYears {
-	return convertTermInYears(term)
+// convertSavingsPlansPaymentOption converts payment option for Savings Plans,
+// returning an error for unrecognized values. This is the fail-loud variant
+// used by the SP recommendation path.
+func convertSavingsPlansPaymentOption(option string) (types.PaymentOption, error) {
+	return convertPaymentOptionE(option)
 }
 
-// convertSavingsPlansLookbackPeriod converts lookback period for Savings Plans
-func convertSavingsPlansLookbackPeriod(period string) types.LookbackPeriodInDays {
-	return convertLookbackPeriod(period)
+// convertSavingsPlansTermInYears converts term for Savings Plans,
+// returning an error for unrecognized values.
+func convertSavingsPlansTermInYears(term string) (types.TermInYears, error) {
+	return convertTermInYearsE(term)
+}
+
+// convertSavingsPlansLookbackPeriod converts lookback period for Savings Plans,
+// returning an error for unrecognized values.
+func convertSavingsPlansLookbackPeriod(period string) (types.LookbackPeriodInDays, error) {
+	return convertLookbackPeriodE(period)
 }
 
 // normalizeRegionName converts AWS region display names to region codes
