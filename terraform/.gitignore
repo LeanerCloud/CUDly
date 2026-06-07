@@ -33,8 +33,10 @@ terraform.rc
 !.terraform.lock.hcl
 
 # Plan files
+tfplan
+tfplan.*
 *.tfplan
-*.tfplan.json
+*.tfplan.*
 
 # Environment-specific variable files
 environments/**/terraform.tfvars
