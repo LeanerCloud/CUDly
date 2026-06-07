@@ -231,15 +231,16 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Extract task type from URL path
-	// Expected format: /api/scheduled/{task_type}
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 3 {
+	// Extract task type from URL path: /api/scheduled/{task_type}.
+	// TrimPrefix is cleaner than splitting and indexing parts[2]; it also
+	// avoids the length-guard dance while remaining robust to extra slashes
+	// (04-L5).
+	const scheduledPrefix = "/api/scheduled/"
+	taskTypeStr := strings.TrimPrefix(r.URL.Path, scheduledPrefix)
+	if taskTypeStr == "" || strings.Contains(taskTypeStr, "/") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
-
-	taskTypeStr := parts[2]
 	taskType := ScheduledTaskType(taskTypeStr)
 
 	// Execute scheduled task

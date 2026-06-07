@@ -40,8 +40,10 @@ func (app *Application) HandleLambdaEvent(ctx context.Context, rawEvent json.Raw
 	case "scheduled":
 		return app.handleLambdaScheduledEvent(ctx, rawEvent)
 	default:
-		log.Printf("Unknown event type, treating as scheduled event")
-		return app.handleLambdaScheduledEvent(ctx, rawEvent)
+		// Return a distinct error instead of silently treating an unrecognised
+		// payload as a scheduled event. Masking the event shape as "unknown
+		// scheduled task action" makes the real cause hard to diagnose (04-N4).
+		return nil, fmt.Errorf("unrecognised Lambda event shape (size %d bytes); not an HTTP/SQS/scheduled event", len(rawEvent))
 	}
 }
 
