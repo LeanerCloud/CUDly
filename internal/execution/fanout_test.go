@@ -87,6 +87,72 @@ func TestPartition(t *testing.T) {
 // item's result slot, and does NOT propagate up and crash the whole process
 // (which would strand the surrounding purchase execution at 'approved' and
 // terminate the Lambda invocation abnormally — see #669).
+// TestFanOut_ContextCancelled_BlockedSemaphore asserts that when a context is
+// cancelled while goroutines are already occupying all semaphore slots, the
+// remaining queued items record ctx.Err() immediately rather than blocking
+// indefinitely on the semaphore (05-H3).
+//
+// Pre-fix behaviour: sem <- struct{}{} was unconditional, so a cancelled
+// context with maxConcurrency=1 and N>1 ids would block the launch loop on
+// the second item until the first goroutine released its slot -- a
+// context-deadline timeout would therefore not be respected at the semaphore
+// boundary.
+func TestFanOut_ContextCancelled_BlockedSemaphore(t *testing.T) {
+	// started (buffered=1) signals when the first goroutine holds the slot.
+	// release (buffered=1) controls when the first goroutine finishes.
+	// Both are buffered so the goroutines never block if the test is already
+	// past the receive.
+	started := make(chan struct{}, 1)
+	release := make(chan struct{}, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Collect results in a separate goroutine so this test goroutine can
+	// drive the cancel/release sequencing without deadlocking on wg.Wait().
+	type outcome struct{ results []Result[string] }
+	done := make(chan outcome, 1)
+
+	go func() {
+		// maxConcurrency=1 so the second item must wait for the semaphore.
+		// The first goroutine signals started, then waits on release; during
+		// that window we cancel the context. The second item should receive
+		// ctx.Err() without waiting for the first goroutine to finish.
+		res := FanOutWithConcurrency(ctx, []string{"first", "second"},
+			func(ctx context.Context, id string) (string, error) {
+				if id == "first" {
+					started <- struct{}{} // tell the test we have the slot
+					<-release            // wait until the test says go
+					return "ok", nil
+				}
+				return "should-not-run", nil
+			}, 1)
+		done <- outcome{res}
+	}()
+
+	// Wait until the first goroutine holds the semaphore, then cancel.
+	<-started
+	cancel()
+	release <- struct{}{} // let the first goroutine finish so FanOut can return
+
+	o := <-done
+	results := o.results
+
+	require.Len(t, results, 2)
+	byID := make(map[string]Result[string], len(results))
+	for _, r := range results {
+		byID[r.AccountID] = r
+	}
+
+	// The first item completes normally (it already had the slot before cancel).
+	assert.NoError(t, byID["first"].Err)
+	assert.Equal(t, "ok", byID["first"].Value)
+
+	// The second item must carry context.Canceled, not block or succeed.
+	require.Error(t, byID["second"].Err)
+	assert.ErrorIs(t, byID["second"].Err, context.Canceled)
+}
+
 func TestFanOut_PanicInFn(t *testing.T) {
 	ids := []string{"a", "panic-me", "c"}
 	results := FanOut(context.Background(), ids, func(ctx context.Context, id string) (string, error) {

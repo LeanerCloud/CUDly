@@ -433,7 +433,8 @@ func TestManager_GetAWSAccountID_Success(t *testing.T) {
 		stsClient: mockSTS,
 	}
 
-	accountID := manager.getAWSAccountID(ctx)
+	accountID, err := manager.getAWSAccountID(ctx)
+	require.NoError(t, err)
 	assert.Equal(t, "987654321098", accountID)
 
 	mockSTS.AssertExpectations(t)
@@ -446,8 +447,8 @@ func TestManager_GetAWSAccountID_NoClient(t *testing.T) {
 		stsClient: nil, // No STS client configured
 	}
 
-	accountID := manager.getAWSAccountID(ctx)
-	assert.Equal(t, "unknown", accountID)
+	_, err := manager.getAWSAccountID(ctx)
+	require.Error(t, err, "nil STS client must return an error (not the 'unknown' sentinel)")
 }
 
 func TestManager_GetAWSAccountID_Error(t *testing.T) {
@@ -460,8 +461,8 @@ func TestManager_GetAWSAccountID_Error(t *testing.T) {
 		stsClient: mockSTS,
 	}
 
-	accountID := manager.getAWSAccountID(ctx)
-	assert.Equal(t, "unknown", accountID)
+	_, err := manager.getAWSAccountID(ctx)
+	require.Error(t, err, "STS failure must return an error")
 
 	mockSTS.AssertExpectations(t)
 }
@@ -478,8 +479,8 @@ func TestManager_GetAWSAccountID_NilAccount(t *testing.T) {
 		stsClient: mockSTS,
 	}
 
-	accountID := manager.getAWSAccountID(ctx)
-	assert.Equal(t, "unknown", accountID)
+	_, err := manager.getAWSAccountID(ctx)
+	require.Error(t, err, "nil Account in STS response must return an error")
 
 	mockSTS.AssertExpectations(t)
 }
@@ -1582,8 +1583,9 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executeForAccount(ctx, baseExec, plan, account)
+	committed, err := manager.executeForAccount(ctx, baseExec, plan, account)
 	require.Error(t, err, "the per-rec failure must surface to the aggregator")
+	assert.True(t, committed, "a partial run committed at least one rec, so committed must be true (issue #1014)")
 
 	require.NotNil(t, savedExec, "per-account record must be saved")
 	assert.Equal(t, "partially_completed", savedExec.Status, "partial success must never be 'failed' (double-spend hazard)")

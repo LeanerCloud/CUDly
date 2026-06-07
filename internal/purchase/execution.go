@@ -86,7 +86,16 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 	// execution where credentials are inherited from the host).
 	accountID := targetAccountID
 	if accountID == "" {
-		accountID = m.getAWSAccountID(ctx)
+		// Fall back to the ambient AWS STS identity for logging/tagging.
+		// getAWSAccountID returns ("", error) on failure so the caller
+		// can substitute a sentinel rather than baking "unknown" into the
+		// purchase history record (05-L2).
+		if id, err := m.getAWSAccountID(ctx); err != nil {
+			logging.Warnf("purchase[%s]: could not resolve ambient AWS account ID: %v; proceeding with empty account ID",
+				exec.ExecutionID, err)
+		} else {
+			accountID = id
+		}
 	}
 
 	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
@@ -127,34 +136,90 @@ func anyRecPurchased(recs []config.RecommendationRecord) bool {
 	return false
 }
 
+// multiAccountPartialError is the sentinel returned by executeMultiAccount when
+// at least one account committed a real purchase while one or more others
+// failed (issue #1014). It is the multi-account analogue of partialPurchaseError:
+// the executor entry points must NOT treat this as a flat failure — the
+// per-account rows already own their authoritative status (partially_completed /
+// completed / failed) and real commitments exist, so an SQS/cron caller must ACK
+// the message (not redeliver) to avoid re-running the fan-out and double-buying
+// the accounts that already succeeded (which #1012's stable key would otherwise
+// dedupe, but the contract should not depend on that second line of defence).
+type multiAccountPartialError struct {
+	committed int
+	errors    []string
+}
+
+func (e *multiAccountPartialError) Error() string {
+	return fmt.Sprintf("multi-account execution: %d account(s) committed, %d failed: %s",
+		e.committed, len(e.errors), strings.Join(e.errors, "; "))
+}
+
+// errAllAccountsFailed is returned by executeMultiAccount when no account
+// committed any purchase — a flat failure that callers may redeliver/retry.
+var errAllAccountsFailed = errors.New("multi-account execution: all accounts failed")
+
 // executeMultiAccount fans out executePurchase across all plan accounts in parallel.
 // Each account gets its own PurchaseExecution record tagged with cloud_account_id.
+//
+// Returns nil when every account fully succeeded; a *multiAccountPartialError
+// when at least one account committed a purchase and at least one failed (so
+// callers ACK rather than redeliver, issue #1014); and errAllAccountsFailed
+// (wrapping the per-account errors) when no account committed anything.
 func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, accounts []config.CloudAccount) error {
-	results := execution.RunForAccountsWithConcurrency(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (struct{}, error) {
-		return struct{}{}, m.executeForAccount(ctx, baseExec, plan, account)
+	results := execution.RunForAccountsWithConcurrency(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (bool, error) {
+		return m.executeForAccount(ctx, baseExec, plan, account)
 	}, getMaxAccountParallelism())
 
+	committed := 0
 	var errs []string
 	for _, r := range results {
+		if r.Value {
+			// At least one rec committed for this account (full or partial).
+			committed++
+		}
 		if r.Err != nil {
 			errs = append(errs, fmt.Sprintf("account %s: %v", r.AccountID, r.Err))
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("multi-account execution: %s", strings.Join(errs, "; "))
+
+	if len(errs) == 0 {
+		return nil
 	}
-	return nil
+	if committed > 0 {
+		// Some accounts committed real purchases; the per-account rows already
+		// recorded the truth. Surface a partial sentinel so the entry points
+		// ack and never mislabel the run as a flat failure (issue #1014).
+		return &multiAccountPartialError{committed: committed, errors: errs}
+	}
+	return fmt.Errorf("%w: %s", errAllAccountsFailed, strings.Join(errs, "; "))
 }
 
 // executeForAccount runs a single plan execution for one cloud account.
 // It creates a new PurchaseExecution record tagged with cloud_account_id, resolves
 // per-account credentials, executes purchases, and saves the result.
-func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, account config.CloudAccount) error {
+//
+// Returns committed=true when at least one rec committed a real purchase for
+// this account (full or partial success), so executeMultiAccount can tell a
+// partial run (some accounts bought) apart from a flat failure and pick the
+// right sentinel (issue #1014). The returned error is non-nil whenever any rec
+// failed, but the authoritative per-account row has already been saved with the
+// correct status (partially_completed / failed) before it surfaces.
+func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, account config.CloudAccount) (committed bool, err error) {
 	// Create a per-account copy of the execution record with an independent
 	// Recommendations slice so concurrent goroutines don't race on writes.
 	acctID := account.ID
 	acctExec := *baseExec
+	// ExecutionID is the per-account row identity (still a fresh UUID), but the
+	// per-rec provider idempotency token must NOT derive from it: a re-drive of
+	// the root execution would mint new UUIDs and lose the provider dedupe,
+	// double-buying every account (issue #1012 / H1). Seed a STABLE per-account
+	// idempotency key from the root's lineage key + the account ID so a re-drive
+	// reproduces the identical token per account. The account ID is the cloud
+	// account's stable config ID, not the (also stable) ExternalID — either is
+	// durable, but account.ID is the value that uniquely keys the fan-out unit.
 	acctExec.ExecutionID = uuid.New().String()
+	acctExec.IdempotencyKey = idempotencyLineageKey(baseExec) + ":" + account.ID
 	acctExec.CloudAccountID = &acctID
 	recs := make([]config.RecommendationRecord, len(baseExec.Recommendations))
 	copy(recs, baseExec.Recommendations)
@@ -165,7 +230,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		acctExec.Status = "failed"
 		acctExec.Error = err.Error()
 		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
-		return fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+		return false, fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
 	}
 
 	accountID := account.ExternalID
@@ -196,8 +261,12 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		acctExec.CompletedAt = &now
 	}
 
-	if err := m.config.SavePurchaseExecution(ctx, &acctExec); err != nil {
-		return fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, err)
+	// committed is the gate executeMultiAccount uses to distinguish a partial
+	// run from a flat failure (issue #1014): true when any rec purchased.
+	committed = anyRecPurchased(acctExec.Recommendations)
+
+	if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
+		return committed, fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr)
 	}
 
 	// Send the confirmation whenever at least one rec committed (full or
@@ -214,9 +283,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	// authoritative per-account row was already saved as partially_completed
 	// (not failed) and the confirmation already went out.
 	if len(purchaseErrors) > 0 {
-		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
+		return committed, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
-	return nil
+	return committed, nil
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
@@ -458,17 +527,26 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			rec := exec.Recommendations[i]
 			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
 			// Derive a deterministic per-rec idempotency token from the
-			// execution ID and this rec's index so a re-drive of a stranded
-			// execution (issue #636) reuses the identical token and the
-			// commitment is never created twice. opts is a value, so this
-			// per-rec copy is safe under the parallel fan-out (no shared
+			// execution's STABLE lineage key (not its mutable ExecutionID)
+			// and this rec's index so a re-drive of a stranded execution
+			// reuses the identical token and the commitment is never created
+			// twice. The lineage key survives Retry and multi-account fan-out
+			// (issue #1012), where the ExecutionID is regenerated; deriving
+			// from the ExecutionID directly defeated the provider guard on
+			// exactly those re-drive paths (#636/#639). opts is a value, so
+			// this per-rec copy is safe under the parallel fan-out (no shared
 			// mutation across goroutines).
 			recOpts := opts
-			recOpts.IdempotencyToken = common.DeriveIdempotencyToken(exec.ExecutionID, i)
+			recOpts.IdempotencyToken = common.DeriveIdempotencyToken(idempotencyLineageKey(exec), i)
 			purchaseResult, err := m.executeSinglePurchase(ctx, rec, provCfg, recOpts)
 			return recPurchaseOutcome{index: i, purchase: purchaseResult, err: err}, nil
 		}, getMaxAccountParallelism())
 
+	// aggregatePurchaseOutcomes is intentionally single-threaded: the fan-out
+	// results are collected above, and the aggregator walks them serially so
+	// there are no concurrent writes to totals, exec.Recommendations, or
+	// purchaseErrors (05-N2). Do NOT move the aggregation inside the FanOut
+	// closure or run it concurrently with the fan-out.
 	return m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
 }
 
@@ -533,13 +611,42 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 // History view (which synthesises completed executions that carry an Error).
 // Appends rather than overwrites so multiple failed history writes within one
 // execution are all recorded.
+// historyAuditGapPrefix is the structured prefix stamped on exec.Error by
+// recordHistoryAuditGap. Using a fixed prefix makes these entries queryable
+// in CloudWatch Insights / log aggregators without grepping free-form text
+// (05-L1). The prefix is intentionally stable; changing it invalidates any
+// existing dashboards or alerts that pattern-match on it.
+const historyAuditGapPrefix = "history_write_failed"
+
 func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, histErr error) {
 	// histErr is a raw persistence error: log it server-side for diagnosis but
 	// keep it out of exec.Error, which is surfaced to clients via the history
 	// status_description. Only a generic, user-safe note reaches the UI.
 	logging.Errorf("history audit gap for commitment %s: %v", commitmentID, histErr)
-	note := fmt.Sprintf("commitment %s purchased but its history record failed to save", commitmentID)
+	// Structured marker: historyAuditGapPrefix + ":" + commitmentID so log
+	// queries can filter on "history_write_failed" and operators can correlate
+	// the commitment ID to the cloud provider's record without parsing prose.
+	note := fmt.Sprintf("%s: commitment %s purchased but its history record failed to save",
+		historyAuditGapPrefix, commitmentID)
 	exec.Error = appendErrNote(exec.Error, note)
+}
+
+// idempotencyLineageKey returns the stable anchor the per-rec provider
+// idempotency token is derived from (issue #1012). It prefers the durable
+// IdempotencyKey column, which is generated once at first creation and copied
+// verbatim onto every Retry successor and combined with the account ID for each
+// multi-account fan-out row — so a strand-and-re-drive reproduces the same
+// token and the provider dedupes the purchase. It falls back to ExecutionID
+// only for legacy rows persisted before migration 000066 (IdempotencyKey == "");
+// for a single un-retried execution that fallback is identical to the pre-fix
+// behaviour, and such legacy rows never gain a retry successor that could
+// diverge (the retry handler seeds the successor's key from the predecessor's
+// ExecutionID in that case, preserving the match).
+func idempotencyLineageKey(exec *config.PurchaseExecution) string {
+	if exec.IdempotencyKey != "" {
+		return exec.IdempotencyKey
+	}
+	return exec.ExecutionID
 }
 
 // appendErrNote joins note onto an existing error string with "; ",
@@ -562,6 +669,12 @@ func appendErrNote(existing, note string) string {
 // the allowed whitelist; an unexpected value (DB tampering, future
 // code path) is dropped to "" rather than fed onto a cloud commitment
 // where it would be expensive to retract.
+//
+// On invalid source the purchase PROCEEDS UNTAGGED (05-L3 decision):
+// failing the rec over a tag-only field would abort a successful cloud
+// purchase, which is a worse outcome than a missing tag. Input
+// validation at the API write boundary (exec.Source on save) is the
+// correct gate; this fallback is last-resort defence-in-depth.
 func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string {
 	source := exec.Source
 	if source == "" {
@@ -949,24 +1062,24 @@ func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
 	return m.config.UpdatePurchasePlan(ctx, plan)
 }
 
-// getAWSAccountID retrieves the current AWS account ID using STS
-func (m *Manager) getAWSAccountID(ctx context.Context) string {
+// getAWSAccountID retrieves the current AWS account ID using STS.
+// It returns ("", error) on all failure paths so the caller decides how to
+// handle the absent ID (log a sentinel, skip tagging, etc.) rather than
+// silently recording "unknown" in the purchase history row (05-L2).
+func (m *Manager) getAWSAccountID(ctx context.Context) (string, error) {
 	if m.stsClient == nil {
-		logging.Debug("STS client not configured, using 'unknown' as account ID")
-		return "unknown"
+		return "", fmt.Errorf("STS client not configured")
 	}
 
 	result, err := m.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		logging.Warnf("Failed to get AWS account ID: %v", err)
-		return "unknown"
+		return "", fmt.Errorf("STS GetCallerIdentity: %w", err)
 	}
 
-	if result.Account != nil {
-		return *result.Account
+	if result.Account == nil {
+		return "", fmt.Errorf("STS returned nil Account")
 	}
-
-	return "unknown"
+	return *result.Account, nil
 }
 
 // applyEngineFallback backfills the Engine field on DB / Cache Details

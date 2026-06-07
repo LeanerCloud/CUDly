@@ -91,28 +91,36 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 		return fmt.Errorf("execution not found: %s", msg.ExecutionID)
 	}
 
-	// Only execute if approved or pending (auto-approved)
-	if execution.Status != "approved" && execution.Status != "pending" {
-		logging.Warnf("Execution %s not in executable state (status: %s), skipping", msg.ExecutionID, execution.Status)
+	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
+
+	// Atomically claim the row before touching the cloud (issue #1013). SQS
+	// delivery is at-least-once: a redelivered execute_purchase message (slow
+	// purchase whose visibility timeout expired, partial-batch replay, operator
+	// re-drive) would otherwise pass the old non-atomic status check and execute
+	// the same row a second time concurrently. claimAndExecute CASes
+	// approved/pending/notified -> running and only proceeds on a won claim; a
+	// lost claim is a benign duplicate that we ack (return nil) without
+	// re-executing.
+	claimed, execErr := m.claimAndExecute(ctx, execution)
+	if !claimed {
+		// Either a benign CAS race-loss (execErr == nil — ack the duplicate) or
+		// a real DB error during the claim (execErr != nil — surface it so the
+		// message is redelivered, since nothing was executed).
+		if execErr != nil {
+			return fmt.Errorf("failed to claim execution %s: %w", msg.ExecutionID, execErr)
+		}
 		return nil
 	}
 
-	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
-	wasMultiAccount, purchaseErr := m.executePurchase(ctx, execution)
-	m.finalizeExecution(execution, purchaseErr)
-
-	if !wasMultiAccount {
-		if saveErr := m.config.SavePurchaseExecution(ctx, execution); saveErr != nil {
-			logging.Errorf("Failed to save execution status: %v", saveErr)
-			return fmt.Errorf("failed to save execution status for %s: %w", msg.ExecutionID, saveErr)
-		}
+	// A multi-account run where at least one account committed must be ACKed,
+	// not redelivered (issue #1014): redelivery would re-run the fan-out and,
+	// absent the per-account idempotency key (#1012), double-buy the accounts
+	// that already succeeded. errAllAccountsFailed (nothing committed) and
+	// single-account errors fall through and are returned so SQS redelivers.
+	if isMultiAccountAckable(execErr) {
+		return nil
 	}
-	if purchaseErr == nil {
-		if err := m.updatePlanProgress(ctx, execution.PlanID); err != nil {
-			logging.Errorf("Failed to update plan progress: %v", err)
-		}
-	}
-	return purchaseErr
+	return execErr
 }
 
 // handleApproveMessage processes an approve message.

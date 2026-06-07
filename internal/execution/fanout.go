@@ -69,8 +69,21 @@ func FanOutWithConcurrency[T any](
 	var wg sync.WaitGroup
 
 	for i, id := range accountIDs {
+		// Acquire a semaphore slot before launching the goroutine.
+		// Use select so a cancelled/expired context is not held up by a
+		// full semaphore: if ctx is done while waiting for a slot, record
+		// ctx.Err() on the result slot and skip launching the goroutine.
+		// Without this, a large fan-out on an already-cancelled context
+		// (e.g. Lambda deadline exceeded partway through) would block
+		// indefinitely here rather than draining quickly.
 		wg.Add(1)
-		sem <- struct{}{} // acquire slot
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			results[i] = Result[T]{AccountID: id, Err: ctx.Err()}
+			wg.Done()
+			continue
+		}
 		go func(idx int, accountID string) {
 			defer wg.Done()
 			defer func() { <-sem }() // release slot

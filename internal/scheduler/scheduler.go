@@ -1141,7 +1141,9 @@ func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey
 // count from each rec, drops recs that go to 0 or below, and
 // annotates the survivors with the badge fields.
 func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppressionKey]*suppressionAgg) []config.RecommendationRecord {
-	out := recs[:0]
+	// Allocate a fresh backing array so callers that hold a reference to
+	// the original recs slice do not see mutations (05-M1).
+	out := make([]config.RecommendationRecord, 0, len(recs))
 	for _, rec := range recs {
 		accountID := ""
 		if rec.CloudAccountID != nil {

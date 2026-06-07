@@ -155,16 +155,20 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	// Best-effort age estimate. The store does not currently return
 	// updated_at on the PurchaseExecution struct (issue #678 may add it
 	// later), so we lower-bound the age at reapAfter — the SELECT
-	// guarantees updated_at < NOW() - reapAfter, so the real age is at
+	// guarantees updated_at < now - reapAfter, so the real age is at
 	// least reapAfter. Rounded to whole minutes for the canonical
 	// message; the WARN log carries the same lower bound.
+	// `now` is injected (rather than time.Now()) so tests can use a
+	// fixed clock and all rows in one sweep share the same reference
+	// instant (05-N1).
 	age := reapAfter
 	ageMinutes := int(age.Round(time.Minute) / time.Minute)
 	if ageMinutes < 1 {
 		ageMinutes = 1
 	}
 
-	logging.Warnf("purchase reaper: reaping execution %s (status=%s, age>=%dm)", exec.ExecutionID, prevStatus, ageMinutes)
+	logging.Warnf("purchase reaper: reaping execution %s (status=%s, age>=%dm sweep_at=%s)",
+		exec.ExecutionID, prevStatus, ageMinutes, now.UTC().Format(time.RFC3339))
 
 	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, stuckStatuses, failedStatus)
 	if err != nil {
@@ -219,10 +223,8 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 		// error-message annotation failed. Otherwise Reaped would
 		// undercount real recoveries.
 		result.Reaped++
-		_ = now // kept in signature for future deterministic-clock injection
 		return
 	}
 
 	result.Reaped++
-	_ = now
 }

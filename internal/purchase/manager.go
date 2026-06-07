@@ -85,11 +85,21 @@ type ProcessResult struct {
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
-// status before the recovery sweep treats it as stranded (issue #632). It must
-// be comfortably larger than the longest possible synchronous purchase run so a
-// legitimately in-flight execution is never failed out from under itself. The
-// purchase Lambda timeout is 60s; 15min (matching the RI-exchange stale-sweep
-// threshold in pkg/exchange) leaves a wide safety margin.
+// status before the recovery sweep in ProcessScheduledPurchases treats it as
+// stranded (issue #632). It must be comfortably larger than the longest
+// possible synchronous purchase run so a legitimately in-flight execution is
+// never failed out from under itself. The purchase Lambda timeout is 60s;
+// 15min (matching the RI-exchange stale-sweep threshold in pkg/exchange)
+// leaves a wide safety margin.
+//
+// Note: the purchase.Reaper (reaper.go) uses DefaultReapAfter (10m) to cover
+// both "approved" and "running" rows via an atomic CAS. These two thresholds
+// serve different sweep paths and the 15m vs 10m difference is intentional:
+// the reaper is CAS-protected and can safely reap "running" rows (the real
+// executor wins the CAS race if it is still alive), while this legacy sweep
+// only targets "approved" rows from the cron path and is deliberately
+// conservative (05-N3). A future consolidation should align both under a
+// single env-configurable threshold.
 const staleApprovedThreshold = 15 * time.Minute
 
 // NotificationResult holds the result of sending notifications
@@ -126,15 +136,22 @@ func NewManager(cfg ManagerConfig) *Manager {
 }
 
 // finalizeExecution sets the status and completion time on an execution based on the error.
+//
+// Both partial sentinels (single-account *partialPurchaseError and
+// multi-account *multiAccountPartialError) map the root row to
+// "partially_completed", never "failed": real commitments exist and a re-approve
+// would double-buy them (issues #642 / #1014). errAllAccountsFailed falls
+// through to the "failed" default — nothing committed, so a Retry is safe.
 func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr error) {
 	var partial *partialPurchaseError
+	var multiPartial *multiAccountPartialError
 	switch {
 	case execErr == nil:
 		completedAt := time.Now()
 		exec.Status = "completed"
 		exec.CompletedAt = &completedAt
-	case errors.As(execErr, &partial):
-		// #642: at least one rec committed a real purchase while others
+	case errors.As(execErr, &partial), errors.As(execErr, &multiPartial):
+		// At least one rec / account committed a real purchase while others
 		// failed. Never mark such a row "failed" — the commitments are real
 		// and a re-approve would double-buy them. Record the partial outcome
 		// and stamp CompletedAt so the row reads as terminal (the successful
@@ -152,29 +169,82 @@ func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr erro
 	}
 }
 
+// claimAndExecute is the single atomic claim-then-execute funnel for the
+// non-synchronous executor entry points (SQS execute_purchase and the cron
+// ProcessScheduledPurchases sweep), mirroring the guard the synchronous approve
+// path already gets from ApproveAndExecute's CAS (issue #1013).
+//
+// It atomically transitions the row from an executable state
+// (approved/pending/notified) to "running" via TransitionExecutionStatus and
+// only proceeds when it wins that CAS. A lost CAS (row already claimed by a
+// concurrent worker, an overlapping cron tick, an SQS redelivery, or the row
+// vanishing mid-flight) is benign: the function returns (claimed=false, nil) and
+// the caller should ack/skip without re-running the purchase. A real DB error
+// during the claim returns (false, err).
+//
+// On a won claim it runs executeAndFinalize and returns (true, execErr).
+func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExecution) (claimed bool, err error) {
+	updated, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved", "pending", "notified"}, "running")
+	if claimErr != nil {
+		if errors.Is(claimErr, config.ErrNotFound) || errors.Is(claimErr, config.ErrExecutionNotInExpectedStatus) {
+			// Benign CAS race-loss: another worker/redelivery already owns this
+			// row (or it was deleted). Ack/skip without executing.
+			logging.Warnf("Skipping execution %s (CAS claim lost to concurrent worker): %v", exec.ExecutionID, claimErr)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim execution %s for execution: %w", exec.ExecutionID, claimErr)
+	}
+	// Carry the committed DB state (status=running, plus any fields refreshed by
+	// the RETURNING clause) onto the caller's struct so the rest of the run
+	// starts from the claimed row rather than the pre-claim snapshot.
+	*exec = *updated
+	return true, m.executeAndFinalize(ctx, exec)
+}
+
+// isMultiAccountAckable reports whether a multi-account execErr should be ACKed
+// (not redelivered/recounted as a flat failure) because at least one account
+// committed a real purchase (issue #1014). A nil error (full success) is also
+// ackable. errAllAccountsFailed is NOT ackable — nothing committed, so a
+// redelivery is safe and useful.
+func isMultiAccountAckable(execErr error) bool {
+	if execErr == nil {
+		return true
+	}
+	var partial *multiAccountPartialError
+	return errors.As(execErr, &partial)
+}
+
 // executeAndFinalize runs a purchase and handles status updates, record saving, and progress.
+//
+// The root execution row is ALWAYS saved with its finalized status — including
+// the multi-account fan-out case (issue #1014 / H2). The per-account fan-out
+// rows are distinct rows that executeForAccount already saved with their own
+// authoritative status; the root row reflects the AGGREGATE outcome
+// (completed / partially_completed / failed, classified by finalizeExecution
+// from the typed sentinel). The previous `!wasMultiAccount` save-skip left the
+// root in whatever pre-execution status it carried, which, now that
+// claimAndExecute claims the root to "running" first (issue #1013), would strand
+// the root row in "running" until the reaper failed it.
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
-	wasMultiAccount, execErr := m.executePurchase(ctx, exec)
+	_, execErr := m.executePurchase(ctx, exec)
 	m.finalizeExecution(exec, execErr)
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
 	}
-	if !wasMultiAccount {
-		if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
-			logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
-			// Wrap with ErrAuditLoss regardless of whether executePurchase itself
-			// failed. When execErr != nil (provider/partial error), finalizeExecution
-			// stamped a terminal status on the in-memory exec struct, but if
-			// SavePurchaseExecution then failed the DB row is still in "running" --
-			// exactly the stranded-row scenario ErrAuditLoss signals. Preserve the
-			// original execErr as the innermost %w so errors.As/errors.Is can still
-			// reach it from callers (e.g. claimAndRedrive checking ErrAuditLoss).
-			if execErr != nil {
-				execErr = fmt.Errorf("%w: terminal save failed (%v); original execution error: %w",
-					config.ErrAuditLoss, err, execErr)
-			} else {
-				execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
-			}
+	if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
+		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
+		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
+		// failed. When execErr != nil (provider/partial error), finalizeExecution
+		// stamped a terminal status on the in-memory exec struct, but if
+		// SavePurchaseExecution then failed the DB row is still in "running" --
+		// exactly the stranded-row scenario ErrAuditLoss signals. Preserve the
+		// original execErr as the innermost %w so errors.As/errors.Is can still
+		// reach it from callers (e.g. claimAndRedrive checking ErrAuditLoss).
+		if execErr != nil {
+			execErr = fmt.Errorf("%w: terminal save failed (%v); original execution error: %w",
+				config.ErrAuditLoss, err, execErr)
+		} else {
+			execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
 		}
 	}
 	if execErr == nil {
@@ -188,7 +258,9 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 // allRecsSafeToRedrive reports whether every recommendation in the execution
 // can be safely re-driven without risking a double-purchase. A re-drive is safe
 // when the underlying provider purchase API is idempotent under the
-// DeriveIdempotencyToken(exec.ExecutionID, i) scheme used by execution.go.
+// DeriveIdempotencyToken(idempotencyLineageKey(exec), i) scheme used by
+// execution.go. An in-place re-drive (this path) keeps the same row, so the
+// lineage key is unchanged and the token is reproduced exactly.
 //
 // Safe providers / services (issue #639):
 //   - AWS (all services): tag-guard or ClientToken deduplication (#636/#638).
@@ -360,9 +432,12 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 //
 // Idempotent re-drive path (issue #639): all AWS, Azure reservations, and GCP
 // compute service clients derive or look up a deterministic idempotency key
-// from DeriveIdempotencyToken(exec.ExecutionID, i). Re-driving with the same
-// ExecutionID produces the same token, so the cloud provider dedupes the second
-// call and no double-purchase occurs. The row transitions directly to "completed"
+// from DeriveIdempotencyToken(idempotencyLineageKey(exec), i). This is an
+// IN-PLACE re-drive — the same row, so the lineage key is unchanged — which
+// reproduces the same token, so the cloud provider dedupes the second call and
+// no double-purchase occurs. (The retry/fan-out double-buy hole #1012 closes is
+// about NEW rows minting a fresh ExecutionID; that does not apply here.) The row
+// transitions directly to "completed"
 // (or "failed"/"partially_completed" on a genuine error), bypassing the manual
 // Retry step required by the old safe-fail path. See allRecsSafeToRedrive for
 // which provider/service combinations are eligible.
@@ -370,6 +445,7 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 // Safe-fail path: Azure savings-plans recs are excluded because the OrderAlias
 // API uses a timestamp-based alias name with no idempotency key. Executions
 // without a stable ExecutionID (legacy rows) also fall through because
+// idempotencyLineageKey(exec) falls back to "" for them and
 // DeriveIdempotencyToken("", i) would produce the same token set for every
 // such row. These fall through to the original behaviour: the row is atomically
 // transitioned to "failed" so it surfaces in History and can be Retry-ed by
@@ -390,10 +466,11 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 		exec := &stranded[i]
 
 		// Idempotent re-drive path (issue #639): all recs honour
-		// opts.IdempotencyToken via DeriveIdempotencyToken(exec.ExecutionID, i),
-		// so a second call with the same ExecutionID is a safe no-op on the
-		// provider side. The ExecutionID must be non-empty to derive a unique
-		// token; an empty ID would map every legacy row to the same token set.
+		// opts.IdempotencyToken via DeriveIdempotencyToken(idempotencyLineageKey(exec), i),
+		// so a second in-place call on the same row is a safe no-op on the
+		// provider side. The ExecutionID must be non-empty so the lineage key
+		// (or its ExecutionID fallback for legacy rows) is unique; an empty ID
+		// would map every legacy row to the same token set.
 		if allRecsSafeToRedrive(exec) && exec.ExecutionID != "" {
 			counted, driveErr := m.claimAndRedrive(ctx, exec)
 			if driveErr != nil {
@@ -441,17 +518,22 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	processed := 0
 	executed := 0
 	failed := 0
-	var errors []string
+	var errs []string
 
-	for _, exec := range executions {
+	for i := range executions {
+		exec := executions[i]
 		// Check if it's time to execute
 		if exec.ScheduledDate.After(now) {
 			logging.Debugf("Execution %s not yet due (scheduled for %s)", exec.ExecutionID, exec.ScheduledDate)
 			continue
 		}
 
-		// Skip if cancelled or already completed
-		if exec.Status == "cancelled" || exec.Status == "completed" {
+		// Positive allowlist (issue #1013 / M2): only the two executable
+		// pre-purchase states proceed. The query already filters to
+		// pending/notified, but a row another worker transitioned in the gap
+		// between SELECT and here (approved/running/failed/...) must be skipped.
+		// The atomic claim below is the real guard; this is defence-in-depth.
+		if exec.Status != "pending" && exec.Status != "notified" {
 			continue
 		}
 
@@ -459,13 +541,33 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 
 		logging.Infof("Executing scheduled purchase: %s", exec.ExecutionID)
 
-		// Execute the purchase and handle post-execution bookkeeping.
-		if execErr := m.executeAndFinalize(ctx, &exec); execErr != nil {
-			failed++
-			errors = append(errors, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
-		} else {
-			executed++
+		// Atomically claim the row before executing (issue #1013). Overlapping
+		// cron ticks (a tick that runs longer than the interval, EventBridge
+		// duplicate/overlapping deliveries, or cron racing the SQS path) would
+		// otherwise both execute the same due row. claimAndExecute CASes the row
+		// to "running" and only the winner runs; a lost claim is skipped without
+		// re-executing.
+		claimed, execErr := m.claimAndExecute(ctx, &exec)
+		if !claimed {
+			// execErr != nil here is a real DB error during the claim (count as
+			// failed); execErr == nil is a benign CAS race-loss (skip silently).
+			if execErr != nil {
+				failed++
+				errs = append(errs, fmt.Sprintf("%s: claim failed: %v", exec.ExecutionID, execErr))
+			}
+			continue
 		}
+
+		// A multi-account run where at least one account committed is a success
+		// for ack purposes (issue #1014): the per-account rows own the truth and
+		// re-running would double-buy. Only a genuine failure (nothing
+		// committed) is counted/surfaced.
+		if isMultiAccountAckable(execErr) {
+			executed++
+			continue
+		}
+		failed++
+		errs = append(errs, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
 	}
 
 	return &ProcessResult{
@@ -473,6 +575,6 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 		Executed:  executed,
 		Failed:    failed,
 		Recovered: recovered,
-		Errors:    errors,
+		Errors:    errs,
 	}, nil
 }

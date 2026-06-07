@@ -723,6 +723,16 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.ExecutionID = uuid.New().String()
 	}
 
+	// Stamp a stable idempotency lineage key on first creation (issue #1012).
+	// Unlike ExecutionID this is generated once and then copied verbatim onto
+	// Retry successors / multi-account fan-out rows by the callers, so the
+	// derived provider token survives a re-drive. INSERT-only below (omitted
+	// from the ON CONFLICT DO UPDATE SET), so an upsert of an existing row
+	// never overwrites the key already persisted at creation.
+	if execution.IdempotencyKey == "" {
+		execution.IdempotencyKey = uuid.New().String()
+	}
+
 	// Marshal recommendations to JSONB
 	recommendationsJSON, err := json.Marshal(execution.Recommendations)
 	if err != nil {
@@ -744,8 +754,9 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
-			executed_by_user_id, executed_at, pre_approval_skip_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+			executed_by_user_id, executed_at, pre_approval_skip_reason,
+			idempotency_key
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -815,6 +826,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.ExecutedByUserID,
 		execution.ExecutedAt,
 		execution.PreApprovalSkipReason,
+		execution.IdempotencyKey,
 	)
 
 	if err != nil {
@@ -838,7 +850,8 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
-		          executed_by_user_id, executed_at, pre_approval_skip_reason
+		          executed_by_user_id, executed_at, pre_approval_skip_reason,
+		          idempotency_key
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -942,7 +955,8 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
@@ -981,7 +995,9 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
-		       approval_token_expires_at
+		       approval_token_expires_at,
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date ASC NULLS LAST, id ASC
@@ -1005,7 +1021,8 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
@@ -1046,7 +1063,8 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND updated_at < NOW() - $2::interval
@@ -1066,7 +1084,8 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1089,7 +1108,8 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1114,7 +1134,8 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -1140,7 +1161,8 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -1228,6 +1250,10 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 		// plan_id is nullable since migration 000033 (direct-execute
 		// rows from the Recommendations page have no originating plan).
 		var planID sql.NullString
+		// idempotency_key is NULL on rows created before migration 000066;
+		// leave exec.IdempotencyKey "" for those so the derivation falls back
+		// to ExecutionID (issue #1012).
+		var idempotencyKey sql.NullString
 
 		err := rows.Scan(
 			&planID,
@@ -1255,6 +1281,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&exec.ExecutedByUserID,
 			&executedAt,
 			&exec.PreApprovalSkipReason,
+			&idempotencyKey,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -1263,33 +1290,42 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 		if planID.Valid {
 			exec.PlanID = planID.String
 		}
+		if idempotencyKey.Valid {
+			exec.IdempotencyKey = idempotencyKey.String
+		}
 
 		// Unmarshal recommendations
 		if err := json.Unmarshal(recommendationsJSON, &exec.Recommendations); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal recommendations: %w", err)
 		}
 
-		// Handle nullable timestamps
-		if notifSent.Valid {
-			exec.NotificationSent = &notifSent.Time
-		}
-		if completedAt.Valid {
-			exec.CompletedAt = &completedAt.Time
-		}
-		if expiresAt.Valid {
-			exec.TTL = ttlFromTime(expiresAt.Time)
-		}
-		if tokenExpiresAt.Valid {
-			exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
-		}
-		if executedAt.Valid {
-			exec.ExecutedAt = &executedAt.Time
-		}
+		applyExecutionNullableTimes(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt)
 
 		executions = append(executions, exec)
 	}
 
 	return executions, rows.Err()
+}
+
+// applyExecutionNullableTimes maps the nullable timestamp columns onto exec.
+// It pulls the per-field NULL handling out of scanExecutionRows to keep that
+// function under the cyclomatic limit.
+func applyExecutionNullableTimes(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt sql.NullTime) {
+	if notifSent.Valid {
+		exec.NotificationSent = &notifSent.Time
+	}
+	if completedAt.Valid {
+		exec.CompletedAt = &completedAt.Time
+	}
+	if expiresAt.Valid {
+		exec.TTL = ttlFromTime(expiresAt.Time)
+	}
+	if tokenExpiresAt.Valid {
+		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
+	}
+	if executedAt.Valid {
+		exec.ExecutedAt = &executedAt.Time
+	}
 }
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.

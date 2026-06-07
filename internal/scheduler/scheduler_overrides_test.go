@@ -286,6 +286,44 @@ func TestApplyAccountOverrides_LookupError_PassesThrough(t *testing.T) {
 	assert.Len(t, recs, 1, "un-filtered list returned on lookup failure")
 }
 
+// TestFilterRecsByResolvedConfigs_DoesNotMutateCallerSlice asserts that
+// filterRecsByResolvedConfigs allocates a fresh output slice instead of
+// aliasing the caller's backing array via recs[:0] (05-M1).
+//
+// Pre-fix: out := recs[:0] shared the backing array, so any append during
+// filtering overwrote elements the caller still expected at their original
+// positions. The fix allocates make([]T, 0, len(recs)).
+func TestFilterRecsByResolvedConfigs_DoesNotMutateCallerSlice(t *testing.T) {
+	// Resolve a ServiceConfig that disables the second rec.
+	enabled := &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: true}
+	disabled := &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: false}
+	accA := "acct-A"
+	accB := "acct-B"
+	recs := []config.RecommendationRecord{
+		{ID: "keep", Provider: "aws", Service: "rds", Region: "us-east-1",
+			ResourceType: "db.t3.medium", Count: 1, CloudAccountID: &accA},
+		{ID: "drop", Provider: "aws", Service: "rds", Region: "us-east-1",
+			ResourceType: "db.t3.medium", Count: 1, CloudAccountID: &accB},
+	}
+	// Keep a snapshot of the original IDs.
+	originalIDs := []string{recs[0].ID, recs[1].ID}
+
+	resolved := map[string]*config.ServiceConfig{
+		config.AccountConfigKey(accA, "aws", "rds"): enabled,
+		config.AccountConfigKey(accB, "aws", "rds"): disabled,
+	}
+	out := filterRecsByResolvedConfigs(recs, resolved)
+
+	// Only the enabled rec survives.
+	require.Len(t, out, 1)
+	assert.Equal(t, "keep", out[0].ID)
+
+	// The original slice must not be mutated.
+	require.Len(t, recs, 2, "original slice length unchanged")
+	assert.Equal(t, originalIDs[0], recs[0].ID, "recs[0] must not be overwritten")
+	assert.Equal(t, originalIDs[1], recs[1].ID, "recs[1] must not be overwritten")
+}
+
 func TestApplyAccountOverrides_OverrideLookupError_PassesThrough(t *testing.T) {
 	// Mirrors the global-config lookup failure contract: if the per-account
 	// override lookup fails, the page should over-show rather than blank.

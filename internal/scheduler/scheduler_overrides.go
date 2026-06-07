@@ -52,7 +52,9 @@ func filterRecsByResolvedConfigs(
 	recs []config.RecommendationRecord,
 	resolved map[string]*config.ServiceConfig,
 ) []config.RecommendationRecord {
-	out := recs[:0]
+	// Allocate a fresh backing array so callers that hold a reference to
+	// the original recs slice do not see mutations (05-M1).
+	out := make([]config.RecommendationRecord, 0, len(recs))
 	for i := range recs {
 		rec := recs[i]
 		if rec.CloudAccountID == nil {

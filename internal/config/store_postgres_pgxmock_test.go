@@ -436,6 +436,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -445,6 +446,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -459,6 +461,10 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 	// columns will catch.
 	assert.Nil(t, exec.RetryExecutionID)
 	assert.Equal(t, 0, exec.RetryAttemptN)
+	// idempotency_key scan-outcome guard (CR): the NULL path (legacy rows
+	// before migration 000066) must leave IdempotencyKey empty so derivation
+	// falls back to ExecutionID (issue #1012).
+	assert.Equal(t, "", exec.IdempotencyKey)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -478,6 +484,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -491,6 +498,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		nil, &successorID, 2,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -507,6 +515,61 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 	require.NotNil(t, exec.RetryExecutionID)
 	assert.Equal(t, "exec-3", *exec.RetryExecutionID)
 	assert.Equal(t, 2, exec.RetryAttemptN)
+	// idempotency_key scan-outcome guard (CR): the non-NULL path must scan
+	// the stored key into IdempotencyKey verbatim.
+	assert.Equal(t, "idem-key-exec-2", exec.IdempotencyKey)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns guards against the
+// SELECT projection in GetPlannedExecutions drifting out of sync with the
+// scanExecutionRows Scan target. When migration 000066 added idempotency_key
+// (and earlier migrations added executed_by_user_id, executed_at,
+// pre_approval_skip_reason) every execution-reading SELECT must project them,
+// or scanExecutionRows fails at runtime with "failed to scan execution" on the
+// planned-purchase list path (handler_purchases.go GetPlannedExecutions).
+//
+// The mock uses regexp query matching, so ExpectQuery requires the issued SQL
+// to contain idempotency_key; with the column missing from the projection the
+// query does not match and GetPlannedExecutions returns an error, which is what
+// this test asserts against. It fails on the pre-fix projection and passes once
+// the four trailing columns are added.
+func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	recsJSON, _ := json.Marshal([]RecommendationRecord{})
+	now := time.Now().Truncate(time.Second)
+	cols := []string{
+		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+		"notification_sent", "approval_token", "recommendations",
+		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
+		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
+		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
+	}
+	rows := pgxmock.NewRows(cols).AddRow(
+		"plan-1", "exec-1", "pending", 1, now,
+		sql.NullTime{}, "tok-123", recsJSON,
+		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
+		nil, "", nil, nil, 100,
+		nil, nil, 0,
+		sql.NullTime{},
+		nil, sql.NullTime{}, nil,
+		"idem-key-planned",
+	)
+	// Regexp matcher: only matches if the issued SELECT projects idempotency_key.
+	mock.ExpectQuery("idempotency_key").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	execs, err := store.GetPlannedExecutions(ctx, []string{"pending"}, 10)
+	require.NoError(t, err)
+	require.Len(t, execs, 1)
+	assert.Equal(t, "idem-key-planned", execs[0].IdempotencyKey)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1800,6 +1863,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
 	}
 }
 
@@ -1812,6 +1876,7 @@ func stuckExecCols() []string {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 }
 
