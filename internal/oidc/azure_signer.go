@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 
@@ -95,9 +96,14 @@ func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete key")
 			return
 		}
+		e := new(big.Int).SetBytes(resp.Key.E)
+		if !e.IsInt64() || e.Int64() <= 0 || e.Int64() > math.MaxInt32 {
+			s.err = fmt.Errorf("oidc: azure keyvault returned unexpected RSA exponent %s", e)
+			return
+		}
 		rsaPub := &rsa.PublicKey{
 			N: new(big.Int).SetBytes(resp.Key.N),
-			E: int(new(big.Int).SetBytes(resp.Key.E).Int64()),
+			E: int(e.Int64()),
 		}
 		kid, err := ComputeKeyID(rsaPub)
 		if err != nil {

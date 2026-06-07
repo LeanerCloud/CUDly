@@ -45,10 +45,18 @@ func NewSignerFromEnv(ctx context.Context) (Signer, error) {
 	case "azure":
 		vaultURL := os.Getenv(envAzureVaultURL)
 		keyName := os.Getenv(envAzureKeyName)
-		if vaultURL == "" && keyName == "" {
+		switch {
+		case vaultURL == "" && keyName == "":
 			return nil, nil // issuer disabled
+		case vaultURL == "":
+			return nil, fmt.Errorf("oidc: %s is set but %s is empty; set both or neither to configure the Azure OIDC issuer",
+				envAzureKeyName, envAzureVaultURL)
+		case keyName == "":
+			return nil, fmt.Errorf("oidc: %s is set but %s is empty; set both or neither to configure the Azure OIDC issuer",
+				envAzureVaultURL, envAzureKeyName)
+		default:
+			return NewAzureKeyVaultSigner(ctx, vaultURL, keyName)
 		}
-		return NewAzureKeyVaultSigner(ctx, vaultURL, keyName)
 
 	case "gcp":
 		keyResource := os.Getenv(envGCPKeyResource)
