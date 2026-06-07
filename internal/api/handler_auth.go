@@ -253,7 +253,7 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Rate limiting: 3 attempts per email per hour to prevent enumeration attacks
+	// Rate limiting: 10 attempts per email per 5 minutes to prevent enumeration attacks
 	if h.rateLimiter != nil {
 		allowed, err := h.rateLimiter.AllowWithEmail(ctx, pwdReq.Email, "forgot_password")
 		if err != nil {

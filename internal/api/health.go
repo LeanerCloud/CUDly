@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/credentials"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
 // HealthResponse represents the health check response
@@ -64,9 +65,12 @@ func (h *Handler) checkConfigStore(ctx context.Context) HealthCheck {
 	// Try to access config to verify database connectivity
 	_, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
+		// Log the detailed error server-side; return a generic message to avoid
+		// leaking connection details (host, db name, SQLSTATE) on this public route.
+		logging.Errorf("health: config store check failed: %v", err)
 		return HealthCheck{
 			Status:  "unhealthy",
-			Message: "Failed to access config store: " + err.Error(),
+			Message: "config store unavailable",
 		}
 	}
 
