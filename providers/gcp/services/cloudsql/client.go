@@ -345,11 +345,15 @@ func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string,
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
+	// Scale the per-hour commitment price to a term total so it is on the
+	// same basis as onDemandPrice * hoursInTerm. Without this, the savings
+	// percentage would be nearly 100% (per-hour price vs term total).
+	commitmentPriceTerm := commitmentPrice * hoursInTerm
+	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPriceTerm)
 
 	return &SQLPricing{
-		HourlyRate:        commitmentPrice / hoursInTerm,
-		CommitmentPrice:   commitmentPrice,
+		HourlyRate:        commitmentPrice,
+		CommitmentPrice:   commitmentPriceTerm,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
@@ -510,6 +514,11 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		paymentOption = "monthly"
 	}
 
+	term := params.Term
+	if term == "" {
+		term = "1yr"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceRelationalDB,
@@ -517,7 +526,7 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		Region:         c.region,
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
+		Term:           term,
 		PaymentOption:  paymentOption,
 	}
 
