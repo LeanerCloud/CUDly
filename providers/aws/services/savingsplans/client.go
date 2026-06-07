@@ -262,58 +262,42 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	return result, nil
 }
 
-// findOfferingID finds the appropriate Savings Plans offering ID.
-// execID is the purchase execution UUID for log correlation; pass "" when
-// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
-	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
-	if !ok {
-		return "", fmt.Errorf("invalid service details for Savings Plans")
+// resolveSPPlanType resolves the effective plan type for an offering lookup.
+// When the client is scoped to a specific plan type (post-split), it validates
+// that the recommendation matches and returns c.planType. Umbrella/legacy
+// clients (c.planType == "") fall back to spDetails.PlanType.
+func (c *Client) resolveSPPlanType(spPlanType string) (types.SavingsPlanType, error) {
+	planType, convErr := convertPlanType(spPlanType)
+	if c.planType == "" {
+		// Legacy umbrella client: accept any convertible plan type.
+		return planType, convErr
 	}
-
-	// Per-plan-type client (post-split): the client's planType is the
-	// source of truth. Reject mismatched recommendations rather than
-	// silently buying the wrong product. Umbrella legacy clients
-	// (c.planType == "") fall back to rec.Details.PlanType to preserve
-	// pre-split behaviour.
-	planType, convErr := convertPlanType(spDetails.PlanType)
-	if c.planType != "" {
-		if convErr != nil {
-			return "", convErr
-		}
-		if planType != c.planType {
-			return "", fmt.Errorf(
-				"recommendation plan type %q does not match client scope %q",
-				spDetails.PlanType, c.planType,
-			)
-		}
-		planType = c.planType
-	} else if convErr != nil {
+	// Scoped client: reject mismatches to prevent buying the wrong product.
+	if convErr != nil {
 		return "", convErr
 	}
-
-	termSeconds := convertTermToSeconds(rec.Term)
-	paymentOption := convertPaymentOption(rec.PaymentOption)
-
-	tag := execID
-	if tag == "" {
-		tag = "no-exec"
+	if planType != c.planType {
+		return "", fmt.Errorf(
+			"recommendation plan type %q does not match client scope %q",
+			spPlanType, c.planType,
+		)
 	}
+	return c.planType, nil
+}
 
-	t0 := time.Now()
-	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
-		tag, planType, rec.Term, rec.PaymentOption)
-
-	// Pin to USD so non-USD currency offerings are excluded server-side.
-	// EC2Instance SPs are region-scoped; add a region filter so only the
-	// offering for the client's region is returned. Compute, SageMaker, and
-	// Database SPs are global and do not carry a region property.
+// buildSPOfferingsInput constructs the DescribeSavingsPlansOfferings request,
+// adding a region filter for EC2Instance plans when the client region is known.
+func (c *Client) buildSPOfferingsInput(planType types.SavingsPlanType, termSeconds int64, paymentOption types.SavingsPlanPaymentOption, tag string) *savingsplans.DescribeSavingsPlansOfferingsInput {
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termSeconds},
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
-		Currencies:     []types.CurrencyCode{types.CurrencyCodeUsd},
+		// Pin to USD so non-USD currency offerings are excluded server-side.
+		Currencies: []types.CurrencyCode{types.CurrencyCodeUsd},
 	}
+	// EC2Instance SPs are region-scoped; add a region filter so only the
+	// offering for the client's region is returned. Compute, SageMaker, and
+	// Database SPs are global and do not carry a region property.
 	if planType == types.SavingsPlanTypeEc2Instance {
 		if c.region == "" {
 			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
@@ -326,7 +310,41 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 			}
 		}
 	}
+	return input
+}
 
+// findOfferingID finds the appropriate Savings Plans offering ID.
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
+	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
+	if !ok {
+		return "", fmt.Errorf("invalid service details for Savings Plans")
+	}
+
+	planType, err := c.resolveSPPlanType(spDetails.PlanType)
+	if err != nil {
+		return "", err
+	}
+	termSeconds, err := convertTermToSeconds(rec.Term)
+	if err != nil {
+		return "", err
+	}
+	paymentOption, err := convertPaymentOption(rec.PaymentOption)
+	if err != nil {
+		return "", err
+	}
+
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+
+	t0 := time.Now()
+	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
+		tag, planType, rec.Term, rec.PaymentOption)
+
+	input := c.buildSPOfferingsInput(planType, termSeconds, paymentOption, tag)
 	offeringID, err := c.lookupOfferingID(ctx, input)
 	if err != nil {
 		log.Printf("purchase[%s]: SavingsPlans findOfferingID failed after %s: %v", tag, time.Since(t0), err)
@@ -352,29 +370,34 @@ func convertPlanType(planType string) (types.SavingsPlanType, error) {
 	}
 }
 
-// convertTermToSeconds converts a term string to seconds for AWS API
-func convertTermToSeconds(term string) int64 {
-	if term == "3yr" || term == "3" {
-		return 94608000 // 3 years in seconds (365 * 3 * 86400)
+// convertTermToSeconds converts a term string to seconds for the AWS Savings
+// Plans API. Returns an error on any unrecognized or empty input so callers
+// fail loud rather than silently buying the wrong commitment length.
+func convertTermToSeconds(term string) (int64, error) {
+	switch term {
+	case "3yr", "3":
+		return 94608000, nil // 3 years in seconds (365 * 3 * 86400)
+	case "1yr", "1":
+		return 31536000, nil // 1 year in seconds (365 * 86400)
+	default:
+		return 0, fmt.Errorf("unsupported Savings Plans term %q: must be one of 1yr, 1, 3yr, 3", term)
 	}
-	if term != "1yr" && term != "1" && term != "" {
-		log.Printf("WARNING: unknown Savings Plans term %q, defaulting to 1 year", term)
-	}
-	return 31536000 // 1 year in seconds (365 * 86400)
 }
 
-// convertPaymentOption converts a payment option string to AWS SDK type
-func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
+// convertPaymentOption converts a payment option string to the AWS SDK type.
+// Returns an error on any unrecognized or empty input so callers fail loud
+// rather than silently buying the wrong (and potentially most expensive)
+// payment option.
+func convertPaymentOption(paymentOption string) (types.SavingsPlanPaymentOption, error) {
 	switch paymentOption {
 	case "All Upfront", "all-upfront":
-		return types.SavingsPlanPaymentOptionAllUpfront
+		return types.SavingsPlanPaymentOptionAllUpfront, nil
 	case "Partial Upfront", "partial-upfront":
-		return types.SavingsPlanPaymentOptionPartialUpfront
+		return types.SavingsPlanPaymentOptionPartialUpfront, nil
 	case "No Upfront", "no-upfront":
-		return types.SavingsPlanPaymentOptionNoUpfront
+		return types.SavingsPlanPaymentOptionNoUpfront, nil
 	default:
-		log.Printf("WARNING: unknown Savings Plans payment option %q, defaulting to AllUpfront", paymentOption)
-		return types.SavingsPlanPaymentOptionAllUpfront
+		return "", fmt.Errorf("unsupported Savings Plans payment option %q: must be one of All Upfront, all-upfront, Partial Upfront, partial-upfront, No Upfront, no-upfront", paymentOption)
 	}
 }
 

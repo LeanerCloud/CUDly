@@ -303,6 +303,23 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
 	}
+	// AZConfig must be explicitly set: single-AZ and multi-AZ RDS RIs have
+	// different prices and do not cover each other's demand. An empty AZConfig
+	// means the CE recommendation omitted DeploymentOption; guessing single-az
+	// risks buying the wrong RI class. Fail loud so the caller can decide.
+	// Validate the full enum, not just the empty case: a non-empty typo would
+	// otherwise fall through to multiAZ==false in paginateRDSOfferings and
+	// silently drive a single-AZ lookup -- the same mis-buy class as the old
+	// default (CR #1085).
+	switch details.AZConfig {
+	case "single-az", "multi-az":
+		// valid
+	case "":
+		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; " +
+			"refusing to guess single-az vs multi-az (see M4 in 19-hardcoded-fallbacks-aws.md)")
+	default:
+		return "", fmt.Errorf("invalid RDS AZConfig %q: must be single-az or multi-az", details.AZConfig)
+	}
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", fmt.Errorf("invalid payment option: %w", err)
@@ -310,12 +327,53 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	return c.paginateRDSOfferings(ctx, rec, details, offeringType, execID)
 }
 
+// rdsOfferingPageResult holds the outcome of a single DescribeReservedDBInstancesOfferings page.
+type rdsOfferingPageResult struct {
+	id     string  // non-empty when a match was found
+	marker *string // pagination cursor for the next page; nil when exhausted
+}
+
+// fetchRDSOfferingPage calls DescribeReservedDBInstancesOfferings for one page and
+// scans the results. It returns a match ID when found, a non-nil marker when more
+// pages remain, or an error on API/offering-validation failure.
+func (c *Client) fetchRDSOfferingPage(ctx context.Context, baseInput *rds.DescribeReservedDBInstancesOfferingsInput, marker *string, rec common.Recommendation, offeringType string, tag string, page int, t0 time.Time) (rdsOfferingPageResult, error) {
+	input := *baseInput
+	input.Marker = marker
+
+	pageStart := time.Now()
+	result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, &input)
+	if err != nil {
+		log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
+			tag, page, time.Since(pageStart), time.Since(t0), err)
+		return rdsOfferingPageResult{}, fmt.Errorf("failed to describe offerings: %w", err)
+	}
+	log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
+		tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
+
+	id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType)
+	if scanErr != nil {
+		return rdsOfferingPageResult{}, scanErr
+	}
+	if id != "" {
+		log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total", tag, page, time.Since(t0))
+		return rdsOfferingPageResult{id: id}, nil
+	}
+	var nextMarker *string
+	if result.Marker != nil && aws.ToString(result.Marker) != "" {
+		nextMarker = result.Marker
+	}
+	return rdsOfferingPageResult{marker: nextMarker}, nil
+}
+
 // paginateRDSOfferings walks DescribeReservedDBInstancesOfferings pages and returns
 // the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
 // timeout exhaustion (issue #688).
 func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string, execID string) (string, error) {
 	multiAZ := details.AZConfig == "multi-az"
-	normalizedEngine := c.normalizeEngineName(details.Engine)
+	normalizedEngine, err := c.normalizeEngineName(details.Engine)
+	if err != nil {
+		return "", fmt.Errorf("cannot look up RDS offering: %w", err)
+	}
 	duration := c.getDurationString(rec.Term)
 
 	tag := execID
@@ -326,51 +384,39 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 	log.Printf("purchase[%s]: RDS findOfferingID starting (class=%s engine=%s multi-az=%v duration=%s payment=%s)",
 		tag, rec.ResourceType, normalizedEngine, multiAZ, duration, offeringType)
 
+	baseInput := &rds.DescribeReservedDBInstancesOfferingsInput{
+		DBInstanceClass:    aws.String(rec.ResourceType),
+		ProductDescription: aws.String(normalizedEngine),
+		MultiAZ:            aws.Bool(multiAZ),
+		Duration:           aws.String(duration),
+		OfferingType:       aws.String(offeringType),
+		MaxRecords:         aws.Int32(100),
+	}
+
 	var marker *string
-	page := 0
-	for {
+	for page := 1; ; page++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		page++
 		if page > maxOfferingPages {
 			return "", fmt.Errorf("pagination cap reached after %d pages for RDS %s %s multi-az=%v %s (issue #688)",
 				maxOfferingPages, rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption)
 		}
-		input := &rds.DescribeReservedDBInstancesOfferingsInput{
-			DBInstanceClass:    aws.String(rec.ResourceType),
-			ProductDescription: aws.String(normalizedEngine),
-			MultiAZ:            aws.Bool(multiAZ),
-			Duration:           aws.String(duration),
-			OfferingType:       aws.String(offeringType),
-			MaxRecords:         aws.Int32(100),
-			Marker:             marker,
-		}
-		pageStart := time.Now()
-		result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
+		pr, err := c.fetchRDSOfferingPage(ctx, baseInput, marker, rec, offeringType, tag, page, t0)
 		if err != nil {
-			log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
-				tag, page, time.Since(pageStart), time.Since(t0), err)
-			return "", fmt.Errorf("failed to describe offerings: %w", err)
+			return "", err
 		}
-		log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
-			tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
-		if id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType); scanErr != nil {
-			return "", scanErr
-		} else if id != "" {
-			log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total",
-				tag, page, time.Since(t0))
-			return id, nil
+		if pr.id != "" {
+			return pr.id, nil
 		}
-		if result.Marker == nil || aws.ToString(result.Marker) == "" {
+		if pr.marker == nil {
 			break
 		}
-		marker = result.Marker
+		marker = pr.marker
 	}
-	log.Printf("purchase[%s]: RDS findOfferingID exhausted %d page(s) in %s -- no match",
-		tag, page, time.Since(t0))
+	log.Printf("purchase[%s]: RDS findOfferingID exhausted pages in %s -- no match", tag, time.Since(t0))
 	return "", fmt.Errorf("no offerings found for RDS %s %s multi-az=%v %s after %d page(s) (issue #688)",
-		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, page)
+		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, maxOfferingPages)
 }
 
 // scanRDSOfferingPage finds a matching offering in a single page of results.
@@ -504,38 +550,63 @@ func (c *Client) convertPaymentOption(option string) (string, error) {
 	}
 }
 
-// normalizeEngineName converts engine names to AWS API format
-func (c *Client) normalizeEngineName(engine string) string {
+// normalizeEngineName maps an RDS engine string to the exact product-description
+// value required by DescribeReservedDBInstancesOfferings. It returns an error
+// for engine names that are ambiguous (Oracle, SQL Server -- multiple editions
+// exist at different prices) or that contain "aurora" without specifying a
+// database engine (aurora-mysql vs aurora-postgresql), so the caller never
+// silently buys an offering for the wrong engine edition.
+//
+// Unambiguous engines (mysql, postgresql, mariadb) are returned verbatim after
+// case-normalisation. Engine strings that are already in the canonical
+// lower-case AWS form (e.g. "aurora-mysql") pass through unchanged.
+func (c *Client) normalizeEngineName(engine string) (string, error) {
 	engineLower := strings.ToLower(engine)
 
 	if strings.Contains(engineLower, "aurora") {
 		if strings.Contains(engineLower, "mysql") {
-			return "aurora-mysql"
+			return "aurora-mysql", nil
 		}
 		if strings.Contains(engineLower, "postgres") {
-			return "aurora-postgresql"
+			return "aurora-postgresql", nil
 		}
-		log.Printf("WARNING: Unknown Aurora variant %q, defaulting to aurora-mysql", engine)
-		return "aurora-mysql"
+		return "", fmt.Errorf(
+			"ambiguous Aurora engine %q: CE must supply the specific variant "+
+				"(aurora-mysql or aurora-postgresql); refusing to guess",
+			engine,
+		)
 	}
 
 	if strings.Contains(engineLower, "mysql") {
-		return "mysql"
+		return "mysql", nil
 	}
 	if strings.Contains(engineLower, "postgres") {
-		return "postgresql"
+		return "postgresql", nil
 	}
 	if strings.Contains(engineLower, "mariadb") {
-		return "mariadb"
+		return "mariadb", nil
 	}
-	if strings.Contains(engineLower, "oracle") {
-		return "oracle-se2"
+	// Only the bare family name is ambiguous (CE returns "Oracle" / "SQL Server"
+	// with no edition). An edition-qualified token like oracle-se2 or
+	// sqlserver-web is already a valid RDS ProductDescription, so pass it through
+	// rather than rejecting it -- rejecting it contradicted the "supply the exact
+	// edition" guidance in this very error message (CR #1085).
+	if engineLower == "oracle" {
+		return "", fmt.Errorf(
+			"ambiguous Oracle engine %q: CE must supply the exact edition "+
+				"(e.g. oracle-se2, oracle-ee); refusing to guess",
+			engine,
+		)
 	}
-	if strings.Contains(engineLower, "sqlserver") || strings.Contains(engineLower, "sql-server") {
-		return "sqlserver-se"
+	if engineLower == "sqlserver" || engineLower == "sql-server" {
+		return "", fmt.Errorf(
+			"ambiguous SQL Server engine %q: CE must supply the exact edition "+
+				"(e.g. sqlserver-se, sqlserver-ee, sqlserver-web, sqlserver-ex); refusing to guess",
+			engine,
+		)
 	}
 
-	return engineLower
+	return engineLower, nil
 }
 
 // createPurchaseTags creates standard tags for the purchase. The tag shape

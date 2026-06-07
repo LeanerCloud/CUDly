@@ -926,18 +926,25 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 	tests := []struct {
 		name          string
 		paymentOption string
+		expectError   bool
 	}{
-		{"All Upfront", "All Upfront"},
-		{"all-upfront", "all-upfront"},
-		{"Partial Upfront", "Partial Upfront"},
-		{"partial-upfront", "partial-upfront"},
-		{"No Upfront", "No Upfront"},
-		{"no-upfront", "no-upfront"},
+		{"All Upfront", "All Upfront", false},
+		{"all-upfront", "all-upfront", false},
+		{"Partial Upfront", "Partial Upfront", false},
+		{"partial-upfront", "partial-upfront", false},
+		{"No Upfront", "No Upfront", false},
+		{"no-upfront", "no-upfront", false},
+		// Unknown payment option must error, not silently default to All Upfront
+		// (regression for H1: prevents silent all-cash-outlay purchase on a typo).
+		{"unknown payment option errors", "bogus-option", true},
+		// Empty payment option must also error (regression for H1).
+		{"empty payment option errors", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSP := &MockSavingsPlansClient{}
+			t.Cleanup(func() { mockSP.AssertExpectations(t) })
 			client := &Client{
 				client: mockSP,
 				region: "us-east-1",
@@ -953,34 +960,47 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 				},
 			}
 
-			mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
-				Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
-					SearchResults: []types.SavingsPlanOffering{
-						{OfferingId: aws.String("offering-123")},
-					},
-				}, nil)
+			if !tt.expectError {
+				mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+					Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+						SearchResults: []types.SavingsPlanOffering{
+							{OfferingId: aws.String("offering-123")},
+						},
+					}, nil).Once()
+			}
 
 			err := client.ValidateOffering(context.Background(), rec)
-			assert.NoError(t, err)
-			mockSP.AssertExpectations(t)
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "unsupported Savings Plans payment option")
+				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
 
 func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 	tests := []struct {
-		name string
-		term string
+		name        string
+		term        string
+		expectError bool
 	}{
-		{"1yr term", "1yr"},
-		{"3yr term", "3yr"},
-		{"3 numeric term", "3"},
-		{"default term", "invalid"},
+		{"1yr term", "1yr", false},
+		{"3yr term", "3yr", false},
+		{"1 numeric term", "1", false},
+		{"3 numeric term", "3", false},
+		// Unknown term must error, not silently default to 1yr (regression for H2).
+		{"unknown term errors", "invalid", true},
+		// Empty term must also error, not silently default to 1yr (regression for H2).
+		{"empty term errors", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSP := &MockSavingsPlansClient{}
+			t.Cleanup(func() { mockSP.AssertExpectations(t) })
 			client := &Client{
 				client: mockSP,
 				region: "us-east-1",
@@ -996,16 +1016,23 @@ func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 				},
 			}
 
-			mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
-				Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
-					SearchResults: []types.SavingsPlanOffering{
-						{OfferingId: aws.String("offering-123")},
-					},
-				}, nil)
+			if !tt.expectError {
+				mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+					Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+						SearchResults: []types.SavingsPlanOffering{
+							{OfferingId: aws.String("offering-123")},
+						},
+					}, nil).Once()
+			}
 
 			err := client.ValidateOffering(context.Background(), rec)
-			assert.NoError(t, err)
-			mockSP.AssertExpectations(t)
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "unsupported Savings Plans term")
+				mockSP.AssertNotCalled(t, "DescribeSavingsPlansOfferings")
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

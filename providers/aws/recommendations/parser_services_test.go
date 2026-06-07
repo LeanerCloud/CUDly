@@ -65,7 +65,11 @@ func TestParseRDSDetails(t *testing.T) {
 			},
 		},
 		{
-			name: "RDS details without deployment option defaults to single-az",
+			// M4 regression test: when CE omits DeploymentOption, AZConfig must be
+			// left empty rather than silently defaulted to "single-az".
+			// single-AZ and multi-AZ RDS RIs have different prices; guessing wrong
+			// would cause findOfferingID to buy the wrong offering class.
+			name: "RDS details without deployment option leaves AZConfig empty (M4)",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{
 					RDSInstanceDetails: &types.RDSInstanceDetails{
@@ -81,7 +85,26 @@ func TestParseRDSDetails(t *testing.T) {
 				dbDetails, ok := rec.Details.(*common.DatabaseDetails)
 				require.True(t, ok)
 				assert.Equal(t, "aurora-postgresql", dbDetails.Engine)
-				assert.Equal(t, "single-az", dbDetails.AZConfig)
+				// AZConfig must be empty, not "single-az" (M4 fix).
+				assert.Empty(t, dbDetails.AZConfig, "AZConfig must not be silently defaulted to single-az")
+			},
+		},
+		{
+			// CR #1085 regression test: an unrecognized DeploymentOption must error
+			// rather than being silently folded into "single-az". The pre-fix code
+			// used an else branch that mapped anything non-"Multi-AZ" to "single-az",
+			// which could cause findOfferingID to query and buy the wrong RI class.
+			name:        "Unknown DeploymentOption errors (CR #1085)",
+			expectError: true,
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					RDSInstanceDetails: &types.RDSInstanceDetails{
+						InstanceType:     aws.String("db.r5.large"),
+						DatabaseEngine:   aws.String("mysql"),
+						Region:           aws.String("us-east-1"),
+						DeploymentOption: aws.String("Multi-AZ-Readable-Standbys"),
+					},
+				},
 			},
 		},
 		{
@@ -326,6 +349,41 @@ func TestParseEC2Details(t *testing.T) {
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{
 					EC2InstanceDetails: nil,
+				},
+			},
+			expectError: true,
+		},
+		{
+			// M5 regression test: "host" tenancy (Dedicated Hosts) has no
+			// corresponding EC2 RI product. Previously this silently collapsed
+			// to "default", which would cause findOfferingID to look up (and
+			// potentially buy) a default-tenancy RI for a Dedicated Host workload.
+			// The parser must error so the caller can decide, rather than
+			// silently buying the wrong product.
+			name: "EC2 host tenancy errors (M5)",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("m5.large"),
+						Platform:     aws.String("Linux/UNIX"),
+						Region:       aws.String("us-east-1"),
+						Tenancy:      aws.String("host"),
+					},
+				},
+			},
+			expectError: true,
+		},
+		{
+			// M5: an unrecognised tenancy value should also error.
+			name: "EC2 unknown tenancy errors (M5)",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("m5.large"),
+						Platform:     aws.String("Linux/UNIX"),
+						Region:       aws.String("us-east-1"),
+						Tenancy:      aws.String("future-unknown-tenancy"),
+					},
 				},
 			},
 			expectError: true,

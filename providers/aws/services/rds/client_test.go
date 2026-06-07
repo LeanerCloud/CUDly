@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRDSClient implements RDSAPI for testing
@@ -480,27 +481,49 @@ func TestClient_NormalizeEngineName(t *testing.T) {
 	client := &Client{}
 
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name        string
+		input       string
+		expected    string
+		expectError bool
 	}{
-		{"Aurora MySQL uppercase", "Aurora-MySQL", "aurora-mysql"},
-		{"Aurora PostgreSQL mixed case", "Aurora-PostgreSQL", "aurora-postgresql"},
-		{"Aurora default", "Aurora", "aurora-mysql"},
-		{"MySQL", "MySQL", "mysql"},
-		{"PostgreSQL", "PostgreSQL", "postgresql"},
-		{"MariaDB", "MariaDB", "mariadb"},
-		{"Oracle", "Oracle-EE", "oracle-se2"},
-		{"SQL Server hyphenated", "sql-server-ex", "sqlserver-se"},
-		{"SQL Server camelcase", "SQLServer", "sqlserver-se"},
-		{"Already normalized postgres", "postgres", "postgresql"},
-		{"Unknown engine", "custom-db", "custom-db"},
+		{"Aurora MySQL uppercase", "Aurora-MySQL", "aurora-mysql", false},
+		{"Aurora PostgreSQL mixed case", "Aurora-PostgreSQL", "aurora-postgresql", false},
+		// Previously "Aurora" without a database variant silently defaulted to
+		// aurora-mysql. Now it must error: aurora-mysql and aurora-postgresql have
+		// different RI prices and the caller must supply the precise variant.
+		{"Aurora no variant errors", "Aurora", "", true},
+		{"MySQL", "MySQL", "mysql", false},
+		{"PostgreSQL", "PostgreSQL", "postgresql", false},
+		{"MariaDB", "MariaDB", "mariadb", false},
+		// Bare family names are ambiguous; only the bare names error.
+		{"Oracle bare errors", "oracle", "", true},
+		{"Oracle title-case bare errors", "Oracle", "", true},
+		{"SQL Server bare errors", "sqlserver", "", true},
+		{"SQL Server hyphen bare errors", "sql-server", "", true},
+		{"SQL Server camelcase errors", "SQLServer", "", true},
+		// Edition-qualified strings are valid RDS ProductDescription values and must pass through.
+		{"Oracle EE edition passes", "oracle-ee", "oracle-ee", false},
+		{"Oracle SE2 edition passes", "oracle-se2", "oracle-se2", false},
+		{"Oracle EE mixed case passes", "Oracle-EE", "oracle-ee", false},
+		{"SQL Server SE edition passes", "sqlserver-se", "sqlserver-se", false},
+		{"SQL Server web edition passes", "sqlserver-web", "sqlserver-web", false},
+		{"SQL Server hyphen-ex edition passes", "sql-server-ex", "sql-server-ex", false},
+		{"Already normalized aurora-mysql", "aurora-mysql", "aurora-mysql", false},
+		{"Already normalized aurora-postgresql", "aurora-postgresql", "aurora-postgresql", false},
+		{"Already normalized postgres", "postgres", "postgresql", false},
+		{"Unknown engine passes through", "custom-db", "custom-db", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.normalizeEngineName(tt.input)
-			assert.Equal(t, tt.expected, result)
+			result, err := client.normalizeEngineName(tt.input)
+			if tt.expectError {
+				assert.Error(t, err, "expected error for engine %q", tt.input)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
 		})
 	}
 }
@@ -796,6 +819,124 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
+}
+
+// TestFindOfferingID_EmptyAZConfig_Errors is the M4 regression test:
+// findOfferingID must error when AZConfig is empty rather than silently
+// assuming single-az. An empty AZConfig means the CE recommendation did not
+// include DeploymentOption; single-AZ and multi-AZ RDS RIs have different
+// prices so fabricating the value risks buying the wrong offering class.
+func TestFindOfferingID_EmptyAZConfig_Errors(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceRelationalDB,
+		ResourceType:  "db.r5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.DatabaseDetails{
+			Engine:   "mysql",
+			AZConfig: "", // not set -- CE omitted DeploymentOption
+		},
+	}
+
+	// No mock calls should be made: findOfferingID must fail before the API call.
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	require.Error(t, err, "findOfferingID must error when AZConfig is empty (M4)")
+	assert.Contains(t, err.Error(), "AZConfig")
+}
+
+// TestFindOfferingID_InvalidAZConfig_Errors is the CR #1085 regression test:
+// findOfferingID must reject a non-empty but invalid AZConfig value rather than
+// silently falling through to multiAZ==false in paginateRDSOfferings (which
+// would treat the bad value as single-AZ, the same mis-buy as the old default).
+func TestFindOfferingID_InvalidAZConfig_Errors(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceRelationalDB,
+		ResourceType:  "db.r5.large",
+		Region:        "us-east-1",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.DatabaseDetails{
+			Engine:   "mysql",
+			AZConfig: "typo-az", // non-empty but not a valid enum value
+		},
+	}
+
+	// No mock calls should be made: findOfferingID must fail before the API call.
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	require.Error(t, err, "findOfferingID must error on invalid non-empty AZConfig (CR #1085)")
+	assert.Contains(t, err.Error(), "AZConfig")
+	assert.Contains(t, err.Error(), "typo-az")
+}
+
+// TestNormalizeEngineName_AmbiguousErrors is the M6 regression test:
+// normalizeEngineName must error for bare Oracle/SQL Server/Aurora inputs.
+// CE returns "Oracle" (title-case) for any Oracle engine when no edition is
+// specified; the normalizer rejects the bare name so the caller surfaces the
+// problem rather than silently guessing an edition.
+// Edition-qualified strings (oracle-se2, sqlserver-web, etc.) are valid RDS
+// ProductDescription values and must pass through (see CR #1085).
+func TestNormalizeEngineName_AmbiguousErrors(t *testing.T) {
+	client := &Client{}
+
+	ambiguous := []string{
+		"oracle",
+		"Oracle",
+		"sqlserver",
+		"SQLServer",
+		"sql-server",
+		"Aurora",
+		"aurora",
+		"aurora-unknown",
+	}
+
+	for _, engine := range ambiguous {
+		t.Run(engine, func(t *testing.T) {
+			_, err := client.normalizeEngineName(engine)
+			assert.Error(t, err, "engine %q must error (M6 regression guard)", engine)
+		})
+	}
+}
+
+// TestNormalizeEngineName_EditionTokensPassThrough is the CR #1085 regression
+// test: edition-qualified Oracle and SQL Server tokens must pass through
+// normalizeEngineName rather than being rejected by the bare-name ambiguity
+// check. These are valid RDS ProductDescription values that CE can supply.
+func TestNormalizeEngineName_EditionTokensPassThrough(t *testing.T) {
+	client := &Client{}
+
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"oracle-se2", "oracle-se2"},
+		{"oracle-ee", "oracle-ee"},
+		{"Oracle-EE", "oracle-ee"},
+		{"oracle-se2-ex", "oracle-se2-ex"},
+		{"sqlserver-se", "sqlserver-se"},
+		{"sqlserver-ee", "sqlserver-ee"},
+		{"sqlserver-web", "sqlserver-web"},
+		{"sqlserver-ex", "sqlserver-ex"},
+		{"sql-server-ex", "sql-server-ex"},
+		{"sql-server-se", "sql-server-se"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			result, err := client.normalizeEngineName(tc.input)
+			assert.NoError(t, err, "edition token %q must pass through (not ambiguous)", tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
 }
 
 // TestClient_PurchaseCommitment_NoToken_RichReservationName asserts the

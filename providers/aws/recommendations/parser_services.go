@@ -29,14 +29,24 @@ func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, 
 	if rdsDetails.Region != nil {
 		rec.Region = normalizeRegionName(*rdsDetails.Region)
 	}
+	// AZConfig is intentionally left empty when CE omits DeploymentOption.
+	// Single-AZ and multi-AZ RDS RIs have different prices and cover different
+	// workloads; silently defaulting to single-az would cause findOfferingID to
+	// query for (and potentially buy) a single-AZ RI even for a multi-AZ workload.
+	// The downstream findOfferingID rejects an empty AZConfig with an explicit
+	// error rather than proceeding with a fabricated value (M4 fix).
 	if rdsDetails.DeploymentOption != nil {
-		if *rdsDetails.DeploymentOption == "Multi-AZ" {
+		// Map only the exact CE tokens; an unrecognized value must not be folded
+		// into single-az (which would drive findOfferingID to the wrong RI class
+		// and a mis-buy). Fail loud instead so the bad token surfaces (CR #1085).
+		switch strings.TrimSpace(*rdsDetails.DeploymentOption) {
+		case "Multi-AZ":
 			rdsInfo.AZConfig = "multi-az"
-		} else {
+		case "Single-AZ":
 			rdsInfo.AZConfig = "single-az"
+		default:
+			return fmt.Errorf("unrecognized RDS DeploymentOption %q: expected \"Multi-AZ\" or \"Single-AZ\"", *rdsDetails.DeploymentOption)
 		}
-	} else {
-		rdsInfo.AZConfig = "single-az"
 	}
 
 	rec.Details = rdsInfo
@@ -69,12 +79,28 @@ func (c *Client) parseElastiCacheDetails(_ context.Context, rec *common.Recommen
 
 // resolveEC2Tenancy maps a Cost Explorer tenancy value to the EC2 RI API
 // tenancy string. CE uses "shared" for the default tenancy; "dedicated" maps
-// directly. Any nil or unrecognised value is treated as default.
-func resolveEC2Tenancy(tenancy *string) string {
-	if tenancy != nil && *tenancy == "dedicated" {
-		return string(ec2types.TenancyDedicated)
+// directly. A nil pointer (CE omitted the field) also maps to default, because
+// CE only populates the field when it is non-default.
+//
+// Unknown tenancy values (e.g. "host" for Dedicated Hosts, which have no
+// corresponding RI product) return an error so the caller fails loud rather
+// than silently querying for and buying a default-tenancy RI on behalf of a
+// workload that requires a different tenancy class (M5 fix).
+func resolveEC2Tenancy(tenancy *string) (string, error) {
+	if tenancy == nil || *tenancy == "shared" {
+		return string(ec2types.TenancyDefault), nil
 	}
-	return string(ec2types.TenancyDefault)
+	switch *tenancy {
+	case "dedicated":
+		return string(ec2types.TenancyDedicated), nil
+	default:
+		return "", fmt.Errorf(
+			"unrecognised EC2 tenancy %q from Cost Explorer: "+
+				"must be shared (default) or dedicated; "+
+				"host tenancy has no corresponding RI product",
+			*tenancy,
+		)
+	}
 }
 
 // resolveEC2Scope maps a Cost Explorer availability zone value to the EC2 RI
@@ -126,7 +152,11 @@ func (c *Client) parseEC2Details(ctx context.Context, rec *common.Recommendation
 	if ec2Details.Region != nil {
 		rec.Region = normalizeRegionName(*ec2Details.Region)
 	}
-	ec2Info.Tenancy = resolveEC2Tenancy(ec2Details.Tenancy)
+	tenancy, tenancyErr := resolveEC2Tenancy(ec2Details.Tenancy)
+	if tenancyErr != nil {
+		return tenancyErr
+	}
+	ec2Info.Tenancy = tenancy
 	ec2Info.Scope = resolveEC2Scope(ec2Details.AvailabilityZone)
 	c.enrichFromCatalogue(ctx, ec2Info)
 
