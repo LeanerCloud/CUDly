@@ -436,6 +436,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -445,6 +446,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -478,6 +480,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -491,6 +494,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		nil, &successorID, 2,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -1800,6 +1804,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
+		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
 	}
 }
 
@@ -1812,6 +1817,7 @@ func stuckExecCols() []string {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key",
 	}
 }
 

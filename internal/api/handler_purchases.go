@@ -1064,12 +1064,24 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	tokenExpiresAt := time.Now().Add(config.ApprovalTokenTTL)
 
 	newExecutionID := uuid.New().String()
+	// Carry the predecessor's stable idempotency lineage key onto the retry
+	// successor VERBATIM (issue #1012) so the per-rec provider token is
+	// reproduced and a re-drive of a "failed" execution whose commitment
+	// actually landed short-circuits at the provider instead of double-buying.
+	// Legacy predecessors (persisted before migration 000066) carry no key —
+	// seed the successor's key from the predecessor's ExecutionID, which is what
+	// the original attempt's token derived from, so the match still holds.
+	idempotencyKey := failedExec.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = failedExec.ExecutionID
+	}
 	// PlanID + StepNumber propagate from the predecessor so a retried
 	// planned execution stays attributed to its plan + ramp step (CR
 	// #168 review). For ad-hoc executions PlanID is "" and StepNumber
 	// is 0, so propagation is a no-op for the non-plan case.
 	newExecution := &config.PurchaseExecution{
 		ExecutionID:            newExecutionID,
+		IdempotencyKey:         idempotencyKey,
 		PlanID:                 failedExec.PlanID,
 		StepNumber:             failedExec.StepNumber,
 		Status:                 "pending",

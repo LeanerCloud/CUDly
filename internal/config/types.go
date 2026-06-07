@@ -286,6 +286,17 @@ type PurchaseExecution struct {
 	// string "direct-execute permission". NULL on every normal-flow row.
 	// Migration 000058.
 	PreApprovalSkipReason *string `json:"pre_approval_skip_reason,omitempty" dynamodbav:"pre_approval_skip_reason,omitempty"`
+	// IdempotencyKey is the stable lineage anchor the per-rec provider
+	// idempotency token is derived from (issue #1012). Unlike ExecutionID
+	// it is NOT regenerated on Retry or multi-account fan-out: it is
+	// generated once at first creation, copied verbatim onto every Retry
+	// successor, and combined with the account ID to seed each per-account
+	// fan-out row. This makes DeriveIdempotencyToken reproduce the same
+	// token across a strand-and-re-drive so the provider dedupes and the
+	// commitment is never bought twice. Empty on rows created before
+	// migration 000066 — the derivation falls back to ExecutionID for those
+	// (identical to the pre-fix behaviour for a single un-retried execution).
+	IdempotencyKey string `json:"idempotency_key,omitempty" dynamodbav:"idempotency_key,omitempty"`
 }
 
 // IsCancelable reports whether an execution may still be cancelled. Only the

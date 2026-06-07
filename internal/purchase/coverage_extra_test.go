@@ -204,6 +204,11 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	}
 
 	mockStore.On("GetExecutionByID", ctx, "exec-approved").Return(exec, nil)
+	// claimAndExecute CASes the row to "running" before executing (issue #1013).
+	runningExec := *exec
+	runningExec.Status = "running"
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-approved",
+		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -281,6 +286,11 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	}
 
 	mockStore.On("GetExecutionByID", ctx, "exec-save-err").Return(exec, nil)
+	// claimAndExecute CASes the row to "running" before executing (issue #1013).
+	runningExec := *exec
+	runningExec.Status = "running"
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-save-err",
+		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-save-err").Return(plan, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -301,9 +311,12 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 		ExecutionID: "exec-save-err",
 	}
 	err := manager.handleExecutePurchase(ctx, msg)
-	// Returns the save error (not the purchase error)
+	// The terminal-save failure now surfaces from executeAndFinalize as
+	// ErrAuditLoss (the row is stranded in "running"). The SQS handler returns
+	// it so the message is redelivered. A single-account provider failure with
+	// no committed recs is not multi-account-ackable, so it is returned.
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to save execution status")
+	assert.ErrorIs(t, err, config.ErrAuditLoss)
 }
 
 // Tests for ProcessMessage with approve and cancel happy paths.

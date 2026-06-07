@@ -1,0 +1,24 @@
+-- Stable idempotency lineage key for purchase executions (issue #1012).
+--
+-- The per-rec provider idempotency token was derived purely from the
+-- execution_id (DeriveIdempotencyToken(execution_id, rec_index)). But the
+-- execution_id is regenerated on Retry (a fresh UUID per successor row) and on
+-- multi-account fan-out (a fresh UUID per account row), so a re-drive of a
+-- "failed" execution whose commitment actually landed on the provider derived a
+-- DIFFERENT token and the provider's idempotency guard could not match,
+-- producing a duplicate purchase (double-buy).
+--
+-- idempotency_key is a stable lineage anchor that is:
+--   * generated once at first creation of an execution,
+--   * copied verbatim onto every Retry successor, and
+--   * combined with the account ID to seed each multi-account fan-out row,
+-- so the derived provider token survives both operations and a stranded-then-
+-- re-driven purchase reuses the identical token (AWS ClientToken / EC2 RI tag,
+-- Azure reservationOrderID GUID, GCP RequestId / commitment name).
+--
+-- Nullable TEXT: rows created before this migration read as NULL. The
+-- application falls back to the execution_id for the derivation on legacy rows
+-- (identical to the pre-fix behaviour for a single un-retried execution), so no
+-- backfill is required and old rows keep working.
+ALTER TABLE purchase_executions
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT;

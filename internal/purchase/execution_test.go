@@ -1582,8 +1582,9 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 		dashboardURL:    "https://dashboard.example.com",
 	}
 
-	err := manager.executeForAccount(ctx, baseExec, plan, account)
+	committed, err := manager.executeForAccount(ctx, baseExec, plan, account)
 	require.Error(t, err, "the per-rec failure must surface to the aggregator")
+	assert.True(t, committed, "a partial run committed at least one rec, so committed must be true (issue #1014)")
 
 	require.NotNil(t, savedExec, "per-account record must be saved")
 	assert.Equal(t, "partially_completed", savedExec.Status, "partial success must never be 'failed' (double-spend hazard)")
