@@ -286,8 +286,29 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 // closed (returns an error) instead of silently leaking the ambient account's
 // RIs under another account's filter.
 func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope: a restricted user must
+	// only see RIs for the deployment's registered AWS account. Mirrors
+	// the same guard in getRIExchangeHistory.
+	if allowed, aErr := h.getAllowedAccounts(ctx, session); aErr != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", aErr)
+	} else if !auth.IsUnrestrictedAccess(allowed) {
+		resolveAccount := h.resolveAWSCloudAccountID
+		if h.reshapeAccountResolver != nil {
+			resolveAccount = h.reshapeAccountResolver
+		}
+		cloudAccountID, aErr := resolveAccount(ctx)
+		if aErr != nil {
+			return nil, fmt.Errorf("failed to resolve cloud account scope for RI listing: %w", aErr)
+		}
+		nameByID := h.resolveAccountNamesByID(ctx)
+		if !auth.MatchesAccount(allowed, cloudAccountID, nameByID[cloudAccountID]) {
+			return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
+		}
 	}
 
 	if accountID := req.QueryStringParameters["account_id"]; accountID != "" {
@@ -321,8 +342,27 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 
 // getRIUtilization returns per-RI utilization from Cost Explorer.
 func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope. Mirrors getRIExchangeHistory.
+	if allowed, aErr := h.getAllowedAccounts(ctx, session); aErr != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", aErr)
+	} else if !auth.IsUnrestrictedAccess(allowed) {
+		resolveAccount := h.resolveAWSCloudAccountID
+		if h.reshapeAccountResolver != nil {
+			resolveAccount = h.reshapeAccountResolver
+		}
+		cloudAccountID, aErr := resolveAccount(ctx)
+		if aErr != nil {
+			return nil, fmt.Errorf("failed to resolve cloud account scope for RI utilization: %w", aErr)
+		}
+		nameByID := h.resolveAccountNamesByID(ctx)
+		if !auth.MatchesAccount(allowed, cloudAccountID, nameByID[cloudAccountID]) {
+			return &RIUtilizationResponse{Utilization: []recommendations.RIUtilization{}}, nil
+		}
 	}
 
 	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
@@ -429,8 +469,27 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 // getReshapeRecommendations orchestrates fetching convertible RIs + utilization
 // and returns reshape recommendations.
 func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope. Mirrors getRIExchangeHistory.
+	if allowed, aErr := h.getAllowedAccounts(ctx, session); aErr != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", aErr)
+	} else if !auth.IsUnrestrictedAccess(allowed) {
+		resolveAccount := h.resolveAWSCloudAccountID
+		if h.reshapeAccountResolver != nil {
+			resolveAccount = h.reshapeAccountResolver
+		}
+		cloudAccountID, aErr := resolveAccount(ctx)
+		if aErr != nil {
+			return nil, fmt.Errorf("failed to resolve cloud account scope for reshape recommendations: %w", aErr)
+		}
+		nameByID := h.resolveAccountNamesByID(ctx)
+		if !auth.MatchesAccount(allowed, cloudAccountID, nameByID[cloudAccountID]) {
+			return &ReshapeRecommendationsResponse{Recommendations: []exchange.ReshapeRecommendation{}}, nil
+		}
 	}
 
 	threshold, err := parseThresholdParam(req.QueryStringParameters)
