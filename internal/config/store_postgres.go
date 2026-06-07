@@ -1125,7 +1125,11 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 	return scanExecutionRows(rows)
 }
 
-// GetExecutionByID retrieves a purchase execution by execution ID
+// GetExecutionByID retrieves a purchase execution by execution ID.
+// Returns (nil, nil) when no row matches executionID so callers can cleanly
+// distinguish "not found" (nil execution, nil error) from a real DB failure
+// (nil execution, non-nil error). All callers must check the execution for
+// nil before use (closes issue #976).
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1146,7 +1150,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	}
 
 	if len(executions) == 0 {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
+		return nil, nil
 	}
 
 	return &executions[0], nil
