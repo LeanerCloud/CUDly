@@ -30,9 +30,9 @@ var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA7
 
 // Password validation constants following NIST guidelines
 const (
-	minPasswordLength       = 12  // Minimum password length
-	maxPasswordLength       = 128 // Maximum password length to prevent bcrypt DoS
-	passwordHistorySize     = 5   // Number of previous passwords to remember
+	minPasswordLength     = 12  // Minimum password length
+	maxPasswordLength     = 128 // Maximum password length to prevent bcrypt DoS
+	passwordHistorySize   = 5   // Number of previous passwords to remember
 	repeatedCharThreshold = 3   // Number of identical consecutive characters to reject
 
 	// PasswordResetRateLimit is the minimum interval between password reset requests
@@ -498,8 +498,8 @@ func redactEmail(email string) string {
 	if dot < 0 || dot == 0 {
 		domain = "***"
 	} else {
-		tld := domain[dot:]   // ".com"
-		host := domain[:dot]  // "example"
+		tld := domain[dot:]  // ".com"
+		host := domain[:dot] // "example"
 		if len(host) <= 2 {
 			domain = "***" + tld
 		} else {

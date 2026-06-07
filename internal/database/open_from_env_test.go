@@ -55,15 +55,15 @@ func TestOpenFromEnv_MissingConfig(t *testing.T) {
 func TestOpenFromEnv_NoPasswordSecret(t *testing.T) {
 	// Provide a structurally valid config that will fail at the TCP dial.
 	env := map[string]string{
-		"DB_HOST":         "127.0.0.1",
-		"DB_PORT":         "19999", // nothing listening here
-		"DB_NAME":         "testdb",
-		"DB_USER":         "testuser",
-		"DB_PASSWORD":     "testpass",
-		"DB_SSL_MODE":     "disable",
-		"DB_MAX_CONN_IDLE_TIME":    "1s",
-		"DB_MAX_CONN_LIFETIME":     "1s",
-		"DB_HEALTH_CHECK_PERIOD":   "1s",
+		"DB_HOST":                "127.0.0.1",
+		"DB_PORT":                "19999", // nothing listening here
+		"DB_NAME":                "testdb",
+		"DB_USER":                "testuser",
+		"DB_PASSWORD":            "testpass",
+		"DB_SSL_MODE":            "disable",
+		"DB_MAX_CONN_IDLE_TIME":  "1s",
+		"DB_MAX_CONN_LIFETIME":   "1s",
+		"DB_HEALTH_CHECK_PERIOD": "1s",
 	}
 	originals := make(map[string]string, len(env))
 	for k, v := range env {

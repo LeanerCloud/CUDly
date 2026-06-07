@@ -122,7 +122,7 @@ func TestFanOut_ContextCancelled_BlockedSemaphore(t *testing.T) {
 			func(ctx context.Context, id string) (string, error) {
 				if id == "first" {
 					started <- struct{}{} // tell the test we have the slot
-					<-release            // wait until the test says go
+					<-release             // wait until the test says go
 					return "ok", nil
 				}
 				return "should-not-run", nil
