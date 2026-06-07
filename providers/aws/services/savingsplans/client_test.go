@@ -257,6 +257,104 @@ func TestClient_GetExistingCommitments_UmbrellaMode(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+// TestClient_GetExistingCommitments_Pagination verifies that
+// GetExistingCommitments drives DescribeSavingsPlans across all pages and
+// accumulates every item. This is the regression test for issue #1019: the
+// original single-call implementation silently dropped page 2+ commitments,
+// causing CUDly to under-count existing SPs and recommend redundant purchases.
+//
+// The test fails on pre-fix code (only 1 item returned from page 1) and passes
+// after the NextToken accumulator loop is in place (both items returned).
+func TestClient_GetExistingCommitments_Pagination(t *testing.T) {
+	mockClient := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
+
+	// Page 1: returns one SP and a NextToken signalling more pages.
+	mockClient.On("DescribeSavingsPlans", mock.Anything, mock.MatchedBy(func(input *savingsplans.DescribeSavingsPlansInput) bool {
+		return input.NextToken == nil
+	})).Return(&savingsplans.DescribeSavingsPlansOutput{
+		SavingsPlans: []types.SavingsPlan{
+			{
+				SavingsPlanId:   aws.String("sp-page1"),
+				SavingsPlanType: types.SavingsPlanTypeCompute,
+				State:           types.SavingsPlanStateActive,
+				Region:          aws.String("us-east-1"),
+			},
+		},
+		NextToken: aws.String("token-page2"),
+	}, nil).Once()
+
+	// Page 2: returns the second SP with no further NextToken.
+	mockClient.On("DescribeSavingsPlans", mock.Anything, mock.MatchedBy(func(input *savingsplans.DescribeSavingsPlansInput) bool {
+		return input.NextToken != nil && *input.NextToken == "token-page2"
+	})).Return(&savingsplans.DescribeSavingsPlansOutput{
+		SavingsPlans: []types.SavingsPlan{
+			{
+				SavingsPlanId:   aws.String("sp-page2"),
+				SavingsPlanType: types.SavingsPlanTypeCompute,
+				State:           types.SavingsPlanStateActive,
+				Region:          aws.String("us-west-2"),
+			},
+		},
+		NextToken: nil,
+	}, nil).Once()
+
+	client := &Client{
+		client:   mockClient,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeCompute,
+	}
+
+	result, err := client.GetExistingCommitments(context.Background())
+	require.NoError(t, err)
+	// Both pages must be accumulated: pre-fix returns 1, post-fix returns 2.
+	require.Len(t, result, 2, "GetExistingCommitments must paginate and accumulate all SPs")
+	ids := []string{result[0].CommitmentID, result[1].CommitmentID}
+	assert.Contains(t, ids, "sp-page1")
+	assert.Contains(t, ids, "sp-page2")
+}
+
+// TestClient_GetExistingCommitments_CtxCancellation verifies that a cancelled
+// context is treated as a hard stop in the pagination loop (not accumulated as
+// lastErr while the loop continues). Per feedback_ctx_cancel_terminal: context
+// cancellation is terminal in API fan-out loops.
+func TestClient_GetExistingCommitments_CtxCancellation(t *testing.T) {
+	mockClient := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// First page succeeds and returns a NextToken; the cancel fires before
+	// the loop re-checks ctx.Err() at the top of the second iteration.
+	mockClient.On("DescribeSavingsPlans", mock.Anything, mock.MatchedBy(func(input *savingsplans.DescribeSavingsPlansInput) bool {
+		return input.NextToken == nil
+	})).Return(&savingsplans.DescribeSavingsPlansOutput{
+		SavingsPlans: []types.SavingsPlan{
+			{
+				SavingsPlanId:   aws.String("sp-1"),
+				SavingsPlanType: types.SavingsPlanTypeCompute,
+				State:           types.SavingsPlanStateActive,
+			},
+		},
+		NextToken: aws.String("token-page2"),
+	}, nil).Run(func(args mock.Arguments) {
+		// Cancel after the first page is returned so the loop's ctx.Err()
+		// check at the top of iteration 2 fires before any second API call.
+		cancel()
+	}).Once()
+
+	client := &Client{
+		client:   mockClient,
+		region:   "us-east-1",
+		planType: types.SavingsPlanTypeCompute,
+	}
+
+	_, err := client.GetExistingCommitments(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled,
+		"GetExistingCommitments must propagate ctx.Err() verbatim on cancellation")
+}
+
 // TestClient_findOfferingID_RejectsMismatchedPlanType pins the
 // per-plan-type isolation post-split: a client scoped to one plan type
 // must refuse to look up an offering for a different plan type, even if
@@ -988,7 +1086,7 @@ func TestLookupOfferingID_PaginationCapFires(t *testing.T) {
 			}, nil).Once()
 	}
 
-	_, err := client.findOfferingID(context.Background(), spRec())
+	_, err := client.findOfferingID(context.Background(), spRec(), "")
 
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "pagination cap reached")
@@ -1011,7 +1109,7 @@ func TestLookupOfferingID_HappyPath(t *testing.T) {
 			},
 		}, nil).Once()
 
-	id, err := client.findOfferingID(context.Background(), spRec())
+	id, err := client.findOfferingID(context.Background(), spRec(), "")
 
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)

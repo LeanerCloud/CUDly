@@ -104,21 +104,13 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 	return []common.Recommendation{}, nil
 }
 
-// GetExistingCommitments retrieves existing Savings Plans
+// GetExistingCommitments retrieves existing Savings Plans across all pages.
+// DescribeSavingsPlans is paginated (NextToken on both input and output); the
+// original single-call implementation silently truncated to the first page,
+// causing CUDly to under-report existing SPs and recommend redundant purchases
+// (issue #1019). The loop mirrors the NextToken accumulator used in the
+// MemoryDB and OpenSearch commitment fetches.
 func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	input := &savingsplans.DescribeSavingsPlansInput{
-		States: []types.SavingsPlanState{
-			types.SavingsPlanStateActive,
-			types.SavingsPlanStatePendingReturn,
-			types.SavingsPlanStateQueued,
-		},
-	}
-
-	result, err := c.client.DescribeSavingsPlans(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
-	}
-
 	// Each client is scoped to one plan type, so partition the API result by
 	// SavingsPlanType and only return commitments matching this client's type.
 	// The provider registers four SP services and calls GetExistingCommitments
@@ -128,40 +120,75 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	// `case common.ServiceSavingsPlans` branch in provider.go's
 	// GetServiceClient): in that mode, return every commitment unfiltered
 	// to match pre-split behaviour. Per-plan-type clients still partition.
-	commitments := make([]common.Commitment, 0, len(result.SavingsPlans))
+	commitments := make([]common.Commitment, 0)
 	service := c.GetServiceType()
+	page := 0
+	var nextToken *string
 
-	for _, sp := range result.SavingsPlans {
-		if sp.SavingsPlanId == nil {
-			continue
-		}
-		if c.planType != "" && sp.SavingsPlanType != c.planType {
-			continue
-		}
-
-		commitment := common.Commitment{
-			Provider:       common.ProviderAWS,
-			CommitmentID:   *sp.SavingsPlanId,
-			CommitmentType: common.CommitmentSavingsPlan,
-			Service:        service,
-			Region:         aws.ToString(sp.Region),
-			ResourceType:   string(sp.SavingsPlanType),
-			Count:          1, // Savings Plans don't have a count
-			State:          string(sp.State),
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
-		if sp.Start != nil {
-			if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
-				commitment.StartDate = startTime
+		page++
+		if page > maxCommitmentPages {
+			log.Printf("WARNING: savingsplans.GetExistingCommitments reached page cap (%d) — returning partial results (issue #1019)",
+				maxCommitmentPages)
+			break
+		}
+
+		input := &savingsplans.DescribeSavingsPlansInput{
+			States: []types.SavingsPlanState{
+				types.SavingsPlanStateActive,
+				types.SavingsPlanStatePendingReturn,
+				types.SavingsPlanStateQueued,
+			},
+			NextToken:  nextToken,
+			MaxResults: aws.Int32(100),
+		}
+
+		result, err := c.client.DescribeSavingsPlans(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe Savings Plans: %w", err)
+		}
+
+		for _, sp := range result.SavingsPlans {
+			if sp.SavingsPlanId == nil {
+				continue
 			}
-		}
-		if sp.End != nil {
-			if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
-				commitment.EndDate = endTime
+			if c.planType != "" && sp.SavingsPlanType != c.planType {
+				continue
 			}
+
+			commitment := common.Commitment{
+				Provider:       common.ProviderAWS,
+				CommitmentID:   *sp.SavingsPlanId,
+				CommitmentType: common.CommitmentSavingsPlan,
+				Service:        service,
+				Region:         aws.ToString(sp.Region),
+				ResourceType:   string(sp.SavingsPlanType),
+				Count:          1, // Savings Plans don't have a count
+				State:          string(sp.State),
+			}
+
+			if sp.Start != nil {
+				if startTime, err := time.Parse(time.RFC3339, *sp.Start); err == nil {
+					commitment.StartDate = startTime
+				}
+			}
+			if sp.End != nil {
+				if endTime, err := time.Parse(time.RFC3339, *sp.End); err == nil {
+					commitment.EndDate = endTime
+				}
+			}
+
+			commitments = append(commitments, commitment)
 		}
 
-		commitments = append(commitments, commitment)
+		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
+			break
+		}
+		nextToken = result.NextToken
 	}
 
 	return commitments, nil
@@ -326,6 +353,14 @@ func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
 // pages to walk before giving up. Exceeding the cap returns a diagnostic error
 // instead of timing out the Lambda budget (issue #688).
 const maxOfferingPages = 5
+
+// maxCommitmentPages is the maximum number of DescribeSavingsPlans pages to
+// walk when listing existing commitments. 100 pages * 100 items/page = 10,000
+// SPs, which is a realistic upper bound for even large enterprise accounts.
+// Exceeding the cap logs a warning but still returns the commitments collected
+// so far, consistent with the #691 guidance (data loss is worse than a
+// truncation warning for the commitment path).
+const maxCommitmentPages = 100
 
 // lookupOfferingID performs the API call(s) to find the offering ID.
 // DescribeSavingsPlansOfferings already accepts PlanTypes/Durations/PaymentOptions
