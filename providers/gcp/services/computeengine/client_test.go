@@ -1148,3 +1148,46 @@ func TestGetComputePricing_NoCommitmentSKUReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no commitment pricing found")
 	assert.Nil(t, pricing, "no pricing struct must be returned when commitment SKU is missing")
 }
+
+// TestConvertGCPRecommendation_EmptyParamsDefaultsToMonthly asserts that when
+// RecommendationParams.PaymentOption is empty the converter defaults to "monthly".
+// GCP CUDs have no upfront-payment option; defaulting to "upfront" caused incorrect
+// purchase-body construction downstream.
+//
+// This test FAILS on the pre-fix code that defaulted to "upfront" (10-M5 / auditor finding).
+func TestConvertGCPRecommendation_EmptyParamsDefaultsToMonthly(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		PrimaryImpact: &recommenderpb.Impact{
+			Category: recommenderpb.Impact_COST,
+			Projection: &recommenderpb.Impact_CostProjection{
+				CostProjection: &recommenderpb.CostProjection{
+					Cost: &money.Money{Units: -100, CurrencyCode: "USD"},
+				},
+			},
+		},
+	}
+
+	// Empty params: no caller-supplied PaymentOption.
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+	assert.Equal(t, "monthly", rec.PaymentOption,
+		"GCP CUDs have no upfront option; empty PaymentOption must default to \"monthly\" (10-M5)")
+}
+
+// TestConvertGCPRecommendation_ParamPaymentOptionRespected asserts that an
+// explicit PaymentOption in RecommendationParams is forwarded to the recommendation.
+func TestConvertGCPRecommendation_ParamPaymentOptionRespected(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+	params := common.RecommendationParams{PaymentOption: "monthly"}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+	require.NotNil(t, rec)
+	assert.Equal(t, "monthly", rec.PaymentOption)
+}

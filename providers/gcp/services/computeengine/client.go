@@ -829,7 +829,12 @@ func skuMatchesMachineType(sku *cloudbilling.Sku, machineType, region string) bo
 func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
 	paymentOption := params.PaymentOption
 	if paymentOption == "" {
-		paymentOption = "upfront"
+		// GCP CUDs are billed monthly with no upfront option; "monthly" is
+		// the only valid default. Aligns with cloudsql/memorystore/cloudstorage
+		// and supersedes the monthly stamp introduced in PR #829 (which
+		// stamped "monthly" in the purchase body but not in the converter
+		// default -- see PR #1047 for the supersession note).
+		paymentOption = "monthly"
 	}
 
 	rec := &common.Recommendation{
@@ -929,6 +934,49 @@ func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, r
 	}
 }
 
+// isMemoryAmountOp returns true when op's path_filters indicate a MEMORY_MB
+// resource type. Used by extractVCPUCountFromRecommendation to skip the memory
+// sibling of the VCPU operation in a GCP commitment resource operation group.
+func isMemoryAmountOp(op *recommenderpb.Operation) bool {
+	for filterKey, filterVal := range op.GetPathFilters() {
+		if !strings.Contains(strings.ToLower(filterKey), "type") {
+			continue
+		}
+		if sv, ok := filterVal.GetKind().(*structpb.Value_StringValue); ok {
+			if strings.EqualFold(sv.StringValue, "MEMORY_MB") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// vcpuCountFromOperationGroups walks the commitment operation groups and
+// returns the VCPU count encoded in the operation's numeric value, or 0 if
+// none is found. Extracted from extractVCPUCountFromRecommendation to keep
+// cyclomatic complexity in check.
+func vcpuCountFromOperationGroups(content *recommenderpb.RecommendationContent) int {
+	for _, opGroup := range content.GetOperationGroups() {
+		for _, op := range opGroup.GetOperations() {
+			if !strings.Contains(strings.ToLower(op.GetResourceType()), "commitment") {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(op.GetPath()), "amount") {
+				continue
+			}
+			if isMemoryAmountOp(op) {
+				continue
+			}
+			if v := op.GetValue(); v != nil {
+				if nv, ok := v.GetKind().(*structpb.Value_NumberValue); ok && nv.NumberValue > 0 {
+					return int(nv.NumberValue)
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // extractVCPUCountFromRecommendation extracts the recommended vCPU count from a
 // GCP Commitment Recommender response (issue #1022 C1).
 //
@@ -947,46 +995,9 @@ func extractVCPUCountFromRecommendation(gcpRec *recommenderpb.Recommendation, re
 		return
 	}
 
-	// Walk operations looking for a VCPU resource amount.
-	for _, opGroup := range gcpRec.Content.GetOperationGroups() {
-		for _, op := range opGroup.GetOperations() {
-			// The commitment recommender uses ResourceType
-			// "compute.googleapis.com/Commitment" with paths like
-			// "/resources/0/amount" (VCPU) and "/resources/1/amount" (MEMORY_MB).
-			// We detect VCPU by checking that the path does NOT mention "memory"
-			// and that a sibling "/resources/0/type" is "VCPU" (encoded in pathFilters).
-			if !strings.Contains(strings.ToLower(op.GetResourceType()), "commitment") {
-				continue
-			}
-			path := strings.ToLower(op.GetPath())
-			if !strings.Contains(path, "amount") {
-				continue
-			}
-			// Skip the memory amount: the path filter or a nearby type operation
-			// distinguishes VCPU from MEMORY_MB. The VCPU amount is always first
-			// ("/resources/0/amount") in the canonical recommender output; if
-			// path_filters carry a "type":"VCPU" entry we can check that directly.
-			isMemory := false
-			for filterKey, filterVal := range op.GetPathFilters() {
-				if strings.Contains(strings.ToLower(filterKey), "type") {
-					if sv, ok := filterVal.GetKind().(*structpb.Value_StringValue); ok {
-						if strings.EqualFold(sv.StringValue, "MEMORY_MB") {
-							isMemory = true
-							break
-						}
-					}
-				}
-			}
-			if isMemory {
-				continue
-			}
-			if v := op.GetValue(); v != nil {
-				if nv, ok := v.GetKind().(*structpb.Value_NumberValue); ok && nv.NumberValue > 0 {
-					rec.Count = int(nv.NumberValue)
-					return
-				}
-			}
-		}
+	if count := vcpuCountFromOperationGroups(gcpRec.Content); count > 0 {
+		rec.Count = count
+		return
 	}
 
 	// Fallback: overview numericValue (used by older recommender versions).
