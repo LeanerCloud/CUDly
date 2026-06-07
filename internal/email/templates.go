@@ -350,15 +350,24 @@ func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data No
 	return s.SendNotification(ctx, subject, body)
 }
 
-// SendScheduledPurchaseNotification sends a notification about upcoming automated purchase
+// SendScheduledPurchaseNotification sends a notification about an upcoming
+// automated purchase. The rendered body embeds approve/pause/cancel links
+// that carry a live token, so it must be delivered to a specific recipient
+// via targeted SES, never broadcast through the SNS topic.
+//
+// Returns ErrNoRecipient when data.RecipientEmail is empty so the caller can
+// surface a precise reason rather than silently dropping the notification.
 func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
 	body, err := RenderScheduledPurchaseEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render scheduled purchase email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - Scheduled Purchase in %d Days: %s", data.DaysUntilPurchase, data.PlanName)
-	return s.SendNotification(ctx, subject, body)
+	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
 // SendPurchaseConfirmation sends a confirmation after successful purchases
@@ -435,15 +444,27 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 	)
 }
 
-// SendRIExchangePendingApproval sends an email with RI exchange approval links
+// SendRIExchangePendingApproval sends an email with RI exchange approval links.
+// The rendered body contains per-exchange approve/reject links that carry live
+// tokens; any subscriber of the SNS topic who receives this body can
+// approve spend they were never authorised for. This method therefore routes
+// through targeted SES (SendToEmailWithCC), mirroring the hardened path used
+// by SendPurchaseApprovalRequest.
+//
+// Returns ErrNoRecipient when data.RecipientEmail is empty. Callers must
+// resolve a recipient (e.g. the global notification email from GlobalConfig)
+// before invoking this method.
 func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
 	body, err := RenderRIExchangePendingApprovalEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render ri exchange pending approval email: %w", err)
 	}
 
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
-	return s.SendNotification(ctx, subject, body)
+	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
 // SendRIExchangeCompleted sends a notification about completed RI exchanges

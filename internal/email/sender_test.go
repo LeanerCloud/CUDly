@@ -878,3 +878,198 @@ func TestSender_SendToEmailWithCCMultipart_FallsBackWhenHTMLEmpty_Issue287(t *te
 	require.NotNil(t, captured.Content.Simple.Body.Text)
 	assert.Nil(t, captured.Content.Simple.Body.Html, "empty HTML body should NOT be sent as multipart")
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for issue #1015: approval tokens broadcast via SNS
+// ---------------------------------------------------------------------------
+
+// TestSendNotification_RejectsTokenBearingBody verifies the structural guard:
+// SendNotification must return ErrTokenInBroadcast when the message body
+// contains "token=" so a body with an approval URL can never reach the SNS
+// broadcast topic, regardless of how it got there.
+func TestSendNotification_RejectsTokenBearingBody(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	// No Publish calls expected — the guard fires before the client is touched.
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+	sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
+		TopicARN: "arn:aws:sns:us-east-1:123456789012:topic",
+	})
+
+	ctx := context.Background()
+	tokenBodies := []string{
+		"Review: https://app.example.com/approve?token=abc123",
+		"token=somesecret",
+		"?token=xyz&action=pause",
+	}
+	for _, body := range tokenBodies {
+		err := sender.SendNotification(ctx, "Test", body)
+		assert.ErrorIsf(t, err, ErrTokenInBroadcast,
+			"expected ErrTokenInBroadcast for body %q", body)
+	}
+}
+
+// TestSendNotification_AllowsTokenFreeBody verifies that a well-formed
+// broadcast body that contains no token reaches SNS normally.
+func TestSendNotification_AllowsTokenFreeBody(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
+		Return(&sns.PublishOutput{MessageId: aws.String("msg-ok")}, nil).Once()
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+	sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
+		TopicARN: "arn:aws:sns:us-east-1:123456789012:topic",
+	})
+
+	ctx := context.Background()
+	err := sender.SendNotification(ctx, "Savings found", "3 new recommendations. Sign in to review.")
+	require.NoError(t, err)
+}
+
+// TestSendScheduledPurchaseNotification_UsesSESNotSNS verifies that a
+// scheduled-purchase notification with RecipientEmail set reaches SES
+// (targeted delivery) and does NOT call the SNS publisher.
+//
+// Regression test for issue #1015: previously the method called
+// s.SendNotification which broadcast the token-bearing body to every
+// SNS subscriber.
+func TestSendScheduledPurchaseNotification_UsesSESNotSNS(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	// SNS Publish must NOT be called.
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil).Once()
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("ses-msg-1")}, nil).Once()
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
+
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		TopicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+		FromEmail: "noreply@example.com",
+	})
+
+	data := NotificationData{
+		DashboardURL:      "https://app.example.com",
+		ApprovalToken:     "supersecret-token",
+		RecipientEmail:    "notify@example.com",
+		TotalSavings:      800.0,
+		DaysUntilPurchase: 3,
+		PlanName:          "Test Plan",
+	}
+
+	ctx := context.Background()
+	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	require.NoError(t, err)
+}
+
+// TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty verifies that
+// omitting RecipientEmail returns ErrNoRecipient, not a silent broadcast.
+func TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	mockSES := new(MockSESClient)
+	// Neither SNS Publish nor SES SendEmail should be called.
+	t.Cleanup(func() {
+		mockSNS.AssertExpectations(t)
+		mockSES.AssertExpectations(t)
+	})
+
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		TopicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+		FromEmail: "noreply@example.com",
+	})
+
+	data := NotificationData{
+		DashboardURL:  "https://app.example.com",
+		ApprovalToken: "supersecret-token",
+		PlanName:      "Test Plan",
+		// RecipientEmail intentionally absent
+	}
+
+	err := sender.SendScheduledPurchaseNotification(context.Background(), data)
+	require.ErrorIs(t, err, ErrNoRecipient)
+}
+
+// TestSendRIExchangePendingApproval_UsesSESNotSNS verifies that an RI-exchange
+// pending-approval notification with RecipientEmail set reaches SES (targeted
+// delivery) and does NOT call the SNS publisher.
+//
+// Regression test for issue #1015: previously the method called
+// s.SendNotification which broadcast per-exchange approve/reject tokens to
+// every SNS subscriber, allowing unauthorised spend approval.
+func TestSendRIExchangePendingApproval_UsesSESNotSNS(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	// SNS Publish must NOT be called.
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
+
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil).Once()
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("ses-msg-2")}, nil).Once()
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
+
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		TopicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+		FromEmail: "noreply@example.com",
+	})
+
+	data := RIExchangeNotificationData{
+		DashboardURL:   "https://app.example.com",
+		Mode:           "manual",
+		RecipientEmail: "notify@example.com",
+		TotalPayment:   "150.00",
+		Exchanges: []RIExchangeItem{
+			{
+				RecordID:           "rec-1",
+				ApprovalToken:      "exchange-secret-token",
+				SourceRIID:         "ri-abc",
+				SourceInstanceType: "m5.large",
+				TargetInstanceType: "m5.xlarge",
+				TargetCount:        1,
+				PaymentDue:         "150.00",
+				UtilizationPct:     45.0,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	err := sender.SendRIExchangePendingApproval(ctx, data)
+	require.NoError(t, err)
+}
+
+// TestSendRIExchangePendingApproval_ErrNoRecipientWhenEmpty verifies that
+// omitting RecipientEmail returns ErrNoRecipient, not a silent broadcast.
+func TestSendRIExchangePendingApproval_ErrNoRecipientWhenEmpty(t *testing.T) {
+	t.Parallel()
+	mockSNS := new(MockSNSClient)
+	mockSES := new(MockSESClient)
+	// Neither SNS Publish nor SES SendEmail should be called.
+	t.Cleanup(func() {
+		mockSNS.AssertExpectations(t)
+		mockSES.AssertExpectations(t)
+	})
+
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		TopicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+		FromEmail: "noreply@example.com",
+	})
+
+	data := RIExchangeNotificationData{
+		DashboardURL: "https://app.example.com",
+		Mode:         "manual",
+		// RecipientEmail intentionally absent
+		Exchanges: []RIExchangeItem{
+			{RecordID: "rec-1", ApprovalToken: "exchange-secret-token"},
+		},
+	}
+
+	err := sender.SendRIExchangePendingApproval(context.Background(), data)
+	require.ErrorIs(t, err, ErrNoRecipient)
+}

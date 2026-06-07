@@ -99,7 +99,7 @@ func TestBuildExchangeNotificationData(t *testing.T) {
 		},
 	}
 
-	data := buildExchangeNotificationData(result, "https://dashboard.example.com")
+	data := buildExchangeNotificationData(result, "https://dashboard.example.com", "")
 
 	testutil.AssertEqual(t, "https://dashboard.example.com", data.DashboardURL)
 	testutil.AssertEqual(t, "manual", data.Mode)
@@ -121,7 +121,7 @@ func TestBuildExchangeNotificationData(t *testing.T) {
 
 func TestBuildExchangeNotificationData_Empty(t *testing.T) {
 	result := &exchange.AutoExchangeResult{Mode: "auto"}
-	data := buildExchangeNotificationData(result, "https://example.com")
+	data := buildExchangeNotificationData(result, "https://example.com", "")
 
 	testutil.AssertEqual(t, "auto", data.Mode)
 	testutil.AssertEqual(t, 0, len(data.Exchanges))
@@ -252,7 +252,7 @@ func TestSendExchangeNotification_NoEmailSender(t *testing.T) {
 	app := &Application{Email: nil}
 	result := &exchange.AutoExchangeResult{Mode: "auto"}
 	// Should not panic when Email is nil
-	app.sendExchangeNotification(context.Background(), result)
+	app.sendExchangeNotification(context.Background(), result, "")
 }
 
 func TestSendExchangeNotification_NoResults(t *testing.T) {
@@ -267,7 +267,7 @@ func TestSendExchangeNotification_NoResults(t *testing.T) {
 	}
 
 	result := &exchange.AutoExchangeResult{Mode: "auto"}
-	app.sendExchangeNotification(context.Background(), result)
+	app.sendExchangeNotification(context.Background(), result, "")
 
 	if emailSent {
 		t.Error("expected no email to be sent for empty results")
@@ -291,7 +291,7 @@ func TestSendExchangeNotification_ManualPending(t *testing.T) {
 			{SourceRIID: "ri-1"},
 		},
 	}
-	app.sendExchangeNotification(context.Background(), result)
+	app.sendExchangeNotification(context.Background(), result, "")
 
 	if !approvalSent {
 		t.Error("expected approval email to be sent")
@@ -315,7 +315,7 @@ func TestSendExchangeNotification_AutoCompleted(t *testing.T) {
 			{SourceRIID: "ri-1", ExchangeID: "exch-1"},
 		},
 	}
-	app.sendExchangeNotification(context.Background(), result)
+	app.sendExchangeNotification(context.Background(), result, "")
 
 	if !completedSent {
 		t.Error("expected completed email to be sent")
@@ -338,7 +338,7 @@ func TestSendExchangeNotification_EmailFailure(t *testing.T) {
 		},
 	}
 	// Should not panic on email failure — just logs
-	app.sendExchangeNotification(context.Background(), result)
+	app.sendExchangeNotification(context.Background(), result, "")
 }
 
 // --- Tests for executeRIExchangeReshape (end-to-end handler tests) ---

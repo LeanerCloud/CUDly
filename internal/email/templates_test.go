@@ -44,17 +44,24 @@ func TestSender_SendNewRecommendationsNotification_Success(t *testing.T) {
 }
 
 func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
-	mockSNS := new(MockSNSClient)
-	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
-		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
+	// Scheduled purchase notifications carry approval tokens and must be
+	// delivered via targeted SES, not the SNS broadcast topic.
+	t.Cleanup(func() {})
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-123")}, nil)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 
-	sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
-		TopicARN: "arn:aws:sns:us-east-1:123456789012:topic",
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{
+		FromEmail: "noreply@example.com",
 	})
 
 	data := NotificationData{
 		DashboardURL:      "https://dashboard.example.com",
 		ApprovalToken:     "token-123",
+		RecipientEmail:    "notify@example.com",
 		TotalSavings:      1000.00,
 		TotalUpfrontCost:  3000.00,
 		PurchaseDate:      "February 1, 2024",
@@ -66,7 +73,6 @@ func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
 	err := sender.SendScheduledPurchaseNotification(ctx, data)
 
 	require.NoError(t, err)
-	mockSNS.AssertExpectations(t)
 }
 
 func TestSender_SendPurchaseConfirmation_Success(t *testing.T) {
@@ -192,19 +198,24 @@ func TestSender_SendNewRecommendationsNotification_NoTopic(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSender_SendScheduledPurchaseNotification_NoTopic(t *testing.T) {
+func TestSender_SendScheduledPurchaseNotification_NoRecipient(t *testing.T) {
+	// When RecipientEmail is empty the send must be rejected — the body carries
+	// approval tokens that must not be broadcast via SNS.
 	sender := &Sender{
-		topicARN: "",
+		topicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+		fromEmail: "noreply@example.com",
 	}
 
 	data := NotificationData{
-		DashboardURL: "https://dashboard.example.com",
+		DashboardURL:  "https://dashboard.example.com",
+		ApprovalToken: "secret-token",
+		// RecipientEmail intentionally empty
 	}
 
 	ctx := context.Background()
 	err := sender.SendScheduledPurchaseNotification(ctx, data)
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 func TestSender_SendPurchaseConfirmation_NoTopic(t *testing.T) {
@@ -282,19 +293,27 @@ func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSender_SendScheduledPurchaseNotification_SNSError(t *testing.T) {
-	mockSNS := new(MockSNSClient)
-	sender := &Sender{
-		snsClient: mockSNS,
-		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
-	}
+func TestSender_SendScheduledPurchaseNotification_SESError(t *testing.T) {
+	// SES send error must propagate to the caller.
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Return(nil, assert.AnError)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 
-	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(nil, assert.AnError)
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{
+		FromEmail: "noreply@example.com",
+	})
 
 	ctx := context.Background()
 	data := NotificationData{
-		DashboardURL: "https://example.com",
-		TotalSavings: 500.0,
+		DashboardURL:      "https://example.com",
+		RecipientEmail:    "notify@example.com",
+		ApprovalToken:     "token-abc",
+		TotalSavings:      500.0,
+		DaysUntilPurchase: 3,
+		PlanName:          "Plan A",
 	}
 
 	err := sender.SendScheduledPurchaseNotification(ctx, data)
@@ -420,17 +439,22 @@ func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *te
 }
 
 func TestSender_SendScheduledPurchaseNotification_WithUpfrontCost(t *testing.T) {
-	mockSNS := new(MockSNSClient)
-	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
-		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
+	// Verify that a well-formed data payload with RecipientEmail succeeds via SES.
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-123")}, nil)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 
-	sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
-		TopicARN: "arn:aws:sns:us-east-1:123456789012:topic",
+	sender := NewSenderWithClients(nil, mockSES, SenderConfig{
+		FromEmail: "noreply@example.com",
 	})
 
 	data := NotificationData{
 		DashboardURL:      "https://dashboard.example.com",
 		ApprovalToken:     "token-456",
+		RecipientEmail:    "notify@example.com",
 		TotalSavings:      1500.00,
 		TotalUpfrontCost:  6000.00,
 		PurchaseDate:      "April 1, 2024",
@@ -452,7 +476,6 @@ func TestSender_SendScheduledPurchaseNotification_WithUpfrontCost(t *testing.T) 
 	err := sender.SendScheduledPurchaseNotification(ctx, data)
 
 	require.NoError(t, err)
-	mockSNS.AssertExpectations(t)
 }
 
 func TestSender_SendPurchaseConfirmation_WithMultipleRecommendations(t *testing.T) {

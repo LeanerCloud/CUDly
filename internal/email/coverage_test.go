@@ -1305,13 +1305,15 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to publish to SNS")
 	})
 
-	t.Run("ScheduledPurchase_propagates_error", func(t *testing.T) {
+	t.Run("ScheduledPurchase_no_recipient", func(t *testing.T) {
+		// RecipientEmail is empty: must return ErrNoRecipient, not broadcast via SNS.
 		err := sender.SendScheduledPurchaseNotification(ctx, NotificationData{
-			DashboardURL: "https://test.com",
-			PlanName:     "Test",
+			DashboardURL:  "https://test.com",
+			PlanName:      "Test",
+			ApprovalToken: "tok",
+			// RecipientEmail intentionally empty
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to publish to SNS")
+		require.ErrorIs(t, err, ErrNoRecipient)
 	})
 
 	t.Run("PurchaseConfirmation_propagates_error", func(t *testing.T) {

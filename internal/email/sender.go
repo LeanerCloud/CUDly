@@ -27,6 +27,12 @@ var (
 	// out. Distinct from ErrNoRecipient so the caller can report which side
 	// of the wire is unconfigured.
 	ErrNoFromEmail = errors.New("email: no from address")
+
+	// ErrTokenInBroadcast is returned by SendNotification when the message
+	// body contains a "token=" query parameter. Broadcasting a body with an
+	// approval token leaks it to every SNS subscriber. Use SendToEmailWithCC
+	// (targeted SES) for any message that carries an approval URL.
+	ErrTokenInBroadcast = errors.New("email: message body contains an approval token; use targeted SES send, not SNS broadcast")
 )
 
 // SenderConfig holds configuration for the email sender
@@ -100,8 +106,17 @@ func NewSenderWithClients(snsClient SNSPublisher, sesClient SESEmailSender, cfg 
 	}
 }
 
-// SendNotification sends a notification email via SNS
+// SendNotification sends a notification email via SNS.
+//
+// Guard: messages whose body contains "token=" are rejected with
+// ErrTokenInBroadcast. Approval tokens must never reach the SNS broadcast
+// topic because every subscriber would receive a working action link. Use
+// SendToEmailWithCC for any message that carries an approval URL.
 func (s *Sender) SendNotification(ctx context.Context, subject, message string) error {
+	if strings.Contains(message, "token=") {
+		return ErrTokenInBroadcast
+	}
+
 	if s.topicARN == "" {
 		logging.Debug("No SNS topic configured, skipping email notification")
 		return nil
@@ -464,6 +479,15 @@ type RIExchangeNotificationData struct {
 	Exchanges    []RIExchangeItem
 	Skipped      []SkippedExchange
 	TotalPayment string
+	// RecipientEmail is the primary (To) inbox for the approval-required flow.
+	// Must be set when Exchanges contain ApprovalToken values; leave empty
+	// only for completion/broadcast notifications that carry no tokens.
+	// When non-empty, SendRIExchangePendingApproval routes through targeted
+	// SES (not the SNS broadcast topic). Mirrors NotificationData.RecipientEmail.
+	RecipientEmail string
+	// CCEmails carries additional recipients informed of the pending exchanges
+	// but not the authorised approvers. Deduplicated against RecipientEmail.
+	CCEmails []string
 }
 
 // RIExchangeItem represents a single exchange in an email notification

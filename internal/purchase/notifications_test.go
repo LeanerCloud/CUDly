@@ -147,7 +147,7 @@ func TestManager_BuildNotificationData(t *testing.T) {
 		},
 	}
 
-	data := manager.buildNotificationData(plan, execution, 5)
+	data := manager.buildNotificationData(plan, execution, 5, "notify@example.com")
 
 	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
 	assert.Equal(t, "token-abc", data.ApprovalToken)
@@ -314,10 +314,13 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 		},
 	}
 
+	notifyEmailStr := "notify@example.com"
+	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// No existing execution found
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
@@ -458,10 +461,13 @@ func TestManager_SendUpcomingPurchaseNotifications_EmailFails(t *testing.T) {
 		},
 	}
 
+	notifyEmailStr := "notify@example.com"
+	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// No existing execution found
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(errors.New("email failed"))
 
 	manager := &Manager{

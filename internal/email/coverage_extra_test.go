@@ -408,12 +408,14 @@ func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) 
 // Tests for Sender.SendRIExchangePendingApproval, SendRIExchangeCompleted, SendPurchaseApprovalRequest
 // using the mock SNS sender (no SNS topic → no-op path)
 
-func TestSender_SendRIExchangePendingApproval_NoTopic(t *testing.T) {
+func TestSender_SendRIExchangePendingApproval_NoRecipient(t *testing.T) {
+	// When RecipientEmail is empty the send must be rejected — the body carries
+	// per-exchange approval tokens that must not be broadcast via SNS.
 	mockSNS := &mockSNSPublisher{}
 	mockSES := &mockSESEmailSender{}
 	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
-		// TopicARN is empty → SendNotification is a no-op
 		FromEmail: "from@example.com",
+		TopicARN:  "arn:aws:sns:us-east-1:123:topic",
 	})
 
 	data := RIExchangeNotificationData{
@@ -421,12 +423,14 @@ func TestSender_SendRIExchangePendingApproval_NoTopic(t *testing.T) {
 		TotalPayment: "300.00",
 		Exchanges: []RIExchangeItem{
 			{RecordID: "r4", SourceRIID: "ri-4", SourceInstanceType: "m4.large",
-				TargetInstanceType: "m4.xlarge", TargetCount: 1, PaymentDue: "300.00", UtilizationPct: 55.0},
+				TargetInstanceType: "m4.xlarge", TargetCount: 1, PaymentDue: "300.00",
+				ApprovalToken: "secret-token", UtilizationPct: 55.0},
 		},
+		// RecipientEmail intentionally empty
 	}
 
 	err := sender.SendRIExchangePendingApproval(context.Background(), data)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 func TestSender_SendRIExchangeCompleted_NoTopic(t *testing.T) {

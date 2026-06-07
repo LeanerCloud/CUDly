@@ -113,7 +113,11 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 		return nil, fmt.Errorf("auto exchange failed: %w", err)
 	}
 
-	app.sendExchangeNotification(ctx, result)
+	notifyEmail := ""
+	if cfg.NotificationEmail != nil {
+		notifyEmail = *cfg.NotificationEmail
+	}
+	app.sendExchangeNotification(ctx, result, notifyEmail)
 
 	log.Printf("RI exchange reshape complete: mode=%s completed=%d pending=%d failed=%d skipped=%d",
 		result.Mode, len(result.Completed), len(result.Pending), len(result.Failed), len(result.Skipped))
@@ -136,8 +140,10 @@ func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
 }
 
 // sendExchangeNotification sends email notifications based on the exchange result.
-// Email errors are logged but don't fail the task.
-func (app *Application) sendExchangeNotification(ctx context.Context, result *exchange.AutoExchangeResult) {
+// notifyEmail is the global notification address from GlobalConfig; it becomes
+// the RecipientEmail for pending-approval messages that carry approval tokens
+// and must not be broadcast via SNS. Email errors are logged but don't fail the task.
+func (app *Application) sendExchangeNotification(ctx context.Context, result *exchange.AutoExchangeResult, notifyEmail string) {
 	if app.Email == nil {
 		return
 	}
@@ -146,7 +152,7 @@ func (app *Application) sendExchangeNotification(ctx context.Context, result *ex
 		return
 	}
 
-	data := buildExchangeNotificationData(result, app.appConfig.DashboardURL)
+	data := buildExchangeNotificationData(result, app.appConfig.DashboardURL, notifyEmail)
 
 	var err error
 	if result.Mode == "manual" && len(result.Pending) > 0 {
@@ -165,10 +171,14 @@ func exchangeHasResults(result *exchange.AutoExchangeResult) bool {
 }
 
 // buildExchangeNotificationData converts AutoExchangeResult into email notification data.
-func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboardURL string) email.RIExchangeNotificationData {
+// notifyEmail is the global notification address from GlobalConfig; it is set as
+// RecipientEmail so token-bearing pending-approval emails route to a specific inbox
+// rather than the SNS broadcast topic.
+func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboardURL, notifyEmail string) email.RIExchangeNotificationData {
 	data := email.RIExchangeNotificationData{
-		DashboardURL: dashboardURL,
-		Mode:         result.Mode,
+		DashboardURL:   dashboardURL,
+		Mode:           result.Mode,
+		RecipientEmail: notifyEmail,
 	}
 
 	allOutcomes := make([]exchange.ExchangeOutcome, 0, len(result.Completed)+len(result.Pending)+len(result.Failed))
