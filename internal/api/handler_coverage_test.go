@@ -776,20 +776,17 @@ func TestDecodeBase64Password_ValidBase64(t *testing.T) {
 	assert.Equal(t, "test123", result)
 }
 
-// Test for types_apikeys toAPIPermissions
+// Tests for types_apikeys toAPIPermissions (02-N2: typed input, no silent drop).
 
 func TestToAPIPermissions_EmptySlice(t *testing.T) {
-	perms := []interface{}{}
-
-	result := toAPIPermissions(perms)
-
+	result := toAPIPermissions([]Permission{})
 	assert.Len(t, result, 0)
 }
 
 func TestToAPIPermissions_WithPermissions(t *testing.T) {
-	perms := []interface{}{
-		Permission{Action: "read", Resource: "config"},
-		Permission{Action: "write", Resource: "plans"},
+	perms := []Permission{
+		{Action: "read", Resource: "config"},
+		{Action: "write", Resource: "plans"},
 	}
 
 	result := toAPIPermissions(perms)
@@ -799,18 +796,12 @@ func TestToAPIPermissions_WithPermissions(t *testing.T) {
 	assert.Equal(t, "read", result[0].Action)
 }
 
-func TestToAPIPermissions_NonPermissionItems(t *testing.T) {
-	perms := []interface{}{
-		"not a permission",
-		123,
-		Permission{Action: "read", Resource: "config"},
-	}
-
-	result := toAPIPermissions(perms)
-
-	// Only the valid Permission should be included
-	assert.Len(t, result, 1)
-	assert.Equal(t, "config", result[0].Resource)
+func TestToAPIPermissions_ReturnsCopy(t *testing.T) {
+	// Mutation of the returned slice must not affect the original (copy contract).
+	src := []Permission{{Action: "read", Resource: "config"}}
+	result := toAPIPermissions(src)
+	result[0].Action = "write"
+	assert.Equal(t, "read", src[0].Action, "original slice must not be mutated")
 }
 
 // Test NewHandler with API key loaded

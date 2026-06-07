@@ -28,14 +28,11 @@ type APIKeyInfo struct {
 	IsActive    bool         `json:"is_active"`
 }
 
-// toAPIPermissions converts auth.Permission to api.Permission
-func toAPIPermissions(perms []any) []Permission {
-	result := make([]Permission, 0, len(perms))
-	for _, p := range perms {
-		// Type assertion - in production this would use proper conversion
-		if perm, ok := p.(Permission); ok {
-			result = append(result, perm)
-		}
-	}
-	return result
+// toAPIPermissions returns a copy of perms as a new slice.
+// The parameter is already the concrete type; the copy makes mutation-safe
+// return values for callers that may hold the originating slice.
+func toAPIPermissions(perms []Permission) []Permission {
+	out := make([]Permission, len(perms))
+	copy(out, perms)
+	return out
 }
