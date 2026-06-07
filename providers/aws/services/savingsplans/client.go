@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -303,10 +304,27 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 	log.Printf("purchase[%s]: SavingsPlans findOfferingID starting (planType=%s term=%s payment=%s)",
 		tag, planType, rec.Term, rec.PaymentOption)
 
+	// Pin to USD so non-USD currency offerings are excluded server-side.
+	// EC2Instance SPs are region-scoped; add a region filter so only the
+	// offering for the client's region is returned. Compute, SageMaker, and
+	// Database SPs are global and do not carry a region property.
 	input := &savingsplans.DescribeSavingsPlansOfferingsInput{
 		PlanTypes:      []types.SavingsPlanType{planType},
 		Durations:      []int64{termSeconds},
 		PaymentOptions: []types.SavingsPlanPaymentOption{paymentOption},
+		Currencies:     []types.CurrencyCode{types.CurrencyCodeUsd},
+	}
+	if planType == types.SavingsPlanTypeEc2Instance {
+		if c.region == "" {
+			log.Printf("purchase[%s]: SavingsPlans findOfferingID: client region is empty; skipping region filter", tag)
+		} else {
+			input.Filters = []types.SavingsPlanOfferingFilterElement{
+				{
+					Name:   types.SavingsPlanOfferingFilterAttributeRegion,
+					Values: []string{c.region},
+				},
+			}
+		}
 	}
 
 	offeringID, err := c.lookupOfferingID(ctx, input)
@@ -374,12 +392,15 @@ const maxOfferingPages = 5
 const maxCommitmentPages = 100
 
 // lookupOfferingID performs the API call(s) to find the offering ID.
-// DescribeSavingsPlansOfferings already accepts PlanTypes/Durations/PaymentOptions
-// filters that narrow the result set, so only a handful of results are expected
-// on the first page. Pagination with a cap is added as a safety net.
+// DescribeSavingsPlansOfferings accepts PlanTypes/Durations/PaymentOptions/
+// Currencies/Filters that narrow the result set to at most a handful of
+// results. All pages are accumulated so the caller receives a stable,
+// lexicographically-sorted first offering rather than a result that depends
+// on AWS response ordering (finding 08-L1).
 func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.DescribeSavingsPlansOfferingsInput) (string, error) {
 	t0 := time.Now()
 	page := 0
+	var offeringIDs []string
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -404,7 +425,7 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 			if offering.OfferingId == nil {
 				continue
 			}
-			return *offering.OfferingId, nil
+			offeringIDs = append(offeringIDs, *offering.OfferingId)
 		}
 
 		if result.NextToken == nil || aws.ToString(result.NextToken) == "" {
@@ -413,7 +434,13 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 		input.NextToken = result.NextToken
 	}
 
-	return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
+	if len(offeringIDs) == 0 {
+		return "", fmt.Errorf("no Savings Plans offerings found after %d page(s) (issue #688)", page)
+	}
+	// Sort for a stable, deterministic tie-break when multiple offerings
+	// survive the server-side filters. The first ID after sorting is returned.
+	sort.Strings(offeringIDs)
+	return offeringIDs[0], nil
 }
 
 // ValidateOffering checks if a Savings Plans offering exists

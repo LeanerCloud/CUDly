@@ -1114,3 +1114,164 @@ func TestLookupOfferingID_HappyPath(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
 }
+
+// TestFindOfferingID_SendsUSDCurrencyFilter asserts that findOfferingID always
+// includes a USD currency filter in the DescribeSavingsPlansOfferings request
+// (finding 08-L1). Without the filter the API may return non-USD offerings
+// and a blind [0] pick selects the wrong offering.
+func TestFindOfferingID_SendsUSDCurrencyFilter(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			return len(in.Currencies) == 1 && in.Currencies[0] == types.CurrencyCodeUsd
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-usd")},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), spRec(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "offering-usd", id)
+}
+
+// TestFindOfferingID_EC2InstanceSendsRegionFilter asserts that an EC2Instance
+// client adds a region filter element to the request (finding 08-L1). EC2
+// Instance SPs are region-scoped; picking without a region filter risks
+// selecting an offering for the wrong region.
+func TestFindOfferingID_EC2InstanceSendsRegionFilter(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "eu-west-1", planType: types.SavingsPlanTypeEc2Instance}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			for _, f := range in.Filters {
+				if f.Name == types.SavingsPlanOfferingFilterAttributeRegion &&
+					len(f.Values) == 1 && f.Values[0] == "eu-west-1" {
+					return true
+				}
+			}
+			return false
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-eu")},
+			},
+		}, nil).Once()
+
+	rec := common.Recommendation{
+		Service:       common.ServiceSavingsPlansEC2Instance,
+		ResourceType:  "EC2Instance",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.SavingsPlanDetails{
+			PlanType:         "EC2Instance",
+			HourlyCommitment: 1.0,
+		},
+	}
+	id, err := client.findOfferingID(context.Background(), rec, "")
+	require.NoError(t, err)
+	assert.Equal(t, "offering-eu", id)
+}
+
+// TestFindOfferingID_ComputeNoRegionFilter asserts that a Compute SP client
+// does NOT attach a region filter (Compute SPs are global, not region-scoped).
+func TestFindOfferingID_ComputeNoRegionFilter(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			// Compute SPs must not carry any region filter.
+			for _, f := range in.Filters {
+				if f.Name == types.SavingsPlanOfferingFilterAttributeRegion {
+					return false
+				}
+			}
+			return true
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-global")},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), spRec(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "offering-global", id)
+}
+
+// TestLookupOfferingID_DeterministicSort asserts that when multiple offerings
+// survive the server-side filters, lookupOfferingID returns the lexicographically
+// smallest offering ID rather than relying on unspecified AWS response ordering
+// (finding 08-L1). Pre-fix code returned SearchResults[0] without sorting,
+// making the result nondeterministic across API calls.
+func TestLookupOfferingID_DeterministicSort(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	// Return three offerings in reverse-alphabetical order. The fix must sort
+	// them so "offering-aaa" (the lexicographically smallest) is returned, not
+	// "offering-zzz" (the one AWS happened to put first).
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-zzz")},
+				{OfferingId: aws.String("offering-mmm")},
+				{OfferingId: aws.String("offering-aaa")},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), spRec(), "")
+	require.NoError(t, err)
+	// Pre-fix: would return "offering-zzz" (first in response).
+	// Post-fix: returns "offering-aaa" (lexicographically smallest).
+	assert.Equal(t, "offering-aaa", id,
+		"findOfferingID must sort results deterministically before selecting")
+}
+
+// TestLookupOfferingID_DeterministicSortAcrossPages asserts that the
+// deterministic sort operates across ALL accumulated pages, not just within a
+// single page (finding 08-L1 multi-page variant).
+func TestLookupOfferingID_DeterministicSortAcrossPages(t *testing.T) {
+	mockSP := &MockSavingsPlansClient{}
+	t.Cleanup(func() { mockSP.AssertExpectations(t) })
+	client := &Client{client: mockSP, region: "us-east-1", planType: types.SavingsPlanTypeCompute}
+
+	// Page 1 returns a "later" offering ID.
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			return in.NextToken == nil
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-zzz")},
+			},
+			NextToken: aws.String("tok-2"),
+		}, nil).Once()
+
+	// Page 2 returns an "earlier" offering ID. Without cross-page sort, the
+	// pre-fix code would have already returned "offering-zzz" from page 1.
+	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything,
+		mock.MatchedBy(func(in *savingsplans.DescribeSavingsPlansOfferingsInput) bool {
+			return in.NextToken != nil && *in.NextToken == "tok-2"
+		})).
+		Return(&savingsplans.DescribeSavingsPlansOfferingsOutput{
+			SearchResults: []types.SavingsPlanOffering{
+				{OfferingId: aws.String("offering-aaa")},
+			},
+			NextToken: nil,
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), spRec(), "")
+	require.NoError(t, err)
+	assert.Equal(t, "offering-aaa", id,
+		"findOfferingID must sort across pages before selecting")
+}
