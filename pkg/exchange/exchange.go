@@ -299,13 +299,52 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 	return executeWithAPI(ctx, ec2.NewFromConfig(cfg), req)
 }
 
+// resolvePaymentDue returns the quote's PaymentDueUSD, treating nil as zero.
+// AWS may omit PaymentDue for zero-cost exchanges (e.g., same-RI-type conversions).
+func resolvePaymentDue(q *ExchangeQuoteSummary) *big.Rat {
+	if q.PaymentDueUSD != nil {
+		return q.PaymentDueUSD
+	}
+	return new(big.Rat)
+}
+
+// checkInitialQuote returns an error if the quote is invalid or exceeds the spend cap.
+func checkInitialQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+	if !q.IsValidExchange {
+		return fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
+	}
+	paymentDue := resolvePaymentDue(q)
+	if paymentDue.Cmp(maxPayment) == 1 {
+		return fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), maxPayment.FloatString(2))
+	}
+	return nil
+}
+
+// checkReQuote returns an error if the pre-accept re-quote is invalid or exceeds the cap.
+// It is called immediately before AcceptReservedInstancesExchangeQuote to narrow the
+// race window between pricing changes.
+func checkReQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+	if !q.IsValidExchange {
+		return fmt.Errorf("exchange no longer valid at accept time: %s", q.ValidationFailureReason)
+	}
+	paymentDue := resolvePaymentDue(q)
+	if paymentDue.Cmp(maxPayment) == 1 {
+		return fmt.Errorf(
+			"aborting exchange: re-quoted payment %s USD exceeds cap %s USD (pricing changed between initial quote and accept)",
+			paymentDue.FloatString(2),
+			maxPayment.FloatString(2),
+		)
+	}
+	return nil
+}
+
 // executeWithAPI performs the exchange using an injected EC2ExchangeAPI.
 func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
 	if req.MaxPaymentDueUSD == nil {
 		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
 	}
 
-	q, err := getQuoteWithAPI(ctx, client, ExchangeQuoteRequest{
+	quoteReq := ExchangeQuoteRequest{
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
@@ -313,25 +352,14 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 		TargetOfferingID: req.TargetOfferingID,
 		TargetCount:      req.TargetCount,
 		DryRun:           false,
-	})
+	}
+
+	q, err := getQuoteWithAPI(ctx, client, quoteReq)
 	if err != nil {
 		return "", nil, err
 	}
-
-	if !q.IsValidExchange {
-		return "", q, fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
-	}
-
-	// AWS may return an empty PaymentDue for zero-cost exchanges (e.g., same-RI-type
-	// conversions). Treat nil as zero cost so valid zero-cost exchanges are not refused.
-	paymentDue := q.PaymentDueUSD
-	if paymentDue == nil {
-		paymentDue = new(big.Rat)
-	}
-
-	// paymentDue > max => refuse
-	if paymentDue.Cmp(req.MaxPaymentDueUSD) == 1 {
-		return "", q, fmt.Errorf("paymentDue %s exceeds max %s", paymentDue.FloatString(2), req.MaxPaymentDueUSD.FloatString(2))
+	if err := checkInitialQuote(q, req.MaxPaymentDueUSD); err != nil {
+		return "", q, err
 	}
 
 	// Re-quote immediately before accepting to narrow the window between quote and
@@ -339,32 +367,12 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 	// pricing can change between the two calls. This second quote reduces -- but
 	// does not eliminate -- the race window. If the fresh quote now exceeds the
 	// cap, abort before the irreversible accept call.
-	freshQ, err := getQuoteWithAPI(ctx, client, ExchangeQuoteRequest{
-		Region:           req.Region,
-		ExpectedAccount:  req.ExpectedAccount,
-		ReservedIDs:      req.ReservedIDs,
-		Targets:          req.Targets,
-		TargetOfferingID: req.TargetOfferingID,
-		TargetCount:      req.TargetCount,
-		DryRun:           false,
-	})
+	freshQ, err := getQuoteWithAPI(ctx, client, quoteReq)
 	if err != nil {
 		return "", q, fmt.Errorf("pre-accept re-quote failed: %w", err)
 	}
-	if !freshQ.IsValidExchange {
-		return "", freshQ, fmt.Errorf("exchange no longer valid at accept time: %s", freshQ.ValidationFailureReason)
-	}
-
-	freshPaymentDue := freshQ.PaymentDueUSD
-	if freshPaymentDue == nil {
-		freshPaymentDue = new(big.Rat)
-	}
-	if freshPaymentDue.Cmp(req.MaxPaymentDueUSD) == 1 {
-		return "", freshQ, fmt.Errorf(
-			"aborting exchange: re-quoted payment %s USD exceeds cap %s USD (pricing changed between initial quote and accept)",
-			freshPaymentDue.FloatString(2),
-			req.MaxPaymentDueUSD.FloatString(2),
-		)
+	if err := checkReQuote(freshQ, req.MaxPaymentDueUSD); err != nil {
+		return "", freshQ, err
 	}
 
 	out, err := client.AcceptReservedInstancesExchangeQuote(ctx, &ec2.AcceptReservedInstancesExchangeQuoteInput{
