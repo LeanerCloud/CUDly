@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/analytics"
 	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
@@ -61,6 +62,10 @@ type HandlerConfig struct {
 	// Analytics configuration (optional)
 	AnalyticsClient    AnalyticsClientInterface
 	AnalyticsCollector AnalyticsCollectorInterface
+	// AnalyticsSnapshots serves the savings-snapshot time-series (coverage %,
+	// utilization, committed spend, realized savings over time) backed by the
+	// savings_snapshots store. Optional; nil disables /api/analytics/trends.
+	AnalyticsSnapshots AnalyticsSnapshotStoreInterface
 	// OIDCSigner is the cloud-agnostic signer that backs
 	// /.well-known/openid-configuration and /.well-known/jwks.json.
 	// Nil disables the OIDC issuer endpoints (they return 404).
@@ -107,6 +112,20 @@ type AnalyticsClientInterface interface {
 // AnalyticsCollectorInterface defines the interface for analytics collection
 type AnalyticsCollectorInterface interface {
 	Collect(ctx context.Context) error
+}
+
+// AnalyticsSnapshotStoreInterface exposes the savings-snapshot time-series for
+// the /api/analytics/trends endpoint. It is the read side of the now-wired
+// internal/analytics collector. Scoping is the dual-column model: the handler
+// resolves the requested account into accountUUIDs + accountExternalIDsByProvider
+// (see resolveSingleAccountFilterIDs) and the store ORs both columns so rows
+// carrying only one identifier are still matched. Both empty means "all" — the
+// handler MUST enforce allowed_accounts scope before passing empty filters.
+type AnalyticsSnapshotStoreInterface interface {
+	QuerySavings(ctx context.Context, req analytics.QueryRequest) ([]analytics.SavingsSnapshot, error)
+	QueryMonthlyTotals(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, months int) ([]analytics.MonthlySummary, error)
+	QueryByProvider(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, startDate, endDate time.Time) ([]analytics.ProviderBreakdown, error)
+	QueryByService(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, startDate, endDate time.Time) ([]analytics.ServiceBreakdown, error)
 }
 
 // HistoryDataPoint represents aggregated historical data

@@ -196,6 +196,9 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/history/analytics", Method: "GET", Handler: r.getHistoryAnalyticsHandler, Auth: AuthUser},
 		{ExactPath: "/api/history/breakdown", Method: "GET", Handler: r.getHistoryBreakdownHandler, Auth: AuthUser},
 
+		// Savings-snapshot time-series (Trends view) — scoped to allowed_accounts.
+		{ExactPath: "/api/analytics/trends", Method: "GET", Handler: r.getAnalyticsTrendsHandler, Auth: AuthUser},
+
 		// Analytics collection endpoint
 		{ExactPath: "/api/analytics/collect", Method: "POST", Handler: r.triggerAnalyticsCollectionHandler, Auth: AuthAdmin},
 
@@ -571,6 +574,10 @@ func (r *Router) getHistoryAnalyticsHandler(ctx context.Context, req *events.Lam
 
 func (r *Router) getHistoryBreakdownHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getHistoryBreakdown(ctx, req, req.QueryStringParameters)
+}
+
+func (r *Router) getAnalyticsTrendsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.getAnalyticsTrends(ctx, req, req.QueryStringParameters)
 }
 
 func (r *Router) triggerAnalyticsCollectionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

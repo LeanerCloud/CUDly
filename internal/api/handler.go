@@ -34,12 +34,13 @@ type Handler struct {
 	apiKey             string // Cached API key
 	corsAllowedOrigin  string // CORS allowed origin
 	rateLimiter        RateLimiterInterface
-	emailNotifier      email.SenderInterface       // Optional: purchase approval emails
-	dashboardURL       string                      // Base URL for approval/cancel links
-	analyticsClient    AnalyticsClientInterface    // Optional: analytics client (Postgres-backed in prod)
-	analyticsCollector AnalyticsCollectorInterface // Optional: Hourly collector
-	signer             oidc.Signer                 // Optional: OIDC issuer signer (backed by cloud KMS)
-	issuerURL          string                      // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
+	emailNotifier      email.SenderInterface           // Optional: purchase approval emails
+	dashboardURL       string                          // Base URL for approval/cancel links
+	analyticsClient    AnalyticsClientInterface        // Optional: analytics client (Postgres-backed in prod)
+	analyticsCollector AnalyticsCollectorInterface     // Optional: snapshot collector
+	analyticsSnapshots AnalyticsSnapshotStoreInterface // Optional: savings-snapshot time-series store
+	signer             oidc.Signer                     // Optional: OIDC issuer signer (backed by cloud KMS)
+	issuerURL          string                          // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
 
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
@@ -157,6 +158,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		dashboardURL:        cfg.DashboardURL,
 		analyticsClient:     cfg.AnalyticsClient,
 		analyticsCollector:  cfg.AnalyticsCollector,
+		analyticsSnapshots:  cfg.AnalyticsSnapshots,
 		signer:              cfg.OIDCSigner,
 		issuerURL:           cfg.OIDCIssuerURL,
 		commitmentOpts:      cfg.CommitmentOpts,

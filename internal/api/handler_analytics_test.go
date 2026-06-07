@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/analytics"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -466,4 +467,133 @@ func TestParseDateRange(t *testing.T) {
 		require.True(t, ok, "range of 367 days must return a ClientError")
 		assert.Equal(t, 400, ce.code)
 	})
+}
+
+// MockAnalyticsSnapshotStore implements AnalyticsSnapshotStoreInterface.
+type MockAnalyticsSnapshotStore struct {
+	mock.Mock
+}
+
+func (m *MockAnalyticsSnapshotStore) QuerySavings(ctx context.Context, req analytics.QueryRequest) ([]analytics.SavingsSnapshot, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]analytics.SavingsSnapshot), args.Error(1)
+}
+
+func (m *MockAnalyticsSnapshotStore) QueryMonthlyTotals(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, months int) ([]analytics.MonthlySummary, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, months)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]analytics.MonthlySummary), args.Error(1)
+}
+
+func (m *MockAnalyticsSnapshotStore) QueryByProvider(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time) ([]analytics.ProviderBreakdown, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]analytics.ProviderBreakdown), args.Error(1)
+}
+
+func (m *MockAnalyticsSnapshotStore) QueryByService(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, start, end time.Time) ([]analytics.ServiceBreakdown, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, provider, start, end)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]analytics.ServiceBreakdown), args.Error(1)
+}
+
+// TestHandler_getAnalyticsTrends_Success_ScopesByAccount verifies the trends
+// endpoint resolves the requested account UUID into the dual-column filter and
+// passes it to every Query* call.
+func TestHandler_getAnalyticsTrends_Success_ScopesByAccount(t *testing.T) {
+	ctx := context.Background()
+	accountUUID := "bbbbbbbb-1111-2222-3333-444444444444"
+	accountExternal := "999988887777"
+
+	mockSnap := new(MockAnalyticsSnapshotStore)
+	wantUUIDs := []string{accountUUID}
+	wantExt := map[string][]string{"aws": {accountExternal}}
+	mockSnap.On("QueryMonthlyTotals", ctx, wantUUIDs, wantExt, mock.Anything).
+		Return([]analytics.MonthlySummary{{Provider: "aws", Service: "rds", TotalSavings: 100}}, nil)
+	mockSnap.On("QueryByProvider", ctx, wantUUIDs, wantExt, mock.Anything, mock.Anything).
+		Return([]analytics.ProviderBreakdown{{Provider: "aws", TotalSavings: 100}}, nil)
+	mockSnap.On("QueryByService", ctx, wantUUIDs, wantExt, "", mock.Anything, mock.Anything).
+		Return([]analytics.ServiceBreakdown{{Service: "rds", TotalSavings: 100}}, nil)
+	t.Cleanup(func() { mockSnap.AssertExpectations(t) })
+
+	mockStore := new(MockConfigStore)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: accountUUID, Name: "Account B", Provider: "aws", ExternalID: accountExternal}}, nil
+	}
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsSnapshots: mockSnap, config: mockStore}
+
+	result, err := handler.getAnalyticsTrends(ctx, req, map[string]string{"account_id": accountUUID})
+	require.NoError(t, err)
+	resp, ok := result.(*TrendsResponse)
+	require.True(t, ok)
+	assert.Len(t, resp.Monthly, 1)
+	assert.Len(t, resp.Provider, 1)
+	assert.Len(t, resp.Service, 1)
+}
+
+// TestHandler_getAnalyticsTrends_NoStore returns 503 when the snapshot store is
+// not configured.
+func TestHandler_getAnalyticsTrends_NoStore(t *testing.T) {
+	ctx := context.Background()
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth}
+
+	_, err := handler.getAnalyticsTrends(ctx, req, map[string]string{})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 503, ce.code)
+}
+
+// TestHandler_getAnalyticsTrends_ScopedUser_RequiresAccountID asserts a scoped
+// user cannot issue an unscoped trends query, and the store is never called.
+func TestHandler_getAnalyticsTrends_ScopedUser_RequiresAccountID(t *testing.T) {
+	ctx := context.Background()
+	mockSnap := new(MockAnalyticsSnapshotStore)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{UserID: "viewer-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+
+	handler := &Handler{auth: mockAuth, analyticsSnapshots: mockSnap, config: new(MockConfigStore)}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer viewer-token"}}
+
+	_, err := handler.getAnalyticsTrends(ctx, req, map[string]string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "account_id is required")
+	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals")
+}
+
+// TestHandler_getAnalyticsTrends_ScopedUser_OutsideScope returns not-found when
+// a scoped user requests an account outside their allowed_accounts.
+func TestHandler_getAnalyticsTrends_ScopedUser_OutsideScope(t *testing.T) {
+	ctx := context.Background()
+	mockSnap := new(MockAnalyticsSnapshotStore)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{UserID: "viewer-1"}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+
+	mockStore := new(MockConfigStore)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: "other-acct", Name: "Staging", Provider: "aws", ExternalID: "111122223333"}}, nil
+	}
+
+	handler := &Handler{auth: mockAuth, analyticsSnapshots: mockSnap, config: mockStore}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer viewer-token"}}
+
+	_, err := handler.getAnalyticsTrends(ctx, req, map[string]string{"account_id": "other-acct"})
+	require.Error(t, err)
+	mockSnap.AssertNotCalled(t, "QueryMonthlyTotals")
 }
