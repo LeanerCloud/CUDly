@@ -218,6 +218,12 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // therefore correct: it projects "how much would I save if I only bought
 // RIs to cover X% of my instances" against the 100%-coverage baseline
 // that every provider gives us. Verified by TestSummarizeRecommendationsWithCoverage_100PctContract.
+//
+// Note: CurrentSavings is NOT set here. It represents committed/realized
+// savings from active purchase history, populated separately in
+// getDashboardSummary via aggregateActiveCommitmentsPerService. A service
+// with recommendations but no active purchases correctly ships
+// current_savings: 0. (Issue #1031)
 func summarizeRecommendationsWithCoverage(
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
@@ -241,17 +247,6 @@ func summarizeRecommendationsWithCoverage(
 		total += scaled
 		svc := byService[rep.rec.Service]
 		svc.PotentialSavings += scaled
-		// CurrentSavings is the committed/realized monthly savings for the
-		// service: the full 100%-coverage potential (rec.Savings) projected
-		// down to the operator-configured coverage %. scaledSavings already
-		// computes exactly that (rec.Savings * min(coverage,100)/100), so we
-		// reuse it rather than re-deriving the coverage lookup. When no
-		// coverage override exists the rec falls through to full savings, so
-		// CurrentSavings == PotentialSavings (nothing committed-away yet); a
-		// configured coverage < 100 pulls CurrentSavings below the potential.
-		// Issue #908: this field was previously never set, so the Home
-		// chart's current-savings underlay always rendered as $0.
-		svc.CurrentSavings += scaled
 		byService[rep.rec.Service] = svc
 	}
 	return total, byService

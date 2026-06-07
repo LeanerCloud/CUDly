@@ -263,9 +263,10 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 			total, byService := summarizeRecommendationsWithCoverage(tc.recs, tc.coverage)
 			assert.InDelta(t, tc.wantTotal, total, 0.0001)
 			assert.InDelta(t, tc.wantTotal, byService["rds"].PotentialSavings, 0.0001)
-			// Issue #908: CurrentSavings (committed/realized) is sourced from
-			// the same coverage-scaled amount, so it tracks the scaled total.
-			assert.InDelta(t, tc.wantTotal, byService["rds"].CurrentSavings, 0.0001)
+			// CurrentSavings is populated by getDashboardSummary from purchase
+			// history, not here — it must remain 0 from this function (issue #1031).
+			assert.Equal(t, 0.0, byService["rds"].CurrentSavings,
+				"summarize must not set CurrentSavings")
 		})
 	}
 }
@@ -320,15 +321,14 @@ func TestSummarizeRecommendationsWithCoverage_100PctContract(t *testing.T) {
 		"nil coverage map must return un-scaled savings (issue #201 contract)")
 }
 
-// TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings is the
-// issue #908 regression: by_service[svc].current_savings must be populated
-// (and keyed/scaled identically to potential) so the Home chart's
-// current-savings underlay renders instead of being a flat $0 series.
-//
-// Before the fix, summarizeRecommendationsWithCoverage set only
-// PotentialSavings, leaving CurrentSavings at its float64 zero value for
-// every service regardless of configured coverage.
-func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing.T) {
+// TestSummarizeRecommendationsWithCoverage_DoesNotSetCurrentSavings asserts
+// that summarizeRecommendationsWithCoverage only populates PotentialSavings.
+// CurrentSavings represents committed/realized savings from active purchase
+// history and is populated separately in getDashboardSummary via
+// aggregateActiveCommitmentsPerService. Mixing the two here would cause a
+// service with recommendations but no purchases to falsely report non-zero
+// CurrentSavings (issue #1031).
+func TestSummarizeRecommendationsWithCoverage_DoesNotSetCurrentSavings(t *testing.T) {
 	acctA := "acct-A"
 	keyEC2 := config.AccountConfigKey(acctA, "aws", "ec2")
 	keyRDS := config.AccountConfigKey(acctA, "aws", "rds")
@@ -343,21 +343,18 @@ func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing
 
 	_, byService := summarizeRecommendationsWithCoverage(recs, coverage)
 
-	// current_savings is non-zero where coverage exists and is scaled the
-	// same way potential is (rec.Savings * coverage/100), keyed per service.
-	assert.InDelta(t, 600.0, byService["ec2"].CurrentSavings, 0.001,
-		"ec2 current_savings = 1000 * 60/100")
-	assert.InDelta(t, 100.0, byService["rds"].CurrentSavings, 0.001,
-		"rds current_savings = 400 * 25/100")
+	// PotentialSavings is scaled correctly by coverage.
+	assert.InDelta(t, 600.0, byService["ec2"].PotentialSavings, 0.001,
+		"ec2 potential_savings = 1000 * 60/100")
+	assert.InDelta(t, 100.0, byService["rds"].PotentialSavings, 0.001,
+		"rds potential_savings = 400 * 25/100")
 
-	// And it matches PotentialSavings (both flow from the same scaled amount).
-	assert.InDelta(t, byService["ec2"].PotentialSavings, byService["ec2"].CurrentSavings, 0.001)
-	assert.InDelta(t, byService["rds"].PotentialSavings, byService["rds"].CurrentSavings, 0.001)
-
-	// Sanity: every populated service has a strictly positive current_savings
-	// when coverage is configured (the bug produced 0 here).
-	require.Positive(t, byService["ec2"].CurrentSavings)
-	require.Positive(t, byService["rds"].CurrentSavings)
+	// CurrentSavings is NOT set here — it remains the float64 zero value.
+	// getDashboardSummary populates it from purchase history (issue #1031).
+	assert.Equal(t, 0.0, byService["ec2"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
+	assert.Equal(t, 0.0, byService["rds"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
 }
 
 // TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell is the
@@ -1200,6 +1197,54 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	require.Contains(t, result.ByService, "EC2")
 	assert.InDelta(t, 120.0, result.ByService["EC2"].CurrentSavings, 0.001,
 		"current_savings field must carry the active purchase's EstimatedSavings")
+}
+
+// TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments is the
+// issue #1031 regression: a service with recommendations but no active purchase
+// history must ship current_savings: 0, not current_savings: potential_savings.
+//
+// The bug was that summarizeRecommendationsWithCoverage set CurrentSavings to
+// the same scaled value as PotentialSavings. getDashboardSummary only overwrites
+// CurrentSavings for services that appear in the purchase-history result, so
+// services with no purchases retained the wrong non-zero value.
+func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *testing.T) {
+	ctx := context.Background()
+
+	// No purchases at all — represents a new account that has recommendations
+	// but has not yet acted on them.
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
+		[]config.RecommendationRecord{
+			{Service: "EC2", Savings: 500.0},
+			{Service: "RDS", Savings: 300.0},
+		}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(
+		[]config.PurchaseHistoryRecord{}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    mockStore,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// PotentialSavings must be populated from recommendations.
+	assert.InDelta(t, 500.0, result.ByService["EC2"].PotentialSavings, 0.001)
+	assert.InDelta(t, 300.0, result.ByService["RDS"].PotentialSavings, 0.001)
+
+	// CurrentSavings must be 0 — no active commitments exist yet.
+	// Before the fix, this incorrectly equalled PotentialSavings because
+	// summarizeRecommendationsWithCoverage also wrote CurrentSavings (issue #1031).
+	assert.Equal(t, 0.0, result.ByService["EC2"].CurrentSavings,
+		"no active commitments: current_savings must be 0, not equal to potential_savings")
+	assert.Equal(t, 0.0, result.ByService["RDS"].CurrentSavings,
+		"no active commitments: current_savings must be 0, not equal to potential_savings")
 }
 
 func TestHandler_calculateCurrentCoverage(t *testing.T) {
