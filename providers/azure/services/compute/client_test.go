@@ -506,6 +506,72 @@ func TestComputeClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	assert.Contains(t, err.Error(), "no pricing data found")
 }
 
+// TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption verifies that an
+// unrecognised payment option fails loud rather than being silently billed as
+// all-upfront (owner policy: no silent fallbacks on money-affecting fields).
+// Pricing is fully present, so the failure is solely on the payment-option
+// branch. Pre-fix the default branch set upfrontCost = totalCost and returned a
+// valid OfferingDetails with no error.
+func TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption(t *testing.T) {
+	ctx := context.Background()
+
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(
+		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()),
+		nil,
+	)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		PaymentOption: "weekly-bananas",
+	}
+
+	details, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Nil(t, details)
+	assert.Contains(t, err.Error(), "unsupported payment option")
+}
+
+// TestComputeClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from the hardcoded 0.62
+// multiplier (issue #1020 H4). Pre-fix this would have silently surfaced a
+// fabricated TotalCost/SavingsPercentage as a real quote.
+func TestComputeClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.096,
+				"unitPrice": 0.096,
+				"armRegionName": "eastus",
+				"armSkuName": "Standard_D2s_v3",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &mocks.MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(
+		mocks.CreateMockHTTPResponse(http.StatusOK, onDemandOnly), nil,
+	)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_D2s_v3",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
+}
+
 // MockTokenCredential for testing PurchaseCommitment
 type MockTokenCredential struct {
 	token string
@@ -641,6 +707,7 @@ func TestComputeClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -664,6 +731,7 @@ func TestComputeClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -693,6 +761,7 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1220,4 +1289,95 @@ func TestComputeClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t 
 	// (see providers/azure/services/internal/reservations/displayname.go).
 	assert.Regexp(t, `^vm-`, capturedDisplayName)
 	assert.Contains(t, capturedDisplayName, "Standard_D2s_v3")
+}
+
+// TestCheckAndRegisterCapacityProvider_NonTwoxx is a regression test for M3:
+// before this fix, checkAndRegisterCapacityProvider decoded the body
+// unconditionally without checking resp.StatusCode, so a 403/429 with a
+// non-JSON body would produce a misleading "decode provider state" error
+// instead of a clear HTTP status error.
+func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	t.Cleanup(func() { mockHTTP.AssertExpectations(t) })
+	cred := &MockTokenCredential{token: "tok"}
+	client := NewClientWithHTTP(cred, "sub", "eastus", mockHTTP)
+
+	// Return a 403 Forbidden instead of 200 Registered.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "providers/Microsoft.Capacity") &&
+			!strings.Contains(r.URL.Path, "reservationOrders") &&
+			!strings.Contains(r.URL.Path, "calculatePrice")
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusForbidden, `{"error":"AuthorizationFailed"}`), nil).Once()
+
+	err := client.checkAndRegisterCapacityProvider(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403", "error must surface the HTTP status code")
+}
+
+// TestExtractVMPricing_SingularOneYear verifies that extractVMPricing correctly
+// recognises the "1 Year" singular form returned by the Azure Retail Prices API
+// for 1-year reservation terms. Before the fix, the extractor used "%d Years"
+// unconditionally, so the 1-year reservation line was silently skipped and
+// reservationPrice remained 0, causing a false "no reservation pricing found"
+// error even when the pricing row was present.
+func TestExtractVMPricing_SingularOneYear(t *testing.T) {
+	items := []AzureRetailPriceItem{
+		{
+			CurrencyCode:    "USD",
+			RetailPrice:     0.096,
+			UnitPrice:       0.096,
+			ArmRegionName:   "eastus",
+			ArmSKUName:      "Standard_D2s_v3",
+			Type:            "Consumption",
+		},
+		{
+			CurrencyCode:    "USD",
+			RetailPrice:     730.0,
+			ArmRegionName:   "eastus",
+			ArmSKUName:      "Standard_D2s_v3",
+			ReservationTerm: "1 Year",
+			Type:            "Reservation",
+		},
+	}
+
+	onDemand, reservation, currency := extractVMPricing(items, 1)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.096, onDemand, "on-demand price must be extracted")
+	assert.Equal(t, 730.0, reservation, "reservation price for '1 Year' term must be extracted")
+}
+
+// TestExtractVMPricing_PluralThreeYears verifies that the plural form "3 Years"
+// continues to work for multi-year terms.
+func TestExtractVMPricing_PluralThreeYears(t *testing.T) {
+	items := []AzureRetailPriceItem{
+		{CurrencyCode: "USD", RetailPrice: 0.096, UnitPrice: 0.096, Type: "Consumption"},
+		{CurrencyCode: "USD", RetailPrice: 1900.0, ReservationTerm: "3 Years", Type: "Reservation"},
+	}
+
+	onDemand, reservation, currency := extractVMPricing(items, 3)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.096, onDemand)
+	assert.Equal(t, 1900.0, reservation, "reservation price for '3 Years' term must be extracted")
+}
+
+// TestComputeClient_PurchaseCommitment_ZeroCountRejected is a regression test
+// for M6: PurchaseCommitment must reject Count==0 before any HTTP call.
+func TestComputeClient_PurchaseCommitment_ZeroCountRejected(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	t.Cleanup(func() { mockHTTP.AssertExpectations(t) })
+	cred := &MockTokenCredential{token: "tok"}
+	client := NewClientWithHTTP(cred, "sub", "eastus", mockHTTP)
+
+	result, err := client.PurchaseCommitment(ctx, common.Recommendation{
+		ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 0,
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "quantity must be greater than zero")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }

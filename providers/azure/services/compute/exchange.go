@@ -188,8 +188,15 @@ func convertToExchangeableReservation(item *armreservations.ReservationResponse)
 		return nil
 	}
 	id, sku, region, term, displayName, quantity, expiryDate := extractReservationFields(item)
+	orderID := parseReservationOrderID(id)
+	// parseReservationOrderID returns "" for IDs that do not contain the expected
+	// "/reservationOrders/" segment (malformed or unexpected format). Reservations
+	// with an empty order ID are still returned here so the caller can include them
+	// in the inventory view, but callers MUST filter out empty-order-ID entries
+	// before initiating an exchange operation -- the Azure exchange API requires a
+	// non-empty reservationOrderId.
 	return &ExchangeableReservation{
-		ReservationOrderID:  parseReservationOrderID(id),
+		ReservationOrderID:  orderID,
 		ReservationID:       id,
 		SKU:                 sku,
 		Quantity:            quantity,

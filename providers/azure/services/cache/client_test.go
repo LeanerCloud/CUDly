@@ -122,7 +122,19 @@ func createSampleRedisPricingResponse() string {
 				"serviceName": "Azure Cache for Redis",
 				"armSkuName": "Premium_P1",
 				"meterName": "P1 Instance",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 850.0,
+				"unitPrice": 850.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"meterName": "P1 Instance",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{
@@ -369,6 +381,42 @@ func TestCacheClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	_, err := client.GetOfferingDetails(ctx, rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
+}
+
+// TestCacheClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from the hardcoded 0.45
+// multiplier (issue #1020 H4). Pre-fix this would have silently surfaced a
+// fabricated TotalCost/SavingsPercentage as a real quote.
+func TestCacheClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.125,
+				"unitPrice": 0.125,
+				"armRegionName": "eastus",
+				"armSkuName": "Premium_P1",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+
+	rec := common.Recommendation{
+		ResourceType:  "Premium_P1",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
 func TestCacheClient_GetExistingCommitments_Empty(t *testing.T) {
@@ -1030,6 +1078,7 @@ func TestCacheClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1051,6 +1100,7 @@ func TestCacheClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1075,6 +1125,7 @@ func TestCacheClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1233,4 +1284,48 @@ func TestCacheClient_GetValidResourceTypes_PageCapFires(t *testing.T) {
 	skus, err := client.GetValidResourceTypes(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, skus, "page cap must trigger fallback to common SKUs, not an empty result")
+}
+
+// TestExtractRedisPricing_SingularOneYear verifies that extractRedisPricing
+// correctly recognises the "1 Year" singular form returned by the Azure Retail
+// Prices API for 1-year reservation terms. Before the fix, the extractor used
+// "%d Years" unconditionally, so the 1-year reservation line was silently
+// skipped and reservationPrice remained 0, causing a false "no reservation
+// pricing found" error even when the pricing row was present.
+func TestExtractRedisPricing_SingularOneYear(t *testing.T) {
+	items := []CacheRetailPriceItem{
+		{
+			CurrencyCode: "USD",
+			RetailPrice:  0.68,
+			UnitPrice:    0.68,
+			Type:         "Consumption",
+		},
+		{
+			CurrencyCode:    "USD",
+			RetailPrice:     4500.0,
+			ReservationTerm: "1 Year",
+			Type:            "Reservation",
+		},
+	}
+
+	onDemand, reservation, currency := extractRedisPricing(items, 1)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.68, onDemand, "on-demand price must be extracted")
+	assert.Equal(t, 4500.0, reservation, "reservation price for '1 Year' term must be extracted")
+}
+
+// TestExtractRedisPricing_PluralThreeYears verifies that the plural form
+// "3 Years" continues to work for multi-year terms.
+func TestExtractRedisPricing_PluralThreeYears(t *testing.T) {
+	items := []CacheRetailPriceItem{
+		{CurrencyCode: "USD", RetailPrice: 0.68, UnitPrice: 0.68, Type: "Consumption"},
+		{CurrencyCode: "USD", RetailPrice: 11000.0, ReservationTerm: "3 Years", Type: "Reservation"},
+	}
+
+	onDemand, reservation, currency := extractRedisPricing(items, 3)
+
+	assert.Equal(t, "USD", currency)
+	assert.Equal(t, 0.68, onDemand)
+	assert.Equal(t, 11000.0, reservation, "reservation price for '3 Years' term must be extracted")
 }

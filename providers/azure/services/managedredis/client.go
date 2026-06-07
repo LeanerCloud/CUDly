@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +18,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/redis/armredis/v3"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
@@ -65,16 +66,16 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Mana
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient:     httpclient.New(),
 	}
 }
 
 // NewClientWithHTTP creates a new ManagedRedisClient with a custom HTTP client (for testing).
-// When httpClient is nil, a default *http.Client with a 30s timeout is used to avoid
-// nil-deref panics on the first Do call.
+// When httpClient is nil, the SSRF-hardened httpclient.New() is used so the nil
+// fallback also blocks IMDS connections.
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *ManagedRedisClient {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = httpclient.New()
 	}
 	return &ManagedRedisClient{
 		cred:           cred,
@@ -109,22 +110,20 @@ func (c *ManagedRedisClient) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice represents pricing information from the Azure Retail Prices API.
-type AzureRetailPrice struct {
-	Items []struct {
-		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
-		ArmRegionName   string  `json:"armRegionName"`
-		ProductName     string  `json:"productName"`
-		ServiceName     string  `json:"serviceName"`
-		ArmSKUName      string  `json:"armSkuName"`
-		MeterName       string  `json:"meterName"`
-		ReservationTerm string  `json:"reservationTerm"`
-		Type            string  `json:"type"`
-	} `json:"Items"`
-	NextPageLink string `json:"NextPageLink"`
-	Count        int    `json:"Count"`
+// redisPriceItem is a single record from the Azure Retail Prices API used by
+// pricing.FetchAll as the type parameter T. Named so it can satisfy the
+// constraint; the anonymous struct in AzureRetailPrice was the blocker.
+type redisPriceItem struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	ArmSKUName      string  `json:"armSkuName"`
+	MeterName       string  `json:"meterName"`
+	ReservationTerm string  `json:"reservationTerm"`
+	Type            string  `json:"type"`
 }
 
 // GetRecommendations gets Redis Cache reservation recommendations from the Azure Consumption API.
@@ -225,20 +224,6 @@ func (c *ManagedRedisClient) reservationDetailToCommitment(detail *armconsumptio
 	return cm
 }
 
-// parseTermYears maps a reservation term string to an integer year count.
-// Returns an error for any value outside the explicit allowlist so callers
-// fail closed rather than silently coercing to a 1-year purchase.
-func parseTermYears(term string) (int, error) {
-	switch strings.ToLower(strings.TrimSpace(term)) {
-	case "", "1", "1yr", "1y":
-		return 1, nil
-	case "3", "3yr", "3y":
-		return 3, nil
-	default:
-		return 0, fmt.Errorf("unsupported reservation term: %s", term)
-	}
-}
-
 // PurchaseCommitment purchases Azure Cache for Redis reserved capacity using the two-step
 // calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
 func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
@@ -258,8 +243,12 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
-	termYears, termErr := parseTermYears(rec.Term)
+	termYears, termErr := reservations.ParseTermYears(rec.Term)
 	if termErr != nil {
 		result.Error = termErr
 		return result, result.Error
@@ -326,7 +315,7 @@ func (c *ManagedRedisClient) ValidateOffering(ctx context.Context, rec common.Re
 
 // GetOfferingDetails retrieves reservation offering details from the Azure Retail Prices API.
 func (c *ManagedRedisClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears, err := parseTermYears(rec.Term)
+	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
 	}
@@ -454,11 +443,11 @@ type RedisPricing struct {
 	SavingsPercentage float64
 }
 
-// getRedisPricing fetches pricing from the Azure Retail Prices API, following
-// pagination via NextPageLink until all pages are consumed.
+// getRedisPricing fetches pricing from the Azure Retail Prices API using the
+// shared pricing.FetchAll walker, which enforces a seen-URL guard, a max-pages
+// cap, and a per-page timeout independent of the caller's context budget. This
+// replaces the former hand-rolled NextPageLink loop (issue #1021 H2).
 func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region string, termYears int) (*RedisPricing, error) {
-	baseURL := "https://prices.azure.com/api/retail/prices"
-
 	filter := fmt.Sprintf("serviceName eq 'Azure Cache for Redis' and armRegionName eq '%s' and contains(armSkuName, '%s')",
 		region, sku)
 
@@ -466,43 +455,18 @@ func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region st
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
 
-	nextURL := baseURL + "?" + params.Encode()
+	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
-	var accumulated AzureRetailPrice
-
-	for nextURL != "" {
-		req, err := http.NewRequestWithContext(ctx, "GET", nextURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to call pricing API: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
-		}
-
-		var page AzureRetailPrice
-		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to decode pricing response: %w", err)
-		}
-		resp.Body.Close()
-
-		accumulated.Items = append(accumulated.Items, page.Items...)
-		nextURL = page.NextPageLink
+	items, err := pricing.FetchAll[redisPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Redis Cache pricing: %w", err)
 	}
 
-	if len(accumulated.Items) == 0 {
+	if len(items) == 0 {
 		return nil, fmt.Errorf("no pricing data found for Redis Cache SKU %s in region %s", sku, region)
 	}
 
-	onDemandPrice, reservationPrice, currency := parsePriceItems(accumulated.Items, termYears)
+	onDemandPrice, reservationPrice, currency := parsePriceItems(items, termYears)
 
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no on-demand pricing found for Redis Cache SKU %s", sku)
@@ -524,22 +488,21 @@ func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region st
 	}, nil
 }
 
+// azureTermString returns the Retail Prices API ReservationTerm string for the
+// given number of years. The API uses the singular form "1 Year" for one year
+// and the plural form "N Years" for two or more years.
+func azureTermString(termYears int) string {
+	if termYears == 1 {
+		return "1 Year"
+	}
+	return fmt.Sprintf("%d Years", termYears)
+}
+
 // parsePriceItems extracts on-demand price, reservation price, and currency
 // from the flat list returned by the Azure Retail Prices API.
-func parsePriceItems(items []struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	MeterName       string  `json:"meterName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}, termYears int) (onDemand, reservation float64, currency string) {
+func parsePriceItems(items []redisPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
-	termStr := fmt.Sprintf("%d Years", termYears)
+	termStr := azureTermString(termYears)
 	for _, item := range items {
 		if item.CurrencyCode != "" {
 			currency = item.CurrencyCode

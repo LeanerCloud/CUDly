@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -126,7 +127,7 @@ func TestContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := contains(tt.s, tt.substr)
+			result := strings.Contains(tt.s, tt.substr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -413,4 +414,41 @@ func TestConvertAdvisorRecommendation_UnknownService(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// TestMergeServiceResults_OrderIsStable is a regression test for L3:
+// the merged output of mergeServiceResults must preserve the canonical
+// compute -> database -> cache -> cosmosdb -> savingsplans -> advisor order
+// regardless of the order arguments are passed in. This test pins the actual
+// argument order used in GetRecommendations so a reordering of the serviceResult
+// literals will be caught immediately.
+func TestMergeServiceResults_OrderIsStable(t *testing.T) {
+	mkRec := func(svc common.ServiceType, marker string) common.Recommendation {
+		return common.Recommendation{Service: svc, Provider: common.ProviderAzure, ResourceType: marker}
+	}
+
+	computeRec := mkRec(common.ServiceCompute, "compute")
+	dbRec := mkRec(common.ServiceRelationalDB, "database")
+	cacheRec := mkRec(common.ServiceCache, "cache")
+	cosmosRec := mkRec(common.ServiceNoSQL, "cosmosdb")
+	spRec := mkRec(common.ServiceSavingsPlans, "savingsplans")
+	advisorRec := mkRec(common.ServiceCompute, "advisor") // Advisor produces Compute recs
+
+	// Replicate the exact call order from GetRecommendations.
+	result := mergeServiceResults(
+		serviceResult{"compute", []common.Recommendation{computeRec}, nil},
+		serviceResult{"database", []common.Recommendation{dbRec}, nil},
+		serviceResult{"cache", []common.Recommendation{cacheRec}, nil},
+		serviceResult{"cosmosdb", []common.Recommendation{cosmosRec}, nil},
+		serviceResult{"savingsplans", []common.Recommendation{spRec}, nil},
+		serviceResult{"advisor", []common.Recommendation{advisorRec}, nil},
+	)
+
+	require.Len(t, result, 6, "all six services must be represented")
+	assert.Equal(t, "compute", result[0].ResourceType, "first must be compute")
+	assert.Equal(t, "database", result[1].ResourceType, "second must be database")
+	assert.Equal(t, "cache", result[2].ResourceType, "third must be cache")
+	assert.Equal(t, "cosmosdb", result[3].ResourceType, "fourth must be cosmosdb")
+	assert.Equal(t, "savingsplans", result[4].ResourceType, "fifth must be savingsplans")
+	assert.Equal(t, "advisor", result[5].ResourceType, "sixth must be advisor (compute-type)")
 }

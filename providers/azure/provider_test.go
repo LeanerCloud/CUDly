@@ -306,7 +306,7 @@ func TestAzureProvider_GetCredentials_NotConfigured(t *testing.T) {
 	if !p.IsConfigured() {
 		_, err := p.GetCredentials()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	}
 }
 
@@ -319,7 +319,7 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 		})
 		err := p.ValidateCredentials(context.Background())
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
 
 	t.Run("success with mock subscriptions client", func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 
 		err := p.ValidateCredentials(context.Background())
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure credentials validation failed")
+		assert.Contains(t, err.Error(), "azure credentials validation failed")
 	})
 }
 
@@ -380,7 +380,7 @@ func TestAzureProvider_GetServiceClient_NotConfigured(t *testing.T) {
 	if !p.IsConfigured() {
 		_, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	}
 }
 
@@ -434,7 +434,7 @@ func TestAzureProvider_GetRecommendationsClient_NotConfigured(t *testing.T) {
 	if !p.IsConfigured() {
 		_, err := p.GetRecommendationsClient(context.Background())
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	}
 }
 
@@ -811,7 +811,7 @@ func TestAzureProvider_GetCredentials(t *testing.T) {
 		})
 		_, err := p.GetCredentials()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
 
 	t.Run("success returns credentials info", func(t *testing.T) {
@@ -1194,7 +1194,7 @@ func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
 		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
 		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "sub-1")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
 }
 
@@ -1218,6 +1218,6 @@ func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
 		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
 		_, err := p.GetRecommendationsClientForAccount(context.Background(), "sub-1")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Azure is not configured")
+		assert.Contains(t, err.Error(), "azure provider is not configured")
 	})
 }

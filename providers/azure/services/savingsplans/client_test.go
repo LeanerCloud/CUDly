@@ -1,13 +1,18 @@
 package savingsplans
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -40,14 +45,18 @@ func (p *mockListAllPager) NextPage(_ context.Context) (armbillingbenefits.Savin
 type mockOrderAliasClient struct {
 	createPoller SavingsPlanOrderAliasPoller
 	createErr    error
+	// capturedName records the alias name passed to BeginCreate so tests can
+	// assert the deterministic idempotency-derived name.
+	capturedName string
 }
 
 func (m *mockOrderAliasClient) BeginCreate(
 	_ context.Context,
-	_ string,
+	savingsPlanOrderAliasName string,
 	_ armbillingbenefits.SavingsPlanOrderAliasModel,
 	_ *armbillingbenefits.SavingsPlanOrderAliasClientBeginCreateOptions,
 ) (SavingsPlanOrderAliasPoller, error) {
+	m.capturedName = savingsPlanOrderAliasName
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -262,6 +271,58 @@ func TestPurchaseCommitment_BadTerm(t *testing.T) {
 	assert.False(t, result.Success)
 }
 
+// TestPurchaseCommitment_DeterministicAliasNameFromToken verifies that when an
+// idempotency token is supplied, the SavingsPlanOrderAlias name is derived
+// deterministically from it (the canonical GUID) rather than from a timestamp.
+// Because the alias is created with an HTTP PUT, a re-drive with the same token
+// re-PUTs the same alias instead of buying a second savings plan (issue #636).
+// Pre-fix this test FAILS: PurchaseCommitment ignored PurchaseOptions and always
+// used a time.Now().UnixNano() alias name, so two re-drives produced two distinct
+// aliases (two purchases).
+func TestPurchaseCommitment_DeterministicAliasNameFromToken(t *testing.T) {
+	orderID := "/subscriptions/sub/providers/Microsoft.BillingBenefits/savingsPlanOrders/order1"
+	resp := armbillingbenefits.SavingsPlanOrderAliasClientCreateResponse{
+		SavingsPlanOrderAliasModel: armbillingbenefits.SavingsPlanOrderAliasModel{ID: &orderID},
+	}
+
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+	wantName := common.ReservationOrderID(token, "")
+	require.NotEmpty(t, wantName, "token must yield a deterministic GUID")
+
+	// First drive.
+	mock1 := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c1 := NewClient(nil, "sub", "eastus")
+	c1.SetOrderAliasClient(mock1)
+	_, err := c1.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{IdempotencyToken: token})
+	require.NoError(t, err)
+	assert.Equal(t, wantName, mock1.capturedName)
+
+	// Re-drive of the same execution: same token must yield the same alias name.
+	mock2 := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c2 := NewClient(nil, "sub", "eastus")
+	c2.SetOrderAliasClient(mock2)
+	_, err = c2.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{IdempotencyToken: token})
+	require.NoError(t, err)
+	assert.Equal(t, mock1.capturedName, mock2.capturedName,
+		"re-drive with the same idempotency token must reuse the alias name (PUT is idempotent)")
+}
+
+// TestPurchaseCommitment_EmptyTokenUsesTimestampName verifies the CLI path (no
+// idempotency token) retains a non-deterministic timestamp-based alias name.
+func TestPurchaseCommitment_EmptyTokenUsesTimestampName(t *testing.T) {
+	orderID := "/subscriptions/sub/providers/Microsoft.BillingBenefits/savingsPlanOrders/order1"
+	resp := armbillingbenefits.SavingsPlanOrderAliasClientCreateResponse{
+		SavingsPlanOrderAliasModel: armbillingbenefits.SavingsPlanOrderAliasModel{ID: &orderID},
+	}
+	mock := &mockOrderAliasClient{createPoller: &mockPoller{resp: resp}}
+	c := NewClient(nil, "sub", "eastus")
+	c.SetOrderAliasClient(mock)
+	_, err := c.PurchaseCommitment(context.Background(), makeRec("1yr"), common.PurchaseOptions{})
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(mock.capturedName, "cudly-"),
+		"empty token should keep the timestamp-based cudly-<nanos> alias name")
+}
+
 // --- ValidateOffering ---
 
 func TestValidateOffering_Valid(t *testing.T) {
@@ -409,6 +470,110 @@ func TestGetOfferingDetails_WrongDetails(t *testing.T) {
 	_, err := c.GetOfferingDetails(context.Background(), rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
+}
+
+// --- HTTP client regression tests (issue #1021) ---
+
+// mockHTTPClient is a testify/mock-based HTTPClient stub for savingsplans tests.
+type mockHTTPClient struct{ mock.Mock }
+
+func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	args := m.Called(req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*http.Response), args.Error(1)
+}
+
+func fakeHTTPResp(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// TestNewClient_UsesHardenedHTTPClient verifies that NewClient installs the
+// SSRF-hardened httpclient (blocks IMDS at 169.254.169.254) rather than a
+// bare &http.Client{}. Pre-fix this would have passed with a bare client that
+// allows IMDS connections (issue #1021 H1).
+func TestNewClient_UsesHardenedHTTPClient(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "hardened client must reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestNewClientWithHTTP_NilFallbackIsHardened verifies that passing nil as the
+// httpClient falls back to httpclient.New() (SSRF-hardened), not bare &http.Client{}.
+func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
+	c := NewClientWithHTTP(nil, "sub", "eastus", nil)
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "nil-fallback client must also reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestFetchOnDemandRate_NotFound verifies that fetchOnDemandRate returns an
+// error (not (0, nil)) when no pricing item is found. Pre-fix the function
+// returned (0, nil) which conflated "not found" with "rate is zero" and would
+// silently corrupt downstream savings calculations (issue #1021 H3,
+// feedback_nullable_not_zero, feedback_empty_string_vs_error).
+func TestFetchOnDemandRate_NotFound(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, err := c.fetchOnDemandRate(context.Background(), "Compute")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no on-demand pricing found")
+}
+
+// TestFetchOnDemandRate_ReturnsFirstPositivePrice verifies the happy path:
+// when at least one item with RetailPrice > 0 exists, it is returned without error.
+func TestFetchOnDemandRate_ReturnsFirstPositivePrice(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	body := `{
+		"Items": [
+			{"currencyCode":"USD","retailPrice":1.5,"unitPrice":1.5,"type":"Consumption","armSkuName":"Compute"}
+		],
+		"NextPageLink": ""
+	}`
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, body), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	rate, err := c.fetchOnDemandRate(context.Background(), "Compute")
+	require.NoError(t, err)
+	assert.InDelta(t, 1.5, rate, 0.001)
+}
+
+// TestFetchOnDemandRate_URLEncoding verifies that the $filter value is built
+// with url.Values.Encode() so that spaces and quotes are percent-encoded rather
+// than passed raw in the URL (issue #1021 H3).
+func TestFetchOnDemandRate_URLEncoding(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	// Capture the request URL and assert it is properly encoded.
+	var capturedURL string
+	h.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		capturedURL = req.URL.RawQuery
+		return true
+	})).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, _ = c.fetchOnDemandRate(context.Background(), "Compute")
+
+	// The raw query must not contain unencoded spaces or single-quotes.
+	assert.NotContains(t, capturedURL, " ", "URL must not contain unencoded spaces")
+	assert.NotContains(t, capturedURL, "'", "URL must not contain unencoded single-quotes")
+	assert.Contains(t, capturedURL, "%24filter", "URL must contain percent-encoded $filter key")
 }
 
 // --- toAzureTerm ---

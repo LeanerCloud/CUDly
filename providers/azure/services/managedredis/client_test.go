@@ -107,7 +107,7 @@ func samplePricingJSON() string {
 				"serviceName": "Azure Cache for Redis",
 				"armSkuName": "Premium_P1",
 				"meterName": "P1 Instance",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			},
 			{
@@ -156,6 +156,66 @@ func TestNewClient(t *testing.T) {
 	assert.Equal(t, "sub-123", c.subscriptionID)
 	assert.Equal(t, "eastus", c.region)
 	assert.NotNil(t, c.httpClient)
+}
+
+// TestNewClient_UsesHardenedHTTPClient verifies that NewClient installs the
+// SSRF-hardened httpclient (blocks IMDS at 169.254.169.254) rather than a
+// bare &http.Client{}. Pre-fix this would have passed with a bare client that
+// allows IMDS connections (issue #1021 H1).
+func TestNewClient_UsesHardenedHTTPClient(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	require.NotNil(t, c.httpClient)
+	// The hardened client blocks IMDS; the bare client does not.
+	// Attempt a dial to the IMDS address and confirm it is rejected.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "hardened client must reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestNewClientWithHTTP_NilFallbackIsHardened verifies that passing nil as the
+// httpClient falls back to httpclient.New() (SSRF-hardened), not bare &http.Client{}.
+func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
+	c := NewClientWithHTTP(nil, "sub", "eastus", nil)
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "nil-fallback client must also reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestGetOfferingDetails_NoReservationPricing verifies that when the Retail
+// Prices API returns on-demand pricing but no reservation line, GetOfferingDetails
+// returns an error rather than fabricating a price from a hardcoded multiplier
+// (issue #1020 H4). Pre-fix this would have returned a fabricated price silently.
+func TestGetOfferingDetails_NoReservationPricing(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.125,
+				"unitPrice": 0.125,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": "",
+		"Count": 1
+	}`
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, onDemandOnly), nil)
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
 func TestNewClientWithHTTP(t *testing.T) {
@@ -481,7 +541,7 @@ func TestGetOfferingDetails_Paginated(t *testing.T) {
 				"serviceName": "Azure Cache for Redis",
 				"armSkuName": "Premium_P1",
 				"meterName": "P1 Instance",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
 				"type": "Reservation"
 			}
 		],
@@ -560,7 +620,7 @@ func TestPurchaseCommitment_Accepted(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -572,7 +632,7 @@ func TestPurchaseCommitment_TokenError(t *testing.T) {
 	cred := &mockTokenCredential{err: errors.New("token error")}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -588,7 +648,7 @@ func TestPurchaseCommitment_HTTPError(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -607,7 +667,7 @@ func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -722,13 +782,6 @@ func TestConvertRecommendation_legacy(t *testing.T) {
 	assert.Equal(t, 0.0, *rec.RecurringMonthlyCost)
 }
 
-// -- AzureRetailPrice struct --
-
-func TestAzureRetailPriceStruct(t *testing.T) {
-	p := AzureRetailPrice{Count: 2}
-	assert.Equal(t, 2, p.Count)
-}
-
 // -- RedisPricing struct --
 
 func TestRedisPricingStruct(t *testing.T) {
@@ -779,4 +832,23 @@ func TestPurchaseCommitment_TagInjection(t *testing.T) {
 	tags, hasTags := body["tags"].(map[string]interface{})
 	require.True(t, hasTags, "tags field must be present in purchase body when Source is set")
 	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
+}
+
+// TestPurchaseCommitment_ZeroCountRejected is a regression test for M6:
+// PurchaseCommitment must reject Count==0 before issuing any HTTP call.
+// An Advisor recommendation with a missing qty field defaults to 0 -- without
+// this guard a zero-quantity purchase would reach the Azure API and produce a
+// confusing 400.
+func TestPurchaseCommitment_ZeroCountRejected(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub", "eastus", h)
+	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr", Count: 0,
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "quantity must be greater than zero")
+	h.AssertNotCalled(t, "Do", mock.Anything)
 }

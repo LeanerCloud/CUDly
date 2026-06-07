@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -339,34 +340,54 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 		return fmt.Errorf("get token: %w", err)
 	}
 
-	apiVersion := "2021-04-01"
+	const apiVersion = "2021-04-01"
+	state, err := c.fetchCapacityProviderState(ctx, token.Token, apiVersion)
+	if err != nil {
+		return err
+	}
+	if state.RegistrationState == "Registered" {
+		return nil
+	}
+	return c.triggerCapacityProviderRegistration(ctx, token.Token, apiVersion, state.RegistrationState)
+}
+
+// fetchCapacityProviderState queries the ARM providers API and returns the
+// current registration state of Microsoft.Capacity.
+func (c *ComputeClient) fetchCapacityProviderState(ctx context.Context, bearerToken, apiVersion string) (providerRegistrationState, error) {
 	checkURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity?api-version=%s",
 		c.subscriptionID, apiVersion,
 	)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return providerRegistrationState{}, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token.Token)
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("check provider: %w", err)
+		return providerRegistrationState{}, fmt.Errorf("check provider: %w", err)
 	}
-	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Non-2xx from the provider check (e.g. 403 permissions, 429 throttle).
+		// Log and return so the purchase attempt can still proceed; a failed
+		// registration check is non-fatal.
+		return providerRegistrationState{}, fmt.Errorf("check Microsoft.Capacity provider status returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
 
 	var state providerRegistrationState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return fmt.Errorf("decode provider state: %w", err)
+	if err := json.Unmarshal(body, &state); err != nil {
+		return providerRegistrationState{}, fmt.Errorf("decode provider state: %w", err)
 	}
+	return state, nil
+}
 
-	if state.RegistrationState == "Registered" {
-		return nil
-	}
-
-	// Trigger registration
+// triggerCapacityProviderRegistration POSTs to the ARM register endpoint to
+// initiate Microsoft.Capacity provider registration.
+func (c *ComputeClient) triggerCapacityProviderRegistration(ctx context.Context, bearerToken, apiVersion, currentState string) error {
 	registerURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/providers/Microsoft.Capacity/register?api-version=%s",
 		c.subscriptionID, apiVersion,
@@ -375,14 +396,19 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("build register request: %w", err)
 	}
-	regReq.Header.Set("Authorization", "Bearer "+token.Token)
+	regReq.Header.Set("Authorization", "Bearer "+bearerToken)
+
 	regResp, err := c.httpClient.Do(regReq)
 	if err != nil {
 		return fmt.Errorf("register provider: %w", err)
 	}
+	regBody, _ := io.ReadAll(regResp.Body)
 	regResp.Body.Close()
+	if regResp.StatusCode < 200 || regResp.StatusCode >= 300 {
+		return fmt.Errorf("register Microsoft.Capacity provider returned HTTP %d: %s", regResp.StatusCode, string(regBody))
+	}
 
-	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", state.RegistrationState)
+	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", currentState)
 	return nil
 }
 
@@ -393,9 +419,9 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 // in the portal AND a re-driven purchase can find it via tag lookup before
 // buying a duplicate (issue #721).
 func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, idempotencyToken string) ([]byte, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, err
 	}
 	requestBody := map[string]interface{}{
 		"sku":      map[string]string{"name": rec.ResourceType},
@@ -454,6 +480,10 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
 	// Ensure Microsoft.Capacity provider is registered (cached after first call).
 	c.ensureCapacityProviderRegistered(ctx)
@@ -503,9 +533,9 @@ func (c *ComputeClient) ValidateOffering(ctx context.Context, rec common.Recomme
 
 // GetOfferingDetails retrieves VM RI offering details from Azure Retail Prices API
 func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, fmt.Errorf("invalid term: %w", err)
 	}
 
 	pricing, err := c.getVMPricing(ctx, rec.ResourceType, c.region, termYears)
@@ -524,7 +554,10 @@ func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		upfrontCost = totalCost
+		// Fail loud on an unrecognised payment option rather than silently
+		// billing it as all-upfront (owner policy: no silent fallbacks on
+		// money-affecting fields).
+		return nil, fmt.Errorf("unsupported payment option for Azure VM offering details: %q", rec.PaymentOption)
 	}
 
 	return &common.OfferingDetails{
@@ -657,8 +690,13 @@ func (c *ComputeClient) getVMPricing(ctx context.Context, vmSize, region string,
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = onDemandPrice * hoursInTerm * 0.62 // Azure VMs typically 38% discount
+		return nil, fmt.Errorf("no reservation pricing found for VM size %s (%d year) in region %s", vmSize, termYears, region)
 	}
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
@@ -696,10 +734,20 @@ func (c *ComputeClient) fetchAzurePricing(ctx context.Context, filter string) (*
 	return &AzureRetailPrice{Items: items}, nil
 }
 
+// azureTermString returns the Retail Prices API ReservationTerm string for the
+// given number of years. The API uses the singular form "1 Year" for one year
+// and the plural form "N Years" for two or more years.
+func azureTermString(termYears int) string {
+	if termYears == 1 {
+		return "1 Year"
+	}
+	return fmt.Sprintf("%d Years", termYears)
+}
+
 // extractVMPricing extracts on-demand and reservation pricing from price items
 func extractVMPricing(items []AzureRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
-	termStr := fmt.Sprintf("%d Years", termYears)
+	termStr := azureTermString(termYears)
 
 	for _, item := range items {
 		if item.CurrencyCode != "" {

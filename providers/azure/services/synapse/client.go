@@ -226,20 +226,6 @@ func (c *SynapseClient) convertSynapseReservation(detail *armconsumption.Reserva
 	return commitment
 }
 
-// parseReservationTermYears maps a term string to an integer year count.
-// Returns an error for any value outside the explicit allowlist so that
-// callers fail closed rather than silently coercing to a 1-year purchase.
-func parseReservationTermYears(term string) (int, error) {
-	switch strings.ToLower(strings.TrimSpace(term)) {
-	case "", "1", "1yr", "1y":
-		return 1, nil
-	case "3", "3yr", "3y":
-		return 3, nil
-	default:
-		return 0, fmt.Errorf("unsupported reservation term: %s", term)
-	}
-}
-
 // PurchaseCommitment purchases Synapse reserved capacity via the Azure
 // Reservations API two-step flow (calculatePrice -> purchase). The reserved
 // resource type is "SqlDW" which covers Dedicated SQL Pool DWU reservations.
@@ -270,7 +256,7 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		return result, result.Error
 	}
 
-	termYears, err := parseReservationTermYears(rec.Term)
+	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		result.Error = err
 		return result, result.Error
@@ -337,7 +323,7 @@ func (c *SynapseClient) ValidateOffering(ctx context.Context, rec common.Recomme
 // GetOfferingDetails retrieves Synapse reservation offering details from the
 // Azure Retail Prices API.
 func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears, err := parseReservationTermYears(rec.Term)
+	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +344,10 @@ func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		upfrontCost = totalCost
+		// Fail loud on an unrecognised payment option rather than silently
+		// billing it as all-upfront (owner policy: no silent fallbacks on
+		// money-affecting fields).
+		return nil, fmt.Errorf("unsupported payment option for Azure Synapse offering details: %q", rec.PaymentOption)
 	}
 
 	return &common.OfferingDetails{

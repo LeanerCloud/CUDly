@@ -206,7 +206,9 @@ func CreateSampleReservationDetails(subscriptionID, region string) []*armconsump
 	}
 }
 
-// CreateSampleVMPricingResponse creates a sample VM pricing response for testing
+// CreateSampleVMPricingResponse creates a sample VM pricing response for testing.
+// Includes both 1-year and 3-year reservation entries so 3YearTerm tests exercise
+// real pricing rather than a fabricated fallback.
 func CreateSampleVMPricingResponse() string {
 	return `{
 		"Items": [
@@ -218,7 +220,18 @@ func CreateSampleVMPricingResponse() string {
 				"productName": "Virtual Machines D Series",
 				"serviceName": "Virtual Machines",
 				"armSkuName": "Standard_D2s_v3",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 1200.0,
+				"unitPrice": 0.096,
+				"armRegionName": "eastus",
+				"productName": "Virtual Machines D Series",
+				"serviceName": "Virtual Machines",
+				"armSkuName": "Standard_D2s_v3",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{

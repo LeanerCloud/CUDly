@@ -3,19 +3,18 @@ package savingsplans
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 )
 
 // SavingsPlanOrderAliasAPI defines operations on SavingsPlanOrderAlias (enables mocking).
@@ -77,14 +76,16 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Clie
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient:     httpclient.New(),
 	}
 }
 
 // NewClientWithHTTP creates a new Azure Savings Plans client with a custom HTTP client (for testing).
+// When httpClient is nil, the SSRF-hardened httpclient.New() is used so the nil
+// fallback also blocks IMDS connections.
 func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = httpclient.New()
 	}
 	return &Client{
 		cred:           cred,
@@ -206,7 +207,17 @@ func convertSavingsPlan(sp *armbillingbenefits.SavingsPlanModel, subscriptionID 
 }
 
 // PurchaseCommitment creates an Azure Savings Plan via the OrderAlias API.
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, _ common.PurchaseOptions) (common.PurchaseResult, error) {
+//
+// Idempotency: the SavingsPlanOrderAlias is created with an HTTP PUT on the
+// alias name (Microsoft.BillingBenefits/savingsPlanOrderAliases/{name}), so a
+// PUT with a previously-used name returns the existing order alias rather than
+// creating a second savings plan. When opts.IdempotencyToken is set (the
+// purchase-execution path), the alias name is derived deterministically from it
+// via common.ReservationOrderID so a re-drive of a stranded execution (issue
+// #636) re-PUTs the same alias instead of double-buying. When the token is empty
+// (the CLI path, which has no owning execution), the prior timestamp-based name
+// is retained.
+func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
@@ -259,7 +270,10 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		aliasClient = &realOrderAliasClient{client: real}
 	}
 
-	aliasName := fmt.Sprintf("cudly-%d", time.Now().UnixNano())
+	// Derive a deterministic alias name from the idempotency token when present
+	// so a re-drive PUTs the same alias (idempotent), falling back to the prior
+	// timestamp-based name on the CLI path (empty token).
+	aliasName := common.ReservationOrderID(opts.IdempotencyToken, fmt.Sprintf("cudly-%d", time.Now().UnixNano()))
 	poller, err := aliasClient.BeginCreate(ctx, aliasName, body, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to begin savings plan purchase: %w", err)
@@ -368,22 +382,20 @@ func checkValidateResponse(resp armbillingbenefits.RPClientValidatePurchaseRespo
 	return nil
 }
 
-// AzureRetailPrice represents a pricing record from the Azure Retail Prices API.
-//
-// NOTE: this struct is also defined in services/compute and services/search.
-// Consolidating it into a shared internal package is tracked as a follow-up.
-type AzureRetailPrice struct {
-	Items []struct {
-		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
-		ArmRegionName   string  `json:"armRegionName"`
-		ProductName     string  `json:"productName"`
-		ServiceName     string  `json:"serviceName"`
-		ArmSKUName      string  `json:"armSkuName"`
-		ReservationTerm string  `json:"reservationTerm"`
-		Type            string  `json:"type"`
-	} `json:"Items"`
+// savingsPlanPriceItem is a single record from the Azure Retail Prices API used
+// by pricing.FetchAll as the type parameter T (requires a named type, not an
+// anonymous struct). NOTE: this struct mirrors the one in services/compute and
+// services/search; consolidating into internal/pricing is tracked as a follow-up.
+type savingsPlanPriceItem struct {
+	CurrencyCode    string  `json:"currencyCode"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
+	ArmRegionName   string  `json:"armRegionName"`
+	ProductName     string  `json:"productName"`
+	ServiceName     string  `json:"serviceName"`
+	ArmSKUName      string  `json:"armSkuName"`
+	ReservationTerm string  `json:"reservationTerm"`
+	Type            string  `json:"type"`
 }
 
 // GetOfferingDetails retrieves pricing details for an Azure Savings Plan offering.
@@ -442,54 +454,33 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 }
 
 // fetchOnDemandRate queries the Azure Retail Prices API for the on-demand hourly
-// rate for the given plan type. Returns 0 and an error if unavailable.
+// rate for the given plan type. The $filter is built with url.Values so that
+// spaces and quotes are properly percent-encoded (issue #1021 H3). Pagination is
+// handled by pricing.FetchAll (seen-URL guard, max-pages cap, per-page timeout).
+// Returns an error when no price record is found rather than (0, nil), which would
+// conflate "zero rate" with "not found" (feedback_nullable_not_zero).
 func (c *Client) fetchOnDemandRate(ctx context.Context, planType string) (float64, error) {
 	filter := fmt.Sprintf(
 		"serviceFamily eq 'Compute' and priceType eq 'Consumption' and armSkuName eq '%s'",
-		url.QueryEscape(planType),
+		planType,
 	)
-	apiURL := fmt.Sprintf(
-		"https://prices.azure.com/api/retail/prices?$filter=%s",
-		filter,
-	)
+	params := url.Values{}
+	params.Add("$filter", filter)
+	params.Add("api-version", "2023-01-01-preview")
+	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	items, err := pricing.FetchAll[savingsPlanPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to fetch on-demand rate for plan type %s: %w", planType, err)
 	}
 
-	// Attach Bearer token if credential is available.
-	if c.cred != nil {
-		tokenOpts := policy.TokenRequestOptions{Scopes: []string{"https://management.azure.com/.default"}}
-		token, err := c.cred.GetToken(ctx, tokenOpts)
-		if err == nil {
-			req.Header.Set("Authorization", "Bearer "+token.Token)
-		}
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-
-	var pricing AzureRetailPrice
-	if err := json.Unmarshal(body, &pricing); err != nil {
-		return 0, err
-	}
-
-	for _, item := range pricing.Items {
+	for _, item := range items {
 		if item.RetailPrice > 0 {
 			return item.RetailPrice, nil
 		}
 	}
 
-	return 0, nil
+	return 0, fmt.Errorf("no on-demand pricing found for savings plan type %s", planType)
 }
 
 // GetValidResourceTypes returns the Azure Savings Plan types.

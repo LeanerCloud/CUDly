@@ -301,10 +301,15 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, termErr := reservations.ParseTermYears(rec.Term)
+	if termErr != nil {
+		result.Error = termErr
+		return result, result.Error
 	}
 
 	requestBody := map[string]interface{}{
@@ -377,9 +382,9 @@ func (c *DatabaseClient) ValidateOffering(ctx context.Context, rec common.Recomm
 
 // GetOfferingDetails retrieves SQL Database reservation offering details from Azure Retail Prices API
 func (c *DatabaseClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, fmt.Errorf("invalid term: %w", err)
 	}
 
 	pricing, err := c.getSQLPricing(ctx, rec.ResourceType, c.region, termYears)
@@ -398,7 +403,10 @@ func (c *DatabaseClient) GetOfferingDetails(ctx context.Context, rec common.Reco
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		upfrontCost = totalCost
+		// Fail loud on an unrecognised payment option rather than silently
+		// billing it as all-upfront (owner policy: no silent fallbacks on
+		// money-affecting fields).
+		return nil, fmt.Errorf("unsupported payment option for Azure SQL Database offering details: %q", rec.PaymentOption)
 	}
 
 	return &common.OfferingDetails{
@@ -535,8 +543,13 @@ func (c *DatabaseClient) getSQLPricing(ctx context.Context, sku, region string, 
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
+	// Return an error rather than fabricating a reservation price from a
+	// hardcoded discount multiplier (issue #1020 H4). Presenting an
+	// estimated figure as a real TotalCost/SavingsPercentage is misleading
+	// and can justify uneconomical purchases. managedredis already uses
+	// this pattern as the model.
 	if reservationPrice == 0 {
-		reservationPrice = onDemandPrice * hoursInTerm * 0.65
+		return nil, fmt.Errorf("no reservation pricing found for SQL Database SKU %s (%d year) in region %s", sku, termYears, region)
 	}
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
@@ -568,10 +581,20 @@ func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (
 	return &AzureRetailPrice{Items: items}, nil
 }
 
+// azureTermString returns the Retail Prices API ReservationTerm string for the
+// given number of years. The API uses the singular form "1 Year" for one year
+// and the plural form "N Years" for two or more years.
+func azureTermString(termYears int) string {
+	if termYears == 1 {
+		return "1 Year"
+	}
+	return fmt.Sprintf("%d Years", termYears)
+}
+
 // extractSQLPricing extracts on-demand and reservation pricing from price items
 func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
-	termStr := fmt.Sprintf("%d Years", termYears)
+	termStr := azureTermString(termYears)
 
 	for _, item := range items {
 		if item.CurrencyCode != "" {

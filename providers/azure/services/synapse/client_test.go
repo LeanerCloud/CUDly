@@ -18,6 +18,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
 // ---- credential mock -------------------------------------------------------
@@ -746,7 +747,7 @@ func TestParseReservationTermYears(t *testing.T) {
 		{"bogus", 0, true},
 	}
 	for _, tc := range tests {
-		got, err := parseReservationTermYears(tc.term)
+		got, err := reservations.ParseTermYears(tc.term)
 		if tc.wantErr {
 			assert.Error(t, err, "term=%q should be an error", tc.term)
 		} else {

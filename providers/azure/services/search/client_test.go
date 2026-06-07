@@ -120,7 +120,19 @@ func createSampleSearchPricingResponse() string {
 				"serviceName": "Azure Cognitive Search",
 				"armSkuName": "Standard_S1",
 				"meterName": "S1 Search Unit",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 1200.0,
+				"unitPrice": 1200.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cognitive Search",
+				"serviceName": "Azure Cognitive Search",
+				"armSkuName": "Standard_S1",
+				"meterName": "S1 Search Unit",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{
@@ -310,6 +322,41 @@ func TestSearchClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	_, err := client.GetOfferingDetails(ctx, rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
+}
+
+// TestSearchClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from a hardcoded multiplier
+// (issue #1020 H4). Pre-fix this would have silently surfaced a fabricated
+// TotalCost/SavingsPercentage as a real quote.
+func TestSearchClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.20,
+				"unitPrice": 0.20,
+				"armRegionName": "eastus",
+				"armSkuName": "Standard_S1",
+				"type": "Consumption"
+			}
+		]
+	}`
+
+	mockHTTP := &MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+
+	rec := common.Recommendation{
+		ResourceType:  "Standard_S1",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
 func TestSearchClient_GetExistingCommitments_Empty(t *testing.T) {
@@ -735,6 +782,7 @@ func TestSearchClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "standard",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -756,6 +804,7 @@ func TestSearchClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "standard",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -780,6 +829,7 @@ func TestSearchClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "standard",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})

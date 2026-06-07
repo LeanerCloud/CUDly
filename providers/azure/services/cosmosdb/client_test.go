@@ -133,7 +133,19 @@ func createSampleCosmosPricingResponse() string {
 				"serviceName": "Azure Cosmos DB",
 				"skuName": "100RU",
 				"meterName": "100 RU/s",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 2400.0,
+				"unitPrice": 2400.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cosmos DB",
+				"serviceName": "Azure Cosmos DB",
+				"skuName": "100RU",
+				"meterName": "100 RU/s",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{
@@ -323,6 +335,43 @@ func TestCosmosDBClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	_, err := client.GetOfferingDetails(ctx, rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
+}
+
+// TestCosmosDBClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from a hardcoded multiplier
+// (issue #1020 H4). Pre-fix this would have silently surfaced a fabricated
+// TotalCost/SavingsPercentage as a real quote.
+func TestCosmosDBClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.008,
+				"unitPrice": 0.008,
+				"armRegionName": "eastus",
+				"productName": "Azure Cosmos DB",
+				"serviceName": "Azure Cosmos DB",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+
+	rec := common.Recommendation{
+		ResourceType:  "100RU",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
 func TestCosmosDBClient_GetExistingCommitments_Empty(t *testing.T) {
@@ -851,6 +900,7 @@ func TestCosmosDBClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -872,6 +922,7 @@ func TestCosmosDBClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -896,6 +947,7 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
