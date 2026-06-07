@@ -318,7 +318,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	// updatePlanProgress only runs on a fully-clean run (execErr == nil); a
 	// partial multi-account run skips it. Marked Maybe so a (non-deterministic)
 	// all-success ordering of the two account goroutines doesn't fail the mock.
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil).Maybe()
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-x").Return(nil).Maybe()
 
 	var savedRoot *config.PurchaseExecution
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {

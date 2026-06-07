@@ -47,6 +47,10 @@ func (m *mockConfigStoreForHealth) UpdatePurchasePlan(ctx context.Context, plan 
 	return nil
 }
 
+func (m *mockConfigStoreForHealth) IncrementPlanCurrentStep(_ context.Context, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStoreForHealth) UpdatePurchasePlanTx(_ context.Context, _ pgx.Tx, _ *config.PurchasePlan) error {
 	return nil
 }

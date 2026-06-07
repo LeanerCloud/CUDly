@@ -215,6 +215,11 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+	args := m.Called(ctx, planID)
+	return args.Error(0)
+}
+
 // UpdatePurchasePlanTx falls back to UpdatePurchasePlan when no
 // expectation is registered. Mirrors the pattern used by
 // SavePurchaseExecutionTx and the api-package mock.

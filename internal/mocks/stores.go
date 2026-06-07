@@ -75,9 +75,15 @@ func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
+// IncrementPlanCurrentStep mocks the atomic step-advance operation.
+func (m *MockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+	args := m.Called(ctx, planID)
+	return args.Error(0)
+}
+
 // UpdatePurchasePlanTx mocks the UpdatePurchasePlanTx operation. Falls
 // back to UpdatePurchasePlan when no expectation is registered so tests
-// that don't care about the Tx variant stay green — same pattern as
+// that don't care about the Tx variant stay green -- same pattern as
 // SavePurchaseExecutionTx below.
 func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
 	if !isExpected(&m.Mock, "UpdatePurchasePlanTx") {

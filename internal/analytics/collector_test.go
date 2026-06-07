@@ -156,6 +156,10 @@ func (m *mockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.P
 	return nil
 }
 
+func (m *mockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+	return nil
+}
+
 func (m *mockConfigStore) UpdatePurchasePlanTx(ctx context.Context, _ pgx.Tx, plan *config.PurchasePlan) error {
 	return nil
 }

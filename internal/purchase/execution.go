@@ -1028,38 +1028,17 @@ func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 }
 
 // updatePlanProgress advances the ramp schedule after a purchase.
-// Direct-execute purchases (Opportunities flow) have no plan to advance —
+// Direct-execute purchases (Opportunities flow) have no plan to advance --
 // PlanID is empty and the Postgres UUID column would reject the query
 // with SQLSTATE 22P02, so short-circuit cleanly before hitting the store.
+// The actual increment is delegated to IncrementPlanCurrentStep which holds
+// a SELECT FOR UPDATE lock for the duration, preventing the lost-update race
+// when two Lambda invocations overlap on the same plan (issue #1071).
 func (m *Manager) updatePlanProgress(ctx context.Context, planID string) error {
 	if planID == "" {
 		return nil
 	}
-	plan, err := m.config.GetPurchasePlan(ctx, planID)
-	if err != nil {
-		return err
-	}
-	if plan == nil {
-		return nil
-	}
-
-	// Advance ramp schedule only if not complete
-	if !plan.RampSchedule.IsComplete() {
-		plan.RampSchedule.CurrentStep++
-	}
-
-	// Calculate next execution date
-	if !plan.RampSchedule.IsComplete() {
-		nextDate := plan.RampSchedule.GetNextPurchaseDate()
-		plan.NextExecutionDate = &nextDate
-	} else {
-		plan.NextExecutionDate = nil
-	}
-
-	now := time.Now()
-	plan.LastExecutionDate = &now
-
-	return m.config.UpdatePurchasePlan(ctx, plan)
+	return m.config.IncrementPlanCurrentStep(ctx, planID)
 }
 
 // getAWSAccountID retrieves the current AWS account ID using STS.

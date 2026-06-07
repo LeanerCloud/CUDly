@@ -320,22 +320,7 @@ func TestManager_UpdatePlanProgress(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	startDate := time.Now()
-	plan := &config.PurchasePlan{
-		ID:   "plan-123",
-		Name: "Test Plan",
-		RampSchedule: config.RampSchedule{
-			Type:             "weekly",
-			PercentPerStep:   25,
-			StepIntervalDays: 7,
-			CurrentStep:      0,
-			TotalSteps:       4,
-			StartDate:        startDate,
-		},
-	}
-
-	mockStore.On("GetPurchasePlan", ctx, "plan-123").Return(plan, nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -354,7 +339,8 @@ func TestManager_UpdatePlanProgress_PlanNotFound(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("GetPurchasePlan", ctx, "nonexistent").Return(nil, nil)
+	// IncrementPlanCurrentStep returns nil when the plan no longer exists.
+	mockStore.On("IncrementPlanCurrentStep", ctx, "nonexistent").Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -373,7 +359,7 @@ func TestManager_UpdatePlanProgress_GetError(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("GetPurchasePlan", ctx, "plan-123").Return(nil, errors.New("database error"))
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(errors.New("database error"))
 
 	manager := &Manager{
 		config:       mockStore,
@@ -392,22 +378,9 @@ func TestManager_UpdatePlanProgress_CompleteRamp(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	startDate := time.Now()
-	plan := &config.PurchasePlan{
-		ID:   "plan-123",
-		Name: "Test Plan",
-		RampSchedule: config.RampSchedule{
-			Type:             "weekly",
-			PercentPerStep:   25,
-			StepIntervalDays: 7,
-			CurrentStep:      3, // Last step (0-indexed, so 3 is the 4th step)
-			TotalSteps:       4,
-			StartDate:        startDate,
-		},
-	}
-
-	mockStore.On("GetPurchasePlan", ctx, "plan-123").Return(plan, nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	// The step-advance and completion logic now live inside IncrementPlanCurrentStep
+	// in the store, tested at the store layer with pgxmock.
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-123").Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
