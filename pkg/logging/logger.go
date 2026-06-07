@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // Level represents a logging level
@@ -26,12 +27,27 @@ const (
 	LevelError
 )
 
-// Logger provides structured logging capabilities
+// Logger provides structured logging capabilities.
+//
+// level is stored as an atomic.Int32 so that SetLevel/SetLevelValue (called at
+// runtime, sometimes after worker goroutines have launched) and the level reads
+// performed by every Debug/Info/Warn/Error call are race-free under the
+// concurrent fan-out, which logs from many goroutines.
 type Logger struct {
-	level    Level
+	level    atomic.Int32
 	logger   *log.Logger
 	prefix   string
 	metadata map[string]interface{}
+}
+
+// getLevel returns the logger's current level, read atomically.
+func (l *Logger) getLevel() Level {
+	return Level(l.level.Load())
+}
+
+// setLevel stores the logger's level atomically.
+func (l *Logger) setLevel(level Level) {
+	l.level.Store(int32(level))
 }
 
 // Config holds logger configuration
@@ -79,37 +95,38 @@ func New(cfg Config) *Logger {
 		flags = 0 // Use custom time format
 	}
 
-	return &Logger{
-		level:    ParseLevel(cfg.Level),
+	l := &Logger{
 		logger:   log.New(output, cfg.Prefix, flags),
 		prefix:   cfg.Prefix,
 		metadata: make(map[string]interface{}),
 	}
+	l.setLevel(ParseLevel(cfg.Level))
+	return l
 }
 
 // SetLevel sets the logging level
 func SetLevel(level string) {
-	defaultLogger.level = ParseLevel(level)
+	defaultLogger.setLevel(ParseLevel(level))
 }
 
 // SetLevelValue sets the logging level using a Level value
 func SetLevelValue(level Level) {
-	defaultLogger.level = level
+	defaultLogger.setLevel(level)
 }
 
 // GetLevel returns the current log level
 func GetLevel() Level {
-	return defaultLogger.level
+	return defaultLogger.getLevel()
 }
 
 // With creates a new logger with additional metadata
 func (l *Logger) With(key string, value interface{}) *Logger {
 	newLogger := &Logger{
-		level:    l.level,
 		logger:   l.logger,
 		prefix:   l.prefix,
 		metadata: make(map[string]interface{}),
 	}
+	newLogger.setLevel(l.getLevel())
 	for k, v := range l.metadata {
 		newLogger.metadata[k] = v
 	}
@@ -138,56 +155,56 @@ func (l *Logger) formatMessage(msg string) string {
 
 // Debug logs a debug message
 func (l *Logger) Debug(msg string) {
-	if l.level <= LevelDebug {
+	if l.getLevel() <= LevelDebug {
 		l.logger.Printf("[DEBUG] %s", l.formatMessage(msg))
 	}
 }
 
 // Debugf logs a formatted debug message
 func (l *Logger) Debugf(format string, args ...interface{}) {
-	if l.level <= LevelDebug {
+	if l.getLevel() <= LevelDebug {
 		l.logger.Printf("[DEBUG] %s", l.formatMessage(fmt.Sprintf(format, args...)))
 	}
 }
 
 // Info logs an info message
 func (l *Logger) Info(msg string) {
-	if l.level <= LevelInfo {
+	if l.getLevel() <= LevelInfo {
 		l.logger.Printf("[INFO] %s", l.formatMessage(msg))
 	}
 }
 
 // Infof logs a formatted info message
 func (l *Logger) Infof(format string, args ...interface{}) {
-	if l.level <= LevelInfo {
+	if l.getLevel() <= LevelInfo {
 		l.logger.Printf("[INFO] %s", l.formatMessage(fmt.Sprintf(format, args...)))
 	}
 }
 
 // Warn logs a warning message
 func (l *Logger) Warn(msg string) {
-	if l.level <= LevelWarn {
+	if l.getLevel() <= LevelWarn {
 		l.logger.Printf("[WARN] %s", l.formatMessage(msg))
 	}
 }
 
 // Warnf logs a formatted warning message
 func (l *Logger) Warnf(format string, args ...interface{}) {
-	if l.level <= LevelWarn {
+	if l.getLevel() <= LevelWarn {
 		l.logger.Printf("[WARN] %s", l.formatMessage(fmt.Sprintf(format, args...)))
 	}
 }
 
 // Error logs an error message
 func (l *Logger) Error(msg string) {
-	if l.level <= LevelError {
+	if l.getLevel() <= LevelError {
 		l.logger.Printf("[ERROR] %s", l.formatMessage(msg))
 	}
 }
 
 // Errorf logs a formatted error message
 func (l *Logger) Errorf(format string, args ...interface{}) {
-	if l.level <= LevelError {
+	if l.getLevel() <= LevelError {
 		l.logger.Printf("[ERROR] %s", l.formatMessage(fmt.Sprintf(format, args...)))
 	}
 }

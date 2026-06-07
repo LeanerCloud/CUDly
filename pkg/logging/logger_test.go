@@ -2,7 +2,9 @@ package logging
 
 import (
 	"bytes"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -285,4 +287,60 @@ func TestWith_ChainedCalls(t *testing.T) {
 	assert.Contains(t, output, "a=1")
 	assert.Contains(t, output, "b=2")
 	assert.Contains(t, output, "c=3")
+}
+
+// TestSetLevel_NoDataRace exercises the concurrent SetLevelValue / level-read
+// path that triggered the 10-L5 data race: before the atomic.Int32 fix,
+// defaultLogger.level was a plain int read by every log call and written by
+// SetLevelValue with no synchronization. Run with `go test -race` to catch a
+// regression. Mutates the package-level defaultLogger global, so it is SERIAL
+// (no t.Parallel) per the file-top note.
+func TestSetLevel_NoDataRace(t *testing.T) {
+	oldLogger := defaultLogger
+	defer func() { defaultLogger = oldLogger }()
+
+	// Discard output so a concurrent bytes.Buffer doesn't confound the race
+	// detector; the contended state under test is the level field, not output.
+	defaultLogger = New(Config{Level: "info", Output: io.Discard})
+
+	const goroutines = 8
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 3)
+
+	// Writers flip the level concurrently.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				if j%2 == 0 {
+					SetLevelValue(LevelDebug)
+				} else {
+					SetLevelValue(LevelError)
+				}
+			}
+		}()
+	}
+	// Readers log (each call reads the level) concurrently.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				Info("concurrent log line")
+				Debug("concurrent debug line")
+			}
+		}()
+	}
+	// Readers also read the level directly via GetLevel.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = GetLevel()
+			}
+		}()
+	}
+
+	wg.Wait()
 }

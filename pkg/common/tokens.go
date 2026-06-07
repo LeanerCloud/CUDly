@@ -48,14 +48,16 @@ func DeriveIdempotencyToken(executionID string, recIndex int) string {
 // keeps just enough of the prefix to correlate log lines for a single purchase
 // while avoiding emitting the whole caller-supplied token into persistent logs
 // (a stable per-execution identifier that should not leak verbatim). An empty
-// token yields "(none)"; a token of 8 chars or fewer is returned unchanged
-// since there is nothing left to redact.
+// token yields "(none)". A token of 8 chars or fewer is fully redacted to
+// "(redacted)" rather than echoed: an 8-char prefix of an 8-char input is the
+// whole value, so for short inputs (e.g. a short secret a future caller might
+// pass) nothing of the token is emitted.
 func MaskToken(token string) string {
 	if token == "" {
 		return "(none)"
 	}
 	if len(token) <= 8 {
-		return token
+		return "(redacted)"
 	}
 	return token[:8] + "..."
 }

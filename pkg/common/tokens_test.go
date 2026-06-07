@@ -81,8 +81,11 @@ func TestMaskToken_NeverEmitsFullToken(t *testing.T) {
 
 func TestMaskToken_EmptyAndShort(t *testing.T) {
 	assert.Equal(t, "(none)", MaskToken(""), "empty token must be reported as (none)")
-	assert.Equal(t, "abc", MaskToken("abc"), "tokens of <=8 chars have nothing to redact")
-	assert.Equal(t, "12345678", MaskToken("12345678"), "exactly 8 chars is returned unchanged")
+	// Short inputs (<=8 chars) are fully redacted, never echoed: an 8-char prefix
+	// of an 8-char value would leak the whole secret (CodeRabbit 10-L6).
+	assert.Equal(t, "(redacted)", MaskToken("abc"), "short tokens must be fully redacted, not echoed")
+	assert.Equal(t, "(redacted)", MaskToken("12345678"), "exactly 8 chars is fully redacted")
+	assert.NotContains(t, MaskToken("secret77"), "secret", "no part of a short secret may appear in the masked form")
 	assert.Equal(t, "12345678...", MaskToken("123456789"), "9 chars is truncated to 8 + ellipsis")
 }
 
