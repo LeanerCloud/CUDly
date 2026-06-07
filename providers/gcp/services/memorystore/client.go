@@ -118,13 +118,23 @@ func (r *realBillingService) ListSKUs(serviceID string) (*cloudbilling.ListSkusR
 	return r.service.Services.Skus.List(serviceID).Do()
 }
 
+// realRecommenderIterator wraps the real recommender iterator (10-L4: makes
+// the memorystore client diffable against the other three service clients).
+type realRecommenderIterator struct {
+	it *recommender.RecommendationIterator
+}
+
+func (r *realRecommenderIterator) Next() (*recommenderpb.Recommendation, error) {
+	return r.it.Next()
+}
+
 // realRecommenderClient wraps the actual recommender client
 type realRecommenderClient struct {
 	client *recommender.Client
 }
 
 func (r *realRecommenderClient) ListRecommendations(ctx context.Context, req *recommenderpb.ListRecommendationsRequest) RecommenderIterator {
-	return r.client.ListRecommendations(ctx, req)
+	return &realRecommenderIterator{it: r.client.ListRecommendations(ctx, req)}
 }
 
 func (r *realRecommenderClient) Close() error {

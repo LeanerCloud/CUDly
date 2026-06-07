@@ -333,16 +333,10 @@ func (p *GCPProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 		}
 	}
 
-	// If no projects found, return at least the default project
-	if len(accounts) == 0 {
-		accounts = append(accounts, common.Account{
-			Provider:  common.ProviderGCP,
-			ID:        p.projectID,
-			Name:      p.projectID,
-			IsDefault: true,
-		})
-	}
-
+	// Return empty if no ACTIVE projects are visible to the credentials (10-M7).
+	// Synthesising a fallback account from p.projectID can silently succeed
+	// when the account has no accessible projects, hiding auth / permission
+	// errors from callers. Return empty so the caller can surface the gap.
 	return accounts, nil
 }
 

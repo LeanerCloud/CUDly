@@ -191,56 +191,15 @@ func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.R
 	return recommendations, nil
 }
 
-// GetExistingCommitments retrieves existing Cloud SQL commitments
-func (c *CloudSQLClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected service if available (for testing)
-	var svc SQLAdminService
-	if c.sqlAdminService != nil {
-		svc = c.sqlAdminService
-	} else {
-		service, err := sqladmin.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create SQL admin service: %w", err)
-		}
-		svc = &realSQLAdminService{service: service}
-	}
-
-	// List all SQL instances in the project
-	instances, err := svc.ListInstances(c.projectID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list SQL instances: %w", err)
-	}
-
-	if instances == nil {
-		return commitments, nil
-	}
-
-	for _, instance := range instances.Items {
-		// Check if instance has a commitment (long-term pricing plan)
-		if instance.Settings != nil && instance.Settings.PricingPlan == "PACKAGE" {
-			commitment := common.Commitment{
-				Provider:       common.ProviderGCP,
-				Account:        c.projectID,
-				CommitmentType: common.CommitmentCUD,
-				Service:        common.ServiceRelationalDB,
-				Region:         instance.Region,
-				CommitmentID:   instance.Name,
-				State:          strings.ToLower(instance.State),
-				ResourceType:   instance.DatabaseVersion,
-			}
-
-			// Extract tier (machine type)
-			if instance.Settings.Tier != "" {
-				commitment.ResourceType = instance.Settings.Tier
-			}
-
-			commitments = append(commitments, commitment)
-		}
-	}
-
-	return commitments, nil
+// GetExistingCommitments returns an empty slice for Cloud SQL. Cloud SQL
+// spend-based CUDs are purchased via the Cloud Billing console / Cloud Commerce
+// Consumer Procurement API, not exposed through the sqladmin API. The legacy
+// PricingPlan "PACKAGE" is a per-instance billing mode (non-commitment,
+// deprecated) -- treating it as a commitment caused double-counting against
+// real spend-based CUDs (10-L3). Return empty until a proper commitment-
+// detection path is available.
+func (c *CloudSQLClient) GetExistingCommitments(_ context.Context) ([]common.Commitment, error) {
+	return nil, nil
 }
 
 // PurchaseCommitment is intentionally a no-op for Cloud SQL: GCP exposes no

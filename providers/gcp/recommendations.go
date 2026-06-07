@@ -235,10 +235,11 @@ func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context
 
 // getRegions retrieves available GCP regions for the project
 func (r *RecommendationsClientAdapter) getRegions(ctx context.Context) ([]string, error) {
-	// Create a temporary provider to get regions
-	provider := NewProviderWithProject(ctx, r.projectID, r.clientOpts...)
+	// Create a temporary provider to get regions. The local variable is named
+	// p (not provider) to avoid shadowing the imported provider package (10-N3).
+	p := NewProviderWithProject(ctx, r.projectID, r.clientOpts...)
 
-	regions, err := provider.GetRegions(ctx)
+	regions, err := p.GetRegions(ctx)
 	if err != nil {
 		return nil, err
 	}

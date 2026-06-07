@@ -300,74 +300,18 @@ func TestCloudSQLClient_ValidateOffering_TierListError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to list SQL tiers")
 }
 
-func TestCloudSQLClient_GetExistingCommitments_WithMock(t *testing.T) {
+// TestCloudSQLClient_GetExistingCommitments_ReturnsEmpty asserts that
+// GetExistingCommitments always returns an empty slice regardless of the
+// sqladmin instance list. Cloud SQL spend-based CUDs are not detectable via
+// the sqladmin API; PricingPlan "PACKAGE" is a legacy billing mode, not a
+// commitment indicator (10-L3).
+func TestCloudSQLClient_GetExistingCommitments_ReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		instances: &sqladmin.InstancesListResponse{
-			Items: []*sqladmin.DatabaseInstance{
-				{
-					Name:            "instance-1",
-					Region:          "us-central1",
-					State:           "RUNNABLE",
-					DatabaseVersion: "MYSQL_8_0",
-					Settings: &sqladmin.Settings{
-						Tier:        "db-n1-standard-1",
-						PricingPlan: "PACKAGE",
-					},
-				},
-				{
-					Name:            "instance-2",
-					Region:          "us-central1",
-					State:           "RUNNABLE",
-					DatabaseVersion: "POSTGRES_14",
-					Settings: &sqladmin.Settings{
-						Tier:        "db-n1-standard-2",
-						PricingPlan: "PER_USE", // Not a commitment
-					},
-				},
-			},
-		},
-	}
-	client.SetSQLAdminService(mockService)
 
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
-	require.Len(t, commitments, 1)
-	assert.Equal(t, "instance-1", commitments[0].CommitmentID)
-	assert.Equal(t, "db-n1-standard-1", commitments[0].ResourceType)
-	assert.Equal(t, common.ServiceRelationalDB, commitments[0].Service)
-}
-
-func TestCloudSQLClient_GetExistingCommitments_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		err: errors.New("API error"),
-	}
-	client.SetSQLAdminService(mockService)
-
-	_, err := client.GetExistingCommitments(ctx)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to list SQL instances")
-}
-
-func TestCloudSQLClient_GetExistingCommitments_Empty(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		instances: &sqladmin.InstancesListResponse{
-			Items: []*sqladmin.DatabaseInstance{},
-		},
-	}
-	client.SetSQLAdminService(mockService)
-
-	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	assert.Empty(t, commitments, "Cloud SQL GetExistingCommitments must return empty (10-L3)")
 }
 
 func TestCloudSQLClient_GetValidResourceTypes_WithMock(t *testing.T) {

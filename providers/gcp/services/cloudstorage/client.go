@@ -211,52 +211,13 @@ func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params comm
 	return recommendations, nil
 }
 
-// GetExistingCommitments retrieves existing Cloud Storage commitments
-func (c *CloudStorageClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected service if available (for testing)
-	var svc StorageService
-	if c.storageService != nil {
-		svc = c.storageService
-	} else {
-		client, err := storage.NewClient(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create storage client: %w", err)
-		}
-		svc = &realStorageService{client: client}
-	}
-	defer svc.Close()
-
-	// List all buckets in the project
-	it := svc.Buckets(ctx, c.projectID)
-	for {
-		bucket, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to list buckets: %w", err)
-		}
-
-		// Check if bucket has committed storage
-		if bucket.Location == c.region {
-			commitment := common.Commitment{
-				Provider:       common.ProviderGCP,
-				Account:        c.projectID,
-				CommitmentType: common.CommitmentReservedCapacity,
-				Service:        common.ServiceStorage,
-				Region:         c.region,
-				CommitmentID:   bucket.Name,
-				State:          "active",
-				ResourceType:   bucket.StorageClass,
-			}
-
-			commitments = append(commitments, commitment)
-		}
-	}
-
-	return commitments, nil
+// GetExistingCommitments returns an empty slice for Cloud Storage. GCP Cloud
+// Storage has no commitment API: there is no committed-use discount purchase
+// for GCS, and enumerating regional buckets does not represent a commitment --
+// it caused every bucket in a region to appear as a "commitment" in the UI
+// (10-L2). Return empty until a proper commitment-detection path is available.
+func (c *CloudStorageClient) GetExistingCommitments(_ context.Context) ([]common.Commitment, error) {
+	return nil, nil
 }
 
 // PurchaseCommitment is intentionally a no-op for Cloud Storage: GCP has no CUD

@@ -15,8 +15,11 @@ import (
 	"cloud.google.com/go/recommender/apiv1/recommenderpb"
 	gax "github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/cloudbilling/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -32,6 +35,22 @@ const maxCommitmentsPages = 50
 
 // maxMachineTypeItems caps GCP machine types iteration (one item per Next() call).
 const maxMachineTypeItems = 20
+
+// memMBPerVCPU is the memory-per-vCPU ratio (in MB) for GCP general-purpose
+// committed-use discounts. GCP requires both VCPU and MEMORY_MB in a single
+// commitments.insert call; the ratio is fixed at 4096 MB per vCPU for
+// GENERAL_PURPOSE commitments.
+const memMBPerVCPU = 4096
+
+// termPlan converts a term string ("1yr"/"3yr"/"3") to the GCP Compute API
+// commitment plan value ("TWELVE_MONTH" or "THIRTY_SIX_MONTH"). Unrecognised
+// terms default to TWELVE_MONTH.
+func termPlan(term string) string {
+	if term == "3yr" || term == "3" {
+		return "THIRTY_SIX_MONTH"
+	}
+	return "TWELVE_MONTH"
+}
 
 // CommitmentsService interface for commitments operations (enables mocking)
 type CommitmentsService interface {
@@ -313,10 +332,11 @@ func (c *ComputeEngineClient) convertGCPCommitmentToCommon(commitment *computepb
 		status = strings.ToLower(*commitment.Status)
 	}
 
+	// All commitment types (GENERAL_PURPOSE, ACCELERATOR) map to CommitmentCUD
+	// for the purposes of the common layer. The if-branch checking for
+	// "GENERAL_PURPOSE" was a no-op (both arms assigned CommitmentCUD) and
+	// is removed (10-L1).
 	commitmentType := common.CommitmentCUD
-	if commitment.Type != nil && *commitment.Type == "GENERAL_PURPOSE" {
-		commitmentType = common.CommitmentCUD
-	}
 
 	com := common.Commitment{
 		Provider:       common.ProviderGCP,
@@ -370,11 +390,7 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 		}
 		k := key{account: rec.Account, region: rec.Region, term: rec.Term}
 		if _, ok := groups[k]; !ok {
-			plan := "TWELVE_MONTH"
-			if rec.Term == "3yr" || rec.Term == "3" {
-				plan = "THIRTY_SIX_MONTH"
-			}
-			groups[k] = &agg{plan: plan}
+			groups[k] = &agg{plan: termPlan(rec.Term)}
 		}
 		groups[k].vcpus += int64(rec.Count)
 	}
@@ -389,7 +405,7 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 			Region: k.region,
 			Resources: []ResourceCommitment{
 				{Type: "VCPU", Amount: a.vcpus},
-				{Type: "MEMORY_MB", Amount: a.vcpus * 4096},
+				{Type: "MEMORY_MB", Amount: a.vcpus * memMBPerVCPU},
 			},
 		})
 		counter++
@@ -397,11 +413,26 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 	return result
 }
 
-// isResourceExhausted reports whether the error represents a RESOURCE_EXHAUSTED (429) response.
+// isResourceExhausted reports whether the error represents a RESOURCE_EXHAUSTED
+// (quota / 429) response. Uses typed checks first: errors.As for REST API errors
+// (*googleapi.Error with Code 429) and status.FromError for gRPC errors
+// (codes.ResourceExhausted). Falls back to string matching only for error types
+// that neither unwraps as a *googleapi.Error nor as a gRPC status (10-M3).
 func isResourceExhausted(err error) bool {
 	if err == nil {
 		return false
 	}
+	// REST path: *googleapi.Error wraps HTTP 429 Too Many Requests.
+	var gapiErr *googleapi.Error
+	if errors.As(err, &gapiErr) {
+		return gapiErr.Code == 429
+	}
+	// gRPC path: RESOURCE_EXHAUSTED maps to quota-exceeded responses from
+	// Google Cloud APIs served over gRPC (e.g. quota for Recommender).
+	if st, ok := status.FromError(err); ok {
+		return st.Code() == codes.ResourceExhausted
+	}
+	// Fallback for wrapped/non-standard errors that carry the signal as text.
 	s := err.Error()
 	return strings.Contains(s, "ResourceExhausted") || strings.Contains(s, "RESOURCE_EXHAUSTED") || strings.Contains(s, "429")
 }
@@ -537,10 +568,7 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 		return nil, "", fmt.Errorf("buildInsertRequest: rec.Count must be > 0 (got %d); a zero-vCPU commitment is invalid (issue #1022)", rec.Count)
 	}
 
-	plan := "TWELVE_MONTH"
-	if rec.Term == "3yr" || rec.Term == "3" {
-		plan = "THIRTY_SIX_MONTH"
-	}
+	plan := termPlan(rec.Term)
 
 	// GCP's computepb.Commitment has no Labels field, and the RegionCommitments
 	// client exposes no SetLabels call — CUDs cannot be tagged or labeled via
@@ -566,7 +594,7 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 			},
 			{
 				Type:   stringPtr("MEMORY_MB"),
-				Amount: int64Ptr(int64(rec.Count) * 4096),
+				Amount: int64Ptr(int64(rec.Count) * memMBPerVCPU),
 			},
 		},
 	}

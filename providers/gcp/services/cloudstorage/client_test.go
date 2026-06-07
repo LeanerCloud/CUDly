@@ -301,69 +301,16 @@ func TestCloudStorageClient_SetterMethods(t *testing.T) {
 	assert.Equal(t, mockBilling, client.billingService)
 }
 
-func TestCloudStorageClient_GetExistingCommitments_WithMock(t *testing.T) {
+// TestCloudStorageClient_GetExistingCommitments_ReturnsEmpty asserts that
+// GetExistingCommitments always returns an empty slice. GCS has no commitment
+// API; enumerating regional buckets does not represent a commitment (10-L2).
+func TestCloudStorageClient_GetExistingCommitments_ReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		buckets: []*storage.BucketAttrs{
-			{
-				Name:         "bucket-1",
-				Location:     "us-central1",
-				StorageClass: "STANDARD",
-			},
-			{
-				Name:         "bucket-2",
-				Location:     "us-central1",
-				StorageClass: "NEARLINE",
-			},
-			{
-				Name:         "bucket-other-region",
-				Location:     "europe-west1",
-				StorageClass: "COLDLINE",
-			},
-		},
-	}
-	client.SetStorageService(mockService)
 
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
-	// Only buckets in the matching region should be returned
-	assert.Len(t, commitments, 2)
-	assert.Equal(t, "bucket-1", commitments[0].CommitmentID)
-	assert.Equal(t, "STANDARD", commitments[0].ResourceType)
-	assert.Equal(t, common.ProviderGCP, commitments[0].Provider)
-	assert.Equal(t, common.ServiceStorage, commitments[0].Service)
-	assert.Equal(t, "bucket-2", commitments[1].CommitmentID)
-	assert.Equal(t, "NEARLINE", commitments[1].ResourceType)
-}
-
-func TestCloudStorageClient_GetExistingCommitments_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		listErr: errors.New("API error"),
-	}
-	client.SetStorageService(mockService)
-
-	_, err := client.GetExistingCommitments(ctx)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to list buckets")
-}
-
-func TestCloudStorageClient_GetExistingCommitments_Empty(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		buckets: []*storage.BucketAttrs{},
-	}
-	client.SetStorageService(mockService)
-
-	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	assert.Empty(t, commitments, "Cloud Storage GetExistingCommitments must return empty (10-L2)")
 }
 
 // TestCloudStorageClient_PurchaseCommitment_NotSupported is the regression test for
