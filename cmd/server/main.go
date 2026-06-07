@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/server"
 )
 
@@ -105,9 +106,10 @@ func determineRuntimeMode(modeFlag string) string {
 		return modeFlag
 	}
 
-	// Auto-detect based on environment
-	// Lambda sets AWS_LAMBDA_RUNTIME_API when running
-	if os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
+	// Auto-detect based on environment using the canonical runtime helper,
+	// which encapsulates the detection rule so future changes stay consistent
+	// across all call sites (issue 04-M5).
+	if runtime.IsLambda() {
 		return "lambda"
 	}
 

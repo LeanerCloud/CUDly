@@ -140,13 +140,6 @@ type ExternalDeps struct {
 	STSClient      purchase.STSClient
 }
 
-// isLambdaRuntime is a thin wrapper over runtime.IsLambda so existing
-// call sites stay unchanged. New code should call runtime.IsLambda
-// directly.
-func isLambdaRuntime() bool {
-	return runtime.IsLambda()
-}
-
 // defaultMigrationsTimeout bounds how long ensureDB waits for migrations
 // before giving up and proceeding. Deliberately shorter than the default
 // Lambda timeout (30s at this writing) so a runaway migration gets
@@ -268,7 +261,7 @@ func LoadApplicationConfig() ApplicationConfig {
 		// NewApplicationFromDeps resolves it via the SecretResolver at init.
 		ScheduledTaskSecret:     os.Getenv("SCHEDULED_TASK_SECRET"),
 		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
-		IsLambda:                isLambdaRuntime(),
+		IsLambda:                runtime.IsLambda(),
 		Analytics:               LoadAnalyticsConfig(),
 	}
 }
@@ -424,7 +417,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
 		STSClient:       deps.STSClient,
-		IsLambda:        isLambdaRuntime(),
+		IsLambda:        runtime.IsLambda(),
 	})
 
 	// Auth store will be initialized lazily after DB connection

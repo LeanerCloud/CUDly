@@ -18,6 +18,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
+	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
@@ -36,10 +37,10 @@ func TestIsLambdaRuntime(t *testing.T) {
 	}()
 
 	os.Unsetenv("AWS_LAMBDA_RUNTIME_API")
-	testutil.AssertEqual(t, false, isLambdaRuntime())
+	testutil.AssertEqual(t, false, runtime.IsLambda())
 
 	os.Setenv("AWS_LAMBDA_RUNTIME_API", "localhost:9001")
-	testutil.AssertEqual(t, true, isLambdaRuntime())
+	testutil.AssertEqual(t, true, runtime.IsLambda())
 }
 
 func TestClose(t *testing.T) {
