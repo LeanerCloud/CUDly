@@ -12,23 +12,41 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// Recommendations handlers
-func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
-	// Require view:recommendations permission
-	session, err := h.requirePermission(ctx, req, "view", "recommendations")
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate input parameters to prevent injection attacks
+// parseRecommendationFilter validates all query parameters and builds the DB
+// filter. It centralises the parameter-validation logic so getRecommendations
+// stays below the cyclomatic-complexity threshold.
+//
+// account_ids filter semantics (issue #211):
+//
+//	account_ids param  | cloud_account_id row | Result
+//	-------------------|----------------------|----------------------------
+//	absent             | any (incl. NULL)     | included (no SQL filter)
+//	non-empty          | NULL                 | excluded (legacy rows are
+//	                   |                      |   not "in any account")
+//	non-empty          | matches one of IDs   | included
+//	non-empty          | doesn't match        | excluded
+//	non-empty, contains| matches (account is  | excluded — enforced by
+//	  a disabled ID    |   disabled)          |   filterRecommendationsByAllowedAccounts
+//	                   |                      |   below, NOT by the SQL filter
+//
+// The SQL contract lives in config.buildRecommendationFilter
+// (store_postgres_recommendations.go). The disabled-account case is enforced by
+// filterRecommendationsByAllowedAccounts after the DB read.
+//
+// min_savings_usd: absolute dollar floor on monthly savings.
+// min_savings_pct: effective savings percentage floor (0-100 scale).
+// Both are optional; absent or "0" means no floor. Fractions are rejected (a
+// user typing "30%" expects a percentage, not $30.5).
+func parseRecommendationFilter(params map[string]string) (config.RecommendationFilter, error) {
+	// Validate input parameters to prevent injection attacks.
 	if err := validateProvider(params["provider"]); err != nil {
-		return nil, err
+		return config.RecommendationFilter{}, err
 	}
 	if err := validateServiceName(params["service"]); err != nil {
-		return nil, err
+		return config.RecommendationFilter{}, err
 	}
 	if err := validateRegion(params["region"]); err != nil {
-		return nil, err
+		return config.RecommendationFilter{}, err
 	}
 
 	// parseAccountIDs splits, trims, and UUID-validates the comma-separated
@@ -37,51 +55,44 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 	// MaxAccountIDsPerRequest (200). See validation.go::parseAccountIDs.
 	accountIDs, err := parseAccountIDs(params["account_ids"])
 	if err != nil {
-		return nil, NewClientError(400, err.Error())
+		return config.RecommendationFilter{}, NewClientError(400, err.Error())
 	}
 
-	// account_ids filter semantics (issue #211):
-	//
-	//   account_ids param  | cloud_account_id row | Result
-	//   -------------------|----------------------|----------------------------
-	//   absent             | any (incl. NULL)     | included (no SQL filter)
-	//   non-empty          | NULL                 | excluded (legacy rows are
-	//                      |                      |   not "in any account")
-	//   non-empty          | matches one of IDs   | included
-	//   non-empty          | doesn't match        | excluded
-	//   non-empty, contains| matches (account is  | excluded — enforced by
-	//     a disabled ID    |   disabled)          |   filterRecommendationsByAllowedAccounts
-	//                      |                      |   below, NOT by the SQL filter
-	//
-	// The SQL contract lives in config.buildRecommendationFilter
-	// (store_postgres_recommendations.go). The disabled-account case is
-	// enforced by filterRecommendationsByAllowedAccounts after the DB read.
-
-	// min_savings_usd: absolute dollar floor on monthly savings.
-	// min_savings_pct: effective savings percentage floor (0-100 scale).
-	// Both are optional; absent or "0" means no floor. Fractions are
-	// rejected (a user typing "30%" expects a percentage, not $30.5).
 	minSavingsUSD, err := parseMinSavingsParam(params["min_savings_usd"], "min_savings_usd")
 	if err != nil {
-		return nil, err
+		return config.RecommendationFilter{}, err
 	}
 	minSavingsPct, err := parseMinSavingsParam(params["min_savings_pct"], "min_savings_pct")
 	if err != nil {
-		return nil, err
+		return config.RecommendationFilter{}, err
 	}
 	if minSavingsPct < 0 || minSavingsPct > 100 {
-		return nil, NewClientError(400, "min_savings_pct must be between 0 and 100")
+		return config.RecommendationFilter{}, NewClientError(400, "min_savings_pct must be between 0 and 100")
 	}
 
-	// Translate query string → DB-level filter. ListRecommendations
-	// pushes these into the WHERE clause so the cache does the pruning.
-	filter := config.RecommendationFilter{
+	return config.RecommendationFilter{
 		Provider:      params["provider"],
 		Service:       params["service"],
 		Region:        params["region"],
 		AccountIDs:    accountIDs,
 		MinSavingsUSD: minSavingsUSD,
 		MinSavingsPct: minSavingsPct,
+	}, nil
+}
+
+// Recommendations handlers
+func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
+	// Require view:recommendations permission
+	session, err := h.requirePermission(ctx, req, "view", "recommendations")
+	if err != nil {
+		return nil, err
+	}
+
+	// Translate query string to DB-level filter. ListRecommendations pushes
+	// these into the WHERE clause so the cache does the pruning.
+	filter, err := parseRecommendationFilter(params)
+	if err != nil {
+		return nil, err
 	}
 
 	recommendations, err := h.scheduler.ListRecommendations(ctx, filter)
