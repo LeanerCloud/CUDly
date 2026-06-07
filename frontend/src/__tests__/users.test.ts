@@ -656,6 +656,24 @@ describe('users/filters', () => {
       const select = document.getElementById('user-group-filter') as HTMLSelectElement;
       expect(select.innerHTML).toContain('&lt;script&gt;');
     });
+
+    it('11-M2: escapes HTML special chars in group id (value attribute)', () => {
+      // Regression: group.id was injected raw into value="..." in the innerHTML
+      // template. An id containing quotes or angle brackets could break the
+      // option element boundary. Verify escapeHtml() is applied to the id too.
+      userState.setAvailableGroups([
+        { id: '"><img src=x onerror=alert(1)>', name: 'Evil Group', permissions: [], description: '' }
+      ] as any);
+
+      userFilters.updateGroupFilterDropdown();
+
+      const select = document.getElementById('user-group-filter') as HTMLSelectElement;
+      // The raw payload must not appear verbatim inside the rendered HTML.
+      expect(select.innerHTML).not.toContain('"><img src=x');
+      // The option's value should be the escaped form.
+      const opt = select.options[1];
+      expect(opt?.value).not.toContain('<img');
+    });
   });
 });
 

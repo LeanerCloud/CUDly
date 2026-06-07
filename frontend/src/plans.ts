@@ -728,11 +728,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${purchase.id}" data-plan-id="${purchase.plan_id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtml(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtml(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtml(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtml(purchase.id)}" data-plan-id="${escapeHtml(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtml(purchase.id)}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -758,12 +758,20 @@ function getPlannedPurchaseStatusClass(status: string): string {
 async function handlePlannedPurchaseAction(action: string, purchaseId: string, planId = ''): Promise<void> {
   try {
     switch (action) {
-      case 'run':
-        if (confirm('Run this purchase now? This will immediately execute the purchase.')) {
+      case 'run': {
+        // Use styled async dialog (11-L2) instead of blocking browser confirm().
+        const runOk = await confirmDialog({
+          title: 'Run purchase now?',
+          body: 'This will immediately execute the purchase.',
+          confirmLabel: 'Run now',
+          destructive: true,
+        });
+        if (runOk) {
           await api.runPlannedPurchase(purchaseId);
           showToast({ message: 'Purchase executed successfully', kind: 'success', timeout: 5_000 });
         }
         break;
+      }
       case 'pause':
         // Pause is reversible and scoped to a single execution: the plan stays
         // enabled (unlike Disable plan) and the row stays listed with a Paused
@@ -784,14 +792,22 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
         }
         await editPlan(planId);
         return;
-      case 'disable':
-        if (confirm('Disable this plan? The plan will be paused and no purchases will be scheduled. You can re-enable it later from the Plans list.')) {
+      case 'disable': {
+        // Use styled async dialog (11-L2) instead of blocking browser confirm().
+        const disableOk = await confirmDialog({
+          title: 'Disable this plan?',
+          body: 'The plan will be paused and no purchases will be scheduled. You can re-enable it later from the Plans list.',
+          confirmLabel: 'Disable plan',
+          destructive: true,
+        });
+        if (disableOk) {
           await api.deletePlannedPurchase(purchaseId);
           // Reload full plans list since we disabled a plan
           await loadPlans();
           return;
         }
         break;
+      }
     }
     await loadPlannedPurchases();
   } catch (error) {
@@ -946,7 +962,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
           <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
+            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtml(plan.id)}" ${plan.enabled ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
           ` : ''}
@@ -986,10 +1002,10 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ` : ''}
         </div>
         <div class="plan-actions">
-          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${plan.id}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${plan.id}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtml(plan.id)}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtml(plan.id)}">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtml(plan.id)}" class="secondary">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtml(plan.id)}" class="danger">Delete</button>` : ''}
         </div>
       </div>
     </div>
@@ -1182,23 +1198,54 @@ export async function savePlan(e: Event): Promise<void> {
   const rampScheduleRadio = document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked');
   const rampSchedule = rampScheduleRadio?.value || 'immediate';
 
+  // Parse and validate integer fields up front. Use Number() not parseInt so
+  // fractions like "2.5" fail Number.isInteger() rather than silently truncating
+  // to 2. Mirrors the strict parse pattern from handleAddPurchases and settings.ts
+  // validatePurchasingSettings (feedback_strict_int_parse, finding 11-M1).
+  const rawTerm = Number((document.getElementById('plan-term') as HTMLSelectElement).value);
+  const rawCoverage = Number((document.getElementById('plan-coverage') as HTMLInputElement).value);
+  const rawNotifyDays = Number((document.getElementById('plan-notify-days') as HTMLInputElement).value);
+
+  if (!Number.isFinite(rawTerm) || !Number.isInteger(rawTerm) || rawTerm < 1) {
+    showToast({ message: 'Term must be a valid whole number of years', kind: 'error' });
+    return;
+  }
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
+    showToast({ message: 'Target Coverage must be a whole number between 0 and 100', kind: 'error' });
+    return;
+  }
+  if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
+    showToast({ message: 'Notification Days must be a whole number between 1 and 30', kind: 'error' });
+    return;
+  }
+
   const plan: SavePlanData = {
     name: (document.getElementById('plan-name') as HTMLInputElement).value,
     description: (document.getElementById('plan-description') as HTMLTextAreaElement).value,
     provider: (document.getElementById('plan-provider') as HTMLSelectElement).value,
     service: (document.getElementById('plan-service') as HTMLSelectElement).value,
-    term: parseInt((document.getElementById('plan-term') as HTMLSelectElement).value, 10),
+    term: rawTerm,
     payment: (document.getElementById('plan-payment') as HTMLSelectElement).value,
-    target_coverage: parseInt((document.getElementById('plan-coverage') as HTMLInputElement).value, 10),
+    target_coverage: rawCoverage,
     ramp_schedule: rampSchedule,
     auto_purchase: (document.getElementById('plan-auto-purchase') as HTMLInputElement).checked,
-    notification_days_before: parseInt((document.getElementById('plan-notify-days') as HTMLInputElement).value, 10),
+    notification_days_before: rawNotifyDays,
     enabled: (document.getElementById('plan-enabled') as HTMLInputElement).checked
   };
 
   if (rampSchedule === 'custom') {
-    plan.custom_step_percent = parseInt((document.getElementById('ramp-step-percent') as HTMLInputElement).value, 10);
-    plan.custom_interval_days = parseInt((document.getElementById('ramp-interval-days') as HTMLInputElement).value, 10);
+    const rawStepPercent = Number((document.getElementById('ramp-step-percent') as HTMLInputElement).value);
+    const rawIntervalDays = Number((document.getElementById('ramp-interval-days') as HTMLInputElement).value);
+    if (!Number.isFinite(rawStepPercent) || !Number.isInteger(rawStepPercent) || rawStepPercent < 1 || rawStepPercent > 100) {
+      showToast({ message: 'Ramp Step Percent must be a whole number between 1 and 100', kind: 'error' });
+      return;
+    }
+    if (!Number.isFinite(rawIntervalDays) || !Number.isInteger(rawIntervalDays) || rawIntervalDays < 1 || rawIntervalDays > 365) {
+      showToast({ message: 'Ramp Interval Days must be a whole number between 1 and 365', kind: 'error' });
+      return;
+    }
+    plan.custom_step_percent = rawStepPercent;
+    plan.custom_interval_days = rawIntervalDays;
   }
 
   // Use the snapshot stamped at Plan-button click time (#273 CR follow-up).
