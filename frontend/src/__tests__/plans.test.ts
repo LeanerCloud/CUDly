@@ -2849,4 +2849,177 @@ describe('Plans Module', () => {
       expect(mockBadge).toHaveBeenCalledWith(maliciousProvider);
     });
   });
+
+  // H-4 regression: extractPlanInfo must not fabricate provider/term/coverage.
+  // Pre-fix: absent fields defaulted to 'aws'/3/80 so the card and edit modal
+  // showed hardcoded values. These tests must FAIL on pre-fix code.
+  describe('H-4: extractPlanInfo does not fabricate provider, term, or coverage', () => {
+    const planBase = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: false,
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+    };
+
+    test('absent provider in services renders -- not aws in plan card', async () => {
+      const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
+      mockBadge.mockClear();
+
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { service: 'ec2', term: 1, coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      // providerBadgeHtml is called with null when provider is absent.
+      // Pre-fix it was called with 'aws' (the hardcoded default).
+      expect(mockBadge).not.toHaveBeenCalledWith('aws');
+      expect(mockBadge).toHaveBeenCalledWith(null);
+    });
+
+    test('absent term in services renders -- not 3yr in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '--'
+      expect(list?.textContent).not.toContain('3 Years');
+      expect(list?.textContent).toContain('--');
+    });
+
+    test('absent coverage in services renders -- not 80% in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', term: 1 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '--'
+      expect(list?.textContent).not.toContain('80%');
+      expect(list?.textContent).toContain('--');
+    });
+
+    test('empty services object renders all -- fields in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: {} }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix: all-zero fallback { provider:'aws', term:3, coverage:80 }
+      // Post-fix: all '--' for missing data
+      expect(list?.textContent).not.toContain('80%');
+      expect(list?.textContent).not.toContain('3 Years');
+    });
+
+    test('edit modal: absent term leaves select unset (not 3yr default)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, id: 'plan-1', services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        id: 'plan-1',
+        notification_days_before: 3,
+        services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const termSelect = document.getElementById('plan-term') as HTMLSelectElement;
+      // Pre-fix: termSelect.value === '3' (hardcoded fallback)
+      // Post-fix: termSelect.value === '' (unset, user must choose)
+      expect(termSelect.value).not.toBe('3');
+      expect(termSelect.value).toBe('');
+    });
+  });
+
+  // H-5 regression: payment option must not be auto-selected when absent.
+  // Pre-fix: `firstService?.payment || 'no-upfront'` pre-selected 'no-upfront'
+  // when payment was missing, silently changing the plan on re-save.
+  // These tests must FAIL on pre-fix code.
+  describe('H-5: absent payment leaves select blank (no no-upfront default)', () => {
+    const planBase = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: false,
+      notification_days_before: 3,
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+    };
+
+    test('absent payment field leaves payment select value empty in edit modal', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Test Plan', enabled: true, auto_purchase: false,
+          services: { ec2: { provider: 'aws', service: 'ec2', term: 1, coverage: 80 } },
+          ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        services: {
+          ec2: {
+            provider: 'aws',
+            service: 'ec2',
+            term: 1,
+            coverage: 80,
+            // payment deliberately absent
+          }
+        }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
+      // Pre-fix: paymentSelect.value === 'no-upfront' (hardcoded default)
+      // Post-fix: paymentSelect.value === '' (unset, user must choose)
+      expect(paymentSelect.value).not.toBe('no-upfront');
+      expect(paymentSelect.value).toBe('');
+    });
+
+    test('present payment field is correctly pre-selected in edit modal', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Test Plan', enabled: true, auto_purchase: false,
+          services: { ec2: { provider: 'aws', service: 'ec2', term: 1, payment: 'all-upfront', coverage: 80 } },
+          ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        services: {
+          ec2: { provider: 'aws', service: 'ec2', term: 1, payment: 'all-upfront', coverage: 80 }
+        }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
+      // When payment IS present, it should be correctly pre-selected
+      expect(paymentSelect.value).toBe('all-upfront');
+    });
+  });
 });

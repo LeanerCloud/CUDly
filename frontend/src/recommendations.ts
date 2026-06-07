@@ -78,7 +78,7 @@ const expandedSpGroups = new Set<string>();
 // total_upfront_cost / avg_payback_months stable while the savings card
 // itself is recomputed client-side from the *visible* recs (so it stays
 // in sync with the per-cell banner range under the table).
-let lastRecommendationsSummary: RecommendationsSummary = {};
+let lastRecommendationsSummary: RecommendationsSummary | null = null;
 
 // #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
 // background refresh is already in flight, any subsequent stale detection
@@ -513,7 +513,10 @@ export async function loadRecommendations(): Promise<void> {
     // filter would shrink the banner range under the table while leaving
     // the card pinned to the unfiltered totals — the same divergence
     // #272 was supposed to close.
-    lastRecommendationsSummary = data.summary || {};
+    // M-5: propagate null/absent summary rather than collapsing to {} which
+    // makes all summary fields read as undefined and silently coerce to 0/--
+    // in downstream display code. Callers already guard for empty/null summary.
+    lastRecommendationsSummary = data.summary ?? null;
     renderRecommendationsList(visibleByPreference as unknown as LocalRecommendation[]);
 
     // Issue #909: render the lookback selector + scope tooltip in the
@@ -688,7 +691,7 @@ async function onLookbackChange(rawValue: string): Promise<void> {
 }
 
 function renderRecommendationsSummary(
-  _summary: RecommendationsSummary,
+  _summary: RecommendationsSummary | null,
   recommendations: readonly LocalRecommendation[],
 ): void {
   const container = document.getElementById('recommendations-summary');
@@ -725,21 +728,28 @@ function renderRecommendationsSummary(
   const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
   // issue #319: scale savings by the active cost period.
+  // M-1: use ?? null so absent savings propagate to '--' via formatCostForPeriod
+  // rather than silently collapsing to $0 (scaleCost returns null only when input
+  // is null/undefined; a genuine $0 saving returns 0, not null).
   const period = state.getCostPeriod();
-  const scaledSavingsMin = scaleCost(plr.savingsMin, period) ?? 0;
-  const scaledSavingsMax = scaleCost(plr.savingsMax, period) ?? 0;
+  const scaledSavingsMin = scaleCost(plr.savingsMin, period) ?? null;
+  const scaledSavingsMax = scaleCost(plr.savingsMax, period) ?? null;
   // Use target.length (variant count) for the guard conditions so they
   // stay consistent with the new KPI value below (closes #748).
   const hasRecs = target.length > 0;
-  const savingsText = hasRecs && plr.savingsMax > 0
+  const savingsText = hasRecs && plr.savingsMax > 0 && scaledSavingsMin !== null && scaledSavingsMax !== null
     ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
-    : formatCostForPeriod(0, period);
+    : hasRecs && (plr.savingsMin === null || plr.savingsMax === null)
+      ? '--'
+      : formatCostForPeriod(0, period);
   const upfrontText = hasRecs && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
+  // L-2: use '--' for absent/inapplicable payback rather than '0 months'
+  // which falsely implies instantaneous payback.
   const paybackText = hasRecs && plr.paybackMonthsMax > 0
     ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
-    : '0 months';
+    : '—';
   // issue #748: count VARIANTS (= target.length), not cells (= plr.cellCount).
   // "Showing X of X" in the filter-status bar also counts variants, so both
   // numbers now agree on the same dataset.
@@ -1677,8 +1687,12 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
   const period = state.getCostPeriod();
   switch (col) {
     case 'count':                return r.count ?? 0;
-    case 'savings':              return scaleCost(r.savings, period) ?? 0;
-    case 'upfront_cost':         return r.upfront_cost ?? 0;
+    // M-2: return NaN for null savings/upfront_cost so numeric filter
+    // predicates (e.g. "savings = 0") don't match rows where the field is
+    // simply absent rather than genuinely zero. Consistent with monthly_cost
+    // and on_demand_monthly which already use NaN for the same reason.
+    case 'savings':              return scaleCost(r.savings, period) ?? Number.NaN;
+    case 'upfront_cost':         return r.upfront_cost ?? Number.NaN;
     // Return NaN for null monthly_cost so numeric filter predicates (e.g. "= 0")
     // don't match rows where the provider simply didn't report a monthly cost.
     case 'monthly_cost':         return scaleCost(r.monthly_cost, period) ?? Number.NaN;

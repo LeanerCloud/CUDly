@@ -249,11 +249,12 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   // min/max savings (best and worst variant per physical resource cell),
   // avoiding the ~6x inflation of summing every variant of every cell that
   // the flat summary.potential_monthly_savings carries.
-  // Falls back to formatCurrency(0) when recs is empty or fetch failed.
+  // Falls back to '--' when recs is empty or fetch failed; never fabricates $0
+  // for an absent/failed computation (finding H-3: no silent $0 fallback).
   // Soft-fail (#304): wrap in try/catch so an unexpected non-iterable shape
   // that slips past the Array.isArray guard in loadDashboard (e.g. if
   // groupRecsByCell is called from a path that bypasses the guard) cannot
-  // blank the entire dashboard — the savings card degrades to $0 instead.
+  // blank the entire dashboard -- the savings card shows '--' instead.
   let savingsDisplay: string;
   try {
     const groups = groupRecsByCell(recs);
@@ -263,16 +264,26 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
       : formatCurrency(0);
   } catch (recErr) {
     console.warn('Dashboard: failed to compute savings range from recommendations:', recErr);
-    savingsDisplay = formatCurrency(0);
+    savingsDisplay = '--';
   }
 
   // When no recommendations and no commitments exist, "100% coverage" is
-  // misleading — nothing is being tracked. Show a dash instead.
+  // misleading -- nothing is being tracked. Show a dash instead.
   const nothingTracked = !data.total_recommendations && !data.active_commitments;
   // #978: round to 1 decimal place to match sibling coverage formatting (inventory.ts)
   // and prevent overflow at narrower screen widths.
-  const coverageValue = nothingTracked ? '—' : `${(data.current_coverage || 0).toFixed(1)}%`;
-  const coverageDetail = nothingTracked ? 'No services tracked' : `Target: ${(data.target_coverage || 80).toFixed(1)}%`;
+  // H-3: use null-safe checks so absent coverage/target are shown as '--'/'--'
+  // rather than fabricating '0%'/'80%'. The hardcoded 80 default is removed
+  // because target_coverage is a user-configured value from the API -- the
+  // frontend must not substitute a business default when the field is absent.
+  const currentCoverage = data.current_coverage ?? null;
+  const targetCoverage = data.target_coverage ?? null;
+  const coverageValue = nothingTracked
+    ? '—'
+    : currentCoverage !== null ? `${currentCoverage.toFixed(1)}%` : '--';
+  const coverageDetail = nothingTracked
+    ? 'No services tracked'
+    : targetCoverage !== null ? `Target: ${targetCoverage.toFixed(1)}%` : 'Target: --';
 
   // Render KPI tiles via DOM construction (textContent / appendChild)
   // rather than an innerHTML template literal, per the issue #340 plan's
@@ -287,8 +298,8 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     detail: string;
   }> = [
     { kpi: 'savings',     title: 'Potential Monthly Savings', value: savingsDisplay, valueSavings: true,
-      detail: `${data.total_recommendations || 0} recommendations` },
-    { kpi: 'commitments', title: 'Active Commitments', value: String(data.active_commitments || 0),
+      detail: `${data.total_recommendations ?? '--'} recommendations` },
+    { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : '--',
       detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
     { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,

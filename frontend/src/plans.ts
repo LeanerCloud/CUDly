@@ -875,7 +875,7 @@ function planServiceLabel(slug: string): string {
 // are plan-level today, not per-service, so picking any entry is
 // correct. If the model ever differentiates per service, this needs
 // to render the same way.
-function extractPlanInfo(plan: BackendPlan): { provider: string; service: string; term: number; coverage: number } {
+function extractPlanInfo(plan: BackendPlan): { provider: string | null; service: string; term: number | null; coverage: number | null } {
   const services = plan.services || {};
   const serviceValues = Object.values(services);
   const firstService = serviceValues[0];
@@ -885,14 +885,18 @@ function extractPlanInfo(plan: BackendPlan): { provider: string; service: string
       : serviceValues
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
+    // H-4: never fabricate provider/term/coverage when absent.
+    // Return null so callers can surface '--'/'Unknown' in the display
+    // layer rather than silently committing to aws/3yr/80% defaults.
     return {
-      provider: firstService.provider || 'aws',
+      provider: firstService.provider || null,
       service,
-      term: firstService.term || 3,
-      coverage: firstService.coverage || 80
+      term: firstService.term || null,
+      coverage: firstService.coverage ?? null
     };
   }
-  return { provider: 'aws', service: '—', term: 3, coverage: 80 };
+  // No services at all: all fields are unknown.
+  return { provider: null, service: '—', term: null, coverage: null };
 }
 
 // Returns true when the plan's next_execution_date is strictly before today.
@@ -980,11 +984,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${formatTerm(info.term)}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage}%</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>
@@ -1114,10 +1118,14 @@ async function editPlan(planId: string): Promise<void> {
       rampValue = 'custom';
     }
 
-    // Get payment option from services and normalize for provider
+    // Get payment option from services and normalize for provider.
+    // H-5: do not pre-select 'no-upfront' when the payment field is absent.
+    // An absent payment field leaves the select empty so the user must
+    // explicitly choose rather than silently inheriting a fabricated default
+    // that could change the plan's payment type on re-save.
     const firstService = Object.values(backendPlan.services || {})[0];
-    const rawPayment = firstService?.payment || 'no-upfront';
-    const payment = normalizePaymentValue(rawPayment, info.provider);
+    const rawPayment = firstService?.payment || null;
+    const payment = rawPayment !== null ? normalizePaymentValue(rawPayment, info.provider ?? '') : '';
 
     const titleEl = document.getElementById('plan-modal-title');
     if (titleEl) titleEl.textContent = 'Edit Purchase Plan';
@@ -1126,21 +1134,29 @@ async function editPlan(planId: string): Promise<void> {
     (document.getElementById('plan-name') as HTMLInputElement).value = backendPlan.name;
     (document.getElementById('plan-description') as HTMLTextAreaElement).value = '';
 
-    // Set provider and service first
-    (document.getElementById('plan-provider') as HTMLSelectElement).value = info.provider;
+    // Set provider and service first. When provider is absent from the API
+    // response, leave the select at its default empty/first option rather
+    // than fabricating 'aws' (H-4: never default provider silently).
+    const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+    providerSelect.value = info.provider ?? '';
     (document.getElementById('plan-service') as HTMLSelectElement).value = info.service;
 
     // Update term/payment options based on provider/service
     const termSelect = document.getElementById('plan-term') as HTMLSelectElement;
     const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
-    populateTermSelect(termSelect, info.provider, info.service);
-    populatePaymentSelect(paymentSelect, info.provider, info.service);
+    populateTermSelect(termSelect, info.provider ?? '', info.service);
+    populatePaymentSelect(paymentSelect, info.provider ?? '', info.service);
 
-    // Now set term and payment values
-    termSelect.value = String(info.term);
+    // Set term only when present; absent term leaves the select unset so
+    // the user must explicitly choose rather than silently inheriting a
+    // fabricated 3yr default (H-4).
+    termSelect.value = info.term !== null ? String(info.term) : '';
+
     paymentSelect.value = payment;
 
-    (document.getElementById('plan-coverage') as HTMLInputElement).value = String(info.coverage);
+    // Set coverage only when present; absent coverage leaves the input
+    // blank so the user sees the field is missing (H-4).
+    (document.getElementById('plan-coverage') as HTMLInputElement).value = info.coverage !== null ? String(info.coverage) : '';
     (document.getElementById('plan-auto-purchase') as HTMLInputElement).checked = backendPlan.auto_purchase;
     (document.getElementById('plan-notify-days') as HTMLInputElement).value = String(backendPlan.notification_days_before || 3);
     (document.getElementById('plan-enabled') as HTMLInputElement).checked = backendPlan.enabled;

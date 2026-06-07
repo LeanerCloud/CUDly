@@ -162,7 +162,7 @@ export async function viewPlanHistory(planId: string): Promise<void> {
 
   try {
     const data = await api.getHistory({ planId }) as unknown as HistoryResponse;
-    renderHistorySummary(data.summary || {});
+    renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
@@ -242,7 +242,7 @@ export async function loadHistory(): Promise<void> {
       account_ids: accountIDs
     };
     const data = await api.getHistory(filters) as unknown as HistoryResponse;
-    renderHistorySummary(data.summary || {});
+    renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
@@ -262,35 +262,64 @@ export async function loadHistory(): Promise<void> {
   }
 }
 
-function renderHistorySummary(summary: HistorySummary): void {
+function renderHistorySummary(summary: HistorySummary | null): void {
   const container = document.getElementById('history-summary');
   if (!container) return;
+
+  // When the API omits the summary field entirely (older deploy, partial
+  // response, or an error absorbed upstream), render an explicit unknown
+  // state on each card rather than fabricating all-zero values that look
+  // like real financial aggregates.
+  if (summary === null || summary === undefined) {
+    container.innerHTML = `
+      <div class="card">
+        <h3>Total Purchases</h3>
+        <p class="value">--</p>
+      </div>
+      <div class="card">
+        <h3>Total Upfront Spent</h3>
+        <p class="value">--</p>
+      </div>
+      <div class="card">
+        <h3>Monthly Savings</h3>
+        <p class="value savings">--</p>
+      </div>
+      <div class="card">
+        <h3>Annual Savings</h3>
+        <p class="value savings">--</p>
+      </div>
+    `;
+    return;
+  }
 
   // total_completed / total_pending fall back to total_purchases so the
   // summary renders sensibly against an older API deploy that hasn't shipped
   // the new counters yet.
-  const total = summary.total_purchases ?? 0;
+  const total = summary.total_purchases ?? null;
+  const totalDisplay = total !== null ? String(total) : '--';
   const completed = summary.total_completed ?? total;
   const pending = summary.total_pending ?? 0;
-  const detail = pending > 0 ? `<p class="detail">${completed} completed · ${pending} pending</p>` : '';
+  const detail = (total !== null && pending > 0)
+    ? `<p class="detail">${completed} completed · ${pending} pending</p>`
+    : '';
 
   container.innerHTML = `
     <div class="card">
       <h3>Total Purchases</h3>
-      <p class="value">${total}</p>
+      <p class="value">${totalDisplay}</p>
       ${detail}
     </div>
     <div class="card">
       <h3>Total Upfront Spent</h3>
-      <p class="value">${formatCurrency(summary.total_upfront)}</p>
+      <p class="value">${formatCurrency(summary.total_upfront ?? null)}</p>
     </div>
     <div class="card">
       <h3>Monthly Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_monthly_savings)}</p>
+      <p class="value savings">${formatCurrency(summary.total_monthly_savings ?? null)}</p>
     </div>
     <div class="card">
       <h3>Annual Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_annual_savings)}</p>
+      <p class="value savings">${formatCurrency(summary.total_annual_savings ?? null)}</p>
     </div>
   `;
 }

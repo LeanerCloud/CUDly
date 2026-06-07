@@ -96,14 +96,17 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
     // rows must not inflate the count).
     const effectiveAccountID = rec.cloud_account_id ?? (rec.provider === 'aws' && hostAWSAccountID ? hostAWSAccountID : null);
     if (effectiveAccountID) accounts.add(effectiveAccountID);
-    // Defensive ?? 0: the wire type is wider than the TS one and a
-    // legacy row could carry null; a single NaN here would poison
-    // the entire header total.
-    totalMonthly += rec.savings ?? 0;
+    // M-3: skip null savings in the aggregate rather than coercing to 0.
+    // A null savings field means the data is absent, not that the saving is
+    // zero; adding 0 would understate the real total (e.g. all rows null
+    // would produce $0 total monthly savings on the approval header).
+    if (rec.savings != null) totalMonthly += rec.savings;
   }
   const totalAnnual = totalMonthly * 12;
 
-  const upfront = details.total_upfront_cost ?? 0;
+  // M-3: show '--' for absent total_upfront_cost rather than $0, which would
+  // falsely imply no upfront charge applies. formatCurrency handles null -> '--'.
+  const upfront = details.total_upfront_cost ?? null;
   // estimated_savings on the response is monthly; aggregating the
   // per-rec savings field above is identical math but lets the
   // table footer stay numerically in sync with the per-row column.
@@ -226,8 +229,8 @@ function renderRecRow(rec: Recommendation, accountsById: AccountsById, hostAWSAc
     <td class="num">${escapeHtml(String(rec.count ?? 0))}</td>
     <td>${escapeHtml(formatTerm(rec.term))}</td>
     <td>${escapeHtml(rec.payment ?? '')}</td>
-    <td class="num">${escapeHtml(formatCurrency(rec.upfront_cost ?? 0))}</td>
-    <td class="num">${escapeHtml(formatCurrency(rec.savings ?? 0))}</td>
+    <td class="num">${escapeHtml(formatCurrency(rec.upfront_cost ?? null))}</td>
+    <td class="num">${escapeHtml(formatCurrency(rec.savings ?? null))}</td>
     <td class="num">${effSavings === null ? '—' : escapeHtml(`${effSavings.toFixed(1)}%`)}</td>`;
   return row;
 }

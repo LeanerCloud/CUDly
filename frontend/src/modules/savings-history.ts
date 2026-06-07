@@ -273,7 +273,12 @@ function renderSavingsStats(data: SavingsAnalyticsResponse): void {
     let peakSavings = 0;
 
     for (const dp of dataPoints) {
-        const savings = dp.total_savings || 0;
+        // M-6: the type contract says total_savings is non-nullable, but a
+        // future API change could introduce null; guard with ?? 0 only for the
+        // aggregation where 0 is the correct absent interpretation (a missing
+        // bucket contributes nothing to the total/peak -- not the same as a
+        // fabricated $0 on a money display path).
+        const savings = dp.total_savings ?? 0;
         totalSavings += savings;
         if (savings > peakSavings) {
             peakSavings = savings;
@@ -316,9 +321,17 @@ function renderSavingsStats(data: SavingsAnalyticsResponse): void {
 }
 
 /**
- * Format currency value
+ * Format currency value for chart contexts (abbreviated K for >= $1000).
+ *
+ * M-7: add a null/non-finite guard so a future API change that introduces
+ * null on total_savings or cumulative_savings doesn't crash the chart with
+ * a TypeError on .toFixed(). Returns '--' for absent/non-finite values,
+ * matching the shared formatCurrency sentinel in utils.ts.
  */
-function formatCurrency(value: number): string {
+function formatCurrency(value: number | null | undefined): string {
+    if (value == null || !Number.isFinite(value)) {
+        return '--';
+    }
     if (value >= 1000) {
         return `$${(value / 1000).toFixed(2)}K`;
     }
@@ -351,8 +364,10 @@ function renderSavingsChart(dataPoints: SavingsDataPoint[], interval: string, un
     });
 
     const suffix = unitSuffix(unit);
-    const savingsData = dataPoints.map(dp => convertFromMonthly(dp.total_savings || 0, unit));
-    const cumulativeSavings = dataPoints.map(dp => dp.cumulative_savings || 0);
+    // M-6: use ?? 0 (not || 0) to treat a genuine 0-saving bucket correctly;
+    // || 0 would coerce a legitimate $0 data point the same as a missing one.
+    const savingsData = dataPoints.map(dp => convertFromMonthly(dp.total_savings ?? 0, unit));
+    const cumulativeSavings = dataPoints.map(dp => dp.cumulative_savings ?? 0);
 
     if (savingsChart) {
         savingsChart.destroy();
