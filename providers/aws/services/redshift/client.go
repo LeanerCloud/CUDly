@@ -473,6 +473,13 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 // Returns an error when an offering matches on node type and duration but carries an
 // unrecognised ReservedNodeOfferingType -- this surfaces unexpected enum values rather
 // than silently skipping them and potentially committing to the wrong offering.
+//
+// In addition to node type and duration, the requested payment option is matched
+// against the offering's price shape (08-H2). Redshift does not encode the
+// payment option in the Regular/Upgradable ReservedNodeOfferingType enum; it is
+// expressed through the offering's FixedPrice (upfront) and recurring charge,
+// so an offering whose price shape does not match the operator's chosen payment
+// option is skipped rather than purchased on the wrong terms.
 func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNodeOffering, rec common.Recommendation) (string, error) {
 	for _, offering := range offerings {
 		if offering.NodeType == nil || *offering.NodeType != rec.ResourceType {
@@ -482,13 +489,60 @@ func (c *Client) scanRedshiftOfferingPage(offerings []redshifttypes.ReservedNode
 			continue
 		}
 		offeringTypeStr := string(offering.ReservedNodeOfferingType)
-		if offeringTypeStr != "Regular" && offeringTypeStr != "Upgradable" {
+		if !c.matchesOfferingType(offeringTypeStr) {
 			return "", fmt.Errorf("Redshift offering %s has unexpected type %q (rec: %s)",
 				aws.ToString(offering.ReservedNodeOfferingId), offeringTypeStr, rec.ResourceType)
+		}
+		if !matchesPaymentOption(offering, rec.PaymentOption) {
+			continue
 		}
 		return aws.ToString(offering.ReservedNodeOfferingId), nil
 	}
 	return "", nil
+}
+
+// offeringRecurringRate returns the offering's recurring charge: the hourly
+// RecurringCharges entry when present, otherwise the UsagePrice. Redshift
+// no-upfront/partial-upfront offerings carry a recurring charge while
+// all-upfront offerings do not.
+func offeringRecurringRate(offering redshifttypes.ReservedNodeOffering) float64 {
+	for _, charge := range offering.RecurringCharges {
+		if charge.RecurringChargeAmount != nil && aws.ToString(charge.RecurringChargeFrequency) == "Hourly" {
+			return *charge.RecurringChargeAmount
+		}
+	}
+	return aws.ToFloat64(offering.UsagePrice)
+}
+
+// matchesPaymentOption reports whether a Redshift reserved-node offering's price
+// shape matches the requested payment option (08-H2). The payment option is not
+// carried in the Regular/Upgradable offering-type enum, so it is derived from
+// the upfront (FixedPrice) and recurring components:
+//
+//   - all-upfront:     upfront > 0, recurring == 0
+//   - no-upfront:      upfront == 0, recurring > 0
+//   - partial-upfront: upfront > 0, recurring > 0
+//
+// An empty/unknown requested option matches nothing (the caller skips the
+// offering and ultimately errors with "no offerings found") so a malformed
+// recommendation never buys on an arbitrarily-chosen payment option. AWS RI
+// pricing has no fractional cents below this threshold, so a strict > 0 test is
+// safe against float noise.
+func matchesPaymentOption(offering redshifttypes.ReservedNodeOffering, paymentOption string) bool {
+	upfront := aws.ToFloat64(offering.FixedPrice)
+	recurring := offeringRecurringRate(offering)
+	hasUpfront := upfront > 0
+	hasRecurring := recurring > 0
+	switch paymentOption {
+	case "all-upfront":
+		return hasUpfront && !hasRecurring
+	case "no-upfront":
+		return !hasUpfront && hasRecurring
+	case "partial-upfront":
+		return hasUpfront && hasRecurring
+	default:
+		return false
+	}
 }
 
 // matchesDuration checks if the offering duration matches
@@ -505,10 +559,11 @@ func (c *Client) matchesDuration(offeringDuration *int32, term string) bool {
 	return int(offeringMonths) == requiredMonths
 }
 
-// matchesOfferingType checks if the offering type is a valid Redshift reserved node offering type.
-// Redshift uses "Regular" and "Upgradable" as offering type identifiers — not payment-option strings
-// like other AWS services. Payment flexibility is encoded differently in the Redshift API.
-func (c *Client) matchesOfferingType(offeringType string, _ string) bool {
+// matchesOfferingType checks if the offering type is a valid Redshift reserved
+// node offering type. Redshift uses "Regular" and "Upgradable" as offering-type
+// identifiers; this is orthogonal to the payment option, which is matched
+// separately by matchesPaymentOption from the offering's price shape (08-H2).
+func (c *Client) matchesOfferingType(offeringType string) bool {
 	return offeringType == "Regular" || offeringType == "Upgradable"
 }
 
@@ -542,24 +597,38 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	offering := result.ReservedNodeOfferings[0]
 
 	details := &common.OfferingDetails{
-		OfferingID:    aws.ToString(offering.ReservedNodeOfferingId),
-		ResourceType:  aws.ToString(offering.NodeType),
-		Term:          fmt.Sprintf("%d", aws.ToInt32(offering.Duration)),
-		PaymentOption: string(offering.ReservedNodeOfferingType),
+		OfferingID:   aws.ToString(offering.ReservedNodeOfferingId),
+		ResourceType: aws.ToString(offering.NodeType),
+		Term:         fmt.Sprintf("%d", aws.ToInt32(offering.Duration)),
+		// Report the derived payment option (08-H2): the offering's price shape,
+		// not the Regular/Upgradable ReservedNodeOfferingType enum, which is not
+		// a payment option. Lets the caller reconcile the bought terms.
+		PaymentOption: derivePaymentOption(offering),
 		UpfrontCost:   aws.ToFloat64(offering.FixedPrice),
-		RecurringCost: aws.ToFloat64(offering.UsagePrice),
+		RecurringCost: offeringRecurringRate(offering),
 		Currency:      aws.ToString(offering.CurrencyCode),
 	}
 
-	for _, charge := range offering.RecurringCharges {
-		if charge.RecurringChargeAmount != nil && charge.RecurringChargeFrequency != nil {
-			if *charge.RecurringChargeFrequency == "Hourly" {
-				details.RecurringCost = *charge.RecurringChargeAmount
-			}
-		}
-	}
-
 	return details, nil
+}
+
+// derivePaymentOption infers the offering's payment option from its price shape
+// (08-H2), returning the canonical CUDly payment-option string. Returns "unknown"
+// when the shape matches no known option (e.g. an offering with neither upfront
+// nor recurring charge) so callers never mistake it for a deliberate choice.
+func derivePaymentOption(offering redshifttypes.ReservedNodeOffering) string {
+	hasUpfront := aws.ToFloat64(offering.FixedPrice) > 0
+	hasRecurring := offeringRecurringRate(offering) > 0
+	switch {
+	case hasUpfront && !hasRecurring:
+		return "all-upfront"
+	case !hasUpfront && hasRecurring:
+		return "no-upfront"
+	case hasUpfront && hasRecurring:
+		return "partial-upfront"
+	default:
+		return "unknown"
+	}
 }
 
 // GetValidResourceTypes returns valid Redshift node types by querying the API

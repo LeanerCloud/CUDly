@@ -259,6 +259,12 @@ func TestClient_ValidateOffering(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// partial-upfront price shape: upfront + recurring (08-H2).
+					FixedPrice: aws.Float64(500.0),
+					RecurringCharges: []types.RecurringCharge{{
+						RecurringChargeAmount:    aws.Float64(0.10),
+						RecurringChargeFrequency: aws.String("Hourly"),
+					}},
 				},
 			},
 		}, nil)
@@ -411,7 +417,12 @@ func TestClient_PurchaseCommitment_TagsCarryRichDescriptors(t *testing.T) {
 				NodeType:                 aws.String("ra3.xlplus"),
 				Duration:                 aws.Int32(94608000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
-				FixedPrice:               aws.Float64(500.0),
+				// partial-upfront price shape: upfront + recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
+				RecurringCharges: []types.RecurringCharge{{
+					RecurringChargeAmount:    aws.Float64(0.10),
+					RecurringChargeFrequency: aws.String("Hourly"),
+				}},
 			}},
 		}, nil)
 
@@ -473,24 +484,23 @@ func TestClient_MatchesDuration(t *testing.T) {
 func TestClient_MatchesOfferingType(t *testing.T) {
 	client := &Client{}
 
-	// Redshift uses "Regular" and "Upgradable" offering types, not payment options
-	// The function returns true for valid offering types regardless of payment option
+	// Redshift uses "Regular" and "Upgradable" offering types; this is a
+	// validity check orthogonal to the payment option (matched separately by
+	// matchesPaymentOption from the offering's price shape, 08-H2).
 	tests := []struct {
-		name          string
-		offeringType  string
-		paymentOption string
-		expected      bool
+		name         string
+		offeringType string
+		expected     bool
 	}{
-		{"Regular offering type accepts any payment", "Regular", "all-upfront", true},
-		{"Regular offering type with partial", "Regular", "partial-upfront", true},
-		{"Upgradable offering type", "Upgradable", "all-upfront", true},
-		{"Unknown offering type rejected", "Unknown", "all-upfront", false},
-		{"Empty offering type rejected", "", "partial-upfront", false},
+		{"Regular offering type accepted", "Regular", true},
+		{"Upgradable offering type accepted", "Upgradable", true},
+		{"Unknown offering type rejected", "Unknown", false},
+		{"Empty offering type rejected", "", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.matchesOfferingType(tt.offeringType, tt.paymentOption)
+			result := client.matchesOfferingType(tt.offeringType)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -611,6 +621,8 @@ func TestClient_PurchaseCommitment_PurchaseAPIError(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape: upfront only, no recurring (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil).Once()
@@ -653,6 +665,8 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape: upfront only, no recurring (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil).Once()
@@ -698,6 +712,8 @@ func TestClient_GetOfferingDetails_Success(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -825,6 +841,8 @@ func TestClient_GetOfferingDetails_EmptyResponseAfterFind(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -870,6 +888,8 @@ func TestClient_GetOfferingDetails_EmptyOfferingsAfterFind(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -1035,6 +1055,8 @@ func expectRSOffering(m *MockRedshiftClient) {
 					NodeType:                 aws.String("ra3.xlplus"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape matching rsIdemRec (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil)
@@ -1200,6 +1222,8 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 					NodeType:                 aws.String("ra3.xlplus"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape matching rsIdemRec (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil).Once()
@@ -1263,4 +1287,148 @@ func TestClient_tagReservedNode_NameTagPresent(t *testing.T) {
 
 	mockRS.AssertExpectations(t)
 	mockSTS.AssertExpectations(t)
+}
+
+// rsPaymentRec builds a Redshift recommendation with the given payment option.
+func rsPaymentRec(paymentOption string) common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: paymentOption,
+		Term:          "1yr",
+		Region:        "us-east-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+}
+
+// rsOffering builds a single matching-node/duration offering with an explicit
+// price shape so payment-option matching (08-H2) can be exercised.
+func rsOffering(id string, fixedPrice float64, recurringHourly float64) types.ReservedNodeOffering {
+	o := types.ReservedNodeOffering{
+		ReservedNodeOfferingId:   aws.String(id),
+		NodeType:                 aws.String("ra3.xlplus"),
+		Duration:                 aws.Int32(31536000),
+		ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+		FixedPrice:               aws.Float64(fixedPrice),
+	}
+	if recurringHourly > 0 {
+		o.RecurringCharges = []types.RecurringCharge{{
+			RecurringChargeAmount:    aws.Float64(recurringHourly),
+			RecurringChargeFrequency: aws.String("Hourly"),
+		}}
+	}
+	return o
+}
+
+// TestFindOfferingID_PaymentOptionMustMatch is the 08-H2 regression test: the
+// requested payment option must be matched against the offering's price shape,
+// not silently ignored. Before the fix, matchesOfferingType discarded the
+// payment option entirely, so a no-upfront request was filled with the first
+// node-type/duration offering regardless of its actual payment terms. This test
+// would FAIL pre-fix (it would return the all-upfront offering for a no-upfront
+// request) and passes after.
+func TestFindOfferingID_PaymentOptionMustMatch(t *testing.T) {
+	// Price shapes: all-upfront (upfront only), no-upfront (recurring only),
+	// partial-upfront (both).
+	allUpfront := rsOffering("off-all", 1000.0, 0)
+	noUpfront := rsOffering("off-no", 0, 0.10)
+	partialUpfront := rsOffering("off-partial", 500.0, 0.05)
+
+	tests := []struct {
+		name          string
+		paymentOption string
+		offerings     []types.ReservedNodeOffering
+		wantID        string
+		wantErr       bool
+	}{
+		{
+			name:          "no-upfront request picks the no-upfront offering, not all-upfront listed first",
+			paymentOption: "no-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront},
+			wantID:        "off-no",
+		},
+		{
+			name:          "all-upfront request picks the all-upfront offering, not no-upfront listed first",
+			paymentOption: "all-upfront",
+			offerings:     []types.ReservedNodeOffering{noUpfront, allUpfront},
+			wantID:        "off-all",
+		},
+		{
+			name:          "partial-upfront request picks the partial offering",
+			paymentOption: "partial-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront, partialUpfront},
+			wantID:        "off-partial",
+		},
+		{
+			name:          "no-upfront request errors when only an all-upfront offering exists",
+			paymentOption: "no-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront},
+			wantErr:       true,
+		},
+		{
+			name:          "empty payment option matches nothing and errors",
+			paymentOption: "",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront, partialUpfront},
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRS := &MockRedshiftClient{}
+			t.Cleanup(func() { mockRS.AssertExpectations(t) })
+			client := &Client{client: mockRS, region: "us-east-1"}
+
+			mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+				Return(&redshift.DescribeReservedNodeOfferingsOutput{
+					ReservedNodeOfferings: tt.offerings,
+				}, nil).Once()
+
+			id, err := client.findOfferingID(context.Background(), rsPaymentRec(tt.paymentOption), "")
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Empty(t, id)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantID, id)
+		})
+	}
+}
+
+// TestMatchesPaymentOption directly exercises the price-shape classifier (08-H2).
+func TestMatchesPaymentOption(t *testing.T) {
+	tests := []struct {
+		name          string
+		fixedPrice    float64
+		recurring     float64
+		paymentOption string
+		want          bool
+	}{
+		{"all-upfront matches upfront-only", 1000, 0, "all-upfront", true},
+		{"all-upfront rejects offering with recurring", 1000, 0.1, "all-upfront", false},
+		{"no-upfront matches recurring-only", 0, 0.1, "no-upfront", true},
+		{"no-upfront rejects upfront offering", 1000, 0, "no-upfront", false},
+		{"partial-upfront matches both", 500, 0.05, "partial-upfront", true},
+		{"partial-upfront rejects upfront-only", 500, 0, "partial-upfront", false},
+		{"unknown payment option matches nothing", 500, 0.05, "weird", false},
+		{"empty payment option matches nothing", 1000, 0, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesPaymentOption(rsOffering("x", tt.fixedPrice, tt.recurring), tt.paymentOption)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestDerivePaymentOption exercises the payment-option derivation used by
+// GetOfferingDetails to surface the actual terms (08-H2).
+func TestDerivePaymentOption(t *testing.T) {
+	assert.Equal(t, "all-upfront", derivePaymentOption(rsOffering("x", 1000, 0)))
+	assert.Equal(t, "no-upfront", derivePaymentOption(rsOffering("x", 0, 0.1)))
+	assert.Equal(t, "partial-upfront", derivePaymentOption(rsOffering("x", 500, 0.05)))
+	assert.Equal(t, "unknown", derivePaymentOption(rsOffering("x", 0, 0)))
 }
