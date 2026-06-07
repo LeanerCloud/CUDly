@@ -213,20 +213,43 @@ func TestBulkInsertSnapshots(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to acquire connection")
 	})
 
-	t.Run("rejects invalid commitment_type before COPY", func(t *testing.T) {
+	t.Run("non-empty slice errors when connection acquire fails", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
 
 		store := newTestableStore(mock)
 
-		// pgxmock.Acquire is unimplemented, so the COPY builder is reached only
-		// after a real connection in production; here we assert the acquire
-		// failure path. The commitment_type validation itself is unit-tested in
-		// the collector (only valid types are produced) and exercised against a
-		// real DB in the integration suite.
-		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{{CommitmentType: "bogus"}})
+		// pgxmock.Acquire is unimplemented, so the COPY builder (where the
+		// commitment_type guard lives) is reached only after a real connection in
+		// production. This path therefore asserts the acquire-failure behaviour,
+		// not the type guard; the guard itself is covered by
+		// TestValidateCommitmentType below and exercised against a real DB in the
+		// integration suite.
+		err = store.BulkInsertSnapshots(context.Background(), []SavingsSnapshot{{CommitmentType: "RI"}})
 		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to acquire connection")
+	})
+}
+
+// TestValidateCommitmentType directly exercises the commitment_type guard that
+// BulkInsertSnapshots applies in its COPY builder (L4), since the COPY path
+// itself can only be reached with a real pooled connection.
+func TestValidateCommitmentType(t *testing.T) {
+	t.Run("accepts RI", func(t *testing.T) {
+		assert.NoError(t, validateCommitmentType("RI"))
+	})
+	t.Run("accepts SavingsPlan", func(t *testing.T) {
+		assert.NoError(t, validateCommitmentType("SavingsPlan"))
+	})
+	t.Run("rejects an unknown value", func(t *testing.T) {
+		err := validateCommitmentType("bogus")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid commitment_type")
+		assert.Contains(t, err.Error(), "bogus")
+	})
+	t.Run("rejects empty", func(t *testing.T) {
+		assert.Error(t, validateCommitmentType(""))
 	})
 }
 

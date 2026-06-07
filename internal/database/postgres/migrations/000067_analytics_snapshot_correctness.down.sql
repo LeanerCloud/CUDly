@@ -54,10 +54,6 @@ GROUP BY provider, account_id;
 CREATE UNIQUE INDEX idx_provider_savings_summary_unique
     ON provider_savings_summary(provider, account_id);
 
-REFRESH MATERIALIZED VIEW monthly_savings_summary;
-REFRESH MATERIALIZED VIEW daily_savings_trend;
-REFRESH MATERIALIZED VIEW provider_savings_summary;
-
 -- Restore NOT NULL DEFAULT 0 on the metric columns. NULLs are coerced to 0
 -- first so the NOT NULL re-add cannot fail.
 UPDATE savings_snapshots SET total_usage = 0 WHERE total_usage IS NULL;
@@ -66,6 +62,12 @@ ALTER TABLE savings_snapshots ALTER COLUMN total_usage SET DEFAULT 0.00;
 ALTER TABLE savings_snapshots ALTER COLUMN total_usage SET NOT NULL;
 ALTER TABLE savings_snapshots ALTER COLUMN coverage_percentage SET DEFAULT 0.00;
 ALTER TABLE savings_snapshots ALTER COLUMN coverage_percentage SET NOT NULL;
+
+-- Refresh AFTER the data/schema are restored so the recreated views reflect the
+-- coerced (non-NULL) values rather than a stale pre-restore state.
+REFRESH MATERIALIZED VIEW monthly_savings_summary;
+REFRESH MATERIALIZED VIEW daily_savings_trend;
+REFRESH MATERIALIZED VIEW provider_savings_summary;
 
 -- Restore the original (WHEN OTHERS) drop_old_savings_partitions body.
 CREATE OR REPLACE FUNCTION drop_old_savings_partitions(retention_months INTEGER DEFAULT 24)

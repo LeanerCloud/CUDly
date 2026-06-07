@@ -268,7 +268,7 @@ func parseDateRange(startStr, endStr string) (time.Time, time.Time, error) {
 			// Try date-only format
 			end, err = time.Parse("2006-01-02", endStr)
 			if err != nil {
-				return time.Time{}, time.Time{}, fmt.Errorf("invalid end date format")
+				return time.Time{}, time.Time{}, NewClientError(400, "invalid end date format")
 			}
 			// Set to end of day
 			end = end.Add(24*time.Hour - time.Second)
@@ -284,14 +284,14 @@ func parseDateRange(startStr, endStr string) (time.Time, time.Time, error) {
 			// Try date-only format
 			start, err = time.Parse("2006-01-02", startStr)
 			if err != nil {
-				return time.Time{}, time.Time{}, fmt.Errorf("invalid start date format")
+				return time.Time{}, time.Time{}, NewClientError(400, "invalid start date format")
 			}
 		}
 	}
 
 	// Validate range order.
 	if start.After(end) {
-		return time.Time{}, time.Time{}, fmt.Errorf("start date must be before end date")
+		return time.Time{}, time.Time{}, NewClientError(400, "start date must be before end date")
 	}
 
 	// Cap the range to at most 366 days to prevent full-table-scan DoS via

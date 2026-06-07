@@ -136,6 +136,17 @@ func (s *PostgresAnalyticsStore) SaveSnapshot(ctx context.Context, snapshot *Sav
 	return nil
 }
 
+// validateCommitmentType rejects a commitment_type that the savings_snapshots
+// table CHECK constraint would reject. Extracted so the guard is unit-testable
+// directly (the COPY path acquires a real pooled connection that pgxmock can't
+// stand in for, so an end-to-end test can only prove the acquire-failure path).
+func validateCommitmentType(commitmentType string) error {
+	if commitmentType != "RI" && commitmentType != "SavingsPlan" {
+		return fmt.Errorf("invalid commitment_type %q (want RI or SavingsPlan)", commitmentType)
+	}
+	return nil
+}
+
 // BulkInsertSnapshots inserts multiple snapshots efficiently via COPY.
 func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapshots []SavingsSnapshot) error {
 	if len(snapshots) == 0 {
@@ -165,8 +176,8 @@ func (s *PostgresAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapsh
 
 			// Validate commitment_type against the table CHECK before COPY so a
 			// single bad value doesn't abort the entire batch server-side (L4).
-			if snapshot.CommitmentType != "RI" && snapshot.CommitmentType != "SavingsPlan" {
-				return nil, fmt.Errorf("snapshot %d has invalid commitment_type %q (want RI or SavingsPlan)", i, snapshot.CommitmentType)
+			if err := validateCommitmentType(snapshot.CommitmentType); err != nil {
+				return nil, fmt.Errorf("snapshot %d: %w", i, err)
 			}
 
 			// Marshal metadata as []byte so pgx transmits it as a JSON value for

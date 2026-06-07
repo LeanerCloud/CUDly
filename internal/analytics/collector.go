@@ -96,6 +96,16 @@ func (c *Collector) Collect(ctx context.Context) error {
 
 	log.Printf("Analytics collector: processing %d purchases", len(purchases))
 
+	// The single-page fetch is capped at purchaseHistoryFetchLimit. If the
+	// result fills the cap the source set may be truncated, which would silently
+	// undercount snapshots (older-but-still-active 1y/3y commitments are the most
+	// likely to fall off). Surface it loudly so the undercount is observable
+	// until the store gains an active-only / paginated read (tracked follow-up).
+	if len(purchases) >= purchaseHistoryFetchLimit {
+		log.Printf("Analytics collector: WARNING purchase_history hit the %d-row fetch cap; snapshots may undercount active commitments. A paginated/active-only store read is needed.",
+			purchaseHistoryFetchLimit)
+	}
+
 	now := time.Now().UTC()
 	serviceMap := make(map[string]*aggregateData)
 	activePurchases := 0

@@ -414,25 +414,38 @@ func TestParseDateRange(t *testing.T) {
 		assert.Equal(t, 23, end.Hour())
 	})
 
-	t.Run("invalid start date format", func(t *testing.T) {
+	// CR #1049: malformed/ordered-date validation must surface as a 400
+	// ClientError so handler.go does not map it to HTTP 500. The plain-error
+	// pre-fix code would have passed the substring asserts below but failed the
+	// IsClientError/400 asserts.
+	t.Run("invalid start date format returns 400 client error", func(t *testing.T) {
 		_, _, err := parseDateRange("not-a-date", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid start date")
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "invalid start date must return a ClientError, got %T", err)
+		assert.Equal(t, 400, ce.code)
 	})
 
-	t.Run("invalid end date format", func(t *testing.T) {
+	t.Run("invalid end date format returns 400 client error", func(t *testing.T) {
 		_, _, err := parseDateRange("", "also-not-a-date")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid end date")
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "invalid end date must return a ClientError, got %T", err)
+		assert.Equal(t, 400, ce.code)
 	})
 
-	t.Run("start after end returns error", func(t *testing.T) {
+	t.Run("start after end returns 400 client error", func(t *testing.T) {
 		startStr := "2024-01-31T00:00:00Z"
 		endStr := "2024-01-01T00:00:00Z"
 
 		_, _, err := parseDateRange(startStr, endStr)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "start date must be before end date")
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "reversed range must return a ClientError, got %T", err)
+		assert.Equal(t, 400, ce.code)
 	})
 
 	// Regression #414: unbounded date ranges caused full-table scans (DoS).
