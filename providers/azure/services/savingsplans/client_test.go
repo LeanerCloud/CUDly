@@ -1,13 +1,17 @@
 package savingsplans
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -409,6 +413,110 @@ func TestGetOfferingDetails_WrongDetails(t *testing.T) {
 	_, err := c.GetOfferingDetails(context.Background(), rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
+}
+
+// --- HTTP client regression tests (issue #1021) ---
+
+// mockHTTPClient is a testify/mock-based HTTPClient stub for savingsplans tests.
+type mockHTTPClient struct{ mock.Mock }
+
+func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	args := m.Called(req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*http.Response), args.Error(1)
+}
+
+func fakeHTTPResp(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// TestNewClient_UsesHardenedHTTPClient verifies that NewClient installs the
+// SSRF-hardened httpclient (blocks IMDS at 169.254.169.254) rather than a
+// bare &http.Client{}. Pre-fix this would have passed with a bare client that
+// allows IMDS connections (issue #1021 H1).
+func TestNewClient_UsesHardenedHTTPClient(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "hardened client must reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestNewClientWithHTTP_NilFallbackIsHardened verifies that passing nil as the
+// httpClient falls back to httpclient.New() (SSRF-hardened), not bare &http.Client{}.
+func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
+	c := NewClientWithHTTP(nil, "sub", "eastus", nil)
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "nil-fallback client must also reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestFetchOnDemandRate_NotFound verifies that fetchOnDemandRate returns an
+// error (not (0, nil)) when no pricing item is found. Pre-fix the function
+// returned (0, nil) which conflated "not found" with "rate is zero" and would
+// silently corrupt downstream savings calculations (issue #1021 H3,
+// feedback_nullable_not_zero, feedback_empty_string_vs_error).
+func TestFetchOnDemandRate_NotFound(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, err := c.fetchOnDemandRate(context.Background(), "Compute")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no on-demand pricing found")
+}
+
+// TestFetchOnDemandRate_ReturnsFirstPositivePrice verifies the happy path:
+// when at least one item with RetailPrice > 0 exists, it is returned without error.
+func TestFetchOnDemandRate_ReturnsFirstPositivePrice(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	body := `{
+		"Items": [
+			{"currencyCode":"USD","retailPrice":1.5,"unitPrice":1.5,"type":"Consumption","armSkuName":"Compute"}
+		],
+		"NextPageLink": ""
+	}`
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, body), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	rate, err := c.fetchOnDemandRate(context.Background(), "Compute")
+	require.NoError(t, err)
+	assert.InDelta(t, 1.5, rate, 0.001)
+}
+
+// TestFetchOnDemandRate_URLEncoding verifies that the $filter value is built
+// with url.Values.Encode() so that spaces and quotes are percent-encoded rather
+// than passed raw in the URL (issue #1021 H3).
+func TestFetchOnDemandRate_URLEncoding(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	// Capture the request URL and assert it is properly encoded.
+	var capturedURL string
+	h.On("Do", mock.MatchedBy(func(req *http.Request) bool {
+		capturedURL = req.URL.RawQuery
+		return true
+	})).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, _ = c.fetchOnDemandRate(context.Background(), "Compute")
+
+	// The raw query must not contain unencoded spaces or single-quotes.
+	assert.NotContains(t, capturedURL, " ", "URL must not contain unencoded spaces")
+	assert.NotContains(t, capturedURL, "'", "URL must not contain unencoded single-quotes")
+	assert.Contains(t, capturedURL, "%24filter", "URL must contain percent-encoded $filter key")
 }
 
 // --- toAzureTerm ---

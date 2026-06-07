@@ -158,6 +158,66 @@ func TestNewClient(t *testing.T) {
 	assert.NotNil(t, c.httpClient)
 }
 
+// TestNewClient_UsesHardenedHTTPClient verifies that NewClient installs the
+// SSRF-hardened httpclient (blocks IMDS at 169.254.169.254) rather than a
+// bare &http.Client{}. Pre-fix this would have passed with a bare client that
+// allows IMDS connections (issue #1021 H1).
+func TestNewClient_UsesHardenedHTTPClient(t *testing.T) {
+	c := NewClient(nil, "sub", "eastus")
+	require.NotNil(t, c.httpClient)
+	// The hardened client blocks IMDS; the bare client does not.
+	// Attempt a dial to the IMDS address and confirm it is rejected.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "hardened client must reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestNewClientWithHTTP_NilFallbackIsHardened verifies that passing nil as the
+// httpClient falls back to httpclient.New() (SSRF-hardened), not bare &http.Client{}.
+func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
+	c := NewClientWithHTTP(nil, "sub", "eastus", nil)
+	require.NotNil(t, c.httpClient)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+	_, err = c.httpClient.Do(req)
+	require.Error(t, err, "nil-fallback client must also reject IMDS connections")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// TestGetOfferingDetails_NoReservationPricing verifies that when the Retail
+// Prices API returns on-demand pricing but no reservation line, GetOfferingDetails
+// returns an error rather than fabricating a price from a hardcoded multiplier
+// (issue #1020 H4). Pre-fix this would have returned a fabricated price silently.
+func TestGetOfferingDetails_NoReservationPricing(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.125,
+				"unitPrice": 0.125,
+				"armRegionName": "eastus",
+				"productName": "Azure Cache for Redis",
+				"serviceName": "Azure Cache for Redis",
+				"armSkuName": "Premium_P1",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": "",
+		"Count": 1
+	}`
+	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, onDemandOnly), nil)
+	c := NewClientWithHTTP(nil, "sub", "eastus", h)
+	_, err := c.GetOfferingDetails(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
+}
+
 func TestNewClientWithHTTP(t *testing.T) {
 	h := &mockHTTPClient{}
 	c := NewClientWithHTTP(nil, "sub-123", "eastus", h)
@@ -720,13 +780,6 @@ func TestConvertRecommendation_legacy(t *testing.T) {
 	assert.InDelta(t, 300.0, rec.EstimatedSavings, 0.01)
 	require.NotNil(t, rec.RecurringMonthlyCost)
 	assert.Equal(t, 0.0, *rec.RecurringMonthlyCost)
-}
-
-// -- AzureRetailPrice struct --
-
-func TestAzureRetailPriceStruct(t *testing.T) {
-	p := AzureRetailPrice{Count: 2}
-	assert.Equal(t, 2, p.Count)
 }
 
 // -- RedisPricing struct --
