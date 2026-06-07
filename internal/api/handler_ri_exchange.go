@@ -633,10 +633,14 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	region := body.Region
-	if region == "" {
-		region = "us-east-1"
+	// Resolve region from the AWS SDK chain when the caller omits it,
+	// matching getReshapeRecommendations. Hardcoding us-east-1 would
+	// return an incorrect quote for deployments in other regions.
+	cfg, err := h.loadAWSConfigWithRegion(ctx, body.Region)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	region := cfg.Region
 
 	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
 		Region:           region,
@@ -671,6 +675,13 @@ func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
 	}
+	// Region is required on execute: RI exchanges are region-scoped and
+	// financially irreversible. Silently defaulting to us-east-1 would
+	// execute the exchange in the wrong region for deployments hosted
+	// elsewhere, with no way to undo the operation.
+	if body.Region == "" {
+		return NewClientError(400, "region is required for execute; omitting it risks exchanging RIs in the wrong region")
+	}
 	return nil
 }
 
@@ -696,9 +707,6 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	region := body.Region
-	if region == "" {
-		region = "us-east-1"
-	}
 
 	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,
@@ -1212,7 +1220,10 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 
 	region := record.Region
 	if region == "" {
-		region = "us-east-1"
+		// Region is a required field captured at record-creation time.
+		// Defaulting to us-east-1 here would execute a financial mutation
+		// in the wrong region for records created without a region stamp.
+		return h.failExchange(ctx, id, "exchange record has no region; cannot execute safely")
 	}
 
 	if globalCfg.RIExchangeMaxPerExchangeUSD == 0 {
