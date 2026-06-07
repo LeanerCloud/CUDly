@@ -371,12 +371,27 @@ type RecommendationRecord struct {
 	// denominator (e.g. Azure all-upfront recs where monthly_cost=$0
 	// collapses the denominator) don't inflate the displayed effective
 	// savings %. See #274.
-	OnDemandCost   *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
-	Selected       bool     `json:"selected" dynamodbav:"selected"`
-	Purchased      bool     `json:"purchased" dynamodbav:"purchased"`
-	PurchaseID     string   `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
-	Error          string   `json:"error,omitempty" dynamodbav:"error,omitempty"`
-	CloudAccountID *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	OnDemandCost *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
+	// SavingsPercentage is the provider-authoritative effective savings %
+	// reported directly by the cloud provider (AWS Cost Explorer
+	// `EstimatedMonthlySavingsPercentage`, Azure / GCP converters' computed
+	// SavingsPercentage). It is the same figure the CLI/reporter prints
+	// verbatim (internal/reporter/reporter.go); persisting it lets the GUI
+	// show the identical number instead of re-deriving it client-side from
+	// savings / on-demand. Persisted via the recommendations row's JSONB
+	// `payload` column; no DDL needed.
+	//
+	// nil means the provider did not report a percentage; the frontend then
+	// falls back to the client-side reconstruction (effectiveSavingsPct).
+	// When non-nil, the frontend prefers this value so the displayed % cannot
+	// drift from the provider's authoritative number and AWS recs missing
+	// on_demand_cost still render a real % rather than an em-dash (see #323).
+	SavingsPercentage *float64 `json:"savings_percentage" dynamodbav:"savings_percentage,omitempty"`
+	Selected          bool     `json:"selected" dynamodbav:"selected"`
+	Purchased         bool     `json:"purchased" dynamodbav:"purchased"`
+	PurchaseID        string   `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
+	Error             string   `json:"error,omitempty" dynamodbav:"error,omitempty"`
+	CloudAccountID    *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 	// SuppressedCount is the cumulative count already committed against
 	// this recommendation's 6-tuple (account, provider, service, region,
 	// resource_type, engine) within the active grace window. The

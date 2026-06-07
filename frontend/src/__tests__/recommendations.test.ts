@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -4237,6 +4237,79 @@ describe('effectiveSavingsPct', () => {
         expect(pct!).toBeCloseTo(30, 1);
       });
     });
+  });
+});
+
+// CLI/GUI parity: displaySavingsPct prefers the provider-authoritative
+// `savings_percentage` (the same figure the CLI/reporter prints) over the
+// client-side reconstruction (effectiveSavingsPct), falling back only when no
+// provider % is present. This closes the gap where the GUI re-derived the %
+// (could drift, and returned an em-dash for AWS recs missing on_demand_cost despite
+// the provider reporting a real %, the #323 case).
+describe('displaySavingsPct (CLI/GUI parity)', () => {
+  const mk = (overrides: Partial<LocalRecommendation>): LocalRecommendation => ({
+    id: 'r',
+    provider: 'aws',
+    service: 'ec2',
+    resource_type: 'm5.large',
+    region: 'us-east-1',
+    count: 1,
+    term: 1,
+    savings: 45,
+    upfront_cost: 120,
+    monthly_cost: 60,
+    on_demand_cost: 150,
+    ...overrides,
+  } as unknown as LocalRecommendation);
+
+  test('(a) uses provider savings_percentage verbatim and ignores the computed value', () => {
+    // Provider reports 30%. The reconstruction would compute a DIFFERENT
+    // number (savings 45 / on_demand 150 = 30% here would coincide, so skew
+    // on_demand to force divergence): with on_demand_cost=300 the computed
+    // value is 45/300=15%, but the provider % (30) must win verbatim.
+    const r = mk({ savings_percentage: 30, savings: 45, on_demand_cost: 300 });
+    // Sanity: the computed fallback would have been 15%, proving the provider
+    // value is used, not the reconstruction.
+    expect(effectiveSavingsPct(r)).toBeCloseTo(15, 1);
+    expect(displaySavingsPct(r)).toBe(30);
+  });
+
+  test('(b) falls back to effectiveSavingsPct when savings_percentage is null', () => {
+    // No provider %, so the displayed value is the net-savings reconstruction.
+    // savings (net) = 45, on_demand_cost = 150 => 45 / 150 = 30%.
+    const r = mk({ savings_percentage: null, savings: 45, on_demand_cost: 150 });
+    expect(displaySavingsPct(r)).toBeCloseTo(30, 1);
+    expect(displaySavingsPct(r)).toBe(effectiveSavingsPct(r));
+  });
+
+  test('(b2) falls back when savings_percentage is undefined (pre-plumbing cached recs)', () => {
+    const r = mk({ savings: 48, on_demand_cost: 200 });
+    delete (r as { savings_percentage?: unknown }).savings_percentage;
+    expect(displaySavingsPct(r)).toBeCloseTo(24, 1); // 48 / 200
+    expect(displaySavingsPct(r)).toBe(effectiveSavingsPct(r));
+  });
+
+  test('(c) AWS rec missing on_demand_cost still shows the provider % (not an em-dash)', () => {
+    // Pre-parity: effectiveSavingsPct returns null for an AWS rec without
+    // on_demand_cost (#323), so the column rendered an em-dash. With the provider %
+    // plumbed through, displaySavingsPct returns the real number.
+    const r = mk({ provider: 'aws', savings_percentage: 22, on_demand_cost: null, monthly_cost: 60 });
+    // Sanity: the reconstruction fallback alone WOULD be null (the bug).
+    expect(effectiveSavingsPct(r)).toBeNull();
+    // With the provider %, the displayed value is the authoritative 22%.
+    expect(displaySavingsPct(r)).toBe(22);
+  });
+
+  test('ignores a non-finite savings_percentage and falls back', () => {
+    const r = mk({ savings_percentage: Number.NaN, savings: 45, on_demand_cost: 150 });
+    expect(displaySavingsPct(r)).toBeCloseTo(30, 1);
+  });
+
+  test('returns null when neither provider % nor a computable fallback exists', () => {
+    // No provider %, AWS rec with no on_demand_cost => effectiveSavingsPct is
+    // null (#323) => displaySavingsPct is null => column renders an em-dash.
+    const r = mk({ provider: 'aws', savings_percentage: null, on_demand_cost: null });
+    expect(displaySavingsPct(r)).toBeNull();
   });
 });
 

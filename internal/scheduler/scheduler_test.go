@@ -1608,6 +1608,56 @@ func TestScheduler_ConvertRecommendations_OnDemandCost(t *testing.T) {
 		"OnDemandCost=0 from the provider must round-trip as nil, not as a pointer to 0.0")
 }
 
+// TestScheduler_ConvertRecommendations_SavingsPercentage pins the CLI/GUI
+// parity fix: the provider-authoritative SavingsPercentage (the same figure
+// the CLI/reporter prints) must be carried onto the RecommendationRecord so
+// the frontend can display it verbatim instead of re-deriving it. A provider
+// value of 0 (not reported) must round-trip as nil, never as a pointer to
+// 0.0, mirroring OnDemandCost so the frontend's "is this populated?" branch
+// stays accurate and falls back to the client-side reconstruction.
+func TestScheduler_ConvertRecommendations_SavingsPercentage(t *testing.T) {
+	scheduler := &Scheduler{}
+
+	recommendations := []common.Recommendation{
+		// AWS rec with a provider-reported percentage in the real data band.
+		{
+			Provider: common.ProviderAWS, Service: common.ServiceEC2,
+			Region: "us-east-1", ResourceType: "m5.large",
+			Count: 2, Term: "1yr", PaymentOption: "partial-upfront",
+			OnDemandCost: 150.0, CommitmentCost: 120.0, EstimatedSavings: 45.0,
+			SavingsPercentage: 30.0,
+		},
+		// Azure rec with a higher provider-reported percentage.
+		{
+			Provider: common.ProviderAzure, Service: common.ServiceCompute,
+			Region: "eastus", ResourceType: "Standard_D11_v2",
+			Count: 1, Term: "3yr", PaymentOption: "all-upfront",
+			OnDemandCost: 122.64, CommitmentCost: 1050.0, EstimatedSavings: 58.0,
+			SavingsPercentage: 47.3,
+		},
+		// Provider did not report a percentage (0); must round-trip as nil.
+		{
+			Provider: common.ProviderGCP, Service: common.ServiceCompute,
+			Region: "us-central1", ResourceType: "n2-standard-4",
+			Count: 1, Term: "3yr", PaymentOption: "no-upfront",
+			OnDemandCost: 200.0, CommitmentCost: 0, EstimatedSavings: 44.0,
+			SavingsPercentage: 0,
+		},
+	}
+
+	records := scheduler.convertRecommendations(recommendations, "aws")
+	require.Len(t, records, 3)
+
+	require.NotNil(t, records[0].SavingsPercentage)
+	assert.InDelta(t, 30.0, *records[0].SavingsPercentage, 0.001)
+
+	require.NotNil(t, records[1].SavingsPercentage)
+	assert.InDelta(t, 47.3, *records[1].SavingsPercentage, 0.001)
+
+	assert.Nil(t, records[2].SavingsPercentage,
+		"SavingsPercentage=0 from the provider must round-trip as nil, not as a pointer to 0.0")
+}
+
 // TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +
 // #188: the rec ID must include term, account, and engine — not just
 // (provider, service, region, resource_type, payment) — otherwise
