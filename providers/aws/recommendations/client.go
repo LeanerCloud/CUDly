@@ -365,7 +365,7 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 		serviceResult{name: "OpenSearch", recs: osRecs, err: osErr},
 		serviceResult{name: "Redshift", recs: redshiftRecs, err: redshiftErr},
 		serviceResult{name: "SavingsPlans", recs: spRecs, err: spErr},
-	), nil
+	)
 }
 
 // serviceResult bundles a per-service collection outcome for the deterministic
@@ -382,10 +382,26 @@ type serviceResult struct {
 // results in the order the slice is passed — callers must preserve the
 // canonical EC2 → RDS → ElastiCache → OpenSearch → Redshift → SavingsPlans
 // order so that order-sensitive consumers stay stable.
-func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+//
+// Partial failure is tolerated: as long as at least one service succeeded, the
+// successful services' recommendations are returned with a nil error and the
+// failures are logged at WARN. But when EVERY service errored (e.g. a sustained
+// Cost Explorer throttle that exhausts each service's per-combo retries), the
+// merge returns a wrapped error instead of an empty-but-nil-error result
+// (08-H4). Returning (recs, nil) on a total failure makes a throttled run
+// indistinguishable from "no savings available", which an operator can misread
+// as "nothing to buy": the same hazard the per-service all-combos-failed guard
+// in GetRecommendationsForService prevents one level down.
+func mergeServiceResults(results ...serviceResult) ([]common.Recommendation, error) {
 	total := 0
+	failures := 0
+	var lastErr error
 	for _, r := range results {
 		total += len(r.recs)
+		if r.err != nil {
+			failures++
+			lastErr = r.err
+		}
 	}
 	out := make([]common.Recommendation, 0, total)
 	for _, r := range results {
@@ -395,5 +411,8 @@ func mergeServiceResults(results ...serviceResult) []common.Recommendation {
 		}
 		out = append(out, r.recs...)
 	}
-	return out
+	if failures == len(results) && failures > 0 {
+		return nil, fmt.Errorf("all %d AWS recommendation services failed: %w", failures, lastErr)
+	}
+	return out, nil
 }
