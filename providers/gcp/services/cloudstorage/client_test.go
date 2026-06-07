@@ -709,8 +709,14 @@ func TestCloudStorageClient_GetStoragePricing_WithCommitmentPrice(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "USD", pricing.Currency)
 	assert.Greater(t, pricing.OnDemandPrice, float64(0))
-	// When commitment price is found, it should be used
-	assert.Equal(t, float64(0.02), pricing.CommitmentPrice)
+	// CommitmentPrice is the term total (per-unit SKU price * hoursInTerm).
+	// onDemand unit = 0.026, commitment unit = 0.020, hoursInTerm = 8760.
+	assert.InDelta(t, 0.02*8760, pricing.CommitmentPrice, 0.01)
+	// HourlyRate is the per-unit commitment price (not divided by hoursInTerm).
+	assert.InDelta(t, 0.02, pricing.HourlyRate, 0.0001)
+	// SavingsPercentage should be positive and less than 100.
+	assert.Greater(t, pricing.SavingsPercentage, float64(0))
+	assert.Less(t, pricing.SavingsPercentage, float64(100))
 }
 
 func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
@@ -731,6 +737,115 @@ func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
 	assert.Greater(t, pricing.SavingsPercentage, float64(0))
 	assert.Greater(t, pricing.OnDemandPrice, float64(0))
 	assert.Greater(t, pricing.CommitmentPrice, float64(0))
+}
+
+// TestConvertGCPRecommendation_PropagatesTermFromParams is a regression test for
+// the finding that convertGCPRecommendation hardcoded rec.Term = "1yr",
+// ignoring params.Term. A caller requesting "3yr" must get "3yr" in the output.
+//
+// This test FAILS on the pre-fix code that always set Term = "1yr".
+func TestCloudStorageConvertGCPRecommendation_PropagatesTermFromParams(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	tests := []struct {
+		inputTerm string
+		wantTerm  string
+	}{
+		{"3yr", "3yr"},
+		{"1yr", "1yr"},
+		{"", "1yr"}, // empty defaults to "1yr"
+	}
+
+	for _, tt := range tests {
+		params := common.RecommendationParams{Term: tt.inputTerm}
+		rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+		require.NotNil(t, rec)
+		assert.Equal(t, tt.wantTerm, rec.Term,
+			"params.Term %q must produce rec.Term %q", tt.inputTerm, tt.wantTerm)
+	}
+}
+
+// TestGetStoragePricing_CommitmentPriceIsTermTotal is a regression test for the
+// unit-mismatch bug where commitmentPrice (per-unit from SKU) was passed
+// directly to calculateStorageSavingsPercentage which expects a term total,
+// producing a ~99.99% savings percentage. After the fix, CommitmentPrice must
+// equal unitRate * hoursInTerm and SavingsPercentage must be realistic.
+//
+// This test FAILS on the pre-fix code where CommitmentPrice == 0.02 (per-unit).
+func TestGetStoragePricing_CommitmentPriceIsTermTotal(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// onDemand = $0.026/unit, commitment = $0.020/unit
+	// hoursInTerm (1yr) = 8760
+	// Expected: CommitmentPrice = 0.020*8760 = 175.2, OnDemandPrice = 0.026*8760 = 227.76
+	// Expected savings ~= (227.76-175.2)/227.76*100 ~= 23%
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "Standard Storage in us-central1",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        26000000, // $0.026/unit
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "Standard Storage Commitment in us-central1",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        20000000, // $0.020/unit
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetBillingService(mockService)
+
+	pricing, err := client.getStoragePricing(ctx, "STANDARD", "us-central1", 1)
+	require.NoError(t, err)
+
+	const hoursInYear = 8760.0
+	// CommitmentPrice must be a term total, not the raw per-unit SKU rate.
+	assert.InDelta(t, 0.02*hoursInYear, pricing.CommitmentPrice, 0.01,
+		"CommitmentPrice must be commitment SKU unit rate * hoursInTerm")
+	// HourlyRate must be the per-unit commitment rate.
+	assert.InDelta(t, 0.02, pricing.HourlyRate, 0.0001,
+		"HourlyRate must be the per-unit commitment SKU rate")
+	// OnDemandPrice stays a term total.
+	assert.InDelta(t, 0.026*hoursInYear, pricing.OnDemandPrice, 0.01)
+	// SavingsPercentage must be ~23%, not ~99.99%.
+	assert.Greater(t, pricing.SavingsPercentage, float64(1),
+		"SavingsPercentage must not be ~99.99% (unit-mismatch bug)")
+	assert.Less(t, pricing.SavingsPercentage, float64(60),
+		"SavingsPercentage must be a realistic storage commitment discount")
 }
 
 func TestSkuMatchesStorageClass_CaseInsensitive(t *testing.T) {

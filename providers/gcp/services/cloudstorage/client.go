@@ -338,11 +338,15 @@ func (c *CloudStorageClient) getStoragePricing(ctx context.Context, storageClass
 	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	savingsPercentage := calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
+	// Scale the per-unit commitment price to a term total so it is on the
+	// same basis as onDemandPrice * hoursInTerm. Without this, the savings
+	// percentage would be nearly 100% (per-unit price vs term total).
+	commitmentPriceTerm := commitmentPrice * hoursInTerm
+	savingsPercentage := calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPriceTerm)
 
 	return &StoragePricing{
-		HourlyRate:        commitmentPrice / hoursInTerm,
-		CommitmentPrice:   commitmentPrice,
+		HourlyRate:        commitmentPrice,
+		CommitmentPrice:   commitmentPriceTerm,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
@@ -502,6 +506,11 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 		paymentOption = "monthly"
 	}
 
+	term := params.Term
+	if term == "" {
+		term = "1yr"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceStorage,
@@ -509,7 +518,7 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 		Region:         c.region,
 		CommitmentType: common.CommitmentReservedCapacity,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
+		Term:           term,
 		PaymentOption:  paymentOption,
 	}
 

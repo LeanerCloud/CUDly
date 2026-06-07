@@ -1237,6 +1237,28 @@ func TestGroupCommitments_UsesValidMemoryEnum(t *testing.T) {
 	assert.True(t, sawMemory, "GroupCommitments must include a MEMORY resource (issue #1022)")
 }
 
+// TestConvertGCPRecommendation_NonMonthlyPaymentOptionForcedToMonthly is a
+// regression test for the CR finding that non-monthly values (e.g. "upfront")
+// are silently propagated to the recommendation, which is invalid for GCP CUDs
+// that only support monthly billing. The converter must always emit "monthly".
+//
+// This test FAILS on the pre-fix code that passed params.PaymentOption through
+// unchanged when it was non-empty.
+func TestConvertGCPRecommendation_NonMonthlyPaymentOptionForcedToMonthly(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	for _, input := range []string{"upfront", "all-upfront", "UPFRONT", "partial-upfront"} {
+		params := common.RecommendationParams{PaymentOption: input}
+		rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+		require.NotNil(t, rec)
+		assert.Equal(t, "monthly", rec.PaymentOption,
+			"GCP CUDs are monthly-only; input %q must be forced to \"monthly\"", input)
+	}
+}
+
 // TestIsMemoryAmountOp_MatchesBothSpellings asserts that the inbound Recommender
 // memory-op detector skips both the canonical "MEMORY" and legacy "MEMORY_MB"
 // path_filter spellings, so the VCPU extractor never mistakes the memory sibling

@@ -864,15 +864,15 @@ func skuMatchesMachineType(sku *cloudbilling.Sku, machineType, region string) bo
 // (issue #1022 C2). Pricing failures are logged but do not discard the recommendation:
 // EstimatedSavings from the Recommender payload is the authoritative savings signal.
 func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
-	paymentOption := params.PaymentOption
-	if paymentOption == "" {
-		// GCP CUDs are billed monthly with no upfront option; "monthly" is
-		// the only valid default. Aligns with cloudsql/memorystore/cloudstorage
-		// and supersedes the monthly stamp introduced in PR #829 (which
-		// stamped "monthly" in the purchase body but not in the converter
-		// default -- see PR #1047 for the supersession note).
-		paymentOption = "monthly"
+	// GCP CUDs are billed monthly with no upfront option; force "monthly"
+	// unconditionally and log any non-monthly input so scheduler
+	// misconfiguration is visible. Supersedes the monthly stamp introduced
+	// in PR #829 (which stamped "monthly" in the purchase body but not in
+	// the converter default -- see PR #1047 for the supersession note).
+	if params.PaymentOption != "" && !strings.EqualFold(params.PaymentOption, "monthly") {
+		log.Printf("computeengine: unsupported GCP payment option %q; forcing monthly", params.PaymentOption)
 	}
+	paymentOption := "monthly"
 
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
