@@ -569,6 +569,10 @@ func TestGCPProvider_GetAccounts_WithMock(t *testing.T) {
 	assert.Equal(t, "project-2", accounts[1].ID)
 }
 
+// TestGCPProvider_GetAccounts_Empty asserts that GetAccounts returns an empty
+// slice (not a synthesised fallback project) when no ACTIVE projects are
+// visible to the credentials (10-M7). A synthesised account would hide
+// permission / auth errors from callers.
 func TestGCPProvider_GetAccounts_Empty(t *testing.T) {
 	ctx := context.Background()
 	p := NewProviderWithProject(ctx, "default-project")
@@ -580,9 +584,7 @@ func TestGCPProvider_GetAccounts_Empty(t *testing.T) {
 
 	accounts, err := p.GetAccounts(ctx)
 	require.NoError(t, err)
-	// Should return the default project when no projects found
-	assert.Len(t, accounts, 1)
-	assert.Equal(t, "default-project", accounts[0].ID)
+	assert.Empty(t, accounts, "GetAccounts must return empty when no ACTIVE projects are visible (10-M7)")
 }
 
 func TestGCPProvider_GetAccounts_Error(t *testing.T) {

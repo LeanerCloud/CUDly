@@ -300,74 +300,18 @@ func TestCloudSQLClient_ValidateOffering_TierListError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to list SQL tiers")
 }
 
-func TestCloudSQLClient_GetExistingCommitments_WithMock(t *testing.T) {
+// TestCloudSQLClient_GetExistingCommitments_ReturnsEmpty asserts that
+// GetExistingCommitments always returns an empty slice regardless of the
+// sqladmin instance list. Cloud SQL spend-based CUDs are not detectable via
+// the sqladmin API; PricingPlan "PACKAGE" is a legacy billing mode, not a
+// commitment indicator (10-L3).
+func TestCloudSQLClient_GetExistingCommitments_ReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		instances: &sqladmin.InstancesListResponse{
-			Items: []*sqladmin.DatabaseInstance{
-				{
-					Name:            "instance-1",
-					Region:          "us-central1",
-					State:           "RUNNABLE",
-					DatabaseVersion: "MYSQL_8_0",
-					Settings: &sqladmin.Settings{
-						Tier:        "db-n1-standard-1",
-						PricingPlan: "PACKAGE",
-					},
-				},
-				{
-					Name:            "instance-2",
-					Region:          "us-central1",
-					State:           "RUNNABLE",
-					DatabaseVersion: "POSTGRES_14",
-					Settings: &sqladmin.Settings{
-						Tier:        "db-n1-standard-2",
-						PricingPlan: "PER_USE", // Not a commitment
-					},
-				},
-			},
-		},
-	}
-	client.SetSQLAdminService(mockService)
 
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
-	require.Len(t, commitments, 1)
-	assert.Equal(t, "instance-1", commitments[0].CommitmentID)
-	assert.Equal(t, "db-n1-standard-1", commitments[0].ResourceType)
-	assert.Equal(t, common.ServiceRelationalDB, commitments[0].Service)
-}
-
-func TestCloudSQLClient_GetExistingCommitments_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		err: errors.New("API error"),
-	}
-	client.SetSQLAdminService(mockService)
-
-	_, err := client.GetExistingCommitments(ctx)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to list SQL instances")
-}
-
-func TestCloudSQLClient_GetExistingCommitments_Empty(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockSQLAdminService{
-		instances: &sqladmin.InstancesListResponse{
-			Items: []*sqladmin.DatabaseInstance{},
-		},
-	}
-	client.SetSQLAdminService(mockService)
-
-	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	assert.Empty(t, commitments, "Cloud SQL GetExistingCommitments must return empty (10-L3)")
 }
 
 func TestCloudSQLClient_GetValidResourceTypes_WithMock(t *testing.T) {
@@ -500,34 +444,59 @@ func TestCloudSQLClient_PurchaseCommitment_NotSupported(t *testing.T) {
 	assert.False(t, mockService.insertCalled, "PurchaseCommitment must not call InsertInstance")
 }
 
-func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "db-n1-standard-1 Cloud SQL",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
+// sqlMockSkus returns a slice with both an on-demand and a commitment SKU for
+// the given tier and region. Required by tests that exercise GetOfferingDetails
+// after the issue #1020 fix (fabricated commitment prices are no longer allowed;
+// both SKUs must be present for getSQLPricing to succeed).
+func sqlMockSkus(tier, region string) []*cloudbilling.Sku {
+	onDemandSKU := &cloudbilling.Sku{
+		Description:    tier + " Cloud SQL",
+		ServiceRegions: []string{region},
+		PricingInfo: []*cloudbilling.PricingInfo{
+			{
+				PricingExpression: &cloudbilling.PricingExpression{
+					TieredRates: []*cloudbilling.TierRate{
 						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        50000000, // 0.05 per hour
-											CurrencyCode: "USD",
-										},
-									},
-								},
+							UnitPrice: &cloudbilling.Money{
+								Units:        0,
+								Nanos:        50000000,
+								CurrencyCode: "USD",
 							},
 						},
 					},
 				},
 			},
 		},
+	}
+	commitmentSKU := &cloudbilling.Sku{
+		Description:    tier + " Cloud SQL commitment 1yr",
+		ServiceRegions: []string{region},
+		PricingInfo: []*cloudbilling.PricingInfo{
+			{
+				PricingExpression: &cloudbilling.PricingExpression{
+					TieredRates: []*cloudbilling.TierRate{
+						{
+							UnitPrice: &cloudbilling.Money{
+								Units:        0,
+								Nanos:        42000000,
+								CurrencyCode: "USD",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return []*cloudbilling.Sku{onDemandSKU, commitmentSKU}
+}
+
+func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Both on-demand and commitment SKUs are required after the issue #1020 fix.
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{Skus: sqlMockSkus("db-n1-standard-1", "us-central1")},
 	}
 	client.SetBillingService(mockService)
 
@@ -549,30 +518,9 @@ func TestCloudSQLClient_GetOfferingDetails_3Year(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs are required after the issue #1020 fix.
 	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "db-n1-standard-1 Cloud SQL",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        50000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		skus: &cloudbilling.ListSkusResponse{Skus: sqlMockSkus("db-n1-standard-1", "us-central1")},
 	}
 	client.SetBillingService(mockService)
 
@@ -635,7 +583,8 @@ func TestCloudSQLClient_GetRecommendations_WithMock(t *testing.T) {
 	mockIterator := &MockRecommenderIterator{
 		recommendations: []*recommenderpb.Recommendation{
 			{
-				Name: "recommendation-1",
+				Name:      "recommendation-1",
+				StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 				PrimaryImpact: &recommenderpb.Impact{
 					Category: recommenderpb.Impact_COST,
 					Projection: &recommenderpb.Impact_CostProjection{
@@ -762,7 +711,7 @@ func TestCloudSQLClient_ConvertGCPRecommendation(t *testing.T) {
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Equal(t, common.ServiceRelationalDB, rec.Service)
@@ -781,7 +730,114 @@ func TestCloudSQLClient_ConvertGCPRecommendation_NilContent(t *testing.T) {
 		Content: nil,
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
+}
+
+// TestCloudSQLConvertGCPRecommendation_PropagatesTermFromParams is a regression
+// test for the finding that convertGCPRecommendation hardcoded rec.Term = "1yr",
+// ignoring params.Term. A caller requesting "3yr" must get "3yr" in the output.
+//
+// This test FAILS on the pre-fix code that always set Term = "1yr".
+func TestCloudSQLConvertGCPRecommendation_PropagatesTermFromParams(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	tests := []struct {
+		inputTerm string
+		wantTerm  string
+	}{
+		{"3yr", "3yr"},
+		{"1yr", "1yr"},
+		{"", "1yr"}, // empty defaults to "1yr"
+	}
+
+	for _, tt := range tests {
+		params := common.RecommendationParams{Term: tt.inputTerm}
+		rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+		require.NotNil(t, rec)
+		assert.Equal(t, tt.wantTerm, rec.Term,
+			"params.Term %q must produce rec.Term %q", tt.inputTerm, tt.wantTerm)
+	}
+}
+
+// TestGetSQLPricing_CommitmentPriceIsTermTotal is a regression test for the
+// unit-mismatch bug where commitmentPrice (per-hour from SKU) was passed
+// directly to calculateSQLSavingsPercentage which expects a term total,
+// producing a ~99.99% savings percentage. After the fix, CommitmentPrice must
+// equal hourlyRate * hoursInTerm and SavingsPercentage must be realistic.
+//
+// This test FAILS on the pre-fix code where CommitmentPrice == 0.042 (per-hour).
+func TestGetSQLPricing_CommitmentPriceIsTermTotal(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// onDemand = $0.05/hr, commitment = $0.042/hr
+	// hoursInTerm (1yr) = 8760
+	// Expected: CommitmentPrice = 0.042*8760 = 367.92, OnDemandPrice = 0.05*8760 = 438
+	// Expected savings ~= (438-367.92)/438*100 ~= 16%
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "db-n1-standard-1 Cloud SQL",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        50000000, // $0.05/hr
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "db-n1-standard-1 Cloud SQL commitment",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        42000000, // $0.042/hr
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetBillingService(mockService)
+
+	pricing, err := client.getSQLPricing(ctx, "db-n1-standard-1", "us-central1", 1)
+	require.NoError(t, err)
+
+	const hoursInYear = 8760.0
+	// CommitmentPrice must be a term total, not the raw per-hour SKU rate.
+	assert.InDelta(t, 0.042*hoursInYear, pricing.CommitmentPrice, 0.01,
+		"CommitmentPrice must be commitment SKU hourly rate * hoursInTerm")
+	// HourlyRate must be the per-hour commitment rate.
+	assert.InDelta(t, 0.042, pricing.HourlyRate, 0.0001,
+		"HourlyRate must be the per-hour commitment SKU rate")
+	// SavingsPercentage must be realistic (not ~99.99%).
+	assert.Greater(t, pricing.SavingsPercentage, float64(0),
+		"SavingsPercentage must be positive")
+	assert.Less(t, pricing.SavingsPercentage, float64(50),
+		"SavingsPercentage must be realistic (not ~100%)")
 }

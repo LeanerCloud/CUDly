@@ -18,7 +18,9 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudsql"
+	"github.com/LeanerCloud/CUDly/providers/gcp/services/cloudstorage"
 	"github.com/LeanerCloud/CUDly/providers/gcp/services/computeengine"
+	"github.com/LeanerCloud/CUDly/providers/gcp/services/memorystore"
 )
 
 // defaultGCPRegionConcurrency caps the parallel per-region goroutines inside
@@ -42,13 +44,21 @@ func gcpRegionConcurrency() int {
 	return defaultGCPRegionConcurrency
 }
 
-// regionResult bundles the Compute Engine and Cloud SQL recommendation slices
-// returned for a single GCP region. The merge in GetRecommendations walks
-// regions in sorted order and appends compute then sql per region so output
-// is deterministic independent of goroutine completion order.
+// regionResult bundles per-service recommendation slices returned for a single
+// GCP region. The merge in GetRecommendations walks regions in sorted order
+// and appends compute, sql, cache, storage per region so output is
+// deterministic independent of goroutine completion order.
+//
+// All four GCP service clients (computeengine, cloudsql, memorystore,
+// cloudstorage) implement GetRecommendations and are fanned out concurrently
+// when shouldIncludeService permits. Note that cache and storage purchase paths
+// are advisory-only (no-op PurchaseCommitment); their recommendations are still
+// surfaced so operators can see spend-optimisation signals.
 type regionResult struct {
 	compute []common.Recommendation
 	sql     []common.Recommendation
+	cache   []common.Recommendation
+	storage []common.Recommendation
 }
 
 // RecommendationsClientAdapter aggregates GCP CUD and commitment recommendations across all services
@@ -65,9 +75,10 @@ type RecommendationsClientAdapter struct {
 //   - Outer: errgroup over regions, capped at gcpRegionConcurrency()
 //     (CUDLY_GCP_REGION_PARALLELISM, default 10) to stay polite to the
 //     project-scoped Recommender API quota.
-//   - Inner: within each region's goroutine, the (compute, cloud-sql) calls
-//     run as two further goroutines under a per-region sub-errgroup, so the
-//     per-region cost is max(compute, sql) rather than compute + sql.
+//   - Inner: within each region's goroutine, the four service calls
+//     (compute, cloud-sql, memorystore, cloudstorage) run as concurrent
+//     goroutines under a per-region sub-errgroup, so the per-region cost is
+//     max(service latencies) rather than their sum.
 //
 // Behaviour change vs the previous nested for-loops: per-(region, service)
 // errors that were previously silently swallowed (`if err == nil { ... }`
@@ -132,9 +143,9 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		return nil, err
 	}
 
-	// Deterministic merge: walk regions in sorted order, append compute then
-	// sql per region. Output is stable regardless of GCP API region-list
-	// ordering or goroutine completion order.
+	// Deterministic merge: walk regions in sorted order, append compute, sql,
+	// cache, storage per region. Output is stable regardless of GCP API
+	// region-list ordering or goroutine completion order.
 	sortedRegions := make([]string, 0, len(results))
 	for region := range results {
 		sortedRegions = append(sortedRegions, region)
@@ -146,64 +157,109 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		res := results[region]
 		allRecommendations = append(allRecommendations, res.compute...)
 		allRecommendations = append(allRecommendations, res.sql...)
+		allRecommendations = append(allRecommendations, res.cache...)
+		allRecommendations = append(allRecommendations, res.storage...)
 	}
 	return allRecommendations, nil
 }
 
-// collectRegion fetches Compute Engine and Cloud SQL recommendations for a
-// single region concurrently. Per-service errors are logged at WARN with the
-// region+service tag and never propagate — the previous silent-skip-on-err
-// shape is preserved (so a misconfigured project doesn't error out the whole
-// recommendations refresh) but errors are now observable in logs. Extracted
-// from GetRecommendations to keep that function under the gocyclo gate
-// (.golangci.yml min-complexity: 15) after the post-Wait ctx.Err() block was
-// added.
+// collectComputeRecs fetches Compute Engine CUD recommendations for one region.
+// Handles semaphore acquire/release and client construction so these branches
+// are not counted toward collectRegion's cyclomatic complexity.
+func (r *RecommendationsClientAdapter) collectComputeRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := computeengine.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectSQLRecs fetches Cloud SQL CUD recommendations for one region.
+func (r *RecommendationsClientAdapter) collectSQLRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := cloudsql.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectCacheRecs fetches Memorystore recommendations for one region.
+func (r *RecommendationsClientAdapter) collectCacheRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := memorystore.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectStorageRecs fetches Cloud Storage recommendations for one region.
+func (r *RecommendationsClientAdapter) collectStorageRecs(ctx context.Context, params common.RecommendationParams, region string) ([]common.Recommendation, error) {
+	if err := concurrency.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer concurrency.Release(ctx)
+	client, err := cloudstorage.NewClient(ctx, r.projectID, region, r.clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return client.GetRecommendations(ctx, params)
+}
+
+// collectRegion fetches recommendations for all four GCP services
+// (Compute Engine, Cloud SQL, Memorystore, Cloud Storage) for a single region
+// concurrently. Per-service errors are logged at WARN with the region+service
+// tag and never propagate -- the previous silent-skip-on-err shape is preserved
+// (so a misconfigured project doesn't error out the whole recommendations
+// refresh) but errors are now observable in logs. The per-service fetch logic
+// (semaphore, client construction, GetRecommendations call) is delegated to
+// dedicated helpers (collectComputeRecs, collectSQLRecs, collectCacheRecs,
+// collectStorageRecs) to keep this function's cyclomatic complexity under the
+// gocyclo gate.
+//
+// Note: memorystore and cloudstorage PurchaseCommitment paths are advisory-only
+// (no programmatic purchase API exists for either); their recommendations are
+// surfaced so operators can see spend-optimisation signals (H-2 fix).
 func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params common.RecommendationParams, region string) regionResult {
 	var (
-		computeRecs, sqlRecs []common.Recommendation
-		computeErr, sqlErr   error
+		computeRecs, sqlRecs, cacheRecs, storageRecs []common.Recommendation
+		computeErr, sqlErr, cacheErr, storageErr     error
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	// Per-(region, service) goroutines are leaves — they issue the actual
-	// Recommender API call. Acquire bounds aggregate concurrent IO across
-	// the whole recommendations-collection fan-out tree at the shared
-	// semaphore's cap (CUDLY_MAX_PARALLELISM, default 20); Release returns
-	// the slot. Without this bound the per-region fan-out (cap 10) ×
-	// per-service sub-fan-out (2) × accounts × providers can produce
-	// hundreds of concurrent gRPC clients that exhaust Lambda memory. If
-	// no semaphore is on ctx (CLI tools, unit tests), Acquire/Release are
-	// no-ops. See pkg/concurrency.
 	if shouldIncludeService(params, common.ServiceCompute) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				computeErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := computeengine.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				computeErr = err
-				return nil
-			}
-			computeRecs, computeErr = client.GetRecommendations(gctx, params)
+			computeRecs, computeErr = r.collectComputeRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
 		g.Go(func() error {
-			if err := concurrency.Acquire(gctx); err != nil {
-				sqlErr = err
-				return nil
-			}
-			defer concurrency.Release(gctx)
-			client, err := cloudsql.NewClient(gctx, r.projectID, region, r.clientOpts...)
-			if err != nil {
-				sqlErr = err
-				return nil
-			}
-			sqlRecs, sqlErr = client.GetRecommendations(gctx, params)
+			sqlRecs, sqlErr = r.collectSQLRecs(gctx, params, region)
+			return nil
+		})
+	}
+	if shouldIncludeService(params, common.ServiceCache) {
+		g.Go(func() error {
+			cacheRecs, cacheErr = r.collectCacheRecs(gctx, params, region)
+			return nil
+		})
+	}
+	if shouldIncludeService(params, common.ServiceStorage) {
+		g.Go(func() error {
+			storageRecs, storageErr = r.collectStorageRecs(gctx, params, region)
 			return nil
 		})
 	}
@@ -215,8 +271,14 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 	if sqlErr != nil {
 		logging.Warnf("GCP %s cloudsql recommendations: %v", region, sqlErr)
 	}
+	if cacheErr != nil {
+		logging.Warnf("GCP %s memorystore recommendations: %v", region, cacheErr)
+	}
+	if storageErr != nil {
+		logging.Warnf("GCP %s cloudstorage recommendations: %v", region, storageErr)
+	}
 
-	return regionResult{compute: computeRecs, sql: sqlRecs}
+	return regionResult{compute: computeRecs, sql: sqlRecs, cache: cacheRecs, storage: storageRecs}
 }
 
 // GetRecommendationsForService retrieves GCP commitment recommendations for a specific service
@@ -235,10 +297,11 @@ func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context
 
 // getRegions retrieves available GCP regions for the project
 func (r *RecommendationsClientAdapter) getRegions(ctx context.Context) ([]string, error) {
-	// Create a temporary provider to get regions
-	provider := NewProviderWithProject(ctx, r.projectID, r.clientOpts...)
+	// Create a temporary provider to get regions. The local variable is named
+	// p (not provider) to avoid shadowing the imported provider package (10-N3).
+	p := NewProviderWithProject(ctx, r.projectID, r.clientOpts...)
 
-	regions, err := provider.GetRegions(ctx)
+	regions, err := p.GetRegions(ctx)
 	if err != nil {
 		return nil, err
 	}

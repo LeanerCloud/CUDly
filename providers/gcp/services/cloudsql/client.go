@@ -4,6 +4,7 @@ package cloudsql
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -181,7 +182,13 @@ func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.R
 			return nil, fmt.Errorf("cloudsql: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		// Skip non-ACTIVE recommendations (CLAIMED/SUCCEEDED/FAILED/DISMISSED).
+		// See computeengine.GetRecommendations for the full rationale.
+		if rec.GetStateInfo().GetState() != recommenderpb.RecommendationStateInfo_ACTIVE {
+			continue
+		}
+
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -190,56 +197,15 @@ func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.R
 	return recommendations, nil
 }
 
-// GetExistingCommitments retrieves existing Cloud SQL commitments
-func (c *CloudSQLClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected service if available (for testing)
-	var svc SQLAdminService
-	if c.sqlAdminService != nil {
-		svc = c.sqlAdminService
-	} else {
-		service, err := sqladmin.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create SQL admin service: %w", err)
-		}
-		svc = &realSQLAdminService{service: service}
-	}
-
-	// List all SQL instances in the project
-	instances, err := svc.ListInstances(c.projectID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list SQL instances: %w", err)
-	}
-
-	if instances == nil {
-		return commitments, nil
-	}
-
-	for _, instance := range instances.Items {
-		// Check if instance has a commitment (long-term pricing plan)
-		if instance.Settings != nil && instance.Settings.PricingPlan == "PACKAGE" {
-			commitment := common.Commitment{
-				Provider:       common.ProviderGCP,
-				Account:        c.projectID,
-				CommitmentType: common.CommitmentCUD,
-				Service:        common.ServiceRelationalDB,
-				Region:         instance.Region,
-				CommitmentID:   instance.Name,
-				State:          strings.ToLower(instance.State),
-				ResourceType:   instance.DatabaseVersion,
-			}
-
-			// Extract tier (machine type)
-			if instance.Settings.Tier != "" {
-				commitment.ResourceType = instance.Settings.Tier
-			}
-
-			commitments = append(commitments, commitment)
-		}
-	}
-
-	return commitments, nil
+// GetExistingCommitments returns an empty slice for Cloud SQL. Cloud SQL
+// spend-based CUDs are purchased via the Cloud Billing console / Cloud Commerce
+// Consumer Procurement API, not exposed through the sqladmin API. The legacy
+// PricingPlan "PACKAGE" is a per-instance billing mode (non-commitment,
+// deprecated) -- treating it as a commitment caused double-counting against
+// real spend-based CUDs (10-L3). Return empty until a proper commitment-
+// detection path is available.
+func (c *CloudSQLClient) GetExistingCommitments(_ context.Context) ([]common.Commitment, error) {
+	return nil, nil
 }
 
 // PurchaseCommitment is intentionally a no-op for Cloud SQL: GCP exposes no
@@ -362,7 +328,9 @@ type SQLPricing struct {
 	SavingsPercentage float64
 }
 
-// getSQLPricing gets pricing from GCP Cloud Billing Catalog API
+// getSQLPricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string, termYears int) (*SQLPricing, error) {
 	svc, err := c.getOrCreateBillingService(ctx)
 	if err != nil {
@@ -374,18 +342,24 @@ func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string,
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	onDemandPrice, currency := extractSQLPricingFromSKUs(skus.Skus, tier, region)
+	onDemandPrice, commitmentPrice, currency := extractSQLPricingFromSKUs(skus.Skus, tier, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Cloud SQL tier %s", tier)
 	}
+	if commitmentPrice == 0 {
+		return nil, fmt.Errorf("no commitment pricing found for Cloud SQL tier %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", tier, region)
+	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	commitmentPrice := estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
-	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
+	// Scale the per-hour commitment price to a term total so it is on the
+	// same basis as onDemandPrice * hoursInTerm. Without this, the savings
+	// percentage would be nearly 100% (per-hour price vs term total).
+	commitmentPriceTerm := commitmentPrice * hoursInTerm
+	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPriceTerm)
 
 	return &SQLPricing{
-		HourlyRate:        commitmentPrice / hoursInTerm,
-		CommitmentPrice:   commitmentPrice,
+		HourlyRate:        commitmentPrice,
+		CommitmentPrice:   commitmentPriceTerm,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
@@ -406,8 +380,9 @@ func (c *CloudSQLClient) getOrCreateBillingService(ctx context.Context) (Billing
 	return &realBillingService{service: service}, nil
 }
 
-// extractSQLPricingFromSKUs extracts on-demand pricing from SKU list
-func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand float64, currency string) {
+// extractSQLPricingFromSKUs extracts on-demand and commitment pricing from the SKU list.
+// Cloud SQL committed-use discounts are surfaced as "commitment" SKUs in the billing catalog.
+func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand, commitment float64, currency string) {
 	currency = "USD"
 
 	for _, sku := range skus {
@@ -424,11 +399,14 @@ func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (o
 			currency = curr
 		}
 
-		// Cloud SQL doesn't have separate commitment pricing in the API
-		onDemand = price
+		if strings.Contains(strings.ToLower(sku.Description), "commitment") {
+			commitment = price
+		} else {
+			onDemand = price
+		}
 	}
 
-	return onDemand, currency
+	return onDemand, commitment, currency
 }
 
 // extractSQLPriceFromSKU extracts the unit price from a SKU
@@ -449,15 +427,6 @@ func extractSQLPriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
 
 	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
 	return price, rate.UnitPrice.CurrencyCode
-}
-
-// estimateSQLCommitmentPrice estimates commitment price based on GCP SQL package savings
-func estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
-	discount := 0.85 // 15% savings for 1 year
-	if termYears == 3 {
-		discount = 0.80 // 20% savings for 3 years
-	}
-	return onDemandPrice * hoursInTerm * discount
 }
 
 // calculateSQLSavingsPercentage calculates the savings percentage
@@ -486,8 +455,76 @@ func skuMatchesTier(sku *cloudbilling.Sku, tier, region string) bool {
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// extractResourceTypeFromContent extracts the last path segment of the first
+// non-empty Operation.Resource across all operation groups. Used by all four
+// GCP service converters to set rec.ResourceType from Recommender payloads.
+func extractResourceTypeFromContent(content *recommenderpb.RecommendationContent) string {
+	if content == nil || content.OperationGroups == nil {
+		return ""
+	}
+	for _, opGroup := range content.OperationGroups {
+		for _, op := range opGroup.Operations {
+			if op.Resource == "" {
+				continue
+			}
+			parts := strings.Split(op.Resource, "/")
+			if len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// extractEstimatedSavings returns the negative of the PrimaryImpact cost
+// projection (GCP encodes savings as a negative cost delta).
+func extractEstimatedSavings(gcpRec *recommenderpb.Recommendation) float64 {
+	if gcpRec.PrimaryImpact == nil {
+		return 0
+	}
+	costProj := gcpRec.PrimaryImpact.GetCostProjection()
+	if costProj == nil || costProj.Cost == nil {
+		return 0
+	}
+	cost := costProj.Cost
+	return -(float64(cost.Units) + float64(cost.Nanos)/1e9)
+}
+
+// fillSQLPricing calls getSQLPricing and, on success, writes CommitmentCost,
+// OnDemandCost, SavingsPercentage, and BreakEvenMonths into rec. Pricing
+// failures are logged and do not discard the recommendation.
+func (c *CloudSQLClient) fillSQLPricing(ctx context.Context, rec *common.Recommendation, termYears int) {
+	pricing, err := c.getSQLPricing(ctx, rec.ResourceType, c.region, termYears)
+	if err != nil {
+		log.Printf("cloudsql: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		return
+	}
+	rec.CommitmentCost = pricing.CommitmentPrice
+	rec.OnDemandCost = pricing.OnDemandPrice
+	rec.SavingsPercentage = pricing.SavingsPercentage
+	if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+		monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+		if monthlySavings > 0 {
+			rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+		}
+	}
+}
+
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getSQLPricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation.
+func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "monthly"
+	}
+
+	term := params.Term
+	if term == "" {
+		term = "1yr"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceRelationalDB,
@@ -495,34 +532,21 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		Region:         c.region,
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "monthly",
+		Term:           term,
+		PaymentOption:  paymentOption,
 	}
 
-	// Extract resource type from recommendation content
-	if gcpRec.Content != nil {
-		if gcpRec.Content.OperationGroups != nil {
-			for _, opGroup := range gcpRec.Content.OperationGroups {
-				for _, op := range opGroup.Operations {
-					if op.Resource != "" {
-						parts := strings.Split(op.Resource, "/")
-						if len(parts) > 0 {
-							rec.ResourceType = parts[len(parts)-1]
-						}
-					}
-				}
-			}
-		}
-	}
+	rec.ResourceType = extractResourceTypeFromContent(gcpRec.Content)
+	rec.EstimatedSavings = extractEstimatedSavings(gcpRec)
 
-	// Extract cost impact
-	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
-		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
-			cost := costProj.Cost
-			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
-			rec.EstimatedSavings = savings
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2).
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
 		}
+		c.fillSQLPricing(ctx, rec, termYears)
 	}
 
 	return rec

@@ -364,6 +364,8 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 		errContains string
 	}{
 		{
+			// Both on-demand and commitment SKUs are required after the issue #1020 fix:
+			// getRedisPricing now returns an error when no commitment SKU is found.
 			name: "successful 1yr offering details",
 			rec: common.Recommendation{
 				ResourceType:  "STANDARD_HA",
@@ -391,11 +393,31 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 							},
 						},
 					},
+					{
+						Description:    "Memorystore Redis STANDARD_HA commitment 1yr",
+						ServiceRegions: []string{"us-central1"},
+						PricingInfo: []*cloudbilling.PricingInfo{
+							{
+								PricingExpression: &cloudbilling.PricingExpression{
+									TieredRates: []*cloudbilling.TierRate{
+										{
+											UnitPrice: &cloudbilling.Money{
+												CurrencyCode: "USD",
+												Units:        0,
+												Nanos:        35000000, // $0.035 per hour
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantErr: false,
 		},
 		{
+			// Both on-demand and commitment SKUs are required after the issue #1020 fix.
 			name: "successful 3yr offering details",
 			rec: common.Recommendation{
 				ResourceType:  "BASIC",
@@ -416,6 +438,25 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 												CurrencyCode: "USD",
 												Units:        0,
 												Nanos:        30000000, // $0.03 per hour
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Description:    "Memorystore Redis BASIC commitment 3yr",
+						ServiceRegions: []string{"us-central1"},
+						PricingInfo: []*cloudbilling.PricingInfo{
+							{
+								PricingExpression: &cloudbilling.PricingExpression{
+									TieredRates: []*cloudbilling.TierRate{
+										{
+											UnitPrice: &cloudbilling.Money{
+												CurrencyCode: "USD",
+												Units:        0,
+												Nanos:        19500000, // $0.0195 per hour
 											},
 										},
 									},
@@ -490,7 +531,8 @@ func TestMemorystoreClient_GetRecommendations_WithMockClient(t *testing.T) {
 			name: "returns recommendations successfully",
 			recommendations: []*recommenderpb.Recommendation{
 				{
-					Name: "projects/test/locations/us-central1/recommenders/google.memorystore.redis.PerformanceRecommender/recommendations/rec-1",
+					Name:      "projects/test/locations/us-central1/recommenders/google.memorystore.redis.PerformanceRecommender/recommendations/rec-1",
+					StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 					Content: &recommenderpb.RecommendationContent{
 						OperationGroups: []*recommenderpb.OperationGroup{
 							{
@@ -592,7 +634,7 @@ func TestMemorystoreClient_ConvertGCPRecommendation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.convertGCPRecommendation(ctx, tt.rec)
+			result := client.convertGCPRecommendation(ctx, tt.rec, common.RecommendationParams{})
 
 			require.NotNil(t, result)
 			assert.Equal(t, common.ProviderGCP, result.Provider)
@@ -603,6 +645,115 @@ func TestMemorystoreClient_ConvertGCPRecommendation(t *testing.T) {
 			assert.Equal(t, tt.wantResource, result.ResourceType)
 		})
 	}
+}
+
+// TestConvertGCPRecommendation_PropagatesTermFromParams is a regression test for
+// the finding that convertGCPRecommendation hardcoded rec.Term = "1yr",
+// ignoring params.Term. A caller requesting "3yr" must get "3yr" in the output.
+//
+// This test FAILS on the pre-fix code that always set Term = "1yr".
+func TestConvertGCPRecommendation_PropagatesTermFromParams(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	tests := []struct {
+		inputTerm string
+		wantTerm  string
+	}{
+		{"3yr", "3yr"},
+		{"1yr", "1yr"},
+		{"", "1yr"}, // empty defaults to "1yr"
+	}
+
+	for _, tt := range tests {
+		params := common.RecommendationParams{Term: tt.inputTerm}
+		rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+		require.NotNil(t, rec)
+		assert.Equal(t, tt.wantTerm, rec.Term,
+			"params.Term %q must produce rec.Term %q", tt.inputTerm, tt.wantTerm)
+	}
+}
+
+// TestGetRedisPricing_CommitmentPriceIsTermTotal is a regression test for the
+// unit-mismatch bug where commitmentPrice (per-hour from SKU) was passed
+// directly to calculateSavingsPercentage which expects a term total, producing
+// a ~99.99% savings percentage. After the fix, CommitmentPrice must equal
+// hourlyRate * hoursInTerm and SavingsPercentage must be a realistic fraction.
+//
+// This test FAILS on the pre-fix code where CommitmentPrice == 0.035 (per-hour).
+func TestGetRedisPricing_CommitmentPriceIsTermTotal(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// onDemand = $0.05/hr, commitment = $0.035/hr
+	// hoursInTerm (1yr) = 8760
+	// Expected: CommitmentPrice = 0.035*8760 = 306.6, OnDemandPrice = 0.05*8760 = 438
+	// Expected savings ~= (438-306.6)/438*100 ~= 30%
+	mockBilling := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "Memorystore Redis STANDARD_HA instance",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											CurrencyCode: "USD",
+											Units:        0,
+											Nanos:        50000000, // $0.05/hr
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "Memorystore Redis STANDARD_HA commitment 1yr",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											CurrencyCode: "USD",
+											Units:        0,
+											Nanos:        35000000, // $0.035/hr
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetBillingService(mockBilling)
+
+	pricing, err := client.getRedisPricing(ctx, "STANDARD_HA", "us-central1", 1)
+	require.NoError(t, err)
+
+	const hoursInYear = 8760.0
+	// CommitmentPrice must be a term total, not the raw per-hour SKU rate.
+	assert.InDelta(t, 0.035*hoursInYear, pricing.CommitmentPrice, 0.01,
+		"CommitmentPrice must be commitment SKU hourly rate * hoursInTerm")
+	// HourlyRate must be the per-hour commitment rate.
+	assert.InDelta(t, 0.035, pricing.HourlyRate, 0.0001,
+		"HourlyRate must be the per-hour commitment SKU rate")
+	// OnDemandPrice stays a term total.
+	assert.InDelta(t, 0.05*hoursInYear, pricing.OnDemandPrice, 0.01)
+	// SavingsPercentage must be ~30%, not ~99.99%.
+	assert.Greater(t, pricing.SavingsPercentage, float64(1),
+		"SavingsPercentage must not be ~99.99% (unit-mismatch bug)")
+	assert.Less(t, pricing.SavingsPercentage, float64(60),
+		"SavingsPercentage must be a realistic 1yr CUD discount")
 }
 
 func TestMemorystoreClient_SetterMethods(t *testing.T) {
