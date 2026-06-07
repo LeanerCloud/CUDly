@@ -296,10 +296,15 @@ func (c *CosmosDBClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, termErr := reservations.ParseTermYears(rec.Term)
+	if termErr != nil {
+		result.Error = termErr
+		return result, result.Error
 	}
 
 	requestBody := map[string]interface{}{
@@ -372,9 +377,9 @@ func (c *CosmosDBClient) ValidateOffering(ctx context.Context, rec common.Recomm
 
 // GetOfferingDetails retrieves Cosmos DB reservation offering details from Azure Retail Prices API
 func (c *CosmosDBClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, fmt.Errorf("invalid term: %w", err)
 	}
 
 	pricing, err := c.getCosmosPricing(ctx, rec.ResourceType, c.region, termYears)

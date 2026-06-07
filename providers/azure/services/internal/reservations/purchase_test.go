@@ -675,3 +675,38 @@ func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 	assert.Equal(t, "second", orderID)
 	m.AssertExpectations(t)
 }
+
+// TestParseTermYears verifies the canonical term parser (M4 regression:
+// before this fix, five service clients used a literal "3yr"||"3" check that
+// silently treated unrecognised terms as 1yr instead of returning an error).
+func TestParseTermYears(t *testing.T) {
+	tests := []struct {
+		term    string
+		want    int
+		wantErr bool
+	}{
+		{"1yr", 1, false},
+		{"1", 1, false},
+		{"1y", 1, false},
+		{"", 1, false},
+		{"3yr", 3, false},
+		{"3", 3, false},
+		{"3y", 3, false},
+		{"1YR", 1, false},   // case-insensitive
+		{"3YR", 3, false},   // case-insensitive
+		{" 1yr ", 1, false}, // whitespace-tolerant
+		{"5yr", 0, true},    // unrecognised term must error (pre-fix: silently returned 1)
+		{"P1Y", 0, true},    // ISO 8601 form not supported by this parser
+		{"bogus", 0, true},
+	}
+	for _, tc := range tests {
+		got, err := ParseTermYears(tc.term)
+		if tc.wantErr {
+			assert.Error(t, err, "term=%q should be an error", tc.term)
+			assert.Equal(t, 0, got, "term=%q error return should be 0", tc.term)
+		} else {
+			require.NoError(t, err, "term=%q should not error", tc.term)
+			assert.Equal(t, tc.want, got, "term=%q", tc.term)
+		}
+	}
+}

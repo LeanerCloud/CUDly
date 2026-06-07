@@ -224,20 +224,6 @@ func (c *ManagedRedisClient) reservationDetailToCommitment(detail *armconsumptio
 	return cm
 }
 
-// parseTermYears maps a reservation term string to an integer year count.
-// Returns an error for any value outside the explicit allowlist so callers
-// fail closed rather than silently coercing to a 1-year purchase.
-func parseTermYears(term string) (int, error) {
-	switch strings.ToLower(strings.TrimSpace(term)) {
-	case "", "1", "1yr", "1y":
-		return 1, nil
-	case "3", "3yr", "3y":
-		return 3, nil
-	default:
-		return 0, fmt.Errorf("unsupported reservation term: %s", term)
-	}
-}
-
 // PurchaseCommitment purchases Azure Cache for Redis reserved capacity using the two-step
 // calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
 func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
@@ -257,8 +243,12 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
-	termYears, termErr := parseTermYears(rec.Term)
+	termYears, termErr := reservations.ParseTermYears(rec.Term)
 	if termErr != nil {
 		result.Error = termErr
 		return result, result.Error
@@ -325,7 +315,7 @@ func (c *ManagedRedisClient) ValidateOffering(ctx context.Context, rec common.Re
 
 // GetOfferingDetails retrieves reservation offering details from the Azure Retail Prices API.
 func (c *ManagedRedisClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears, err := parseTermYears(rec.Term)
+	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
 	}

@@ -679,6 +679,7 @@ func TestComputeClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -702,6 +703,7 @@ func TestComputeClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -731,6 +733,7 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Standard_D2s_v3",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1258,4 +1261,47 @@ func TestComputeClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t 
 	// (see providers/azure/services/internal/reservations/displayname.go).
 	assert.Regexp(t, `^vm-`, capturedDisplayName)
 	assert.Contains(t, capturedDisplayName, "Standard_D2s_v3")
+}
+
+// TestCheckAndRegisterCapacityProvider_NonTwoxx is a regression test for M3:
+// before this fix, checkAndRegisterCapacityProvider decoded the body
+// unconditionally without checking resp.StatusCode, so a 403/429 with a
+// non-JSON body would produce a misleading "decode provider state" error
+// instead of a clear HTTP status error.
+func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	t.Cleanup(func() { mockHTTP.AssertExpectations(t) })
+	cred := &MockTokenCredential{token: "tok"}
+	client := NewClientWithHTTP(cred, "sub", "eastus", mockHTTP)
+
+	// Return a 403 Forbidden instead of 200 Registered.
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "providers/Microsoft.Capacity") &&
+			!strings.Contains(r.URL.Path, "reservationOrders") &&
+			!strings.Contains(r.URL.Path, "calculatePrice")
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusForbidden, `{"error":"AuthorizationFailed"}`), nil).Once()
+
+	err := client.checkAndRegisterCapacityProvider(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403", "error must surface the HTTP status code")
+}
+
+// TestComputeClient_PurchaseCommitment_ZeroCountRejected is a regression test
+// for M6: PurchaseCommitment must reject Count==0 before any HTTP call.
+func TestComputeClient_PurchaseCommitment_ZeroCountRejected(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &mocks.MockHTTPClient{}
+	t.Cleanup(func() { mockHTTP.AssertExpectations(t) })
+	cred := &MockTokenCredential{token: "tok"}
+	client := NewClientWithHTTP(cred, "sub", "eastus", mockHTTP)
+
+	result, err := client.PurchaseCommitment(ctx, common.Recommendation{
+		ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 0,
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "quantity must be greater than zero")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
 }

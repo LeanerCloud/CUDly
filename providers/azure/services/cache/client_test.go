@@ -1078,6 +1078,7 @@ func TestCacheClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1099,6 +1100,7 @@ func TestCacheClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1123,6 +1125,7 @@ func TestCacheClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "Premium_P1",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -355,10 +356,18 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("check provider: %w", err)
 	}
-	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Non-2xx from the provider check (e.g. 403 permissions, 429 throttle).
+		// Log and return so the purchase attempt can still proceed; a failed
+		// registration check is non-fatal.
+		return fmt.Errorf("check Microsoft.Capacity provider status returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
 
 	var state providerRegistrationState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+	if err := json.Unmarshal(body, &state); err != nil {
 		return fmt.Errorf("decode provider state: %w", err)
 	}
 
@@ -380,7 +389,11 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("register provider: %w", err)
 	}
+	regBody, _ := io.ReadAll(regResp.Body)
 	regResp.Body.Close()
+	if regResp.StatusCode < 200 || regResp.StatusCode >= 300 {
+		return fmt.Errorf("register Microsoft.Capacity provider returned HTTP %d: %s", regResp.StatusCode, string(regBody))
+	}
 
 	log.Printf("Triggered Microsoft.Capacity provider registration (was: %q)", state.RegistrationState)
 	return nil
@@ -393,9 +406,9 @@ func (c *ComputeClient) checkAndRegisterCapacityProvider(ctx context.Context) er
 // in the portal AND a re-driven purchase can find it via tag lookup before
 // buying a duplicate (issue #721).
 func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, idempotencyToken string) ([]byte, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, err
 	}
 	requestBody := map[string]interface{}{
 		"sku":      map[string]string{"name": rec.ResourceType},
@@ -454,6 +467,10 @@ func (c *ComputeClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		result.Error = fmt.Errorf("purchase source is required for Azure reservation purchases")
 		return result, result.Error
 	}
+	if rec.Count <= 0 {
+		result.Error = fmt.Errorf("quantity must be greater than zero, got %d", rec.Count)
+		return result, result.Error
+	}
 
 	// Ensure Microsoft.Capacity provider is registered (cached after first call).
 	c.ensureCapacityProviderRegistered(ctx)
@@ -503,9 +520,9 @@ func (c *ComputeClient) ValidateOffering(ctx context.Context, rec common.Recomme
 
 // GetOfferingDetails retrieves VM RI offering details from Azure Retail Prices API
 func (c *ComputeClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
+	termYears, err := reservations.ParseTermYears(rec.Term)
+	if err != nil {
+		return nil, fmt.Errorf("invalid term: %w", err)
 	}
 
 	pricing, err := c.getVMPricing(ctx, rec.ResourceType, c.region, termYears)

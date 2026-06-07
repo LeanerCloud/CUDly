@@ -900,6 +900,7 @@ func TestCosmosDBClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -921,6 +922,7 @@ func TestCosmosDBClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -945,6 +947,7 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})

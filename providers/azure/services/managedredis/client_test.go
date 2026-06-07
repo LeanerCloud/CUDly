@@ -620,7 +620,7 @@ func TestPurchaseCommitment_Accepted(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -632,7 +632,7 @@ func TestPurchaseCommitment_TokenError(t *testing.T) {
 	cred := &mockTokenCredential{err: errors.New("token error")}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -648,7 +648,7 @@ func TestPurchaseCommitment_HTTPError(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -667,7 +667,7 @@ func TestPurchaseCommitment_BadStatus(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub", "eastus", h)
 	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
-		ResourceType: "Premium_P1", Term: "1yr",
+		ResourceType: "Premium_P1", Term: "1yr", Count: 1,
 	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
@@ -832,4 +832,23 @@ func TestPurchaseCommitment_TagInjection(t *testing.T) {
 	tags, hasTags := body["tags"].(map[string]interface{})
 	require.True(t, hasTags, "tags field must be present in purchase body when Source is set")
 	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
+}
+
+// TestPurchaseCommitment_ZeroCountRejected is a regression test for M6:
+// PurchaseCommitment must reject Count==0 before issuing any HTTP call.
+// An Advisor recommendation with a missing qty field defaults to 0 -- without
+// this guard a zero-quantity purchase would reach the Azure API and produce a
+// confusing 400.
+func TestPurchaseCommitment_ZeroCountRejected(t *testing.T) {
+	h := &mockHTTPClient{}
+	t.Cleanup(func() { h.AssertExpectations(t) })
+	cred := &mockTokenCredential{token: "tok"}
+	c := NewClientWithHTTP(cred, "sub", "eastus", h)
+	result, err := c.PurchaseCommitment(context.Background(), common.Recommendation{
+		ResourceType: "Premium_P1", Term: "1yr", Count: 0,
+	}, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "quantity must be greater than zero")
+	h.AssertNotCalled(t, "Do", mock.Anything)
 }

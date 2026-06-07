@@ -972,6 +972,7 @@ func TestDatabaseClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "GP_Gen5_8",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -993,6 +994,7 @@ func TestDatabaseClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "GP_Gen5_8",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -1017,6 +1019,7 @@ func TestDatabaseClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "GP_Gen5_8",
 		Term:         "1yr",
+		Count:        1,
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})

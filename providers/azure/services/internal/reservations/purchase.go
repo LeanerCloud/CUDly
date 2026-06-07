@@ -52,6 +52,24 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
+// ParseTermYears maps a term string to an integer year count.
+// Returns an error for any value outside the explicit allowlist so that
+// callers fail closed rather than silently coercing to a 1-year purchase.
+// Recognised forms: "", "1", "1yr", "1y" -> 1; "3", "3yr", "3y" -> 3.
+// This is the canonical parser; service clients that previously used a local
+// literal comparison (rec.Term == "3yr" || rec.Term == "3") should call this
+// instead to get consistent error reporting on unrecognised terms.
+func ParseTermYears(term string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(term)) {
+	case "", "1", "1yr", "1y":
+		return 1, nil
+	case "3", "3yr", "3y":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("unsupported reservation term: %s", term)
+	}
+}
+
 // apiVersion is the GA api-version for the Microsoft.Capacity Reservations API.
 // Pinned to 2022-11-01 — the last stable version before Azure introduced the
 // calculatePrice requirement for new SKU families.
