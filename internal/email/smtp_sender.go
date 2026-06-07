@@ -3,7 +3,9 @@ package email
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -22,18 +24,25 @@ type SMTPConfig struct {
 	FromName    string
 	NotifyEmail string // Notification recipient email (defaults to FromEmail if empty)
 	UseTLS      bool   // Use STARTTLS (default true)
+	// AllowInsecure, when true, permits sending with credentials over a
+	// non-TLS connection. This must never be set in production; it exists
+	// only for integration tests against a local plaintext SMTP stub.
+	// When false (the default), dispatchSMTP returns an error if auth is
+	// configured but UseTLS is false (07-H2).
+	AllowInsecure bool
 }
 
 // SMTPSender handles sending email via SMTP (works for SendGrid, Azure ACS, and others)
 type SMTPSender struct {
-	host        string
-	port        int
-	username    string
-	password    string
-	fromEmail   string
-	fromName    string
-	notifyEmail string
-	useTLS      bool
+	host          string
+	port          int
+	username      string
+	password      string
+	fromEmail     string
+	fromName      string
+	notifyEmail   string
+	useTLS        bool
+	allowInsecure bool
 }
 
 // NewSMTPSender creates a new SMTP email sender
@@ -59,21 +68,29 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 	}
 
 	return &SMTPSender{
-		host:        cfg.Host,
-		port:        cfg.Port,
-		username:    cfg.Username,
-		password:    cfg.Password,
-		fromEmail:   cfg.FromEmail,
-		fromName:    cfg.FromName,
-		notifyEmail: notifyEmail,
-		useTLS:      cfg.UseTLS,
+		host:          cfg.Host,
+		port:          cfg.Port,
+		username:      cfg.Username,
+		password:      cfg.Password,
+		fromEmail:     cfg.FromEmail,
+		fromName:      cfg.FromName,
+		notifyEmail:   notifyEmail,
+		useTLS:        cfg.UseTLS,
+		allowInsecure: cfg.AllowInsecure,
 	}, nil
 }
 
-// SendNotification sends a notification email via SMTP
-// Note: SMTP doesn't have SNS-like pub/sub, so this sends directly
+// SendNotification is a no-op for SMTP senders (07-N4).
+// SMTP has no pub/sub equivalent of SNS: there is no topic to publish to and
+// no subscriber list to fan out to. As a result, GCP (SendGrid) and Azure
+// (ACS SMTP) deployments do not receive broadcast notifications (new-recs,
+// scheduled-purchase reminders without a recipient email, etc.). Callers that
+// need broadcast behaviour on non-AWS deployments must wire their own fan-out
+// or configure an SNS-compatible endpoint. Targeted approval emails
+// (SendPurchaseApprovalRequest, SendScheduledPurchaseNotification) are
+// unaffected because they use SendToEmailWithCC directly.
 func (s *SMTPSender) SendNotification(ctx context.Context, subject, message string) error {
-	logging.Debug("SMTP notification would be sent (not implemented for pub/sub)")
+	logging.Debug("SMTP broadcast notification is a no-op (SMTP has no pub/sub mechanism)")
 	return nil
 }
 
@@ -163,13 +180,26 @@ func sanitizeCCList(toEmail string, ccEmails []string) []string {
 	return out
 }
 
+// mimeRandBoundary returns a per-message random MIME boundary (07-N2).
+// Using a fixed constant boundary risks corruption if a message body
+// literally contains that string. crypto/rand gives a collision-free 8-byte
+// hex suffix; falls back to a fixed literal on the (exceptional) rand failure
+// so messages still deliver in degraded environments.
+func mimeRandBoundary() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "cudly-mp-fallback-7e3b1c89af04d2"
+	}
+	return "cudly-mp-" + hex.EncodeToString(b)
+}
+
 // buildSMTPMessageMultipart assembles a multipart/alternative RFC-5322
-// message with both a plain-text and an HTML part. The boundary is a
-// fixed literal — small risk of body-content collision, mitigated by the
-// boundary's unlikely-to-occur shape. `cc` is already sanitized and
-// deduped by the caller.
+// message with both a plain-text and an HTML part. A per-message random
+// boundary is generated via mimeRandBoundary to eliminate the theoretical
+// body-collision risk of a fixed literal (07-N2). `cc` is already sanitized
+// and deduped by the caller.
 func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subject, textBody, htmlBody string) []byte {
-	const boundary = "cudly-mp-7e3b1c89af04d2"
+	boundary := mimeRandBoundary()
 	from := s.fromEmail
 	if s.fromName != "" {
 		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
@@ -215,11 +245,21 @@ func (s *SMTPSender) buildSMTPMessage(toEmail string, cc []string, subject, body
 // dispatchSMTP runs the actual SMTP SendMail call, routing through
 // STARTTLS when s.useTLS is true. The rcpts list carries every address
 // that should receive the message (To + Cc).
+//
+// Security (07-H2): if credentials are configured but TLS is disabled the
+// call is refused unless AllowInsecure was explicitly set. Sending SMTP AUTH
+// over a non-TLS connection exposes credentials (SendGrid API key, Azure ACS
+// password) and token-bearing message bodies in cleartext. AllowInsecure must
+// never be set in production; it exists solely for integration tests against a
+// local plaintext stub server.
 func (s *SMTPSender) dispatchSMTP(rcpts []string, msg []byte) error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	var auth smtp.Auth
 	if s.username != "" && s.password != "" {
 		auth = smtp.PlainAuth("", s.username, s.password, s.host)
+	}
+	if auth != nil && !s.useTLS && !s.allowInsecure {
+		return fmt.Errorf("SMTP auth over non-TLS connection is refused: set UseTLS=true or, for test-only stubs, AllowInsecure=true")
 	}
 	if s.useTLS {
 		if err := s.sendMailTLS(addr, auth, s.fromEmail, rcpts, msg); err != nil {
