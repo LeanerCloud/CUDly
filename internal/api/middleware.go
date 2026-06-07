@@ -133,17 +133,24 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	}
 
 	// Auth endpoints that don't have a session yet are exempt unconditionally.
-	csrfExemptAlways := []string{
+	// Prefix matching is safe for these /api/auth/* paths because no admin
+	// sub-paths share those prefixes.
+	csrfExemptAlwaysPrefix := []string{
 		"/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-		"/api/register", // Public registration (no session)
 	}
-	for _, exempt := range csrfExemptAlways {
+	for _, exempt := range csrfExemptAlwaysPrefix {
 		if strings.HasPrefix(path, exempt) {
 			return false
 		}
+	}
+	// Exact match for the public self-registration endpoint (issue #1017).
+	// HasPrefix would also exempt /api/registrations/<id>/approve|reject|delete,
+	// which are AuthAdmin state-changing routes that MUST be CSRF-protected.
+	if path == "/api/register" {
+		return false
 	}
 
 	// Token-based approve/cancel/reject paths are exempt ONLY when the request

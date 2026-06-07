@@ -262,6 +262,50 @@ func TestGetDefaultRateLimits_SetupAdminHasDedicatedBucket(t *testing.T) {
 		"setup_admin window must be 15 minutes per issue #411")
 }
 
+// Regression test for #1016: "register" must have a dedicated strict rate-limit
+// bucket and must NOT fall through to the permissive api_general config (300/min).
+// An attacker at 300/min can flood the DB with pending-registration rows and
+// trigger a synchronous admin-notification email per request (inbox spam + DoS).
+func TestGetDefaultRateLimits_RegisterHasDedicatedBucket(t *testing.T) {
+	limits := getDefaultRateLimits()
+
+	cfg, ok := limits["register"]
+	if !ok {
+		t.Fatal("register key missing from default rate limits (issue #1016): add it to getDefaultRateLimits()")
+	}
+
+	// register must be far stricter than api_general (300/min).
+	apiGeneral := limits["api_general"]
+	if cfg.MaxAttempts >= apiGeneral.MaxAttempts {
+		t.Errorf("register limit (%d) is not stricter than api_general (%d); regression of #1016",
+			cfg.MaxAttempts, apiGeneral.MaxAttempts)
+	}
+
+	// Window must be non-zero.
+	if cfg.Window == 0 {
+		t.Error("register rate limit has zero window duration")
+	}
+}
+
+// Regression test for #1016: assertRateLimitKeysKnown must panic when an
+// unregistered key is supplied, so a future caller typo is caught at startup
+// rather than silently falling through to api_general.
+func TestAssertRateLimitKeysKnown_PanicsOnUnknownKey(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("assertRateLimitKeysKnown did not panic for an unknown key")
+		}
+	}()
+	assertRateLimitKeysKnown("this_key_does_not_exist_in_the_map")
+}
+
+// Regression test for #1016: assertRateLimitKeysKnown must not panic when all
+// supplied keys are present in getDefaultRateLimits().
+func TestAssertRateLimitKeysKnown_NoopForKnownKeys(t *testing.T) {
+	// Should not panic.
+	assertRateLimitKeysKnown("login", "setup_admin", "register", "approve_cancel_public")
+}
+
 // Regression test for #420: NewInMemoryRateLimiter must be ready at construction
 // time (not after a slow lazy init) so Lambda cold-start first requests are protected.
 func TestNewInMemoryRateLimiter_ReadyImmediately(t *testing.T) {

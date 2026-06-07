@@ -35,6 +35,26 @@ func getDefaultRateLimits() map[string]RateLimitConfig {
 		// 5 attempts per 15 minutes so a cold-start burst cannot brute-force the
 		// first-run endpoint before the DB-backed limiter is available.
 		"setup_admin": NewRateLimitConfig(5, 15*60), // 5 attempts / 15 minutes / IP
+		// register is a public, side-effect-heavy endpoint (DB write + email fan-out
+		// per request). Issue #1016: without a dedicated bucket it fell through to
+		// api_general (300/min), enabling bulk table-flooding and inbox-spam. Limit
+		// to 5 per 15 minutes per IP, matching setup_admin severity.
+		"register": NewRateLimitConfig(5, 15*60), // 5 attempts / 15 minutes / IP (#1016)
+	}
+}
+
+// assertRateLimitKeysKnown panics at startup if any endpoint key passed to
+// checkRateLimit is absent from the default rate-limit map. A missing key
+// silently falls through to api_general (300/min), which is the root cause of
+// issue #1016. Call this once during handler initialisation, passing every
+// string literal that appears in checkRateLimit call sites.
+func assertRateLimitKeysKnown(keys ...string) {
+	limits := getDefaultRateLimits()
+	for _, k := range keys {
+		if _, ok := limits[k]; !ok {
+			panic("checkRateLimit called with unknown endpoint key " + k +
+				": add it to getDefaultRateLimits() (issue #1016)")
+		}
 	}
 }
 

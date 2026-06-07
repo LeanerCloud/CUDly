@@ -466,6 +466,37 @@ func TestRequiresCSRFValidation_TokenBasedPathsWithSession(t *testing.T) {
 	}
 }
 
+// Regression test for #1017: /api/registrations/* admin routes must require CSRF.
+// Previously the csrfExemptAlways list contained "/api/register" matched with
+// strings.HasPrefix, which also matched /api/registrations/<id>/approve|reject|delete.
+// Those routes are AuthAdmin and state-changing: approving a registration creates
+// an enabled cloud account and stores attacker-supplied credentials.
+func TestRequiresCSRFValidation_RegistrationsAdminRoutesAreNotExempt(t *testing.T) {
+	h := &Handler{}
+	sessionReq := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{
+			"Authorization": "Bearer some-session-token",
+		},
+	}
+
+	adminRoutes := []struct {
+		method string
+		path   string
+	}{
+		{"POST", "/api/registrations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/approve"},
+		{"POST", "/api/registrations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/reject"},
+		{"DELETE", "/api/registrations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+	}
+
+	for _, tc := range adminRoutes {
+		got := h.requiresCSRFValidation(tc.method, tc.path, sessionReq)
+		if !got {
+			t.Errorf("admin route %s %s: expected requiresCSRFValidation=true (must be CSRF-protected, regression of #1017), got false",
+				tc.method, tc.path)
+		}
+	}
+}
+
 // Regression guard: unconditionally-exempt paths (login, setup-admin, etc.) must
 // remain exempt regardless of whether a session is present.
 func TestRequiresCSRFValidation_AlwaysExemptPaths(t *testing.T) {
