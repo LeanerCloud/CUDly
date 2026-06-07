@@ -170,8 +170,8 @@ func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *confi
 }
 
 // TransitionExecutionStatus mocks the TransitionExecutionStatus operation
-func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
-	args := m.Called(ctx, executionID, fromStatuses, toStatus)
+func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*config.PurchaseExecution, error) {
+	args := m.Called(ctx, executionID, fromStatuses, toStatus, actor)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -379,8 +379,8 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
 }
 
-func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
-	args := m.Called(ctx, id, fromStatus, toStatus)
+func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
+	args := m.Called(ctx, id, fromStatus, toStatus, actor)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -912,8 +912,8 @@ func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *co
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg *config.AccountRegistration, fromStatus string) error {
-	args := m.Called(ctx, reg, fromStatus)
+func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg *config.AccountRegistration, fromStatus string, actor *string) error {
+	args := m.Called(ctx, reg, fromStatus, actor)
 	return args.Error(0)
 }
 

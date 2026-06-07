@@ -965,7 +965,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 	mockStore.On("GetExecutionByID", ctx, executionID).Return(&config.PurchaseExecution{
 		ExecutionID: executionID, PlanID: planID, Status: "pending",
 	}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, executionID, mock.Anything, "paused").
+	mockStore.On("TransitionExecutionStatus", ctx, executionID, mock.Anything, "paused", mock.Anything).
 		Return(transitoned, nil)
 
 	// Plan is associated with account A — within the scoped user's allowed set.
@@ -985,7 +985,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 	require.NoError(t, err, "scoped user must be able to pause an account-A execution")
 	require.NotNil(t, result)
 	assert.Equal(t, "paused", result.Status, "result must reflect the paused status")
-	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, executionID, mock.Anything, "paused")
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, executionID, mock.Anything, "paused", mock.Anything)
 }
 
 // ─── 10. GET /ri-exchange/instances ──────────────────────────────────────────

@@ -123,7 +123,7 @@ func (m *mockConfigStoreForHealth) ListPendingExecutionIDsForAccount(ctx context
 	return nil, nil
 }
 
-func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
+func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
 
@@ -151,7 +151,7 @@ func (m *mockConfigStoreForHealth) GetRIExchangeRecordByToken(ctx context.Contex
 func (m *mockConfigStoreForHealth) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
-func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
+func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStoreForHealth) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
@@ -236,7 +236,7 @@ func (m *mockConfigStoreForHealth) ListAccountRegistrations(_ context.Context, _
 func (m *mockConfigStoreForHealth) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
 	return nil
 }
-func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
+func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string, _ *string) error {
 	return nil
 }
 func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, _ string) error {

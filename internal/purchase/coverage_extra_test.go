@@ -359,7 +359,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// Atomic approve transition (issue #372 fix).
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved").Return(approved, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved", (*string)(nil)).Return(approved, nil)
 	// Synchronous execute chain: GetPurchasePlan is called with the
 	// approved execution's PlanID — pinning the non-empty id here means a
 	// regression that drops it (e.g. passes "" or exec.ExecutionID by

@@ -144,7 +144,9 @@ func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor stri
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveAndExecute starting (actor=%q)", executionID, maskActor(actor))
 
-	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "approved")
+	// System-initiated transition: the human actor is stamped onto approved_by
+	// separately (below). Pass nil here so transitioned_by = NULL on this hop.
+	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "approved", nil)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveAndExecute status transition failed after %s: %v",
 			executionID, time.Since(t0), err)

@@ -77,7 +77,11 @@ type StoreInterface interface {
 	// is a one-off operator task rather than a button click anyway.
 	ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
-	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error)
+	// TransitionExecutionStatus atomically transitions an execution status.
+	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
+	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
+	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
+	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
 	// CancelExecutionAtomic atomically flips status from pending / notified /
 	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
 	// supports the Gmail-style pre-fire delay revoke path (issue #290).
@@ -184,7 +188,9 @@ type StoreInterface interface {
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
 	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
-	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error)
+	// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
+	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
+	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
 	// StampRIExchangeApprovedBy sets the approved_by column on a completed
 	// exchange row (issue #300). Called after CompleteRIExchange when the
@@ -269,7 +275,9 @@ type StoreInterface interface {
 	GetAccountRegistrationByToken(ctx context.Context, token string) (*AccountRegistration, error)
 	ListAccountRegistrations(ctx context.Context, filter AccountRegistrationFilter) ([]AccountRegistration, error)
 	UpdateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
-	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string) error
+	// TransitionRegistrationStatus atomically updates a registration's workflow fields.
+	// actor is the UUID of the reviewer (nil for system-initiated transitions).
+	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error
 	DeleteAccountRegistration(ctx context.Context, id string) error
 
 	// Purchase suppressions. Written inside a WithTx block during bulk

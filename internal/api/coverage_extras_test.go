@@ -330,7 +330,7 @@ func TestHandler_rejectRIExchange_AlreadyProcessed(t *testing.T) {
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: "tok"}, nil)
 	// Transition returns nil indicating already processed
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled").
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
 		Return(nil, nil)
 
 	h := &Handler{config: mockStore}
@@ -364,11 +364,81 @@ func TestHandler_approveRIExchange_AlreadyProcessed(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: "tok"}, nil)
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "processing").
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "processing", mock.Anything).
 		Return(nil, nil)
 
 	h := &Handler{config: mockStore}
 	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, "11111111-1111-1111-1111-111111111111", "tok")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already processed")
+}
+
+// ---------------------------------------------------------------------------
+// validUUIDPtrOrNil — actor-stamp helper (issue #1009)
+// ---------------------------------------------------------------------------
+
+// TestValidUUIDPtrOrNil_ReturnsPointerForValidUUID asserts the happy-path:
+// a string that parses as a UUID is passed through unchanged.
+func TestValidUUIDPtrOrNil_ReturnsPointerForValidUUID(t *testing.T) {
+	uid := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	result := validUUIDPtrOrNil(&uid)
+	require.NotNil(t, result, "valid UUID must return non-nil pointer")
+	assert.Equal(t, uid, *result)
+}
+
+// TestValidUUIDPtrOrNil_ReturnsNilForNonUUID asserts that a non-UUID string
+// (e.g. "admin-api-key") returns nil so it is never used as a FK actor.
+func TestValidUUIDPtrOrNil_ReturnsNilForNonUUID(t *testing.T) {
+	s := "admin-api-key"
+	assert.Nil(t, validUUIDPtrOrNil(&s), "non-UUID reviewer_by must map to nil actor")
+}
+
+// TestValidUUIDPtrOrNil_ReturnsNilForNilInput asserts that a nil *string
+// returns nil (no panic on nil dereference).
+func TestValidUUIDPtrOrNil_ReturnsNilForNilInput(t *testing.T) {
+	assert.Nil(t, validUUIDPtrOrNil(nil))
+}
+
+// TestHandler_TransitionRegistrationStatus_ActorStamped asserts that
+// TransitionRegistrationStatus is called with a non-nil actor when ReviewedBy
+// holds a valid UUID (the common human-reviewed path).
+func TestHandler_TransitionRegistrationStatus_ActorStamped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	const actorID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	reg := &config.AccountRegistration{
+		ID:         "reg-id-1",
+		Status:     "pending",
+		ReviewedBy: &[]string{actorID}[0],
+	}
+	// Actor must equal the reviewer UUID.
+	mockStore.On("TransitionRegistrationStatus", ctx, reg, "pending",
+		mock.MatchedBy(func(a *string) bool { return a != nil && *a == actorID }),
+	).Return(nil)
+
+	err := mockStore.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy))
+	require.NoError(t, err)
+}
+
+// TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil asserts that when
+// ReviewedBy is "admin-api-key" (API key session), the actor passed to
+// TransitionRegistrationStatus is nil so transitioned_by = NULL.
+func TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	nonUUID := "admin-api-key"
+	reg := &config.AccountRegistration{
+		ID:         "reg-id-2",
+		Status:     "pending",
+		ReviewedBy: &nonUUID,
+	}
+	// Non-UUID reviewer: actor must be nil.
+	mockStore.On("TransitionRegistrationStatus", ctx, reg, "pending", (*string)(nil)).Return(nil)
+
+	err := mockStore.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy))
+	require.NoError(t, err)
 }

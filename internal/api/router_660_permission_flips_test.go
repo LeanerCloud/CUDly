@@ -207,7 +207,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
 		// TransitionExecutionStatus is called next; stub it.
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
@@ -231,7 +231,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		_, err := h.pausePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
 		assert403(t, err)
 		// The status transition must never run for a non-owner.
-		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("update-any holder can pause another user's planned purchase (issue #950)", func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		// authorizeExecutionManagement; only requireExecutionAccess fetches.
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
@@ -266,7 +266,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		// immediately without calling GetAllowedAccountsAPI or GetExecutionByID).
 		mockAuth := authForAdmin(ctx, t)
 		mockStore := new(MockConfigStore)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused").
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "running"}, "paused", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
@@ -292,7 +292,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled").
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
@@ -312,7 +312,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
 		assert403(t, err)
-		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("user without delete:purchases is rejected with 403", func(t *testing.T) {

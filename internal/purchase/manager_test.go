@@ -356,7 +356,7 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// The atomic transition only flips rows still in "approved".
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-stranded", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-stranded", []string{"approved"}, "failed", (*string)(nil)).
 		Return(&failedRow, nil)
 	// The explanatory error is stamped on the now-failed row.
 	var saved *config.PurchaseExecution
@@ -406,7 +406,7 @@ func TestManager_RecoverStrandedApprovals_FreshRowUntouched(t *testing.T) {
 	assert.Equal(t, 0, recovered)
 
 	mockStore.AssertExpectations(t)
-	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
@@ -459,7 +459,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// CAS claim: approved -> running. The re-drive proceeds only after winning this.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running", (*string)(nil)).
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
@@ -500,8 +500,8 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	// The provider was reached: the re-drive called PurchaseCommitment exactly once.
 	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// The CAS claim (approved -> running) was called; "failed" transition was not.
-	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running")
-	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running", (*string)(nil))
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
 }
 
 // TestManager_RecoverStrandedApprovals_AzureReservationRedrives verifies that a
@@ -547,7 +547,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// CAS claim: approved -> running before re-drive.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running", (*string)(nil)).
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-azure-res").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
@@ -582,8 +582,8 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 	// Provider was reached: re-drive called PurchaseCommitment exactly once.
 	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// CAS claim (approved -> running) was called; "failed" transition was not.
-	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running")
-	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running", (*string)(nil))
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
 }
 
 // TestManager_RecoverStrandedApprovals_GCPRedrives verifies that a stranded GCP
@@ -628,7 +628,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// CAS claim: approved -> running before re-drive.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running", (*string)(nil)).
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-gcp").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
@@ -663,8 +663,8 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 	// Provider was reached: re-drive called PurchaseCommitment exactly once.
 	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// CAS claim (approved -> running) was called; "failed" transition was not.
-	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running")
-	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed")
+	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running", (*string)(nil))
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
 }
 
 // TestManager_RecoverStrandedApprovals_MixedAWSAzureSPSafeFails verifies that a
@@ -692,7 +692,7 @@ func TestManager_RecoverStrandedApprovals_MixedAWSAzureSPSafeFails(t *testing.T)
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-mixed-sp", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-mixed-sp", []string{"approved"}, "failed", (*string)(nil)).
 		Return(&failedRow, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
@@ -734,7 +734,7 @@ func TestManager_RecoverStrandedApprovals_AzureSavingsPlansSafeFails(t *testing.
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-sp", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-sp", []string{"approved"}, "failed", (*string)(nil)).
 		Return(&failedRow, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
@@ -775,7 +775,7 @@ func TestManager_RecoverStrandedApprovals_LegacyNoExecutionIDSafeFails(t *testin
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "", []string{"approved"}, "failed", (*string)(nil)).
 		Return(&failedRow, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
@@ -808,7 +808,7 @@ func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-raced", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-raced", []string{"approved"}, "failed", (*string)(nil)).
 		Return(nil, errors.New("execution exec-raced cannot transition from \"completed\" to \"failed\""))
 	// When TransitionExecutionStatus fails the manager calls GetExecutionByID to
 	// distinguish a race (row already left "approved") from a real store error.
@@ -849,7 +849,7 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrNotFoundIsBenign(t *testin
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// TransitionExecutionStatus wraps "row vanished" as config.ErrNotFound.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-vanished", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-vanished", []string{"approved"}, "failed", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-vanished", config.ErrNotFound))
 
 	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
@@ -892,7 +892,7 @@ func TestManager_RecoverStrandedApprovals_SafeFail_ErrExecutionNotInExpectedStat
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// TransitionExecutionStatus signals the row is in a non-approved state.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-already-transitioned", []string{"approved"}, "failed").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-already-transitioned", []string{"approved"}, "failed", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-already-transitioned status is completed", config.ErrExecutionNotInExpectedStatus))
 
 	manager := &Manager{config: mockStore, dashboardURL: "https://dashboard.example.com"}
@@ -956,7 +956,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// CAS claim: approved -> running. This succeeds -- the row is now "running".
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-persist-fail", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-persist-fail", []string{"approved"}, "running", (*string)(nil)).
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-persist-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
@@ -1031,7 +1031,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_ExecAndPersistBothFail(t *t
 	mockStore.On("GetStaleApprovedExecutions", ctx, staleApprovedThreshold).
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// CAS claim succeeds: the row is now "running" with no terminal state yet.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-both-fail", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-both-fail", []string{"approved"}, "running", (*string)(nil)).
 		Return(&runningRow, nil)
 	// executePurchase calls GetPurchasePlan; make it fail so execErr != nil.
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-both-fail").Return(nil, planErr).Once()
@@ -1087,7 +1087,7 @@ func TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive(t *testing.T) {
 		Return([]config.PurchaseExecution{stranded}, nil)
 	// A concurrent sweep has already claimed the row (status changed to "running"),
 	// so our CAS (approved -> running) is rejected as ErrExecutionNotInExpectedStatus.
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-claimed", []string{"approved"}, "running").
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-claimed", []string{"approved"}, "running", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-aws-claimed cannot transition from \"running\" to \"running\"", config.ErrExecutionNotInExpectedStatus))
 
 	manager := &Manager{

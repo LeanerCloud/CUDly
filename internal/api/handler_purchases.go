@@ -272,7 +272,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	}
 
 	// Atomically transition to paused
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "running"}, "paused"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "running"}, "paused", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be paused: %v", executionID, err))
 	}
 
@@ -296,7 +296,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	}
 
 	// Atomically transition from paused back to pending
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, err))
 	}
 
@@ -321,7 +321,7 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 
 	// Atomically transition to running — only one concurrent caller can succeed.
 	// TransitionExecutionStatus handles not-found and wrong-status cases.
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "running"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "running", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be started: %v", executionID, err))
 	}
 
@@ -348,7 +348,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID)
+	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
 	}
@@ -371,8 +371,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
 // can still drive the plan-disable side-effect, keeping the operation
 // idempotent across retries.
-func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
-	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
+// actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
+func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
+	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled", actor)
 	if err == nil {
 		return cancelled, nil
 	}
