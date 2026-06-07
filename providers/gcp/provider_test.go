@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"cloud.google.com/go/compute/apiv1/computepb"
@@ -403,28 +404,34 @@ func TestNewProvider_NilConfig(t *testing.T) {
 }
 
 func TestGCPProvider_GetCredentials_WithEnvVar(t *testing.T) {
-	// Test GetCredentials when GOOGLE_APPLICATION_CREDENTIALS env var is set
-	// We just test the logic, not actual credential retrieval
-	p := &GCPProvider{
-		projectID: "test-project",
-	}
+	// GOOGLE_APPLICATION_CREDENTIALS set -> source is File, no network call.
+	clearGCPCredEnv(t)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
-	// Save and restore env var
-	origVal := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	p := &GCPProvider{projectID: "test-project"}
 
-	// Test with env var set
-	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
-	defer func() {
-		if origVal == "" {
-			os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
-		} else {
-			os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", origVal)
-		}
-	}()
+	creds, err := p.GetCredentials()
+	require.NoError(t, err)
+	baseCreds, ok := creds.(*provider.BaseCredentials)
+	require.True(t, ok)
+	assert.Equal(t, provider.CredentialSourceFile, baseCreds.Source)
+}
 
-	// GetCredentials will still fail without real credentials,
-	// but we're testing the code path
-	_, _ = p.GetCredentials()
+func TestGCPProvider_GetCredentials_ADCFileSource(t *testing.T) {
+	// gcloud ADC file present (via CLOUDSDK_CONFIG) -> source is CLI, no env var.
+	clearGCPCredEnv(t)
+	cfgDir := t.TempDir()
+	t.Setenv("CLOUDSDK_CONFIG", cfgDir)
+	adcPath := filepath.Join(cfgDir, "application_default_credentials.json")
+	require.NoError(t, os.WriteFile(adcPath, []byte(`{"type":"authorized_user"}`), 0o600))
+
+	p := &GCPProvider{projectID: "test-project"}
+
+	creds, err := p.GetCredentials()
+	require.NoError(t, err)
+	baseCreds, ok := creds.(*provider.BaseCredentials)
+	require.True(t, ok)
+	assert.Equal(t, provider.CredentialSourceCLI, baseCreds.Source)
 }
 
 func TestGCPProvider_SetterMethods(t *testing.T) {
@@ -707,63 +714,66 @@ func TestGCPProvider_GetRegions_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to list regions")
 }
 
-func TestGCPProvider_GetCredentials_NotConfigured(t *testing.T) {
-	p := &GCPProvider{
-		projectID: "",
-	}
+// clearGCPCredEnv makes credential-source detection deterministic by clearing
+// the credential env vars and pointing CLOUDSDK_CONFIG at an empty temp dir so
+// no real gcloud ADC file on the test machine is picked up. t.Setenv auto-
+// restores after the test.
+func clearGCPCredEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+	t.Setenv("CLOUDSDK_CONFIG", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
+}
 
-	// Set up mock that returns error to simulate not configured
+func TestGCPProvider_GetCredentials_NotConfigured(t *testing.T) {
+	clearGCPCredEnv(t)
+
+	// No credential env var, no ADC file, and no project ID: detection finds
+	// no usable source. GetCredentials reports this WITHOUT any network call
+	// (10-H3) -- the projectsClient mock must never be invoked.
 	mockClient := &MockProjectsClient{
-		err: errors.New("not configured"),
+		err: errors.New("network call must not happen"),
 	}
+	p := &GCPProvider{projectID: ""}
 	p.SetProjectsClient(mockClient)
 
 	_, err := p.GetCredentials()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "GCP is not configured")
+	assert.False(t, mockClient.closed, "GetCredentials must not open/close a network client (no RPC)")
 }
 
 func TestGCPProvider_GetCredentials_Configured(t *testing.T) {
-	p := &GCPProvider{
-		projectID: "test-project",
-	}
+	clearGCPCredEnv(t)
 
+	// A configured project ID is enough for ADC (metadata-server fallback) to be
+	// the reported source, with no network call required.
 	mockClient := &MockProjectsClient{
-		project: &resourcemanagerpb.Project{
-			Name:  "projects/test-project",
-			State: resourcemanagerpb.Project_ACTIVE,
-		},
+		err: errors.New("network call must not happen"),
 	}
+	p := &GCPProvider{projectID: "test-project"}
 	p.SetProjectsClient(mockClient)
 
 	creds, err := p.GetCredentials()
 	require.NoError(t, err)
 	require.NotNil(t, creds)
+
+	baseCreds, ok := creds.(*provider.BaseCredentials)
+	require.True(t, ok)
+	assert.Equal(t, provider.CredentialSourceADC, baseCreds.Source)
+	assert.False(t, mockClient.closed, "GetCredentials must not issue a GetProject RPC")
 }
 
 func TestGCPProvider_GetCredentials_WithFileSource(t *testing.T) {
-	p := &GCPProvider{
-		projectID: "test-project",
-	}
+	clearGCPCredEnv(t)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
 	mockClient := &MockProjectsClient{
-		project: &resourcemanagerpb.Project{
-			Name:  "projects/test-project",
-			State: resourcemanagerpb.Project_ACTIVE,
-		},
+		err: errors.New("network call must not happen"),
 	}
+	p := &GCPProvider{projectID: "test-project"}
 	p.SetProjectsClient(mockClient)
-
-	// Save and restore env var
-	origVal := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
-	defer func() {
-		if origVal == "" {
-			os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
-		} else {
-			os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", origVal)
-		}
-	}()
 
 	creds, err := p.GetCredentials()
 	require.NoError(t, err)
@@ -772,4 +782,5 @@ func TestGCPProvider_GetCredentials_WithFileSource(t *testing.T) {
 	baseCreds, ok := creds.(*provider.BaseCredentials)
 	require.True(t, ok)
 	assert.Equal(t, provider.CredentialSourceFile, baseCreds.Source)
+	assert.False(t, mockClient.closed, "GetCredentials must not issue a GetProject RPC")
 }
