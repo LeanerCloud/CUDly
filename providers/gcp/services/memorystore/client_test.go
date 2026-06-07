@@ -364,6 +364,8 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 		errContains string
 	}{
 		{
+			// Both on-demand and commitment SKUs are required after the issue #1020 fix:
+			// getRedisPricing now returns an error when no commitment SKU is found.
 			name: "successful 1yr offering details",
 			rec: common.Recommendation{
 				ResourceType:  "STANDARD_HA",
@@ -391,11 +393,31 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 							},
 						},
 					},
+					{
+						Description:    "Memorystore Redis STANDARD_HA commitment 1yr",
+						ServiceRegions: []string{"us-central1"},
+						PricingInfo: []*cloudbilling.PricingInfo{
+							{
+								PricingExpression: &cloudbilling.PricingExpression{
+									TieredRates: []*cloudbilling.TierRate{
+										{
+											UnitPrice: &cloudbilling.Money{
+												CurrencyCode: "USD",
+												Units:        0,
+												Nanos:        35000000, // $0.035 per hour
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 			wantErr: false,
 		},
 		{
+			// Both on-demand and commitment SKUs are required after the issue #1020 fix.
 			name: "successful 3yr offering details",
 			rec: common.Recommendation{
 				ResourceType:  "BASIC",
@@ -416,6 +438,25 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 												CurrencyCode: "USD",
 												Units:        0,
 												Nanos:        30000000, // $0.03 per hour
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Description:    "Memorystore Redis BASIC commitment 3yr",
+						ServiceRegions: []string{"us-central1"},
+						PricingInfo: []*cloudbilling.PricingInfo{
+							{
+								PricingExpression: &cloudbilling.PricingExpression{
+									TieredRates: []*cloudbilling.TierRate{
+										{
+											UnitPrice: &cloudbilling.Money{
+												CurrencyCode: "USD",
+												Units:        0,
+												Nanos:        19500000, // $0.0195 per hour
 											},
 										},
 									},
@@ -592,7 +633,7 @@ func TestMemorystoreClient_ConvertGCPRecommendation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.convertGCPRecommendation(ctx, tt.rec)
+			result := client.convertGCPRecommendation(ctx, tt.rec, common.RecommendationParams{})
 
 			require.NotNil(t, result)
 			assert.Equal(t, common.ProviderGCP, result.Provider)

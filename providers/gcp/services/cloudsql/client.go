@@ -4,6 +4,7 @@ package cloudsql
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -181,7 +182,7 @@ func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.R
 			return nil, fmt.Errorf("cloudsql: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -362,7 +363,9 @@ type SQLPricing struct {
 	SavingsPercentage float64
 }
 
-// getSQLPricing gets pricing from GCP Cloud Billing Catalog API
+// getSQLPricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string, termYears int) (*SQLPricing, error) {
 	svc, err := c.getOrCreateBillingService(ctx)
 	if err != nil {
@@ -374,13 +377,15 @@ func (c *CloudSQLClient) getSQLPricing(ctx context.Context, tier, region string,
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	onDemandPrice, currency := extractSQLPricingFromSKUs(skus.Skus, tier, region)
+	onDemandPrice, commitmentPrice, currency := extractSQLPricingFromSKUs(skus.Skus, tier, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Cloud SQL tier %s", tier)
 	}
+	if commitmentPrice == 0 {
+		return nil, fmt.Errorf("no commitment pricing found for Cloud SQL tier %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", tier, region)
+	}
 
 	hoursInTerm := 8760.0 * float64(termYears)
-	commitmentPrice := estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
 	savingsPercentage := calculateSQLSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &SQLPricing{
@@ -406,8 +411,9 @@ func (c *CloudSQLClient) getOrCreateBillingService(ctx context.Context) (Billing
 	return &realBillingService{service: service}, nil
 }
 
-// extractSQLPricingFromSKUs extracts on-demand pricing from SKU list
-func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand float64, currency string) {
+// extractSQLPricingFromSKUs extracts on-demand and commitment pricing from the SKU list.
+// Cloud SQL committed-use discounts are surfaced as "commitment" SKUs in the billing catalog.
+func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (onDemand, commitment float64, currency string) {
 	currency = "USD"
 
 	for _, sku := range skus {
@@ -424,11 +430,14 @@ func extractSQLPricingFromSKUs(skus []*cloudbilling.Sku, tier, region string) (o
 			currency = curr
 		}
 
-		// Cloud SQL doesn't have separate commitment pricing in the API
-		onDemand = price
+		if strings.Contains(strings.ToLower(sku.Description), "commitment") {
+			commitment = price
+		} else {
+			onDemand = price
+		}
 	}
 
-	return onDemand, currency
+	return onDemand, commitment, currency
 }
 
 // extractSQLPriceFromSKU extracts the unit price from a SKU
@@ -449,15 +458,6 @@ func extractSQLPriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
 
 	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
 	return price, rate.UnitPrice.CurrencyCode
-}
-
-// estimateSQLCommitmentPrice estimates commitment price based on GCP SQL package savings
-func estimateSQLCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
-	discount := 0.85 // 15% savings for 1 year
-	if termYears == 3 {
-		discount = 0.80 // 20% savings for 3 years
-	}
-	return onDemandPrice * hoursInTerm * discount
 }
 
 // calculateSQLSavingsPercentage calculates the savings percentage
@@ -486,8 +486,16 @@ func skuMatchesTier(sku *cloudbilling.Sku, tier, region string) bool {
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getSQLPricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation.
+func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "monthly"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceRelationalDB,
@@ -496,7 +504,7 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
 		Term:           "1yr",
-		PaymentOption:  "monthly",
+		PaymentOption:  paymentOption,
 	}
 
 	// Extract resource type from recommendation content
@@ -517,11 +525,32 @@ func (c *CloudSQLClient) convertGCPRecommendation(ctx context.Context, gcpRec *r
 
 	// Extract cost impact
 	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
 		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
 			cost := costProj.Cost
 			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 			rec.EstimatedSavings = savings
+		}
+	}
+
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2).
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
+		}
+		if pricing, err := c.getSQLPricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
+			log.Printf("cloudsql: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		} else {
+			rec.CommitmentCost = pricing.CommitmentPrice
+			rec.OnDemandCost = pricing.OnDemandPrice
+			rec.SavingsPercentage = pricing.SavingsPercentage
+			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+				if monthlySavings > 0 {
+					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+				}
+			}
 		}
 	}
 

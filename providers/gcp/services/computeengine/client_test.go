@@ -13,8 +13,10 @@ import (
 	"google.golang.org/api/cloudbilling/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/genproto/googleapis/type/money"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/scorer"
 )
 
 // MockCommitmentsService mocks the CommitmentsService interface
@@ -590,6 +592,7 @@ func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "n1-standard-1",
 		Term:         "3yr",
+		Count:        4, // must be > 0 after issue #1022 guard
 	}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
@@ -606,7 +609,8 @@ func TestComputeEngineClient_PurchaseCommitment_InsertError(t *testing.T) {
 	}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1"}
+	// Count must be > 0 so the guard passes and the insert error is exercised.
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Count: 2}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
@@ -623,7 +627,8 @@ func TestComputeEngineClient_PurchaseCommitment_WaitError(t *testing.T) {
 	}
 	client.SetCommitmentsService(mockService)
 
-	rec := common.Recommendation{ResourceType: "n1-standard-1"}
+	// Count must be > 0 so the guard passes and the wait error is exercised.
+	rec := common.Recommendation{ResourceType: "n1-standard-1", Count: 2}
 
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 	assert.Error(t, err)
@@ -635,6 +640,8 @@ func TestComputeEngineClient_GetOfferingDetails_WithMock(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs are required; without a commitment SKU
+	// getComputePricing now returns an error (issue #1020 fix).
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
 			Skus: []*cloudbilling.Sku{
@@ -649,6 +656,25 @@ func TestComputeEngineClient_GetOfferingDetails_WithMock(t *testing.T) {
 										UnitPrice: &cloudbilling.Money{
 											Units:        0,
 											Nanos:        50000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "n1-standard-1 commitment 1yr in Americas",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        32000000,
 											CurrencyCode: "USD",
 										},
 									},
@@ -831,7 +857,7 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Equal(t, common.ServiceCompute, rec.Service)
@@ -882,4 +908,243 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 
 	_, err = client.GetRecommendations(context.Background(), common.RecommendationParams{})
 	require.Error(t, err, "page cap must surface an error when the iterator never terminates")
+}
+
+// realisticCUDRecommendation builds a realistic GCP Commitment Recommender payload
+// for a 4-vCPU n1-standard-4 commitment in us-central1. The operation group has two ops:
+//  1. A machine-type op whose resource path ends in the machine type (n1-standard-4) --
+//     used by extractResourceTypeFromOperations to set rec.ResourceType.
+//  2. A commitment resource op whose numeric Value is the VCPU count --
+//     used by extractVCPUCountFromRecommendation to set rec.Count.
+//
+// This mirrors the GCP CUD Recommender format (issue #1022 C1).
+func realisticCUDRecommendation() *recommenderpb.Recommendation {
+	vcpuVal, _ := structpb.NewValue(4.0)
+	return &recommenderpb.Recommendation{
+		Name: "projects/test/locations/us-central1/recommenders/google.billing.CostInsight.commitmentRecommender/recommendations/rec-001",
+		PrimaryImpact: &recommenderpb.Impact{
+			Category: recommenderpb.Impact_COST,
+			Projection: &recommenderpb.Impact_CostProjection{
+				CostProjection: &recommenderpb.CostProjection{
+					Cost: &money.Money{
+						Units:        -200,
+						Nanos:        0,
+						CurrencyCode: "USD",
+					},
+				},
+			},
+		},
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{
+							// Machine type op: resource path ends in the machine type name,
+							// so extractResourceTypeFromOperations sets rec.ResourceType = "n1-standard-4".
+							Action:   "add",
+							Resource: "projects/test/zones/us-central1-a/machineTypes/n1-standard-4",
+						},
+					},
+				},
+				{
+					Operations: []*recommenderpb.Operation{
+						{
+							// Commitment resource op: carries the VCPU amount as a numeric value.
+							// extractVCPUCountFromRecommendation reads this and sets rec.Count = 4.
+							Action:       "add",
+							ResourceType: "compute.googleapis.com/Commitment",
+							Resource:     "//compute.googleapis.com/projects/test/regions/us-central1/commitments/cud-001",
+							Path:         "/resources/0/amount",
+							PathValue:    &recommenderpb.Operation_Value{Value: vcpuVal},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// mockBillingWithCommitment returns a MockBillingService that has both an
+// on-demand SKU and a commitment SKU for n1-standard machines in us-central1.
+func mockBillingWithCommitment() *MockBillingService {
+	return &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "n1-standard-4 VM running in Americas",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        190000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "n1-standard-4 commitment 1yr in Americas",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        120000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestConverterToInsert_CountNonZero_VCPUAmountSet is the primary regression test
+// for issue #1022 C1. It exercises the full converter->purchase path with a
+// realistic Recommender payload and asserts:
+//   - converter sets Count > 0 (extracted from the operation's numeric value)
+//   - buildInsertRequest produces a non-zero VCPU Amount in the resulting commitment
+//
+// This test FAILS on the pre-fix code where convertGCPRecommendation never set Count.
+func TestConverterToInsert_CountNonZero_VCPUAmountSet(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+	client.SetBillingService(mockBillingWithCommitment())
+
+	gcpRec := realisticCUDRecommendation()
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+
+	// C1: Count must be > 0 so that buildInsertRequest produces non-zero VCPU Amount.
+	require.Greater(t, rec.Count, 0, "convertGCPRecommendation must set Count > 0 from the Recommender payload (issue #1022 C1)")
+
+	// Verify the insert request carries the correct VCPU count.
+	insertReq, _, buildErr := client.buildInsertRequest(*rec, common.PurchaseOptions{})
+	require.NoError(t, buildErr, "buildInsertRequest must not error when Count > 0")
+	require.NotNil(t, insertReq)
+	require.NotNil(t, insertReq.CommitmentResource)
+
+	var vcpuAmount, memoryAmount int64
+	for _, r := range insertReq.CommitmentResource.Resources {
+		switch r.GetType() {
+		case "VCPU":
+			vcpuAmount = r.GetAmount()
+		case "MEMORY_MB":
+			memoryAmount = r.GetAmount()
+		}
+	}
+	assert.Greater(t, vcpuAmount, int64(0), "VCPU Amount in the insert request must be > 0 (issue #1022 C1)")
+	assert.Greater(t, memoryAmount, int64(0), "MEMORY_MB Amount in the insert request must be > 0 (issue #1022 C1)")
+}
+
+// TestConverterFillsPricingForScorer is the regression test for issue #1022 C2.
+// It exercises the full converter path with a realistic Recommender payload and a
+// billing mock that returns both on-demand and commitment SKUs, and then asserts
+// that a scorer with MinSavingsPct set does NOT drop the GCP recommendation.
+//
+// This test FAILS on the pre-fix code where convertGCPRecommendation never
+// called getComputePricing, leaving SavingsPercentage at 0.
+func TestConverterFillsPricingForScorer(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+	client.SetBillingService(mockBillingWithCommitment())
+
+	gcpRec := realisticCUDRecommendation()
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+
+	// C2: SavingsPercentage must be > 0 so a MinSavingsPct filter doesn't silently drop the rec.
+	require.Greater(t, rec.SavingsPercentage, float64(0),
+		"convertGCPRecommendation must set SavingsPercentage > 0 from billing pricing (issue #1022 C2)")
+	assert.Greater(t, rec.CommitmentCost, float64(0), "CommitmentCost must be > 0")
+	assert.Greater(t, rec.OnDemandCost, float64(0), "OnDemandCost must be > 0")
+
+	// Apply a non-trivial MinSavingsPct filter and confirm the rec passes.
+	result := scorer.Score([]common.Recommendation{*rec}, scorer.Config{MinSavingsPct: 5.0})
+	require.Len(t, result.Passed, 1, "GCP recommendation must pass a MinSavingsPct=5 scorer filter after pricing is wired (issue #1022 C2)")
+	assert.Empty(t, result.Filtered, "no GCP recommendations should be filtered by MinSavingsPct when pricing is set")
+}
+
+// TestBuildInsertRequest_RefusesZeroCount is the regression test for the
+// issue #1022 guard in buildInsertRequest. A recommendation with Count == 0
+// must return an error rather than sending a zero-vCPU commitment to GCP.
+//
+// This test FAILS on the pre-fix code (which had no such guard).
+func TestBuildInsertRequest_RefusesZeroCount(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	rec := common.Recommendation{
+		ResourceType: "n1-standard-4",
+		Term:         "1yr",
+		Count:        0, // zero -- should be refused
+	}
+
+	_, _, err := client.buildInsertRequest(rec, common.PurchaseOptions{})
+	require.Error(t, err, "buildInsertRequest must refuse Count <= 0 (issue #1022 guard)")
+	assert.Contains(t, err.Error(), "rec.Count must be > 0")
+
+	// PurchaseCommitment must also surface the error and not call Insert.
+	mockSvc := &MockCommitmentsService{operation: &MockOperation{}}
+	client.SetCommitmentsService(mockSvc)
+	result, purchaseErr := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.Error(t, purchaseErr)
+	assert.False(t, result.Success)
+	assert.Empty(t, mockSvc.insertReqs, "Insert must not be called when Count <= 0")
+}
+
+// TestGetComputePricing_NoCommitmentSKUReturnsError is the regression test for
+// issue #1020 (GCP). When the billing catalog has no commitment SKU, getComputePricing
+// must return an error rather than fabricating a price from a hardcoded discount factor.
+//
+// This test FAILS on the pre-fix code where estimateComputeCommitmentPrice was called.
+func TestGetComputePricing_NoCommitmentSKUReturnsError(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Only on-demand SKU -- no commitment SKU.
+	client.SetBillingService(&MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "n1-standard-4 VM running in Americas",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        190000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	pricing, err := client.getComputePricing(ctx, "n1-standard-4", "us-central1", 1)
+	require.Error(t, err, "getComputePricing must return an error when no commitment SKU exists (issue #1020)")
+	assert.Contains(t, err.Error(), "no commitment pricing found")
+	assert.Nil(t, pricing, "no pricing struct must be returned when commitment SKU is missing")
 }

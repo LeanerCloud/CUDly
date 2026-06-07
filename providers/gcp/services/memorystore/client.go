@@ -4,6 +4,7 @@ package memorystore
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -181,7 +182,7 @@ func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params commo
 			return nil, fmt.Errorf("memorystore: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -295,7 +296,9 @@ type RedisPricing struct {
 	SavingsPercentage float64
 }
 
-// getRedisPricing gets pricing from GCP Cloud Billing Catalog API
+// getRedisPricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *MemorystoreClient) getRedisPricing(ctx context.Context, tier, region string, termYears int) (*RedisPricing, error) {
 	billingSvc, err := c.getOrCreateBillingService(ctx)
 	if err != nil {
@@ -311,12 +314,11 @@ func (c *MemorystoreClient) getRedisPricing(ctx context.Context, tier, region st
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Memorystore tier %s", tier)
 	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
 	if commitmentPrice == 0 {
-		commitmentPrice = estimateCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
+		return nil, fmt.Errorf("no commitment pricing found for Memorystore tier %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", tier, region)
 	}
 
+	hoursInTerm := 8760.0 * float64(termYears)
 	savingsPercentage := calculateSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &RedisPricing{
@@ -390,15 +392,6 @@ func extractPriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
 	return price, rate.UnitPrice.CurrencyCode
 }
 
-// estimateCommitmentPrice estimates commitment price based on typical GCP savings
-func estimateCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
-	discount := 0.70 // 30% savings for 1 year
-	if termYears == 3 {
-		discount = 0.65 // 35% savings for 3 years
-	}
-	return onDemandPrice * hoursInTerm * discount
-}
-
 // calculateSavingsPercentage calculates the savings percentage
 func calculateSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
 	onDemandTotal := onDemandPrice * hoursInTerm
@@ -425,8 +418,16 @@ func skuMatchesTier(sku *cloudbilling.Sku, tier, region string) bool {
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getRedisPricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation.
+func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "monthly"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCache,
@@ -435,7 +436,7 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
 		Term:           "1yr",
-		PaymentOption:  "monthly",
+		PaymentOption:  paymentOption,
 	}
 
 	// Extract resource type from recommendation content
@@ -456,11 +457,32 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 
 	// Extract cost impact
 	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
 		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
 			cost := costProj.Cost
 			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 			rec.EstimatedSavings = savings
+		}
+	}
+
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2).
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
+		}
+		if pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
+			log.Printf("memorystore: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		} else {
+			rec.CommitmentCost = pricing.CommitmentPrice
+			rec.OnDemandCost = pricing.OnDemandPrice
+			rec.SavingsPercentage = pricing.SavingsPercentage
+			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+				if monthlySavings > 0 {
+					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+				}
+			}
 		}
 	}
 

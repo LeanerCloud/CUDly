@@ -500,34 +500,59 @@ func TestCloudSQLClient_PurchaseCommitment_NotSupported(t *testing.T) {
 	assert.False(t, mockService.insertCalled, "PurchaseCommitment must not call InsertInstance")
 }
 
-func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "db-n1-standard-1 Cloud SQL",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
+// sqlMockSkus returns a slice with both an on-demand and a commitment SKU for
+// the given tier and region. Required by tests that exercise GetOfferingDetails
+// after the issue #1020 fix (fabricated commitment prices are no longer allowed;
+// both SKUs must be present for getSQLPricing to succeed).
+func sqlMockSkus(tier, region string) []*cloudbilling.Sku {
+	onDemandSKU := &cloudbilling.Sku{
+		Description:    tier + " Cloud SQL",
+		ServiceRegions: []string{region},
+		PricingInfo: []*cloudbilling.PricingInfo{
+			{
+				PricingExpression: &cloudbilling.PricingExpression{
+					TieredRates: []*cloudbilling.TierRate{
 						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        50000000, // 0.05 per hour
-											CurrencyCode: "USD",
-										},
-									},
-								},
+							UnitPrice: &cloudbilling.Money{
+								Units:        0,
+								Nanos:        50000000,
+								CurrencyCode: "USD",
 							},
 						},
 					},
 				},
 			},
 		},
+	}
+	commitmentSKU := &cloudbilling.Sku{
+		Description:    tier + " Cloud SQL commitment 1yr",
+		ServiceRegions: []string{region},
+		PricingInfo: []*cloudbilling.PricingInfo{
+			{
+				PricingExpression: &cloudbilling.PricingExpression{
+					TieredRates: []*cloudbilling.TierRate{
+						{
+							UnitPrice: &cloudbilling.Money{
+								Units:        0,
+								Nanos:        42000000,
+								CurrencyCode: "USD",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return []*cloudbilling.Sku{onDemandSKU, commitmentSKU}
+}
+
+func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Both on-demand and commitment SKUs are required after the issue #1020 fix.
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{Skus: sqlMockSkus("db-n1-standard-1", "us-central1")},
 	}
 	client.SetBillingService(mockService)
 
@@ -549,30 +574,9 @@ func TestCloudSQLClient_GetOfferingDetails_3Year(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs are required after the issue #1020 fix.
 	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "db-n1-standard-1 Cloud SQL",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        50000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		skus: &cloudbilling.ListSkusResponse{Skus: sqlMockSkus("db-n1-standard-1", "us-central1")},
 	}
 	client.SetBillingService(mockService)
 
@@ -762,7 +766,7 @@ func TestCloudSQLClient_ConvertGCPRecommendation(t *testing.T) {
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Equal(t, common.ServiceRelationalDB, rec.Service)
@@ -781,7 +785,7 @@ func TestCloudSQLClient_ConvertGCPRecommendation_NilContent(t *testing.T) {
 		Content: nil,
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 }

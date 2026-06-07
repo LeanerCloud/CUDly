@@ -460,38 +460,69 @@ func TestCloudStorageClient_GetRecommendations_IteratorError(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
+	// Iterator errors now propagate (issue #1022 H2 fix) -- they must not be
+	// silently swallowed, as that would mask auth/quota failures and cause callers
+	// to act on a partial (empty) recommendation list.
 	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
-	require.NoError(t, err) // Error during iteration is handled gracefully
-	assert.Empty(t, recommendations)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cloudstorage: iterate recommendations")
+	assert.Nil(t, recommendations)
 }
 
-func TestCloudStorageClient_GetOfferingDetails_WithMock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
+// storageMockSkus returns a slice with both an on-demand and a commitment SKU for
+// the given storage class and region. Required by tests that exercise GetOfferingDetails
+// after the issue #1020 fix (fabricated commitment prices are no longer allowed).
+func storageMockSkus(storageClass, region string, onDemandNanos, commitmentNanos int64) []*cloudbilling.Sku {
+	return []*cloudbilling.Sku{
+		{
+			Description:    storageClass + " Storage in " + region,
+			ServiceRegions: []string{region},
+			PricingInfo: []*cloudbilling.PricingInfo{
 				{
-					Description:    "Standard Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        26000000,
-											CurrencyCode: "USD",
-										},
-									},
+					PricingExpression: &cloudbilling.PricingExpression{
+						TieredRates: []*cloudbilling.TierRate{
+							{
+								UnitPrice: &cloudbilling.Money{
+									Units:        0,
+									Nanos:        onDemandNanos,
+									CurrencyCode: "USD",
 								},
 							},
 						},
 					},
 				},
 			},
+		},
+		{
+			Description:    storageClass + " Storage commitment in " + region,
+			ServiceRegions: []string{region},
+			PricingInfo: []*cloudbilling.PricingInfo{
+				{
+					PricingExpression: &cloudbilling.PricingExpression{
+						TieredRates: []*cloudbilling.TierRate{
+							{
+								UnitPrice: &cloudbilling.Money{
+									Units:        0,
+									Nanos:        commitmentNanos,
+									CurrencyCode: "USD",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestCloudStorageClient_GetOfferingDetails_WithMock(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 19500000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -516,29 +547,10 @@ func TestCloudStorageClient_GetOfferingDetails_3yr(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "Nearline Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        10000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			Skus: storageMockSkus("NEARLINE", "us-central1", 10000000, 7000000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -599,29 +611,10 @@ func TestCloudStorageClient_GetOfferingDetails_DefaultPaymentOption(t *testing.T
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "Standard Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        26000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 19500000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -666,7 +659,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation(t *testing.T) {
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Equal(t, common.ServiceStorage, rec.Service)
@@ -686,7 +679,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_NilContent(t *testing.T) {
 		Content: nil,
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Empty(t, rec.ResourceType)
@@ -710,7 +703,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_NilPrimaryImpact(t *testing
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, float64(0), rec.EstimatedSavings)
 }
@@ -777,37 +770,20 @@ func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix:
+	// without a commitment SKU, getStoragePricing returns an error.
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "Standard Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        26000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 18200000),
 		},
 	}
 	client.SetBillingService(mockService)
 
 	pricing, err := client.getStoragePricing(ctx, "STANDARD", "us-central1", 3)
 	require.NoError(t, err)
-	// 3-year should have 30% savings vs 25% for 1-year
-	assert.Greater(t, pricing.SavingsPercentage, float64(25))
+	assert.Greater(t, pricing.SavingsPercentage, float64(0))
+	assert.Greater(t, pricing.OnDemandPrice, float64(0))
+	assert.Greater(t, pricing.CommitmentPrice, float64(0))
 }
 
 func TestSkuMatchesStorageClass_CaseInsensitive(t *testing.T) {

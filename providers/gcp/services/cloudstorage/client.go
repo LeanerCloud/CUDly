@@ -4,6 +4,7 @@ package cloudstorage
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
+
+// maxRecsPages caps GCP Recommender API iteration to avoid looping forever on a
+// stalled or unexpectedly large result set.
+const maxRecsPages = 20
 
 // StorageService interface for storage operations (enables mocking)
 type StorageService interface {
@@ -179,16 +184,25 @@ func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params comm
 	}
 
 	it := recClient.ListRecommendations(ctx, req)
-	for {
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("cloudstorage: GetRecommendations iteration cap (%d items) reached", maxRecsPages)
+		}
 		rec, err := it.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
-			break
+			// Iterator errors must propagate so callers don't silently act on a
+			// partial recommendation list -- see the computeengine client for the
+			// full rationale (issue #1022 H2 fix).
+			return nil, fmt.Errorf("cloudstorage: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -340,7 +354,9 @@ type StoragePricing struct {
 	SavingsPercentage float64
 }
 
-// getStoragePricing gets pricing from GCP Cloud Billing Catalog API
+// getStoragePricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *CloudStorageClient) getStoragePricing(ctx context.Context, storageClass, region string, termYears int) (*StoragePricing, error) {
 	svc, err := c.getOrCreateBillingService(ctx)
 	if err != nil {
@@ -356,12 +372,11 @@ func (c *CloudStorageClient) getStoragePricing(ctx context.Context, storageClass
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Cloud Storage class %s", storageClass)
 	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
 	if commitmentPrice == 0 {
-		commitmentPrice = estimateStorageCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
+		return nil, fmt.Errorf("no commitment pricing found for Cloud Storage class %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", storageClass, region)
 	}
 
+	hoursInTerm := 8760.0 * float64(termYears)
 	savingsPercentage := calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &StoragePricing{
@@ -435,15 +450,6 @@ func extractStoragePriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
 	return price, rate.UnitPrice.CurrencyCode
 }
 
-// estimateStorageCommitmentPrice estimates commitment price based on GCP storage savings
-func estimateStorageCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
-	discount := 0.75 // 25% savings for 1 year
-	if termYears == 3 {
-		discount = 0.70 // 30% savings for 3 years
-	}
-	return onDemandPrice * hoursInTerm * discount
-}
-
 // calculateStorageSavingsPercentage calculates the savings percentage
 func calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
 	onDemandTotal := onDemandPrice * hoursInTerm
@@ -470,8 +476,16 @@ func skuMatchesStorageClass(sku *cloudbilling.Sku, storageClass, region string) 
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getStoragePricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation.
+func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "monthly"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceStorage,
@@ -480,7 +494,7 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 		CommitmentType: common.CommitmentReservedCapacity,
 		Timestamp:      time.Now(),
 		Term:           "1yr",
-		PaymentOption:  "monthly",
+		PaymentOption:  paymentOption,
 	}
 
 	// Extract resource type from recommendation content
@@ -501,11 +515,32 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 
 	// Extract cost impact
 	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
 		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
 			cost := costProj.Cost
 			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 			rec.EstimatedSavings = savings
+		}
+	}
+
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2).
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
+		}
+		if pricing, err := c.getStoragePricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
+			log.Printf("cloudstorage: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		} else {
+			rec.CommitmentCost = pricing.CommitmentPrice
+			rec.OnDemandCost = pricing.OnDemandPrice
+			rec.SavingsPercentage = pricing.SavingsPercentage
+			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+				if monthlySavings > 0 {
+					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+				}
+			}
 		}
 	}
 

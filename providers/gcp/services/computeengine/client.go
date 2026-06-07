@@ -17,6 +17,7 @@ import (
 	"google.golang.org/api/cloudbilling/v1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/retry"
@@ -234,7 +235,7 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 			return nil, fmt.Errorf("computeengine: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -464,7 +465,11 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 	}
 	defer svc.Close()
 
-	insertReq, commitmentName := c.buildInsertRequest(rec, opts)
+	insertReq, commitmentName, buildErr := c.buildInsertRequest(rec, opts)
+	if buildErr != nil {
+		result.Error = buildErr
+		return result, buildErr
+	}
 
 	// Exponential backoff on RESOURCE_EXHAUSTED: BaseDelay 1s with 2× growth
 	// capped at MaxDelay 4s gives the same 1s/2s/4s sequence the open-coded
@@ -508,8 +513,9 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 // buildInsertRequest assembles the RegionCommitments.Insert request for a
 // purchase, threading opts.IdempotencyToken into both GCP idempotency levers so
 // a re-drive of the same execution cannot create a second CUD (issue #654, the
-// financial double-buy). It returns the request and the commitment name (used as
-// the resulting CommitmentID).
+// financial double-buy). It returns the request, the commitment name (used as
+// the resulting CommitmentID), and an error when rec.Count <= 0 (which would
+// produce a zero-vCPU / zero-MB commitment that GCP rejects or silently wastes).
 //
 //   - RequestId is GCP's native server-side idempotency key on Insert, which the
 //     API documents as preventing clients from accidentally creating duplicate
@@ -526,7 +532,11 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 // An empty token preserves the prior non-idempotent timestamp-based name (the
 // CLI path, which has no owning execution). The token is masked in logs via
 // common.MaskToken and never logged verbatim.
-func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts common.PurchaseOptions) (*computepb.InsertRegionCommitmentRequest, string) {
+func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts common.PurchaseOptions) (*computepb.InsertRegionCommitmentRequest, string, error) {
+	if rec.Count <= 0 {
+		return nil, "", fmt.Errorf("buildInsertRequest: rec.Count must be > 0 (got %d); a zero-vCPU commitment is invalid (issue #1022)", rec.Count)
+	}
+
 	plan := "TWELVE_MONTH"
 	if rec.Term == "3yr" || rec.Term == "3" {
 		plan = "THIRTY_SIX_MONTH"
@@ -572,7 +582,7 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 			common.MaskToken(opts.IdempotencyToken), commitmentName)
 	}
 
-	return insertReq, commitmentName
+	return insertReq, commitmentName, nil
 }
 
 // ValidateOffering validates that a machine type exists
@@ -689,7 +699,9 @@ type ComputePricing struct {
 	SavingsPercentage float64
 }
 
-// getComputePricing gets pricing from GCP Cloud Billing Catalog API
+// getComputePricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *ComputeEngineClient) getComputePricing(ctx context.Context, machineType, region string, termYears int) (*ComputePricing, error) {
 	svc, err := c.getOrCreateBillingService(ctx)
 	if err != nil {
@@ -705,12 +717,11 @@ func (c *ComputeEngineClient) getComputePricing(ctx context.Context, machineType
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no on-demand pricing found for machine type %s", machineType)
 	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
 	if commitmentPrice == 0 {
-		commitmentPrice = estimateComputeCommitmentPrice(onDemandPrice, hoursInTerm, termYears)
+		return nil, fmt.Errorf("no commitment pricing found for machine type %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", machineType, region)
 	}
 
+	hoursInTerm := 8760.0 * float64(termYears)
 	savingsPercentage := calculateComputeSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice)
 
 	return &ComputePricing{
@@ -784,15 +795,6 @@ func extractComputePriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
 	return price, rate.UnitPrice.CurrencyCode
 }
 
-// estimateComputeCommitmentPrice estimates commitment price based on GCP CUD discounts
-func estimateComputeCommitmentPrice(onDemandPrice, hoursInTerm float64, termYears int) float64 {
-	discount := 0.63 // 37% savings for 1 year
-	if termYears == 3 {
-		discount = 0.45 // 55% savings for 3 years
-	}
-	return onDemandPrice * hoursInTerm * discount
-}
-
 // calculateComputeSavingsPercentage calculates the savings percentage
 func calculateComputeSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
 	onDemandTotal := onDemandPrice * hoursInTerm
@@ -819,8 +821,17 @@ func skuMatchesMachineType(sku *cloudbilling.Sku, machineType, region string) bo
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getComputePricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation:
+// EstimatedSavings from the Recommender payload is the authoritative savings signal.
+func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "upfront"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCompute,
@@ -829,11 +840,40 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 		CommitmentType: common.CommitmentCUD,
 		Timestamp:      time.Now(),
 		Term:           "1yr",
-		PaymentOption:  "upfront",
+		PaymentOption:  paymentOption,
 	}
 
 	extractResourceTypeFromRecommendation(gcpRec, rec)
 	extractCostImpactFromRecommendation(gcpRec, rec)
+	extractVCPUCountFromRecommendation(gcpRec, rec)
+
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2). If the billing catalog lacks a commitment SKU
+	// we propagate the error as a log line rather than dropping the rec entirely
+	// -- the Recommender-derived EstimatedSavings is still valid.
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
+		}
+		if pricing, err := c.getComputePricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
+			log.Printf("computeengine: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		} else {
+			rec.CommitmentCost = pricing.CommitmentPrice
+			rec.OnDemandCost = pricing.OnDemandPrice
+			rec.SavingsPercentage = pricing.SavingsPercentage
+			// BreakEvenMonths: months of accrued savings required to cover the
+			// commitment cost (conservative: treats the whole period cost as sunk,
+			// which is accurate for all-upfront and overestimates for monthly CUDs).
+			// monthlySavings = monthly spend difference between on-demand and CUD.
+			if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+				monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+				if monthlySavings > 0 {
+					rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+				}
+			}
+		}
+	}
 
 	return rec
 }
@@ -886,6 +926,76 @@ func extractCostImpactFromRecommendation(gcpRec *recommenderpb.Recommendation, r
 		// depends on (issue #215 audit).
 		savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
 		rec.EstimatedSavings = savings
+	}
+}
+
+// extractVCPUCountFromRecommendation extracts the recommended vCPU count from a
+// GCP Commitment Recommender response (issue #1022 C1).
+//
+// The Recommender encodes the commitment resource amounts in two places:
+//   - Operation.Value: a structpb.Value whose numeric value is the amount, with
+//     Operation.Path indicating the resource type (e.g. "/resources/0/amount").
+//     Operations with ResourceType "compute.googleapis.com/Commitment" and a path
+//     containing "amount" carry the VCPU count; the sibling MEMORY_MB amount is
+//     always 4096 * vcpuCount for general-purpose commitments.
+//   - RecommendationContent.Overview: a JSON struct with a "numericValue" field.
+//
+// We prefer the operation-value path because it is structured and unambiguous.
+// If no VCPU operation is found we fall back to the overview's numericValue.
+func extractVCPUCountFromRecommendation(gcpRec *recommenderpb.Recommendation, rec *common.Recommendation) {
+	if gcpRec.Content == nil {
+		return
+	}
+
+	// Walk operations looking for a VCPU resource amount.
+	for _, opGroup := range gcpRec.Content.GetOperationGroups() {
+		for _, op := range opGroup.GetOperations() {
+			// The commitment recommender uses ResourceType
+			// "compute.googleapis.com/Commitment" with paths like
+			// "/resources/0/amount" (VCPU) and "/resources/1/amount" (MEMORY_MB).
+			// We detect VCPU by checking that the path does NOT mention "memory"
+			// and that a sibling "/resources/0/type" is "VCPU" (encoded in pathFilters).
+			if !strings.Contains(strings.ToLower(op.GetResourceType()), "commitment") {
+				continue
+			}
+			path := strings.ToLower(op.GetPath())
+			if !strings.Contains(path, "amount") {
+				continue
+			}
+			// Skip the memory amount: the path filter or a nearby type operation
+			// distinguishes VCPU from MEMORY_MB. The VCPU amount is always first
+			// ("/resources/0/amount") in the canonical recommender output; if
+			// path_filters carry a "type":"VCPU" entry we can check that directly.
+			isMemory := false
+			for filterKey, filterVal := range op.GetPathFilters() {
+				if strings.Contains(strings.ToLower(filterKey), "type") {
+					if sv, ok := filterVal.GetKind().(*structpb.Value_StringValue); ok {
+						if strings.EqualFold(sv.StringValue, "MEMORY_MB") {
+							isMemory = true
+							break
+						}
+					}
+				}
+			}
+			if isMemory {
+				continue
+			}
+			if v := op.GetValue(); v != nil {
+				if nv, ok := v.GetKind().(*structpb.Value_NumberValue); ok && nv.NumberValue > 0 {
+					rec.Count = int(nv.NumberValue)
+					return
+				}
+			}
+		}
+	}
+
+	// Fallback: overview numericValue (used by older recommender versions).
+	if gcpRec.Content.GetOverview() != nil {
+		if nv := gcpRec.Content.GetOverview().GetFields()["numericValue"]; nv != nil {
+			if count := nv.GetNumberValue(); count > 0 {
+				rec.Count = int(count)
+			}
+		}
 	}
 }
 
