@@ -292,8 +292,14 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		return "", convErr
 	}
 
-	termSeconds := convertTermToSeconds(rec.Term)
-	paymentOption := convertPaymentOption(rec.PaymentOption)
+	termSeconds, err := convertTermToSeconds(rec.Term)
+	if err != nil {
+		return "", err
+	}
+	paymentOption, err := convertPaymentOption(rec.PaymentOption)
+	if err != nil {
+		return "", err
+	}
 
 	tag := execID
 	if tag == "" {
@@ -352,29 +358,34 @@ func convertPlanType(planType string) (types.SavingsPlanType, error) {
 	}
 }
 
-// convertTermToSeconds converts a term string to seconds for AWS API
-func convertTermToSeconds(term string) int64 {
-	if term == "3yr" || term == "3" {
-		return 94608000 // 3 years in seconds (365 * 3 * 86400)
+// convertTermToSeconds converts a term string to seconds for the AWS Savings
+// Plans API. Returns an error on any unrecognized or empty input so callers
+// fail loud rather than silently buying the wrong commitment length.
+func convertTermToSeconds(term string) (int64, error) {
+	switch term {
+	case "3yr", "3":
+		return 94608000, nil // 3 years in seconds (365 * 3 * 86400)
+	case "1yr", "1":
+		return 31536000, nil // 1 year in seconds (365 * 86400)
+	default:
+		return 0, fmt.Errorf("unsupported Savings Plans term %q: must be one of 1yr, 1, 3yr, 3", term)
 	}
-	if term != "1yr" && term != "1" && term != "" {
-		log.Printf("WARNING: unknown Savings Plans term %q, defaulting to 1 year", term)
-	}
-	return 31536000 // 1 year in seconds (365 * 86400)
 }
 
-// convertPaymentOption converts a payment option string to AWS SDK type
-func convertPaymentOption(paymentOption string) types.SavingsPlanPaymentOption {
+// convertPaymentOption converts a payment option string to the AWS SDK type.
+// Returns an error on any unrecognized or empty input so callers fail loud
+// rather than silently buying the wrong (and potentially most expensive)
+// payment option.
+func convertPaymentOption(paymentOption string) (types.SavingsPlanPaymentOption, error) {
 	switch paymentOption {
 	case "All Upfront", "all-upfront":
-		return types.SavingsPlanPaymentOptionAllUpfront
+		return types.SavingsPlanPaymentOptionAllUpfront, nil
 	case "Partial Upfront", "partial-upfront":
-		return types.SavingsPlanPaymentOptionPartialUpfront
+		return types.SavingsPlanPaymentOptionPartialUpfront, nil
 	case "No Upfront", "no-upfront":
-		return types.SavingsPlanPaymentOptionNoUpfront
+		return types.SavingsPlanPaymentOptionNoUpfront, nil
 	default:
-		log.Printf("WARNING: unknown Savings Plans payment option %q, defaulting to AllUpfront", paymentOption)
-		return types.SavingsPlanPaymentOptionAllUpfront
+		return "", fmt.Errorf("unsupported Savings Plans payment option %q: must be one of All Upfront, all-upfront, Partial Upfront, partial-upfront, No Upfront, no-upfront", paymentOption)
 	}
 }
 
