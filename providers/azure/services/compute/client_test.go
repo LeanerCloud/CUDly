@@ -1325,12 +1325,12 @@ func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
 func TestExtractVMPricing_SingularOneYear(t *testing.T) {
 	items := []AzureRetailPriceItem{
 		{
-			CurrencyCode:    "USD",
-			RetailPrice:     0.096,
-			UnitPrice:       0.096,
-			ArmRegionName:   "eastus",
-			ArmSKUName:      "Standard_D2s_v3",
-			Type:            "Consumption",
+			CurrencyCode:  "USD",
+			RetailPrice:   0.096,
+			UnitPrice:     0.096,
+			ArmRegionName: "eastus",
+			ArmSKUName:    "Standard_D2s_v3",
+			Type:          "Consumption",
 		},
 		{
 			CurrencyCode:    "USD",

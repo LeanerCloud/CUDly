@@ -256,7 +256,6 @@ func TestDecrypt_BadBase64Ciphertext(t *testing.T) {
 	assert.Contains(t, err.Error(), "decode ciphertext")
 }
 
-
 // TestDecodeHexKey_ExactlyCorrect preserves existing coverage.
 func TestDecodeHexKey_ExactlyCorrect(t *testing.T) {
 	key, err := decodeHexKey(strings.Repeat("ff", 32))
