@@ -5,8 +5,28 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// validDockerRef matches safe Docker image reference components: must start
+// with an alphanumeric character (no leading hyphen -- leading hyphens would
+// be interpreted as flags by docker) and may then contain alphanumerics plus
+// the characters that appear in valid registry hosts, repository paths, tags,
+// and digest prefixes (dots, colons, slashes, at-signs, hyphens).
+var validDockerRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+
+// validateDockerRef returns an error if ref is empty or contains characters
+// outside the safe set (including a leading hyphen).
+func validateDockerRef(label, ref string) error {
+	if ref == "" {
+		return fmt.Errorf("docker %s must not be empty", label)
+	}
+	if !validDockerRef.MatchString(ref) {
+		return fmt.Errorf("docker %s contains invalid characters: %q", label, ref)
+	}
+	return nil
+}
 
 // DockerService handles Docker operations.
 type DockerService struct {
@@ -22,6 +42,12 @@ func NewDockerService(cmdRunner CommandRunner) *DockerService {
 
 // BuildImage builds a Docker image with the specified architecture and tag.
 func (s *DockerService) BuildImage(architecture, tag, imageName string) error {
+	if err := validateDockerRef("tag", tag); err != nil {
+		return err
+	}
+	if err := validateDockerRef("image name", imageName); err != nil {
+		return err
+	}
 	platform := fmt.Sprintf("linux/%s", architecture)
 	return s.CmdRunner.Run("docker", "build",
 		"--platform", platform,
@@ -31,11 +57,20 @@ func (s *DockerService) BuildImage(architecture, tag, imageName string) error {
 
 // TagImage tags a Docker image with a new name.
 func (s *DockerService) TagImage(sourceTag, targetTag string) error {
+	if err := validateDockerRef("source tag", sourceTag); err != nil {
+		return err
+	}
+	if err := validateDockerRef("target tag", targetTag); err != nil {
+		return err
+	}
 	return s.CmdRunner.Run("docker", "tag", sourceTag, targetTag)
 }
 
 // PushImage pushes a Docker image to a registry.
 func (s *DockerService) PushImage(imageTag string) error {
+	if err := validateDockerRef("image tag", imageTag); err != nil {
+		return err
+	}
 	return s.CmdRunner.Run("docker", "push", imageTag)
 }
 

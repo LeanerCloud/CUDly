@@ -268,11 +268,12 @@ func (s *FrontendService) EmptyBucket(ctx context.Context, bucketName string) er
 			return err
 		}
 
-		// Check for per-object errors
+		// Check for per-object errors. Key and Message are *string and can be
+		// nil when only the Code field is set; use aws.ToString for safe access.
 		if len(deleteResult.Errors) > 0 {
 			var errMsgs []string
 			for _, delErr := range deleteResult.Errors {
-				errMsgs = append(errMsgs, *delErr.Key+": "+*delErr.Message)
+				errMsgs = append(errMsgs, aws.ToString(delErr.Key)+": "+aws.ToString(delErr.Message))
 			}
 			return fmt.Errorf("failed to delete some objects: %s", strings.Join(errMsgs, "; "))
 		}

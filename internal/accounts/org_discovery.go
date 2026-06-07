@@ -12,9 +12,10 @@ import (
 )
 
 // OrgDiscoveryResult holds the list of member accounts found during discovery.
+// Discovery is all-or-nothing: a pagination error is returned as a function
+// error, not accumulated here. There is no partial-success path.
 type OrgDiscoveryResult struct {
 	Accounts []config.CloudAccount
-	Errors   []error
 }
 
 // orgListAccountsClient is the minimal Organizations API surface needed for discovery.

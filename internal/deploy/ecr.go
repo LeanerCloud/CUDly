@@ -92,18 +92,10 @@ func (s *ECRService) LoginToPublicECR(ctx context.Context) error {
 		return fmt.Errorf("no authorization data returned from public ECR")
 	}
 
-	// Decode the base64 token
-	tokenBytes, err := base64.StdEncoding.DecodeString(*result.AuthorizationData.AuthorizationToken)
+	password, err := decodeBase64Token(*result.AuthorizationData.AuthorizationToken)
 	if err != nil {
-		return fmt.Errorf("failed to decode auth token: %w", err)
+		return fmt.Errorf("failed to decode public ECR auth token: %w", err)
 	}
-
-	// Token format is "AWS:<password>"
-	parts := strings.SplitN(string(tokenBytes), ":", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("unexpected token format")
-	}
-	password := parts[1]
 
 	// Login to Docker using the token
 	if err := s.CmdRunner.RunWithStdin("docker", password, "login", "--username", "AWS", "--password-stdin", "public.ecr.aws"); err != nil {

@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -295,6 +296,80 @@ func TestFrontendService_EmptyBucket_DeleteError(t *testing.T) {
 	err := service.EmptyBucket(context.Background(), "my-bucket")
 	if err == nil {
 		t.Error("expected error, got nil")
+	}
+}
+
+// TestFrontendService_EmptyBucket_PerObjectErrorNilFields is a regression test
+// for the nil-deref bug (07-M4): S3 DeleteObjects can return an Error with a
+// nil Key or nil Message (e.g. when only the Code field is set). The old code
+// dereferenced both unconditionally, causing a panic during bucket teardown.
+// aws.ToString is now used so nil fields produce an empty string instead.
+func TestFrontendService_EmptyBucket_PerObjectErrorNilFields(t *testing.T) {
+	mockS3Client := &MockS3Client{
+		ListObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+			return &s3.ListObjectsV2Output{
+				Contents: []s3types.Object{
+					{Key: aws.String("file1.html")},
+				},
+				IsTruncated: aws.Bool(false),
+			}, nil
+		},
+		DeleteObjectsFunc: func(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+			// Simulate an S3 per-object error where Key and Message are nil
+			// (only Code is set), which the old code would panic on.
+			return &s3.DeleteObjectsOutput{
+				Errors: []s3types.Error{
+					{Code: aws.String("InternalError"), Key: nil, Message: nil},
+				},
+			}, nil
+		},
+	}
+
+	service := NewFrontendService(mockS3Client, nil, nil)
+
+	// Must return an error (not panic) even with nil Key/Message fields.
+	err := service.EmptyBucket(context.Background(), "my-bucket")
+	if err == nil {
+		t.Fatal("expected error from per-object S3 error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to delete some objects") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestFrontendService_EmptyBucket_PerObjectErrorWithFields confirms that when
+// Key and Message are populated the error message includes them.
+func TestFrontendService_EmptyBucket_PerObjectErrorWithFields(t *testing.T) {
+	mockS3Client := &MockS3Client{
+		ListObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+			return &s3.ListObjectsV2Output{
+				Contents: []s3types.Object{
+					{Key: aws.String("file2.js")},
+				},
+				IsTruncated: aws.Bool(false),
+			}, nil
+		},
+		DeleteObjectsFunc: func(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+			return &s3.DeleteObjectsOutput{
+				Errors: []s3types.Error{
+					{
+						Code:    aws.String("AccessDenied"),
+						Key:     aws.String("file2.js"),
+						Message: aws.String("access denied"),
+					},
+				},
+			}, nil
+		},
+	}
+
+	service := NewFrontendService(mockS3Client, nil, nil)
+
+	err := service.EmptyBucket(context.Background(), "my-bucket")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "file2.js") {
+		t.Errorf("expected error to contain object key, got: %v", err)
 	}
 }
 
