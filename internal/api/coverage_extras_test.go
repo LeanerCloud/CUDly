@@ -399,46 +399,61 @@ func TestValidUUIDPtrOrNil_ReturnsNilForNilInput(t *testing.T) {
 	assert.Nil(t, validUUIDPtrOrNil(nil))
 }
 
-// TestHandler_TransitionRegistrationStatus_ActorStamped asserts that
-// TransitionRegistrationStatus is called with a non-nil actor when ReviewedBy
-// holds a valid UUID (the common human-reviewed path).
+// TestHandler_TransitionRegistrationStatus_ActorStamped drives the real
+// rejectRegistration handler and asserts that TransitionRegistrationStatus is
+// called with a non-nil actor equal to the reviewing admin session's UUID (the
+// common human-reviewed path). Exercising the handler (not the store directly)
+// keeps the test honest: it fails if the handler ever stops deriving the actor
+// from the session and threading it through (CR feedback on PR #1011).
 func TestHandler_TransitionRegistrationStatus_ActorStamped(t *testing.T) {
 	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-	t.Cleanup(func() { mockStore.AssertExpectations(t) })
-
+	const regID = "11111111-1111-1111-1111-111111111111"
 	const actorID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	reg := &config.AccountRegistration{
-		ID:         "reg-id-1",
-		Status:     "pending",
-		ReviewedBy: &[]string{actorID}[0],
-	}
-	// Actor must equal the reviewer UUID.
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	reg := &config.AccountRegistration{ID: regID, Status: "pending"}
+	mockStore.On("GetAccountRegistration", ctx, regID).Return(reg, nil)
+	// setReviewMetadata stamps reg.ReviewedBy = session.UserID, so the actor
+	// threaded into the store must equal the session UUID.
 	mockStore.On("TransitionRegistrationStatus", ctx, reg, "pending",
 		mock.MatchedBy(func(a *string) bool { return a != nil && *a == actorID }),
 	).Return(nil)
 
-	err := mockStore.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy))
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: actorID, Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer sess-tok"},
+	}
+	_, err := handler.rejectRegistration(ctx, req, regID)
 	require.NoError(t, err)
 }
 
-// TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil asserts that when
-// ReviewedBy is "admin-api-key" (API key session), the actor passed to
-// TransitionRegistrationStatus is nil so transitioned_by = NULL.
+// TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil drives the real
+// rejectRegistration handler via the admin-API-key path, where requireAdmin
+// returns a session whose UserID is the literal "admin-api-key" (not a UUID
+// FK). The handler must pass nil as the actor so transitioned_by = NULL.
 func TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil(t *testing.T) {
 	ctx := context.Background()
+	const regID = "22222222-2222-2222-2222-222222222222"
+
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	nonUUID := "admin-api-key"
-	reg := &config.AccountRegistration{
-		ID:         "reg-id-2",
-		Status:     "pending",
-		ReviewedBy: &nonUUID,
-	}
-	// Non-UUID reviewer: actor must be nil.
+	reg := &config.AccountRegistration{ID: regID, Status: "pending"}
+	mockStore.On("GetAccountRegistration", ctx, regID).Return(reg, nil)
+	// API-key reviewer ("admin-api-key") is not a UUID: actor must be nil.
 	mockStore.On("TransitionRegistrationStatus", ctx, reg, "pending", (*string)(nil)).Return(nil)
 
-	err := mockStore.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy))
+	handler := &Handler{config: mockStore, apiKey: "admin-secret"}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"x-api-key": "admin-secret"},
+	}
+	_, err := handler.rejectRegistration(ctx, req, regID)
 	require.NoError(t, err)
 }

@@ -312,7 +312,7 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 	// ApproveAndExecute, not ApproveExecution. The token-only path runs
 	// ApproveExecution; the dashboard click runs ApproveAndExecute. Both
 	// converge inside the Manager.
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -356,7 +356,7 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(errors.New("AWS RI purchase failed"))
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(errors.New("AWS RI purchase failed"))
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -411,7 +411,7 @@ func TestHandler_approvePurchase_AzureOrphanRejects409(t *testing.T) {
 	assert.Contains(t, ce.Error(), "no longer exists")
 	assert.Contains(t, ce.Error(), "azure")
 	// Guard fires before the purchase manager is touched.
-	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -447,7 +447,7 @@ func TestHandler_approvePurchase_GCPOrphanRejects409(t *testing.T) {
 	assert.Equal(t, 409, ce.code)
 	assert.Contains(t, ce.Error(), "no longer exists")
 	assert.Contains(t, ce.Error(), "gcp")
-	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything)
+	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -477,7 +477,7 @@ func TestHandler_approvePurchase_AWSOrphanFallsThrough(t *testing.T) {
 
 	mockPurchase := new(MockPurchaseManager)
 	// Guard does not fire; ApproveAndExecute is called normally.
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -516,7 +516,7 @@ func TestHandler_approvePurchase_NonOrphanUnchanged(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail).Return(nil)
+	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -1566,7 +1566,6 @@ func TestHandler_pausePlannedPurchase_ActorStamped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "paused", res.Status)
 }
-
 
 func TestHandler_getPlannedPurchases_ErrorGettingPlans(t *testing.T) {
 	ctx := context.Background()
@@ -3370,7 +3369,10 @@ func TestHandler_executePurchase_DirectExec_ExecuteAny(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, adminSession.UserID, "execute-any", "purchases").Return(true, nil)
 	// Scope check: no allowed_accounts restriction for this test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, adminSession.UserID).Return([]string{}, nil)
-	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), adminSession.Email).Return(nil)
+	// Direct-execute is a human session action: the transitioned_by actor
+	// must be the session user's UUID, not nil (issue #1009 audit objective).
+	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), adminSession.Email,
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == adminSession.UserID })).Return(nil)
 	setupDirectExecMocks(ctx, mockStore)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
@@ -3408,7 +3410,10 @@ func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-own", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerID).Return([]string{}, nil)
-	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), ownerSession.Email).Return(nil)
+	// Direct-execute is a human session action: the transitioned_by actor
+	// must be the session user's UUID, not nil (issue #1009 audit objective).
+	mockPurchase.On("ApproveAndExecute", ctx, mock.AnythingOfType("string"), ownerSession.Email,
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == ownerID })).Return(nil)
 	setupDirectExecMocks(ctx, mockStore)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, purchase: mockPurchase}
@@ -3827,12 +3832,12 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 
 	mockConfig := new(MockConfigStore)
 	// TransitionExecutionStatus fails because a concurrent Cancel already landed.
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
 		Return(nil, concurrentCancelErr)
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com")
+	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil)
 	require.Error(t, err, "concurrent cancel must surface as an error, not a silent overwrite")
 	// SavePurchaseExecution must NEVER be called: the cancelled row is untouched.
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
@@ -3858,7 +3863,7 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 	}
 
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
 		Return(transitioned, nil)
 	mockConfig.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == execID &&
@@ -3868,7 +3873,7 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 
 	handler := &Handler{config: mockConfig}
 
-	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com")
+	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "scheduled", result.Status)
 	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
@@ -3887,12 +3892,12 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 		config.ErrExecutionNotInExpectedStatus, execID)
 
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
 		Return(nil, concurrentCancelErr)
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com")
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "CAS-lost error must be a ClientError")

@@ -147,9 +147,13 @@ type BreakdownValue struct {
 // attribution via the auth-gated deep-link flow; pass "" for token-only
 // paths (message workers, legacy callers) where attribution falls back to
 // the notification email at render time.
+//
+// `transitionedBy` (ApproveAndExecute) is the session user's UUID stamped
+// onto purchase_executions.transitioned_by for human-initiated approvals;
+// pass nil for token/SQS/system flows so transitioned_by = NULL (issue #1009).
 type PurchaseManagerInterface interface {
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
-	ApproveAndExecute(ctx context.Context, execID, actor string) error
+	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 

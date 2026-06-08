@@ -1,4 +1,4 @@
--- Migration 000066: audit actor stamps on state transitions
+-- Migration 000074: audit actor stamps on state transitions
 -- Adds transitioned_by + transitioned_at to the three financial state machines:
 -- purchase_executions, ri_exchanges (ri_exchange_history), account_registrations.
 -- Idempotent: uses ADD COLUMN IF NOT EXISTS throughout.

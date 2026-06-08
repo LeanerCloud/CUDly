@@ -250,7 +250,7 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
-	err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com")
+	err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil)
 	require.NoError(t, err)
 
 	// Crucially, the empty PlanID must never reach the UUID-typed store columns.
@@ -273,19 +273,26 @@ func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 	// Session-authed path: ApproveAndExecute is called directly without a
 	// token, after the caller has run RBAC. Verifies the entry point works
 	// independently of the token branch.
+	//
+	// Also the manager-level regression guard for issue #1009: a non-nil
+	// transitionedBy (the session user's UUID) must be threaded into
+	// TransitionExecutionStatus so transitioned_by is stamped for human
+	// session approvals. Pre-fix ApproveAndExecute always passed nil here.
 	ctx := context.Background()
 	manager, store, sender := newApproveManager(t)
 
+	actorUUID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	updated := &config.PurchaseExecution{
 		ExecutionID:   "exec-456",
 		PlanID:        "plan-789",
 		Status:        "approved",
 		ApprovalToken: "tok",
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-789")
 
-	err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com")
+	err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com", &actorUUID)
 	require.NoError(t, err)
 	require.NotNil(t, updated.ApprovedBy)
 	assert.Equal(t, "session-user@example.com", *updated.ApprovedBy)

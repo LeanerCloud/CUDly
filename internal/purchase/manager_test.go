@@ -211,7 +211,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
-		[]string{"approved", "pending", "notified"}, "running").Return(&claimedExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimedExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
@@ -307,7 +307,7 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
-		[]string{"approved", "pending", "notified"}, "running").Return(&claimedExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimedExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(nil, errors.New("plan not found")).Once()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// updatePlanProgress is NOT called when execution fails

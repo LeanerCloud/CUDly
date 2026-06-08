@@ -208,7 +208,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	runningExec := *exec
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-approved",
-		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -290,7 +290,7 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	runningExec := *exec
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-save-err",
-		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-save-err").Return(plan, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))

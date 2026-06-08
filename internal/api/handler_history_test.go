@@ -432,7 +432,7 @@ func TestHandler_getHistory_GetIsReadOnly(t *testing.T) {
 	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{stale}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	mockStore.On("TransitionExecutionStatus", mock.Anything, "stale-ro-exec", []string{"pending", "notified"}, "expired").
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "stale-ro-exec", []string{"pending", "notified"}, "expired", mock.Anything).
 		Run(func(_ mock.Arguments) {
 			close(transitionCalled) // signal that the goroutine reached the transition
 			<-gate                  // block until the test releases it
@@ -541,11 +541,14 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 	assert.Equal(t, 1, resp.Summary.TotalPending)
 }
 
-// TestHandler_expireIfStale_SystemActorIsNil asserts that the expireIfStale
-// helper passes nil as the actor param to TransitionExecutionStatus.
-// expireIfStale is a system-initiated path (no human session), so transitioned_by
-// must be NULL on the affected row (issue #1009).
-func TestHandler_expireIfStale_SystemActorIsNil(t *testing.T) {
+// TestHandler_expireStaleExecutionsAsync_SystemActorIsNil asserts that the
+// async stale-expire sweep passes nil as the actor param to
+// TransitionExecutionStatus. Expiry is a system-initiated path (no human
+// session), so transitioned_by must be NULL on the affected row (issue #1009).
+// The transition fires in a background goroutine (issue #1032: GET is a pure
+// read), so the test blocks on a done channel rather than asserting
+// synchronously.
+func TestHandler_expireStaleExecutionsAsync_SystemActorIsNil(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	approverEmail := "ops@example.com"
@@ -553,6 +556,7 @@ func TestHandler_expireIfStale_SystemActorIsNil(t *testing.T) {
 
 	staleID := "actor-nil-stale-exec"
 	expired := config.PurchaseExecution{ExecutionID: staleID, Status: "expired"}
+	done := make(chan struct{})
 
 	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
@@ -562,15 +566,23 @@ func TestHandler_expireIfStale_SystemActorIsNil(t *testing.T) {
 			ScheduledDate: time.Now().Add(-8 * 24 * time.Hour),
 		}}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	// System path: expireIfStale must pass nil actor so transitioned_by = NULL.
-	mockStore.On("TransitionExecutionStatus", ctx, staleID, []string{"pending", "notified"}, "expired",
+	// System path: the async expire must pass nil actor so transitioned_by =
+	// NULL. The (*string)(nil) literal is the contract under test. The
+	// goroutine uses context.Background(); use mock.Anything for ctx.
+	mockStore.On("TransitionExecutionStatus", mock.Anything, staleID, []string{"pending", "notified"}, "expired",
 		(*string)(nil),
-	).Return(&expired, nil).Once()
+	).Run(func(_ mock.Arguments) { close(done) }).Return(&expired, nil).Once()
 
 	mockAuth, req := adminHistoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	_, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expire goroutine did not call TransitionExecutionStatus within 5s")
+	}
 }
 
 // TestHandler_getHistory_PermissionDenied asserts that a non-admin user without

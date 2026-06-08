@@ -77,7 +77,8 @@ func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution
 	// CAS: scheduled -> approved. If this fails with ErrExecutionNotInExpectedStatus
 	// the revoke handler already transitioned the row to "cancelled" — that is
 	// not an error, just a CAS race loss.
-	updated, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"scheduled"}, "approved")
+	// Scheduler-initiated fire: no human session UUID, so transitioned_by = NULL.
+	updated, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"scheduled"}, "approved", nil)
 	if err != nil {
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
 			logging.Infof("fireOneDue[%s]: CAS lost (execution already transitioned by another actor)", exec.ExecutionID)
