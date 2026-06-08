@@ -82,6 +82,11 @@ type StoreInterface interface {
 	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
 	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
+	// SetCancelledBy stamps a cancelled_by / revoked_by email on an execution
+	// without overwriting any other columns. Used after TransitionExecutionStatus
+	// to fold the actor attribution into the same logical write without the
+	// full-row SavePurchaseExecution clobber risk (Finding #5 / PR #889).
+	SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error
 	// CancelExecutionAtomic atomically flips status from pending / notified /
 	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
 	// supports the Gmail-style pre-fire delay revoke path (issue #290).

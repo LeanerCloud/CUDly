@@ -1243,11 +1243,16 @@ func (h *Handler) revokeViaSession(ctx context.Context, execution *config.Purcha
 		return nil, fmt.Errorf("failed to record revocation request for execution %s: %w", execution.ExecutionID, err)
 	}
 	if revokedBy != "" {
-		rb := revokedBy
-		updated.CancelledBy = &rb
-		if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+		// Use a narrow SetCancelledBy UPDATE rather than a full-row
+		// SavePurchaseExecution to avoid clobbering concurrent writes
+		// between the TransitionExecutionStatus and this attribution step
+		// (Finding #5). The targeted UPDATE only touches cancelled_by so
+		// any other concurrent column change (e.g. a background webhook
+		// stamping a cloud reference) is preserved.
+		if err := h.config.SetCancelledBy(ctx, execution.ExecutionID, revokedBy); err != nil {
 			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
 		}
+		_ = updated // kept for future use; CancelledBy is now persisted atomically
 	}
 	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, redactEmail(revokedBy))
 	return map[string]string{
