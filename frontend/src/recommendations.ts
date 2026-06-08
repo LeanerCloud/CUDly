@@ -1265,28 +1265,31 @@ function formatTermRange(min: number, max: number): string {
 }
 
 /**
- * Computes effective monthly savings by amortizing the upfront cost over the
- * term. Assumes rec.savings is the on-demand vs. discounted recurring delta
- * EXCLUDING upfront amortization (matches AWS Cost Explorer's
- * EstimatedMonthlySavingsAmount semantics; verify per-provider if adding
- * non-AWS sources).
+ * Returns the effective monthly savings for a recommendation.
  *
- * Edge case: term=0 clamps to 1yr to avoid division by zero (defensive
- * clamp consistent with the original pickBestVariantPerCell behaviour).
+ * All three providers (AWS, Azure, GCP) report `savings` as the already-net
+ * monthly savings figure -- i.e. the on-demand/recurring delta AFTER the
+ * amortized upfront cost has been factored in. Subtracting upfront again
+ * would double-count it and drive the result negative for high-upfront RIs.
  */
 export function effectiveMonthlySavings(r: LocalRecommendation): number {
-  const monthsInTerm = Math.max(12, (r.term || 1) * 12);
-  return r.savings - (r.upfront_cost / monthsInTerm);
+  return r.savings;
 }
 
 /**
  * Computes effective savings as a percentage of the equivalent on-demand
- * monthly cost, amortizing the upfront cost over the term. Returns null when
- * the result would require division by zero (on_demand_monthly === 0).
+ * monthly cost. Returns null when the result would require division by zero
+ * (on_demand_monthly === 0).
+ *
+ * All three providers (AWS, Azure, GCP) report `savings` as already-net
+ * monthly savings -- the on-demand/recurring delta AFTER the amortized
+ * upfront cost is factored in. The numerator is therefore `savings` directly;
+ * subtracting amortized upfront again would double-count it and drive the
+ * percentage negative for high-upfront RIs (issue #1103).
  *
  * Denominator source (closes #274):
  *   1. If `r.on_demand_cost` is populated (non-null, > 0), use it directly
- *      — it's the canonical baseline straight from the cloud provider
+ *      -- it's the canonical baseline straight from the cloud provider
  *      (Azure CostWithNoReservedInstances, AWS
  *      EstimatedMonthlyOnDemandCost).
  *   2. Otherwise fall back to reconstructing from
@@ -1295,19 +1298,14 @@ export function effectiveMonthlySavings(r: LocalRecommendation): number {
  *      it stays correct for cleanly-shaped data, but for Azure all-upfront
  *      recs where `monthly_cost = $0` the reconstructed denominator
  *      collapses to `savings + amortized` and inflates the percentage well
- *      past realistic ceilings (~30% real → 86% shown).
+ *      past realistic ceilings (~30% real to 86% shown).
  *
- * Formula (numerator unchanged — assumes rec.savings excludes upfront
- * amortization, see effectiveMonthlySavings):
- *   amortized_upfront_per_month = upfront_cost / (term * 12)
- *   effective_monthly_savings   = savings - amortized_upfront_per_month
- *   effective_savings_pct       = (effective_monthly_savings / on_demand_monthly) * 100
- *
- * A negative result is valid data — it flags a rec where the upfront cost
- * outweighs the recurring savings over the term (anomaly signal).
+ * Formula:
+ *   amortized_upfront_per_month = upfront_cost / (term * 12)   [denominator only]
+ *   effective_savings_pct       = (savings / on_demand_monthly) * 100
  */
 export function effectiveSavingsPct(r: LocalRecommendation): number | null {
-  // Per acceptance criteria: term=0 is a data anomaly — render as em-dash.
+  // Per acceptance criteria: term=0 is a data anomaly -- render as em-dash.
   if (!r.term) return null;
   // monthly_cost === null means the provider API did not return a recurring
   // monthly breakdown. Without it we can only compute the formula when the
@@ -1320,17 +1318,16 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // denominator (EstimatedMonthlyOnDemandCost from Cost Explorer). When it
   // is absent the reconstruction formula (monthly_cost + savings + amortized)
   // diverges from the true on-demand baseline for RI/SP recs, producing
-  // misleadingly high percentages. Return null so the UI renders "—" rather
+  // misleadingly high percentages. Return null so the UI renders "--" rather
   // than a silently-wrong value.
   if (r.provider === 'aws' && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
   const amortized = r.upfront_cost / monthsInTerm;
-  const effectiveSavings = r.savings - amortized;
   const onDemand = hasOnDemand
     ? (r.on_demand_cost as number)
     : (r.monthly_cost as number) + r.savings + amortized;
   if (onDemand === 0) return null;
-  return (effectiveSavings / onDemand) * 100;
+  return (r.savings / onDemand) * 100;
 }
 
 /**
