@@ -102,7 +102,11 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  formatCurrency: jest.fn((val) => {
+    const n = typeof val === 'number' ? val : Number(val);
+    if (val == null || !Number.isFinite(n)) return '--';
+    return `$${n}`;
+  }),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
@@ -657,11 +661,12 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Active Commitments');
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
-      // Savings card must fall back to $0 (not throw or go blank).
+      // Savings card must fall back to '--' (not throw, go blank, or fabricate $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      // mockPageLevelRange returns cellCount=0 for empty groups, so formatCurrency(0) = '$0'
-      expect(savingsCard?.innerHTML).toContain('$0');
+      // When recs fail cellCount=0, the sentinel '--' is shown instead of fabricated $0.
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #293: summary.potential_monthly_savings is no longer the source for
@@ -721,10 +726,11 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
 
-      // Savings card falls back to $0 when recs are absent.
+      // Savings card shows '--' when recs are absent (no fabricated $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      expect(savingsCard?.innerHTML).toContain('$0');
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #304: getRecommendations returns a non-array object (e.g. a wrapped
@@ -749,9 +755,10 @@ describe('Dashboard Module', () => {
       const summary = document.getElementById('summary');
       expect(summary?.innerHTML).toContain('Active Commitments');
 
-      // Savings card falls back to $0.
+      // Savings card shows '--' (no fabricated $0 when recs are absent).
       const savingsCard = summary?.querySelector('.card');
-      expect(savingsCard?.innerHTML).toContain('$0');
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #749: the real backend always returns the envelope shape

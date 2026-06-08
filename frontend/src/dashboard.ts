@@ -261,7 +261,7 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     const range = pageLevelRange(groups);
     savingsDisplay = range.cellCount > 0
       ? formatSavingsRange(range.savingsMin, range.savingsMax)
-      : formatCurrency(0);
+      : '--';
   } catch (recErr) {
     console.warn('Dashboard: failed to compute savings range from recommendations:', recErr);
     savingsDisplay = '--';
