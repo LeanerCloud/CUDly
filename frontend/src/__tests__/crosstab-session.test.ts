@@ -8,6 +8,9 @@
 const originalLocation = window.location;
 afterEach(() => {
   Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+  // initAuth() seeds in-memory auth from localStorage, so clear it between
+  // tests to stop stale tokens from one case leaking into the next.
+  localStorage.clear();
 });
 
 function loadAuth(): { api: typeof import('../api'); handler: (e: StorageEvent) => void; reload: jest.Mock; addSpy: jest.SpyInstance } {
