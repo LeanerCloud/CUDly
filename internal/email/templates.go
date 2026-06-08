@@ -779,16 +779,23 @@ func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
 // The email tells the user when the purchase will execute and includes a
 // one-click revoke link. Route: direct To/CC (same as approval request)
 // because the revoke link is scoped to the execution ID.
+//
+// Returns ErrNoRecipient when data.RecipientEmail is empty. The body carries a
+// live, execution-scoped revoke link, so it must never fall back to the
+// broadcast SendNotification path (which would leak the action link to every
+// alert subscriber and break the ownership/RBAC model around revocation).
+// Mirrors SendScheduledPurchaseNotification and the SMTP sender, which both
+// require a resolved recipient for this email.
 func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
 	body, err := RenderPurchaseScheduledDelayEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase scheduled delay email: %w", err)
 	}
 	subject := fmt.Sprintf("CUDly - Purchase Scheduled for %s", data.RevocationWindowClosesAt)
-	if data.RecipientEmail != "" {
-		return s.SendToEmailWithCCMultipart(ctx, data.RecipientEmail, data.CCEmails, subject, body, "")
-	}
-	return s.SendNotification(ctx, subject, body)
+	return s.SendToEmailWithCCMultipart(ctx, data.RecipientEmail, data.CCEmails, subject, body, "")
 }
 
 // ---------------------------------------------------------------------------

@@ -245,6 +245,18 @@ func (m *mockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID st
 	return nil
 }
 
+func (m *mockConfigStore) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStore) ClearRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStore) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }

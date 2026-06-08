@@ -945,6 +945,10 @@ func (m *mockConfigStoreForExchange) FlipPurchaseRevocationInFlight(_ context.Co
 	return nil
 }
 
+func (m *mockConfigStoreForExchange) ClearRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStoreForExchange) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
 	return nil, nil
 }

@@ -1056,10 +1056,15 @@ func TestRevokePurchase_AzureWithinSafetyMarginRejected(t *testing.T) {
 	assert.Contains(t, ce.message, "window closed")
 }
 
-// TestRevokePurchase_AzureJustOutsideSafetyMarginAllowed verifies that a
-// purchase made (7d - 90min) ago (outside the 1h safety margin) is still
-// accepted by the local window check.
-func TestRevokePurchase_AzureJustOutsideSafetyMarginAllowed(t *testing.T) {
+// TestCallAzureReturn_JustOutsideSafetyMargin covers the Azure return path only.
+// It exercises callAzureReturn directly with injected stub clients, so it does
+// NOT exercise the 1h local safety-margin gate (that lives in
+// dispatchProviderRevoke, before any Azure call). The reject side of that gate
+// is covered end-to-end via revokePurchase in the test above
+// (TestRevokePurchase_AzureWithinSafetyMarginRejected, which asserts 422
+// "window closed"); here we only assert that the two-step CalculateRefund+Return
+// path succeeds and reports "revoked" when Azure accepts the return.
+func TestCallAzureReturn_JustOutsideSafetyMargin(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
