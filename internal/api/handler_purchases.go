@@ -629,6 +629,12 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string) (any, error) {
 	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor)
 	if err != nil {
+		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+			// A concurrent Cancel beat the approve: the CAS rejected because the row
+			// is no longer in a schedulable status. Return 409 so the client knows to
+			// reload and not retry with the same payload.
+			return nil, NewClientError(409, "purchase no longer schedulable: state changed concurrently (concurrent cancel)")
+		}
 		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution %s: %v", execution.ExecutionID, err))
 	}
 	// Best-effort scheduled notification email.

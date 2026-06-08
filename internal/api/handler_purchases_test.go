@@ -3841,3 +3841,28 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
 	mockConfig.AssertExpectations(t)
 }
+
+// TestApproveWithDelay_CASLostMaps409 verifies that when scheduleApprovedExecution
+// returns ErrExecutionNotInExpectedStatus (concurrent cancel beat the approve CAS),
+// approveWithDelay surfaces 409 rather than 500 (Finding A, second-wave CR).
+func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
+	ctx := context.Background()
+	execID := "exec-cas-409"
+	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
+
+	concurrentCancelErr := fmt.Errorf("%w: execution %s already cancelled",
+		config.ErrExecutionNotInExpectedStatus, execID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+		Return(nil, concurrentCancelErr)
+
+	handler := &Handler{config: mockConfig}
+
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "CAS-lost error must be a ClientError")
+	assert.Equal(t, 409, ce.code, "concurrent cancel CAS race must map to 409, not 500")
+	mockConfig.AssertExpectations(t)
+}
