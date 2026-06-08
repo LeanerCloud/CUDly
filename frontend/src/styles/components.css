@@ -911,18 +911,23 @@ tr.rec-cell-summary-row:hover {
     background: transparent;
     border: none;
     cursor: pointer;
-    font-size: 1.2em;
+    font-size: 1.5em;
     color: var(--cudly-text-muted);
-    padding: 4px;
-    min-width: 24px;
-    min-height: 24px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
     line-height: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
 }
-.rec-cell-chevron:hover {
+.rec-cell-chevron:hover,
+.rec-cell-chevron:focus-visible {
     color: var(--cudly-primary);
+    background: var(--cudly-info-bg, #eaf0fb);
+    outline: none;
 }
 .rec-cell-identity {
     font-weight: 500;
