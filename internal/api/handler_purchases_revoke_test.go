@@ -120,8 +120,8 @@ func TestRevokePurchase_PurchaseNotFound(t *testing.T) {
 
 	adminSess := revokeAdminSession()
 	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, "pid-1").Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, "pid-1").Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, "pid-1").Return((*config.PurchaseHistoryRecord)(nil), nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -149,8 +149,8 @@ func TestRevokePurchase_AlreadyRevoked(t *testing.T) {
 	r := armReservationRecord()
 	r.RevokedAt = &revokedAt
 	r.RevokedVia = "direct-api"
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -177,8 +177,8 @@ func TestRevokePurchase_AWSReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "aws"
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -204,8 +204,8 @@ func TestRevokePurchase_GCPReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "gcp"
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -231,8 +231,8 @@ func TestRevokePurchase_AzureOutsideWindow(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Timestamp = time.Now().UTC().Add(-8 * 24 * time.Hour) // 8 days ago -- window closed
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -346,8 +346,8 @@ func TestRevokePurchase_UsesStampedWindow(t *testing.T) {
 	// ...but the stamped window already closed an hour ago.
 	closed := time.Now().UTC().Add(-1 * time.Hour)
 	r.RevocationWindowClosesAt = &closed
-	// Pre-check: not a scheduled execution.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -992,7 +992,7 @@ func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T)
 	r.RevocationInFlight = true
 	r.RevokedAt = nil
 
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -1032,7 +1032,7 @@ func TestRevokePurchase_AzureWithinSafetyMarginRejected(t *testing.T) {
 	windowCloses := purchasedAt.AddDate(0, 0, AzureRevocationWindowDays)
 	r.RevocationWindowClosesAt = &windowCloses
 
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -1189,4 +1189,105 @@ func TestRevocationWindowClosesAtFor_DSTCrossing(t *testing.T) {
 // feature is in development; remove the t.Skip when #1005 lands.
 func TestRevokePurchase_FourEyesApproval(t *testing.T) {
 	t.Skip("placeholder until #1005 4-eyes revocation approval lands")
+}
+
+// TestRevokePurchase_GetExecutionByIDDBError_Returns500 guards that a genuine
+// DB error from GetExecutionByID surfaces as 500 rather than silently falling
+// through to the purchase_history lookup path (Finding C, second-wave CR).
+//
+// Before the fix, any non-nil execErr was folded into "execErr == nil && ..."
+// so the error was swallowed and the handler continued to GetPurchaseHistoryByPurchaseID.
+// Now a non-nil execErr returns a 500 immediately.
+func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	adminSess := revokeAdminSession()
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+
+	// GetExecutionByID returns a genuine DB error (not a not-found nil).
+	dbErr := errors.New("pq: connection closed unexpectedly")
+	mockStore.On("GetExecutionByID", ctx, "pid-dberr").Return((*config.PurchaseExecution)(nil), dbErr)
+	// GetPurchaseHistoryByPurchaseID must NEVER be called when GetExecutionByID fails.
+	mockStore.AssertNotCalled(t, "GetPurchaseHistoryByPurchaseID", mock.Anything, mock.Anything)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid-dberr")
+	require.Error(t, err, "DB error from GetExecutionByID must surface as an error, not silent passthrough")
+	// The error wraps the DB error; it is NOT a ClientError (not user-facing 500 shape)
+	// but the router will convert it to a 500 response. Verify the DB error is present.
+	assert.ErrorContains(t, err, "pq: connection closed unexpectedly")
+	mockStore.AssertExpectations(t)
+}
+
+// TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410 verifies that
+// two parallel revoke requests for the same scheduled execution produce the
+// correct outcomes: the first CAS wins (cancelled), the second CAS loses and
+// returns 410 (Finding B, second-wave CR).
+//
+// The fix drops the racy "status == scheduled" pre-check and lets
+// CancelScheduledExecutionAtomic decide. A second call with !cancelled means
+// the scheduler (or first caller) already transitioned the row.
+func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	execID := "exec-concurrent-b"
+	adminSess := revokeAdminSession()
+
+	// --- First caller: wins the CAS ---
+	t.Run("first caller wins", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() {
+			mockStore.AssertExpectations(t)
+			mockAuth.AssertExpectations(t)
+		})
+
+		mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+		exec := scheduledExecution(execID, "")
+		mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+		mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+			Return(true, "cancelled", nil).Once()
+		mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
+
+		h := &Handler{config: mockStore, auth: mockAuth}
+		result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+		require.NoError(t, err)
+		m, ok := result.(map[string]string)
+		require.True(t, ok)
+		assert.Equal(t, "cancelled", m["status"])
+	})
+
+	// --- Second caller: CAS returns !cancelled (scheduler or first caller won) ---
+	t.Run("second caller gets 410", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() {
+			mockStore.AssertExpectations(t)
+			mockAuth.AssertExpectations(t)
+		})
+
+		mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+		exec := scheduledExecution(execID, "")
+		mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+		// CAS returns !cancelled because the row was already transitioned.
+		mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+			Return(false, "completed", nil).Once()
+
+		h := &Handler{config: mockStore, auth: mockAuth}
+		_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+		require.Error(t, err)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "CAS race-lost must surface as a ClientError")
+		assert.Equal(t, 410, ce.code, "second concurrent revoke must return 410")
+	})
 }

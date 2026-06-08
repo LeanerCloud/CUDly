@@ -149,12 +149,19 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, err
 	}
 
-	// Gmail-style pre-fire delay: if the ID resolves to a scheduled execution
-	// (cloud SDK not yet called), revoke it for free at the execution layer.
-	// Only try this when the store call returns a row (err == nil); a non-nil
-	// error here just means "not found as an execution" and we fall through to
+	// Gmail-style pre-fire delay: if the ID resolves to a purchase_execution
+	// (cloud SDK not yet called), attempt to cancel it for free at the execution
+	// layer. The status=="scheduled" check is intentionally omitted here: reading
+	// "scheduled" then checking the status is a TOCTOU race. Instead we pass the
+	// row straight to revokeScheduledExecution which calls CancelScheduledExecutionAtomic
+	// (WHERE status='scheduled' CAS) and returns 410 if the scheduler already fired.
+	//
+	// A genuine DB error from GetExecutionByID surfaces as 500; (nil, nil) means
+	// the ID is not an execution (or is not yet visible) and we fall through to
 	// the purchase_history lookup below.
-	if execution, execErr := h.config.GetExecutionByID(ctx, purchaseID); execErr == nil && execution != nil && execution.Status == "scheduled" {
+	if execution, execErr := h.config.GetExecutionByID(ctx, purchaseID); execErr != nil {
+		return nil, fmt.Errorf("revoke: GetExecutionByID %s: %w", purchaseID, execErr)
+	} else if execution != nil {
 		return h.revokeScheduledExecution(ctx, session, execution)
 	}
 
