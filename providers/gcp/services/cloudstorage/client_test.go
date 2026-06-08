@@ -889,6 +889,27 @@ func TestCloudStorageClient_ConvertGCPRecommendation_PopulatesRecurringMonthlyCo
 						},
 					},
 				},
+				{
+					// Commitment SKU required by getStoragePricing: without a
+					// "commitment" SKU it errors and RecurringMonthlyCost stays nil.
+					Description:    "Standard Storage commitment 1yr in us-central1",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        20000000,
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 	}
@@ -919,7 +940,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_PopulatesRecurringMonthlyCo
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
 	assert.Greater(t, *rec.RecurringMonthlyCost, float64(0))
@@ -951,7 +972,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_BillingFailure_RecurringMon
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Nil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must remain nil when billing lookup fails")
 }
