@@ -55,6 +55,10 @@ jest.mock('../utils', () => ({
   formatDate: jest.fn((val: string) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years: number) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
   escapeHtml: jest.fn((str: string) => str || ''),
+  escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
 }));
 
