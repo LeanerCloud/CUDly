@@ -514,17 +514,19 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // server-provided rec so `details`, `engine`, `cloud_account_id`, and
   // any future additions flow through unchanged. Only `payment`,
   // `monthly_cost`, `selected`, and `purchased` are overridden: `payment`
-  // comes from the bucket (user's per-bucket choice), `monthly_cost` is
-  // coerced to null for absent values, and the purchase-intent flags are
-  // forced to their canonical values. Passing `details` ensures
-  // non-default platforms (Windows EC2, dedicated tenancy, AZ-scoped RIs,
-  // non-default-engine RDS/Cache) reach the backend correctly (issue #597).
+  // comes from perRecPayments[rec.id] for multi-account buckets (issue #197)
+  // or from the bucket-level payment for single-account buckets.
+  // `monthly_cost` is coerced to null for absent values, and the
+  // purchase-intent flags are forced to their canonical values. Passing
+  // `details` ensures non-default platforms (Windows EC2, dedicated tenancy,
+  // AZ-scoped RIs, non-default-engine RDS/Cache) reach the backend correctly
+  // (issue #597).
   const promises = buckets.map((b) =>
     api.executePurchase(
       b.recs.map((r) => ({
         ...r,
         monthly_cost: r.monthly_cost ?? null,
-        payment: b.payment,
+        payment: b.perRecPayments?.get(r.id) ?? b.payment,
         selected: true,
         purchased: false,
       })),
