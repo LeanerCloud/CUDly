@@ -231,7 +231,17 @@ function collectPermissions(): Permission[] {
       if (providers) permission.constraints.providers = providers.split(',').map(s => s.trim()).filter(s => s);
       if (services) permission.constraints.services = services.split(',').map(s => s.trim()).filter(s => s);
       if (regions) permission.constraints.regions = regions.split(',').map(s => s.trim()).filter(s => s);
-      if (maxAmount) permission.constraints.max_amount = parseFloat(maxAmount);
+      if (maxAmount) {
+        const parsed = parseFloat(maxAmount);
+        // Reject non-finite or negative values (feedback_nullable_not_zero).
+        // A malformed entry is silently skipped so the rest of the constraints
+        // still reach the API; the input's type="number" min="0" already
+        // prevents browser submission of non-numeric values, but the JS
+        // path must guard too.
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          permission.constraints.max_amount = parsed;
+        }
+      }
     }
 
     permissions.push(permission);

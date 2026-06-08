@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
@@ -162,7 +162,7 @@ export async function viewPlanHistory(planId: string): Promise<void> {
 
   try {
     const data = await api.getHistory({ planId }) as unknown as HistoryResponse;
-    renderHistorySummary(data.summary || {});
+    renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
@@ -242,7 +242,7 @@ export async function loadHistory(): Promise<void> {
       account_ids: accountIDs
     };
     const data = await api.getHistory(filters) as unknown as HistoryResponse;
-    renderHistorySummary(data.summary || {});
+    renderHistorySummary(data.summary ?? null);
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
@@ -262,35 +262,64 @@ export async function loadHistory(): Promise<void> {
   }
 }
 
-function renderHistorySummary(summary: HistorySummary): void {
+function renderHistorySummary(summary: HistorySummary | null): void {
   const container = document.getElementById('history-summary');
   if (!container) return;
+
+  // When the API omits the summary field entirely (older deploy, partial
+  // response, or an error absorbed upstream), render an explicit unknown
+  // state on each card rather than fabricating all-zero values that look
+  // like real financial aggregates.
+  if (summary === null || summary === undefined) {
+    container.innerHTML = `
+      <div class="card">
+        <h3>Total Purchases</h3>
+        <p class="value">--</p>
+      </div>
+      <div class="card">
+        <h3>Total Upfront Spent</h3>
+        <p class="value">--</p>
+      </div>
+      <div class="card">
+        <h3>Monthly Savings</h3>
+        <p class="value savings">--</p>
+      </div>
+      <div class="card">
+        <h3>Annual Savings</h3>
+        <p class="value savings">--</p>
+      </div>
+    `;
+    return;
+  }
 
   // total_completed / total_pending fall back to total_purchases so the
   // summary renders sensibly against an older API deploy that hasn't shipped
   // the new counters yet.
-  const total = summary.total_purchases ?? 0;
+  const total = summary.total_purchases ?? null;
+  const totalDisplay = total !== null ? String(total) : '--';
   const completed = summary.total_completed ?? total;
   const pending = summary.total_pending ?? 0;
-  const detail = pending > 0 ? `<p class="detail">${completed} completed · ${pending} pending</p>` : '';
+  const detail = (total !== null && pending > 0)
+    ? `<p class="detail">${completed} completed · ${pending} pending</p>`
+    : '';
 
   container.innerHTML = `
     <div class="card">
       <h3>Total Purchases</h3>
-      <p class="value">${total}</p>
+      <p class="value">${totalDisplay}</p>
       ${detail}
     </div>
     <div class="card">
       <h3>Total Upfront Spent</h3>
-      <p class="value">${formatCurrency(summary.total_upfront)}</p>
+      <p class="value">${formatCurrency(summary.total_upfront ?? null)}</p>
     </div>
     <div class="card">
       <h3>Monthly Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_monthly_savings)}</p>
+      <p class="value savings">${formatCurrency(summary.total_monthly_savings ?? null)}</p>
     </div>
     <div class="card">
       <h3>Annual Savings</h3>
-      <p class="value savings">${formatCurrency(summary.total_annual_savings)}</p>
+      <p class="value savings">${formatCurrency(summary.total_annual_savings ?? null)}</p>
     </div>
   `;
 }
@@ -515,10 +544,10 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
   if (!p.purchase_id) return '';
   const buttons: string[] = [];
   if (canApprovePendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtml(p.purchase_id)}">Approve</button>`);
+    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}">Approve</button>`);
   }
   if (canCancelPendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`);
+    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}">Cancel</button>`);
   }
   return buttons.join(' ');
 }
@@ -558,7 +587,7 @@ function renderActionCell(p: HistoryPurchase): string {
       const overThreshold = retryThresholdReached(p);
       const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
-      return `<button type="button" class="${cls}" data-retry-id="${escapeHtml(p.purchase_id)}">${label}</button>`;
+      return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
   }
 
@@ -652,7 +681,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       }
       return badge;
     })();
-    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
     const monthlyCostCell = p.monthly_cost != null
       ? formatCurrency(p.monthly_cost)
@@ -953,7 +982,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     const monthlyCostCell = p.monthly_cost != null
       ? formatCurrency(p.monthly_cost)
       : '<span class="muted">-</span>';
-    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
         <td>${formatDate(p.timestamp)}</td>

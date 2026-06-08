@@ -27,8 +27,10 @@ export function formatCurrency(
   currency: string = '$',
   digits: number = CURRENCY_DEFAULT_DIGITS
 ): string {
-  if (value === null || value === undefined || isNaN(value)) {
-    return `${currency}${(0).toFixed(digits)}`;
+  // Represent absent or non-finite values distinctly from a real $0 so
+  // callers can see when data is missing vs actually zero (finding 11-N2).
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '--';
   }
   return `${currency}${value.toLocaleString(undefined, {
     minimumFractionDigits: digits,
@@ -149,13 +151,26 @@ export function throttle<T extends (...args: unknown[]) => unknown>(
 }
 
 /**
- * Escape HTML to prevent XSS
+ * Escape HTML to prevent XSS in text content (between tags).
+ * Escapes &, <, >, ", and ' so the result is safe in both text and attribute contexts.
  */
 export function escapeHtml(str: string | null | undefined): string {
   if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Escape a value for safe interpolation inside an HTML attribute value delimited by double quotes.
+ * Encodes &, <, >, ", and ' -- the quote escaping is essential here because a raw " terminates
+ * the attribute and allows injecting new attributes or markup. Use escapeHtml for text nodes.
+ */
+export function escapeHtmlAttr(str: string | null | undefined): string {
+  return escapeHtml(str);
 }
 
 /**
@@ -188,12 +203,26 @@ export function buildUrl(baseUrl: string, params: Record<string, string | number
 }
 
 /**
- * Deep clone an object using JSON serialization.
- * Note: This drops undefined values, converts Date to strings,
- * and does not preserve Set/Map objects. For objects containing
- * Set/Map, use structuredClone() instead.
+ * Deep clone an object using structuredClone (finding 11-N1).
+ *
+ * structuredClone preserves undefined values, Date objects, Set and Map
+ * instances, and circular-reference-safe trees.  The old JSON round-trip
+ * silently dropped undefined, converted Date to strings, and lost Set/Map.
+ *
+ * For callers that explicitly need JSON-serialisation semantics (e.g. to
+ * strip undefined before sending to the API) use jsonClone() instead.
  */
 export function deepClone<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') return obj;
+  return structuredClone(obj);
+}
+
+/**
+ * Clone via JSON round-trip: drops undefined values, converts Date to strings,
+ * and does not preserve Set/Map.  Use this only when JSON-serialisation
+ * semantics are explicitly required; prefer deepClone for general cloning.
+ */
+export function jsonClone<T>(obj: T): T {
   if (obj === null || typeof obj !== 'object') return obj;
   return JSON.parse(JSON.stringify(obj)) as T;
 }
@@ -284,4 +313,31 @@ export function calculatePaybackMonths(upfrontCost: number, monthlySavings: numb
   if (!monthlySavings || monthlySavings <= 0) return 0;
   if (!upfrontCost || upfrontCost <= 0) return 0;
   return Math.ceil(upfrontCost / monthlySavings);
+}
+
+/** Canonical set of known cloud providers used for whitelist checks. */
+const KNOWN_PROVIDERS = ['aws', 'azure', 'gcp'] as const;
+
+/**
+ * Return the whitelisted CSS class name for a provider value.
+ *
+ * Whitelist guards against stored XSS when provider strings are interpolated
+ * into innerHTML class attributes (findings H1/L4, issues #443 / CR #253).
+ * An unrecognised value produces an empty string (no badge modifier class).
+ */
+export function providerBadgeClass(provider: string | null | undefined): string {
+  if (!provider) return '';
+  const n = provider.toLowerCase();
+  return (KNOWN_PROVIDERS as readonly string[]).includes(n) ? n : '';
+}
+
+/**
+ * Render a `<span class="provider-badge ...">LABEL</span>` string for use in
+ * innerHTML templates.  Both the CSS class and the text label are sanitised:
+ * the class is whitelisted to known providers and the label is HTML-escaped.
+ */
+export function providerBadgeHtml(provider: string | null | undefined): string {
+  const cls = providerBadgeClass(provider);
+  const label = escapeHtml((provider || '').toUpperCase());
+  return `<span class="provider-badge${cls ? ` ${cls}` : ''}">${label}</span>`;
 }

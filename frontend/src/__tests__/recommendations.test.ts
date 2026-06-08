@@ -1746,12 +1746,15 @@ describe('Recommendations Module', () => {
       expect(api.refreshRecommendations).toHaveBeenCalled();
     });
 
-    test('shows success alert', async () => {
+    test('shows success toast (alert replaced by showToast, finding 11-L3)', async () => {
       (api.refreshRecommendations as jest.Mock).mockResolvedValue({});
 
       await refreshRecommendations();
 
-      expect(window.alert).toHaveBeenCalledWith('Recommendation refresh started. This may take a few minutes.');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Recommendation refresh started. This may take a few minutes.',
+        kind: 'success',
+      }));
     });
 
     test('schedules reload after 5 seconds', async () => {
@@ -1769,13 +1772,16 @@ describe('Recommendations Module', () => {
       expect(api.getRecommendations).toHaveBeenCalled();
     });
 
-    test('shows error on failure', async () => {
+    test('shows error toast on failure (alert replaced by showToast, finding 11-L3)', async () => {
       (api.refreshRecommendations as jest.Mock).mockRejectedValue(new Error('API Error'));
       console.error = jest.fn();
 
       await refreshRecommendations();
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to start recommendation refresh');
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Failed to start recommendation refresh',
+        kind: 'error',
+      }));
     });
   });
 

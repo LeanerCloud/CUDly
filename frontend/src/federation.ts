@@ -9,6 +9,7 @@
  */
 
 import { getFederationIaC } from './api';
+import { showToast } from './toast';
 
 // ---------------------------------------------------------------------------
 // Download helper
@@ -161,7 +162,8 @@ function runDownload(btn: HTMLButtonElement, target: string, source: string, for
     })
     .catch((err: unknown) => {
       console.error('Federation IaC download failed:', err);
-      alert(`Failed to generate IaC: ${(err as Error).message}`);
+      // Use showToast instead of blocking alert() (finding 11-L3).
+      showToast({ message: `Failed to generate IaC: ${(err as Error).message}`, kind: 'error' });
     })
     .finally(() => {
       btn.disabled = false;

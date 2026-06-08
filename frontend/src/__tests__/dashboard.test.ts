@@ -102,10 +102,16 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  formatCurrency: jest.fn((val) => {
+    const n = typeof val === 'number' ? val : Number(val);
+    if (val == null || !Number.isFinite(n)) return '--';
+    return `$${n}`;
+  }),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
   escapeHtml: jest.fn((str) => str || ''),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // providerBadgeClass added for L4/D1 fix: whitelist-based CSS class helper.
+  providerBadgeClass: jest.fn((p) => ['aws', 'azure', 'gcp'].includes((p || '').toLowerCase()) ? (p || '').toLowerCase() : ''),
 }));
 
 import * as api from '../api';
@@ -655,11 +661,12 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Active Commitments');
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
-      // Savings card must fall back to $0 (not throw or go blank).
+      // Savings card must fall back to '--' (not throw, go blank, or fabricate $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      // mockPageLevelRange returns cellCount=0 for empty groups, so formatCurrency(0) = '$0'
-      expect(savingsCard?.innerHTML).toContain('$0');
+      // When recs fail cellCount=0, the sentinel '--' is shown instead of fabricated $0.
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #293: summary.potential_monthly_savings is no longer the source for
@@ -719,10 +726,11 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
 
-      // Savings card falls back to $0 when recs are absent.
+      // Savings card shows '--' when recs are absent (no fabricated $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      expect(savingsCard?.innerHTML).toContain('$0');
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #304: getRecommendations returns a non-array object (e.g. a wrapped
@@ -747,9 +755,10 @@ describe('Dashboard Module', () => {
       const summary = document.getElementById('summary');
       expect(summary?.innerHTML).toContain('Active Commitments');
 
-      // Savings card falls back to $0.
+      // Savings card shows '--' (no fabricated $0 when recs are absent).
       const savingsCard = summary?.querySelector('.card');
-      expect(savingsCard?.innerHTML).toContain('$0');
+      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
     // #749: the real backend always returns the envelope shape
@@ -1805,6 +1814,113 @@ describe('Dashboard Module', () => {
         // factor 0.5 halves each channel.
         expect(darkenHexColor('#646464', 0.5)).toBe('#323232');
       });
+    });
+  });
+
+  // H-3 regression: absent API coverage/count fields must render '--', not '$0'/'80%'/'0'.
+  // Pre-fix: `data.current_coverage || 0` fabricated '0%'; `data.target_coverage || 80`
+  // fabricated '80%'; `data.active_commitments || 0` fabricated '0'; the savings catch
+  // block fell back to formatCurrency(0). These tests must FAIL on pre-fix code.
+  describe('H-3: absent dashboard KPI fields render -- sentinel, not fabricated values', () => {
+    test('absent target_coverage shows -- not hardcoded 80%', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        // target_coverage deliberately absent
+        total_recommendations: 1,
+        active_commitments: 1,
+        committed_monthly: 100,
+        current_coverage: 60,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summary = document.getElementById('summary');
+      // Must not show the hardcoded 80% fallback
+      expect(summary?.textContent).not.toContain('Target: 80.0%');
+      expect(summary?.textContent).not.toContain('Target: 80%');
+      // Must show the '--' sentinel for absent target
+      expect(summary?.textContent).toContain('Target: --');
+    });
+
+    test('absent current_coverage shows -- not fabricated 0%', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        // current_coverage deliberately absent
+        total_recommendations: 2,
+        active_commitments: 1,
+        committed_monthly: 100,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summaryEl = document.getElementById('summary');
+      // Find the Coverage tile specifically to check its value
+      const tiles = summaryEl?.querySelectorAll('.kpi-tile');
+      const coverageTile = Array.from(tiles ?? []).find(t =>
+        t.textContent?.includes('Current Coverage')
+      );
+      expect(coverageTile).toBeDefined();
+      const valueEl = coverageTile?.querySelector('.kpi-tile-value');
+      // Must show '--' (not a fabricated '0.0%') when current_coverage is absent
+      expect(valueEl?.textContent).toBe('--');
+    });
+
+    test('absent active_commitments shows -- not fabricated 0', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 1,
+        // active_commitments deliberately absent
+        committed_monthly: 0,
+        current_coverage: 70,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summaryEl = document.getElementById('summary');
+      // Find the Active Commitments tile specifically
+      const tiles = summaryEl?.querySelectorAll('.kpi-tile');
+      const commitmentsTile = Array.from(tiles ?? []).find(t =>
+        t.textContent?.includes('Active Commitments')
+      );
+      expect(commitmentsTile).toBeDefined();
+      // Must not show fabricated '0'; must show '--'
+      const valueEl = commitmentsTile?.querySelector('.kpi-tile-value');
+      expect(valueEl?.textContent).toBe('--');
+    });
+
+    test('savings range catch block shows -- not $0 when computation throws', async () => {
+      // Force the groupRecsByCell mock to throw so the catch block fires.
+      mockGroupRecsByCell.mockImplementationOnce(() => { throw new Error('compute error'); });
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 1,
+        active_commitments: 1,
+        committed_monthly: 100,
+        current_coverage: 70,
+        target_coverage: 80,
+        ytd_savings: 0,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const summaryEl = document.getElementById('summary');
+      const tiles = summaryEl?.querySelectorAll('.kpi-tile');
+      const savingsTile = Array.from(tiles ?? []).find(t =>
+        t.textContent?.includes('Potential Monthly Savings')
+      );
+      expect(savingsTile).toBeDefined();
+      const valueEl = savingsTile?.querySelector('.kpi-tile-value');
+      // Must show '--' (not '$0') when the savings computation fails
+      expect(valueEl?.textContent).toBe('--');
     });
   });
 });

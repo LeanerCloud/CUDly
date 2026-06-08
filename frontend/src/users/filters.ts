@@ -125,7 +125,7 @@ export function updateGroupFilterDropdown(): void {
   groupFilterEl.innerHTML = `
     <option value="">All Groups</option>
     ${availableGroups.map(group => `
-      <option value="${group.id}">${escapeHtml(group.name)}</option>
+      <option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>
     `).join('')}
   `;
   groupFilterEl.value = currentValue;

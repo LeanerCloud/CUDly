@@ -1248,3 +1248,104 @@ describe('groups/groupModals — duplicate', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression tests for finding 11-M3: max_amount must be validated before
+// parseFloat assignment in collectPermissions.
+// ---------------------------------------------------------------------------
+describe('11-M3 max_amount validation in collectPermissions', () => {
+  // Access collectPermissions indirectly via saveGroup and observe API call.
+
+  it('rejects Infinity max_amount (does not forward it to API)', async () => {
+    const modal = document.createElement('div');
+    modal.id = 'group-modal';
+    modal.innerHTML = `
+      <input id="group-id" value="">
+      <input id="group-name" value="Test">
+      <textarea id="group-description"></textarea>
+      <div id="permissions-list">
+        <div class="permission-item">
+          <select class="perm-action"><option value="view" selected>View</option></select>
+          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
+          <input class="perm-providers" value="">
+          <input class="perm-services" value="">
+          <input class="perm-regions" value="">
+          <input class="perm-max-amount" type="number" min="0" value="Infinity">
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'new-id', name: 'Test', description: '', permissions: [] });
+
+    const event = new Event('submit', { cancelable: true });
+    await groupModals.saveGroup(event);
+
+    expect(api.createGroup).toHaveBeenCalled();
+    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
+    // max_amount must not be Infinity (non-finite rejected).
+    const maxAmount = call.permissions[0]?.constraints?.max_amount;
+    expect(maxAmount).toBeUndefined();
+  });
+
+  it('accepts a valid positive max_amount', async () => {
+    document.body.innerHTML = '';
+    const modal = document.createElement('div');
+    modal.id = 'group-modal';
+    modal.innerHTML = `
+      <input id="group-id" value="">
+      <input id="group-name" value="Test">
+      <textarea id="group-description"></textarea>
+      <div id="permissions-list">
+        <div class="permission-item">
+          <select class="perm-action"><option value="view" selected>View</option></select>
+          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
+          <input class="perm-providers" value="">
+          <input class="perm-services" value="">
+          <input class="perm-regions" value="">
+          <input class="perm-max-amount" type="number" min="0" value="5000">
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'new-id', name: 'Test', description: '', permissions: [] });
+
+    const event = new Event('submit', { cancelable: true });
+    await groupModals.saveGroup(event);
+
+    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
+    expect(call.permissions[0]?.constraints?.max_amount).toBe(5000);
+  });
+
+  it('rejects negative max_amount (does not forward it to API)', async () => {
+    document.body.innerHTML = '';
+    const modal = document.createElement('div');
+    modal.id = 'group-modal';
+    modal.innerHTML = `
+      <input id="group-id" value="">
+      <input id="group-name" value="Test">
+      <textarea id="group-description"></textarea>
+      <div id="permissions-list">
+        <div class="permission-item">
+          <select class="perm-action"><option value="view" selected>View</option></select>
+          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
+          <input class="perm-providers" value="">
+          <input class="perm-services" value="">
+          <input class="perm-regions" value="">
+          <input class="perm-max-amount" type="number" value="-100">
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'new-id', name: 'Test', description: '', permissions: [] });
+
+    const event = new Event('submit', { cancelable: true });
+    await groupModals.saveGroup(event);
+
+    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
+    // Negative value must be silently skipped.
+    expect(call.permissions[0]?.constraints?.max_amount).toBeUndefined();
+  });
+});

@@ -13,10 +13,18 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Mirrors the real formatCurrency behaviour: null/undefined/NaN -> '--', numbers -> '$<val>'
+  formatCurrency: jest.fn((val) => (val === null || val === undefined || isNaN(val)) ? '--' : `$${val}`),
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
+  // escapeHtmlAttr must encode " and ' to block attribute-boundary injection.
+  // This mock mirrors the real implementation so tests catch regressions where
+  // code reverts to the quote-transparent escapeHtml in attribute context.
+  escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }),
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
@@ -437,6 +445,114 @@ describe('History Module', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(api.getHistory).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // H-2 regression: absent API summary must render '--' on KPI cards, not '$0'.
+  // Pre-fix: `data.summary || {}` passed an empty HistorySummary to
+  // renderHistorySummary, and `?? 0` coercions made money fields render as
+  // '$0' (or the mock's '$0'). These tests must FAIL on the pre-fix code.
+  describe('H-2: absent summary renders -- sentinel on KPI cards', () => {
+    test('renderHistorySummary: absent summary (undefined) shows -- on all money cards (loadHistory)', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        // summary field deliberately absent
+        purchases: []
+      });
+
+      await loadHistory();
+
+      const summary = document.getElementById('history-summary');
+      expect(summary?.innerHTML).toContain('Total Upfront Spent');
+      expect(summary?.innerHTML).toContain('Monthly Savings');
+      expect(summary?.innerHTML).toContain('Annual Savings');
+      // Must show the absent sentinel, not a fabricated '$0'
+      expect(summary?.innerHTML).toContain('--');
+      // The mock formatCurrency returns '$0' for 0 and '--' for null;
+      // verify no '$0' slips through for the money cards.
+      expect(summary?.textContent).not.toMatch(/Total Upfront Spent.*\$0/s);
+      expect(summary?.textContent).not.toMatch(/Monthly Savings.*\$0/s);
+    });
+
+    test('renderHistorySummary: absent total_upfront renders -- not $0 (viewPlanHistory)', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {
+          total_purchases: 3,
+          // total_upfront intentionally absent
+          total_monthly_savings: 100,
+          total_annual_savings: 1200,
+        },
+        purchases: []
+      });
+
+      await viewPlanHistory('plan-abc');
+
+      const summary = document.getElementById('history-summary');
+      // total_purchases is present; money fields that are absent must be '--'
+      expect(summary?.textContent).toContain('3');
+      // formatCurrency must be called with null for the absent total_upfront
+      // field and must produce '--', not '$0'. This assertion fails if the
+      // production code regresses to passing 0 or a fabricated value.
+      const { formatCurrency } = jest.requireMock('../utils') as { formatCurrency: jest.Mock };
+      expect(formatCurrency).toHaveBeenCalledWith(null);
+      // The rendered card must show '--', not a dollar amount.
+      expect(summary?.innerHTML).toContain('Total Upfront Spent');
+      expect(summary?.innerHTML).toContain('<p class="value">--</p>');
+      expect(summary?.innerHTML).not.toContain('<p class="value">$0</p>');
+    });
+
+    // Regression: attribute-boundary XSS via purchase_id containing a double-quote.
+    // Pre-fix, data-approve-id / data-cancel-id / data-retry-id / data-execution-id
+    // used escapeHtml which did not encode ", allowing a crafted ID to break out of
+    // the attribute and inject markup. Post-fix, escapeHtmlAttr is used and " becomes
+    // &quot; so the attribute stays well-formed.
+    test('encodes double-quotes in purchase_id for data-* attributes (XSS regression)', async () => {
+      const maliciousId = 'a" onmouseover="alert(1)';
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          {
+            purchase_id: maliciousId,
+            status: 'pending',
+            provider: 'aws',
+            service: 'ec2',
+            resource_type: 't3.medium',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            upfront_cost: 100,
+            estimated_savings: 10,
+            can_approve: true,
+            can_cancel: true,
+          }
+        ]
+      });
+
+      await loadHistory();
+
+      const html = document.getElementById('history-list')?.innerHTML || '';
+      // The encoded form must appear in the attribute value.
+      expect(html).toContain('&quot;');
+      // The raw injection payload must not appear as unescaped markup.
+      expect(html).not.toContain('onmouseover="alert(1)"');
+    });
+
+    test('renderHistorySummary: null summary shows unknown-state banner with all four cards', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: null as unknown as undefined,
+        purchases: []
+      });
+
+      await loadHistory();
+
+      const summary = document.getElementById('history-summary');
+      // All four cards must still render (just with '--' values).
+      expect(summary?.innerHTML).toContain('Total Purchases');
+      expect(summary?.innerHTML).toContain('Total Upfront Spent');
+      expect(summary?.innerHTML).toContain('Monthly Savings');
+      expect(summary?.innerHTML).toContain('Annual Savings');
+      // The unknown-state banner always shows '--' for every value.
+      const allDashes = (summary?.innerHTML.match(/--/g) || []).length;
+      expect(allDashes).toBeGreaterThanOrEqual(4);
     });
   });
 });

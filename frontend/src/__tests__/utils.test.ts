@@ -10,13 +10,17 @@ import {
   debounce,
   throttle,
   escapeHtml,
+  escapeHtmlAttr,
   parseQueryParams,
   buildUrl,
   deepClone,
+  jsonClone,
   isValidEmail,
   formatRampSchedule,
   getStatusBadge,
-  calculatePaybackMonths
+  calculatePaybackMonths,
+  providerBadgeClass,
+  providerBadgeHtml
 } from '../utils';
 
 describe('formatCurrency', () => {
@@ -30,13 +34,19 @@ describe('formatCurrency', () => {
     expect(formatCurrency(0)).toBe('$0');
   });
 
-  test('handles null and undefined', () => {
-    expect(formatCurrency(null as unknown as number)).toBe('$0');
-    expect(formatCurrency(undefined as unknown as number)).toBe('$0');
+  test('handles null and undefined with distinct absent marker (11-N2)', () => {
+    // Absent/non-finite values now render as '--' to distinguish missing data
+    // from a real $0 balance (finding 11-N2, feedback_nullable_not_zero).
+    expect(formatCurrency(null as unknown as number)).toBe('--');
+    expect(formatCurrency(undefined as unknown as number)).toBe('--');
   });
 
-  test('handles NaN', () => {
-    expect(formatCurrency(NaN)).toBe('$0');
+  test('handles NaN with distinct absent marker (11-N2)', () => {
+    expect(formatCurrency(NaN)).toBe('--');
+  });
+
+  test('still renders real zero as $0', () => {
+    expect(formatCurrency(0)).toBe('$0');
   });
 
   test('supports custom currency symbol', () => {
@@ -196,7 +206,7 @@ describe('throttle', () => {
 
 describe('escapeHtml', () => {
   test('escapes HTML special characters', () => {
-    expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert("xss")&lt;/script&gt;');
+    expect(escapeHtml('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
   });
 
   test('escapes ampersands', () => {
@@ -204,7 +214,7 @@ describe('escapeHtml', () => {
   });
 
   test('escapes quotes', () => {
-    expect(escapeHtml('"test"')).toBe('"test"');
+    expect(escapeHtml('"test"')).toBe('&quot;test&quot;');
   });
 
   test('returns empty string for null/undefined', () => {
@@ -216,6 +226,35 @@ describe('escapeHtml', () => {
   test('passes through safe strings', () => {
     expect(escapeHtml('Hello World')).toBe('Hello World');
     expect(escapeHtml('123')).toBe('123');
+  });
+});
+
+describe('escapeHtmlAttr', () => {
+  test('encodes double-quote to &quot; (attribute boundary safety)', () => {
+    // A raw " would terminate the surrounding attribute and allow markup injection.
+    expect(escapeHtmlAttr('"')).toBe('&quot;');
+    expect(escapeHtmlAttr('a" onmouseover="alert(1)')).toBe('a&quot; onmouseover=&quot;alert(1)');
+  });
+
+  test('encodes single-quote to &#39;', () => {
+    expect(escapeHtmlAttr("'")).toBe('&#39;');
+    expect(escapeHtmlAttr("it's")).toBe('it&#39;s');
+  });
+
+  test('still encodes & < > (inherits from escapeHtml)', () => {
+    expect(escapeHtmlAttr('&')).toBe('&amp;');
+    expect(escapeHtmlAttr('<img>')).toBe('&lt;img&gt;');
+    expect(escapeHtmlAttr('x"><img src=x onerror=alert(1)>')).toBe('x&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  test('returns empty string for null/undefined', () => {
+    expect(escapeHtmlAttr(null as unknown as string)).toBe('');
+    expect(escapeHtmlAttr(undefined as unknown as string)).toBe('');
+    expect(escapeHtmlAttr('')).toBe('');
+  });
+
+  test('passes through safe strings unchanged', () => {
+    expect(escapeHtmlAttr('abc-123_OK')).toBe('abc-123_OK');
   });
 });
 
@@ -361,5 +400,142 @@ describe('calculatePaybackMonths', () => {
   test('returns 0 for zero/negative upfront', () => {
     expect(calculatePaybackMonths(0, 100)).toBe(0);
     expect(calculatePaybackMonths(-100, 100)).toBe(0);
+  });
+});
+
+// Regression tests for H1/D1/L4: providerBadgeClass whitelist.
+// Pre-fix the class was interpolated raw from the API (plans.ts) or allowed any
+// alphanumeric string (dashboard.ts).  Post-fix all sites go through this
+// helper which enforces the aws|azure|gcp allow-list.
+describe('providerBadgeClass', () => {
+  test('returns lowercase provider for known aws', () => {
+    expect(providerBadgeClass('aws')).toBe('aws');
+    expect(providerBadgeClass('AWS')).toBe('aws');
+  });
+
+  test('returns lowercase provider for known azure', () => {
+    expect(providerBadgeClass('azure')).toBe('azure');
+    expect(providerBadgeClass('Azure')).toBe('azure');
+  });
+
+  test('returns lowercase provider for known gcp', () => {
+    expect(providerBadgeClass('gcp')).toBe('gcp');
+  });
+
+  test('returns empty string for unknown provider (XSS payload neutralised)', () => {
+    // Regression: pre-fix this value would be injected verbatim as a CSS class.
+    expect(providerBadgeClass('aws"><img src=x onerror=alert(1)>')).toBe('');
+    expect(providerBadgeClass('evil-class')).toBe('');
+    expect(providerBadgeClass('unknown')).toBe('');
+  });
+
+  test('returns empty string for null/undefined/empty', () => {
+    expect(providerBadgeClass(null)).toBe('');
+    expect(providerBadgeClass(undefined)).toBe('');
+    expect(providerBadgeClass('')).toBe('');
+  });
+});
+
+// Regression tests for H1: providerBadgeHtml XSS in plans.ts.
+// Pre-fix: plans.ts interpolated provider raw into class + textContent via innerHTML.
+// Post-fix: class is whitelisted; text is HTML-escaped.
+describe('providerBadgeHtml', () => {
+  test('renders known provider with correct class and uppercased label', () => {
+    const html = providerBadgeHtml('aws');
+    expect(html).toContain('class="provider-badge aws"');
+    expect(html).toContain('>AWS<');
+  });
+
+  test('renders azure with correct class', () => {
+    const html = providerBadgeHtml('azure');
+    expect(html).toContain('class="provider-badge azure"');
+    expect(html).toContain('>AZURE<');
+  });
+
+  test('neutralises XSS payload in class attribute position', () => {
+    // The raw value would previously be injected as: class="provider-badge <payload>"
+    const payload = 'aws"><img src=x onerror=alert(document.cookie)>';
+    const html = providerBadgeHtml(payload);
+    // Class must not contain the raw payload.
+    expect(html).not.toContain(payload);
+    // No <img> or onerror in the output.
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('onerror');
+    // Class falls back to just provider-badge (no extra class token).
+    expect(html).toMatch(/class="provider-badge"/);
+  });
+
+  test('HTML-escapes text content of unknown provider', () => {
+    const html = providerBadgeHtml('<script>alert(1)</script>');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;SCRIPT&gt;');
+  });
+
+  test('handles null/undefined gracefully', () => {
+    expect(providerBadgeHtml(null)).toContain('provider-badge');
+    expect(providerBadgeHtml(undefined)).toContain('provider-badge');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for finding 11-N1: deepClone defaults to structuredClone.
+// Note: the jsdom test environment polyfills structuredClone with a JSON
+// round-trip (see setup.ts) because jsdom does not expose Node's built-in
+// structuredClone. As a result, undefined preservation can only be asserted
+// when the native structuredClone is available (not in jsdom).
+// ---------------------------------------------------------------------------
+describe('deepClone (11-N1: structuredClone default)', () => {
+  test('deep copy: mutation of clone does not affect source', () => {
+    const obj = { nested: { x: 1 } };
+    const clone = deepClone(obj);
+    clone.nested.x = 99;
+    expect(obj.nested.x).toBe(1);
+  });
+
+  test('deep copy: clones arrays independently', () => {
+    const arr = [1, [2, 3]] as [number, number[]];
+    const clone = deepClone(arr);
+    (clone[1] as number[])[0] = 99;
+    expect((arr[1] as number[])[0]).toBe(2);
+  });
+
+  test('handles primitives and null without throwing', () => {
+    expect(deepClone(null)).toBe(null);
+    expect(deepClone(42)).toBe(42);
+    expect(deepClone('hello')).toBe('hello');
+  });
+});
+
+describe('jsonClone (explicit JSON-serialisation variant)', () => {
+  test('drops undefined values (expected JSON behaviour)', () => {
+    const obj = { a: 1, b: undefined };
+    const clone = jsonClone(obj);
+    // JSON round-trip removes keys whose value is undefined.
+    expect('b' in clone).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for finding 11-N2: formatCurrency distinguishes absent from $0.
+// ---------------------------------------------------------------------------
+describe('formatCurrency (11-N2: absent vs real zero)', () => {
+  test('null returns -- not $0', () => {
+    expect(formatCurrency(null as unknown as number)).toBe('--');
+  });
+
+  test('undefined returns -- not $0', () => {
+    expect(formatCurrency(undefined as unknown as number)).toBe('--');
+  });
+
+  test('NaN returns -- not $0', () => {
+    expect(formatCurrency(NaN)).toBe('--');
+  });
+
+  test('Infinity returns -- not $Infinity', () => {
+    expect(formatCurrency(Infinity)).toBe('--');
+  });
+
+  test('real zero still renders as $0', () => {
+    expect(formatCurrency(0)).toBe('$0');
   });
 });

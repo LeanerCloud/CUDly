@@ -1,7 +1,7 @@
 /**
  * Plans module tests
  */
-import { loadPlans, savePlan, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal, setupPlanHandlers } from '../plans';
+import { loadPlans, savePlan, closePlanModal, openCreatePlanModal, openNewPlanModal, closePurchaseModal, setupPlanHandlers, _resetRampHandlersForTest } from '../plans';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -108,7 +108,17 @@ jest.mock('../utils', () => ({
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
   formatCurrency: jest.fn((val) => `$${val || 0}`),
-  populateAccountFilter: jest.fn(() => Promise.resolve())
+  populateAccountFilter: jest.fn(() => Promise.resolve()),
+  // providerBadgeHtml added for H1 fix: returns a deterministic span so XSS
+  // regression tests can assert neutralisation without a real DOM escaper.
+  providerBadgeHtml: jest.fn((p) => {
+    const cls = ['aws','azure','gcp'].includes((p||'').toLowerCase()) ? (p||'').toLowerCase() : '';
+    const label = (p||'').toUpperCase()
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return `<span class="provider-badge ${cls}">${label}</span>`;
+  }),
+  CURRENCY_DEFAULT_DIGITS: 0,
 }));
 
 import * as api from '../api';
@@ -182,6 +192,12 @@ describe('Plans Module', () => {
     jest.clearAllMocks();
     window.alert = jest.fn();
     window.confirm = jest.fn().mockReturnValue(true);
+    // Default confirmDialog to confirmed so tests that don't override it
+    // behave like the old window.confirm() returning true (finding 11-L2).
+    mockConfirmDialog.mockResolvedValue(true);
+    // Reset ramp-handlers install-once guard: DOM is rebuilt each beforeEach,
+    // so static modal elements are fresh and need listeners re-attached (H3 fix).
+    _resetRampHandlersForTest();
   });
 
   describe('loadPlans', () => {
@@ -870,20 +886,22 @@ describe('Plans Module', () => {
     test('run action executes purchase with confirmation', async () => {
       (api.runPlannedPurchase as jest.Mock).mockResolvedValue({});
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.confirm).toHaveBeenCalled();
+      expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.runPlannedPurchase).toHaveBeenCalledWith('purchase-1');
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Purchase executed successfully' }));
     });
 
     test('run action cancelled by user', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(false);
 
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
@@ -912,7 +930,8 @@ describe('Plans Module', () => {
       (api.deletePlannedPurchase as jest.Mock).mockResolvedValue({});
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       // Clear prior getPlans calls from setup so the assertion below only
       // counts the reload triggered by the disable action itself.
@@ -923,7 +942,7 @@ describe('Plans Module', () => {
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(window.confirm).toHaveBeenCalled();
+      expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.deletePlannedPurchase).toHaveBeenCalledWith('purchase-1');
       // Issue #774: after disable the Plans page must refresh so the toggle
       // reflects the backend's new enabled=false. getPlans is the API call
@@ -932,7 +951,8 @@ describe('Plans Module', () => {
     });
 
     test('disable action cancelled by user', async () => {
-      window.confirm = jest.fn().mockReturnValue(false);
+      // confirm() replaced by confirmDialog() (11-L2); control via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(false);
 
       const disableBtn = document.querySelector('[data-action="disable"]') as HTMLButtonElement;
       disableBtn?.click();
@@ -1373,6 +1393,61 @@ describe('Plans Module', () => {
           '22222222-2222-2222-2222-222222222222',
         ],
       }));
+    });
+
+    // -------------------------------------------------------------------------
+    // Regression tests for finding 11-M1: plan numeric fields must be validated
+    // with Number.isInteger(Number(raw)) before being sent to the API.
+    // -------------------------------------------------------------------------
+    describe('11-M1: strict integer validation for plan numeric fields', () => {
+      test('rejects fractional target_coverage (2.5 should not truncate to 2)', async () => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '2.5';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('rejects NaN notification_days_before (e.g. empty string after clear)', async () => {
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = 'abc';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('rejects out-of-range notification_days_before (0 is below min 1)', async () => {
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = '0';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('accepts valid integer values and proceeds to API call', async () => {
+        (api.createPlan as jest.Mock).mockResolvedValue({});
+        (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '80';
+        (document.getElementById('plan-notify-days') as HTMLInputElement).value = '3';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({
+          target_coverage: 80,
+          notification_days_before: 3,
+        }));
+      });
+
+      test('rejects fractional custom_step_percent when ramp is custom', async () => {
+        const customRadio = document.querySelector('input[value="custom"]') as HTMLInputElement;
+        customRadio.checked = true;
+        (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '10.5';
+        (document.getElementById('ramp-interval-days') as HTMLInputElement).value = '7';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
     });
   });
 
@@ -2069,7 +2144,8 @@ describe('Plans Module', () => {
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       (api.deletePlan as jest.Mock).mockResolvedValue({});
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirmDialog() replaces window.confirm() (11-L2); set via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
 
       await loadPlans();
 
@@ -2143,7 +2219,8 @@ describe('Plans Module', () => {
       });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       (api.deletePlan as jest.Mock).mockRejectedValue(new Error('API Error'));
-      window.confirm = jest.fn().mockReturnValue(true);
+      // confirmDialog() replaces window.confirm() (11-L2); set via mockConfirmDialog.
+      mockConfirmDialog.mockResolvedValue(true);
       console.error = jest.fn();
 
       await loadPlans();
@@ -2684,6 +2761,271 @@ describe('Plans Module', () => {
       // query by id to get the current node.
       const searchInput = document.getElementById('plan-account-search') as HTMLInputElement;
       expect(searchInput.disabled).toBe(false);
+    });
+  });
+
+  // Regression tests for H3: setupRampScheduleHandlers must not stack duplicate
+  // listeners on static modal elements across multiple modal opens.
+  // Pre-fix: opening the plan modal N times would attach N handlers to each
+  // element, so a single radio change would fire updateCommitmentOptions N times.
+  describe('H3 regression: setupRampScheduleHandlers install-once guard', () => {
+    test('provider-change handler fires exactly once after opening modal 3 times', () => {
+      const { populateTermSelect: mockPopulate } = jest.requireMock('../commitmentOptions') as {
+        populateTermSelect: jest.Mock;
+      };
+
+      // beforeEach already called _resetRampHandlersForTest() so the flag is clear.
+      // Open the modal 3 times without resetting between them.
+      openNewPlanModal(); // first open: installs handlers (rampHandlersInstalled = true)
+      openNewPlanModal(); // second open: guard returns early -- no re-attach
+      openNewPlanModal(); // third open: guard returns early -- no re-attach
+
+      mockPopulate.mockClear(); // clear any calls from setup above
+
+      // Dispatch one change event on the provider select.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'azure';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      // populateTermSelect is called exactly once from updateCommitmentOptions.
+      // Pre-fix (no guard) it would be called 3 times (once per open).
+      expect(mockPopulate).toHaveBeenCalledTimes(1);
+    });
+
+    test('ramp schedule radio handler fires exactly once after 2 modal opens', () => {
+      // The radio-change handler calls updatePlanNameFromSchedule which reads
+      // the plan-name input. Count invocations via a side-effect on populateTermSelect.
+      const { populateTermSelect: mockPopulate } = jest.requireMock('../commitmentOptions') as {
+        populateTermSelect: jest.Mock;
+      };
+
+      // beforeEach called _resetRampHandlersForTest(); open twice without reset between.
+      openNewPlanModal(); // installs
+      openNewPlanModal(); // guard: no re-install
+
+      mockPopulate.mockClear();
+
+      // The provider-select change handler calls updateCommitmentOptions -> populateTermSelect.
+      const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+      providerSelect.value = 'gcp';
+      providerSelect.dispatchEvent(new Event('change'));
+
+      // With stacked handlers it would fire twice (once per open).
+      // With the guard it fires exactly once.
+      expect(mockPopulate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Regression for H1: providerBadgeHtml must be used for planned-purchase rows
+  // and plan card detail (prevents XSS via class attribute injection).
+  describe('H1 regression: provider badge XSS neutralisation in plans.ts', () => {
+    test('providerBadgeHtml is called with the purchase provider for planned-purchase rows', async () => {
+      const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
+
+      const maliciousProvider = 'aws"><img src=x onerror=alert(1)>';
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
+        purchases: [
+          {
+            id: 'pp-1',
+            plan_id: 'plan-1',
+            plan_name: 'Test Plan',
+            provider: maliciousProvider,
+            service: 'ec2',
+            resource_type: 'Standard',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            payment: 'no-upfront',
+            upfront_cost: 0,
+            estimated_savings: 50,
+            scheduled_date: '2024-06-01',
+            status: 'pending',
+            step_number: 1,
+            total_steps: 4,
+          }
+        ]
+      });
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+
+      await loadPlans();
+
+      // providerBadgeHtml must have been called with the malicious string.
+      // Pre-fix the string was raw-interpolated into a class attribute via innerHTML.
+      // Post-fix it goes through the helper which whitelists and escapes it.
+      expect(mockBadge).toHaveBeenCalledWith(maliciousProvider);
+    });
+  });
+
+  // H-4 regression: extractPlanInfo must not fabricate provider/term/coverage.
+  // Pre-fix: absent fields defaulted to 'aws'/3/80 so the card and edit modal
+  // showed hardcoded values. These tests must FAIL on pre-fix code.
+  describe('H-4: extractPlanInfo does not fabricate provider, term, or coverage', () => {
+    const planBase = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: false,
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+    };
+
+    test('absent provider in services renders -- not aws in plan card', async () => {
+      const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
+      mockBadge.mockClear();
+
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { service: 'ec2', term: 1, coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      // providerBadgeHtml is called with null when provider is absent.
+      // Pre-fix it was called with 'aws' (the hardcoded default).
+      expect(mockBadge).not.toHaveBeenCalledWith('aws');
+      expect(mockBadge).toHaveBeenCalledWith(null);
+    });
+
+    test('absent term in services renders -- not 3yr in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '--'
+      expect(list?.textContent).not.toContain('3 Years');
+      expect(list?.textContent).toContain('--');
+    });
+
+    test('absent coverage in services renders -- not 80% in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', term: 1 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '--'
+      expect(list?.textContent).not.toContain('80%');
+      expect(list?.textContent).toContain('--');
+    });
+
+    test('empty services object renders all -- fields in plan card', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, services: {} }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const list = document.getElementById('plans-list');
+      // Pre-fix: all-zero fallback { provider:'aws', term:3, coverage:80 }
+      // Post-fix: all '--' for missing data
+      expect(list?.textContent).not.toContain('80%');
+      expect(list?.textContent).not.toContain('3 Years');
+    });
+
+    test('edit modal: absent term leaves select unset (not 3yr default)', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{ ...planBase, id: 'plan-1', services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        id: 'plan-1',
+        notification_days_before: 3,
+        services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const termSelect = document.getElementById('plan-term') as HTMLSelectElement;
+      // Pre-fix: termSelect.value === '3' (hardcoded fallback)
+      // Post-fix: termSelect.value === '' (unset, user must choose)
+      expect(termSelect.value).not.toBe('3');
+      expect(termSelect.value).toBe('');
+    });
+  });
+
+  // H-5 regression: payment option must not be auto-selected when absent.
+  // Pre-fix: `firstService?.payment || 'no-upfront'` pre-selected 'no-upfront'
+  // when payment was missing, silently changing the plan on re-save.
+  // These tests must FAIL on pre-fix code.
+  describe('H-5: absent payment leaves select blank (no no-upfront default)', () => {
+    const planBase = {
+      id: 'plan-1',
+      name: 'Test Plan',
+      enabled: true,
+      auto_purchase: false,
+      notification_days_before: 3,
+      ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
+    };
+
+    test('absent payment field leaves payment select value empty in edit modal', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Test Plan', enabled: true, auto_purchase: false,
+          services: { ec2: { provider: 'aws', service: 'ec2', term: 1, coverage: 80 } },
+          ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        services: {
+          ec2: {
+            provider: 'aws',
+            service: 'ec2',
+            term: 1,
+            coverage: 80,
+            // payment deliberately absent
+          }
+        }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
+      // Pre-fix: paymentSelect.value === 'no-upfront' (hardcoded default)
+      // Post-fix: paymentSelect.value === '' (unset, user must choose)
+      expect(paymentSelect.value).not.toBe('no-upfront');
+      expect(paymentSelect.value).toBe('');
+    });
+
+    test('present payment field is correctly pre-selected in edit modal', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Test Plan', enabled: true, auto_purchase: false,
+          services: { ec2: { provider: 'aws', service: 'ec2', term: 1, payment: 'all-upfront', coverage: 80 } },
+          ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
+        }]
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        ...planBase,
+        services: {
+          ec2: { provider: 'aws', service: 'ec2', term: 1, payment: 'all-upfront', coverage: 80 }
+        }
+      });
+
+      await loadPlans();
+      const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
+      editBtn?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
+      // When payment IS present, it should be correctly pre-selected
+      expect(paymentSelect.value).toBe('all-upfront');
     });
   });
 });

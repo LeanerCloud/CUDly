@@ -57,6 +57,14 @@ Object.defineProperty(global, 'Chart', {
   writable: true
 });
 
+// Polyfill structuredClone for jsdom (jest-environment-jsdom does not expose
+// the Node.js global structuredClone to the window scope). The utils.ts
+// deepClone function delegates to structuredClone; without this the suite
+// throws "ReferenceError: structuredClone is not defined" (finding 11-N1).
+if (typeof globalThis.structuredClone === 'undefined') {
+  globalThis.structuredClone = <T>(val: T): T => JSON.parse(JSON.stringify(val)) as T;
+}
+
 // Mock alert and confirm
 global.alert = jest.fn();
 global.confirm = jest.fn(() => true);

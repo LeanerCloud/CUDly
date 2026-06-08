@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -26,6 +26,12 @@ import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from 
 // (the New-Plan-from-scratch path has no pre-resolved target). See #273
 // CR follow-up.
 let pendingPlanRecommendations: api.Recommendation[] = [];
+
+// Install-once guard for setupRampScheduleHandlers. The elements it binds are
+// static modal singletons that are never replaced, so adding listeners on
+// every modal open stacks duplicate handlers. The flag ensures we bind once;
+// reset to false only in tests via resetRampHandlersForTest().
+let rampHandlersInstalled = false;
 
 /**
  * Load plans and planned purchases
@@ -713,7 +719,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
-      <td><span class="provider-badge ${purchase.provider}">${purchase.provider.toUpperCase()}</span></td>
+      <td>${providerBadgeHtml(purchase.provider)}</td>
       <td>${escapeHtml(purchase.service)}</td>
       <td>${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})</td>
       <td>${purchase.count}</td>
@@ -722,11 +728,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${purchase.id}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${purchase.id}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${purchase.id}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${purchase.id}" data-plan-id="${purchase.plan_id}" class="btn-small" title="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${purchase.id}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -752,12 +758,20 @@ function getPlannedPurchaseStatusClass(status: string): string {
 async function handlePlannedPurchaseAction(action: string, purchaseId: string, planId = ''): Promise<void> {
   try {
     switch (action) {
-      case 'run':
-        if (confirm('Run this purchase now? This will immediately execute the purchase.')) {
+      case 'run': {
+        // Use styled async dialog (11-L2) instead of blocking browser confirm().
+        const runOk = await confirmDialog({
+          title: 'Run purchase now?',
+          body: 'This will immediately execute the purchase.',
+          confirmLabel: 'Run now',
+          destructive: true,
+        });
+        if (runOk) {
           await api.runPlannedPurchase(purchaseId);
           showToast({ message: 'Purchase executed successfully', kind: 'success', timeout: 5_000 });
         }
         break;
+      }
       case 'pause':
         // Pause is reversible and scoped to a single execution: the plan stays
         // enabled (unlike Disable plan) and the row stays listed with a Paused
@@ -778,14 +792,22 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
         }
         await editPlan(planId);
         return;
-      case 'disable':
-        if (confirm('Disable this plan? The plan will be paused and no purchases will be scheduled. You can re-enable it later from the Plans list.')) {
+      case 'disable': {
+        // Use styled async dialog (11-L2) instead of blocking browser confirm().
+        const disableOk = await confirmDialog({
+          title: 'Disable this plan?',
+          body: 'The plan will be paused and no purchases will be scheduled. You can re-enable it later from the Plans list.',
+          confirmLabel: 'Disable plan',
+          destructive: true,
+        });
+        if (disableOk) {
           await api.deletePlannedPurchase(purchaseId);
           // Reload full plans list since we disabled a plan
           await loadPlans();
           return;
         }
         break;
+      }
     }
     await loadPlannedPurchases();
   } catch (error) {
@@ -853,7 +875,7 @@ function planServiceLabel(slug: string): string {
 // are plan-level today, not per-service, so picking any entry is
 // correct. If the model ever differentiates per service, this needs
 // to render the same way.
-function extractPlanInfo(plan: BackendPlan): { provider: string; service: string; term: number; coverage: number } {
+function extractPlanInfo(plan: BackendPlan): { provider: string | null; service: string; term: number | null; coverage: number | null } {
   const services = plan.services || {};
   const serviceValues = Object.values(services);
   const firstService = serviceValues[0];
@@ -863,14 +885,18 @@ function extractPlanInfo(plan: BackendPlan): { provider: string; service: string
       : serviceValues
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
+    // H-4: never fabricate provider/term/coverage when absent.
+    // Return null so callers can surface '--'/'Unknown' in the display
+    // layer rather than silently committing to aws/3yr/80% defaults.
     return {
-      provider: firstService.provider || 'aws',
+      provider: firstService.provider || null,
       service,
-      term: firstService.term || 3,
-      coverage: firstService.coverage || 80
+      term: firstService.term || null,
+      coverage: firstService.coverage ?? null
     };
   }
-  return { provider: 'aws', service: '—', term: 3, coverage: 80 };
+  // No services at all: all fields are unknown.
+  return { provider: null, service: '—', term: null, coverage: null };
 }
 
 // Returns true when the plan's next_execution_date is strictly before today.
@@ -940,7 +966,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
           <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${plan.id}" ${plan.enabled ? 'checked' : ''}>
+            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" ${plan.enabled ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
           ` : ''}
@@ -950,7 +976,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         <div class="plan-details">
           <div class="plan-detail">
             <span class="plan-detail-label">Provider</span>
-            <span class="plan-detail-value"><span class="provider-badge ${info.provider}">${info.provider.toUpperCase()}</span></span>
+            <span class="plan-detail-value">${providerBadgeHtml(info.provider)}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Service</span>
@@ -958,11 +984,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${formatTerm(info.term)}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage}%</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>
@@ -980,10 +1006,10 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ` : ''}
         </div>
         <div class="plan-actions">
-          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${plan.id}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${plan.id}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${plan.id}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${plan.id}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
         </div>
       </div>
     </div>
@@ -1092,10 +1118,14 @@ async function editPlan(planId: string): Promise<void> {
       rampValue = 'custom';
     }
 
-    // Get payment option from services and normalize for provider
+    // Get payment option from services and normalize for provider.
+    // H-5: do not pre-select 'no-upfront' when the payment field is absent.
+    // An absent payment field leaves the select empty so the user must
+    // explicitly choose rather than silently inheriting a fabricated default
+    // that could change the plan's payment type on re-save.
     const firstService = Object.values(backendPlan.services || {})[0];
-    const rawPayment = firstService?.payment || 'no-upfront';
-    const payment = normalizePaymentValue(rawPayment, info.provider);
+    const rawPayment = firstService?.payment || null;
+    const payment = rawPayment !== null ? normalizePaymentValue(rawPayment, info.provider ?? '') : '';
 
     const titleEl = document.getElementById('plan-modal-title');
     if (titleEl) titleEl.textContent = 'Edit Purchase Plan';
@@ -1104,21 +1134,29 @@ async function editPlan(planId: string): Promise<void> {
     (document.getElementById('plan-name') as HTMLInputElement).value = backendPlan.name;
     (document.getElementById('plan-description') as HTMLTextAreaElement).value = '';
 
-    // Set provider and service first
-    (document.getElementById('plan-provider') as HTMLSelectElement).value = info.provider;
+    // Set provider and service first. When provider is absent from the API
+    // response, leave the select at its default empty/first option rather
+    // than fabricating 'aws' (H-4: never default provider silently).
+    const providerSelect = document.getElementById('plan-provider') as HTMLSelectElement;
+    providerSelect.value = info.provider ?? '';
     (document.getElementById('plan-service') as HTMLSelectElement).value = info.service;
 
     // Update term/payment options based on provider/service
     const termSelect = document.getElementById('plan-term') as HTMLSelectElement;
     const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
-    populateTermSelect(termSelect, info.provider, info.service);
-    populatePaymentSelect(paymentSelect, info.provider, info.service);
+    populateTermSelect(termSelect, info.provider ?? '', info.service);
+    populatePaymentSelect(paymentSelect, info.provider ?? '', info.service);
 
-    // Now set term and payment values
-    termSelect.value = String(info.term);
+    // Set term only when present; absent term leaves the select unset so
+    // the user must explicitly choose rather than silently inheriting a
+    // fabricated 3yr default (H-4).
+    termSelect.value = info.term !== null ? String(info.term) : '';
+
     paymentSelect.value = payment;
 
-    (document.getElementById('plan-coverage') as HTMLInputElement).value = String(info.coverage);
+    // Set coverage only when present; absent coverage leaves the input
+    // blank so the user sees the field is missing (H-4).
+    (document.getElementById('plan-coverage') as HTMLInputElement).value = info.coverage !== null ? String(info.coverage) : '';
     (document.getElementById('plan-auto-purchase') as HTMLInputElement).checked = backendPlan.auto_purchase;
     (document.getElementById('plan-notify-days') as HTMLInputElement).value = String(backendPlan.notification_days_before || 3);
     (document.getElementById('plan-enabled') as HTMLInputElement).checked = backendPlan.enabled;
@@ -1176,23 +1214,54 @@ export async function savePlan(e: Event): Promise<void> {
   const rampScheduleRadio = document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked');
   const rampSchedule = rampScheduleRadio?.value || 'immediate';
 
+  // Parse and validate integer fields up front. Use Number() not parseInt so
+  // fractions like "2.5" fail Number.isInteger() rather than silently truncating
+  // to 2. Mirrors the strict parse pattern from handleAddPurchases and settings.ts
+  // validatePurchasingSettings (feedback_strict_int_parse, finding 11-M1).
+  const rawTerm = Number((document.getElementById('plan-term') as HTMLSelectElement).value);
+  const rawCoverage = Number((document.getElementById('plan-coverage') as HTMLInputElement).value);
+  const rawNotifyDays = Number((document.getElementById('plan-notify-days') as HTMLInputElement).value);
+
+  if (!Number.isFinite(rawTerm) || !Number.isInteger(rawTerm) || rawTerm < 1) {
+    showToast({ message: 'Term must be a valid whole number of years', kind: 'error' });
+    return;
+  }
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
+    showToast({ message: 'Target Coverage must be a whole number between 0 and 100', kind: 'error' });
+    return;
+  }
+  if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
+    showToast({ message: 'Notification Days must be a whole number between 1 and 30', kind: 'error' });
+    return;
+  }
+
   const plan: SavePlanData = {
     name: (document.getElementById('plan-name') as HTMLInputElement).value,
     description: (document.getElementById('plan-description') as HTMLTextAreaElement).value,
     provider: (document.getElementById('plan-provider') as HTMLSelectElement).value,
     service: (document.getElementById('plan-service') as HTMLSelectElement).value,
-    term: parseInt((document.getElementById('plan-term') as HTMLSelectElement).value, 10),
+    term: rawTerm,
     payment: (document.getElementById('plan-payment') as HTMLSelectElement).value,
-    target_coverage: parseInt((document.getElementById('plan-coverage') as HTMLInputElement).value, 10),
+    target_coverage: rawCoverage,
     ramp_schedule: rampSchedule,
     auto_purchase: (document.getElementById('plan-auto-purchase') as HTMLInputElement).checked,
-    notification_days_before: parseInt((document.getElementById('plan-notify-days') as HTMLInputElement).value, 10),
+    notification_days_before: rawNotifyDays,
     enabled: (document.getElementById('plan-enabled') as HTMLInputElement).checked
   };
 
   if (rampSchedule === 'custom') {
-    plan.custom_step_percent = parseInt((document.getElementById('ramp-step-percent') as HTMLInputElement).value, 10);
-    plan.custom_interval_days = parseInt((document.getElementById('ramp-interval-days') as HTMLInputElement).value, 10);
+    const rawStepPercent = Number((document.getElementById('ramp-step-percent') as HTMLInputElement).value);
+    const rawIntervalDays = Number((document.getElementById('ramp-interval-days') as HTMLInputElement).value);
+    if (!Number.isFinite(rawStepPercent) || !Number.isInteger(rawStepPercent) || rawStepPercent < 1 || rawStepPercent > 100) {
+      showToast({ message: 'Ramp Step Percent must be a whole number between 1 and 100', kind: 'error' });
+      return;
+    }
+    if (!Number.isFinite(rawIntervalDays) || !Number.isInteger(rawIntervalDays) || rawIntervalDays < 1 || rawIntervalDays > 365) {
+      showToast({ message: 'Ramp Interval Days must be a whole number between 1 and 365', kind: 'error' });
+      return;
+    }
+    plan.custom_step_percent = rawStepPercent;
+    plan.custom_interval_days = rawIntervalDays;
   }
 
   // Use the snapshot stamped at Plan-button click time (#273 CR follow-up).
@@ -1748,9 +1817,14 @@ function wirePlanRangeInputs(): void {
 }
 
 /**
- * Set up event handlers for ramp schedule changes
+ * Set up event handlers for ramp schedule changes.
+ * Guarded by rampHandlersInstalled so re-opening the plan modal does not
+ * stack duplicate listeners on the static modal elements (H3, feedback_event_listener_dedup).
  */
 function setupRampScheduleHandlers(): void {
+  if (rampHandlersInstalled) return;
+  rampHandlersInstalled = true;
+
   // Listen to ramp schedule radio changes
   document.querySelectorAll<HTMLInputElement>('input[name="ramp-schedule"]').forEach(radio => {
     radio.addEventListener('change', () => {
@@ -2147,4 +2221,15 @@ function updateServiceDropdownForProvider(provider: string): void {
     // Trigger change event to update term/payment options
     serviceSelect.dispatchEvent(new Event('change'));
   }
+}
+
+/**
+ * Reset the ramp-handlers install-once guard.
+ * Exported for unit tests only: each test rebuilds the DOM so the static
+ * modal elements are fresh; without this reset the guard prevents listener
+ * re-attachment and tests that open the modal multiple times break.
+ * Must NOT be called in production code.
+ */
+export function _resetRampHandlersForTest(): void {
+  rampHandlersInstalled = false;
 }
