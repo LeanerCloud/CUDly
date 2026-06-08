@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -728,11 +728,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${formatCurrency(purchase.estimated_savings)}/mo</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtml(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtml(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtml(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtml(purchase.id)}" data-plan-id="${escapeHtml(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtml(purchase.id)}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Disable Plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -966,7 +966,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
           <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtml(plan.id)}" ${plan.enabled ? 'checked' : ''}>
+            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" ${plan.enabled ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
           ` : ''}
@@ -1006,10 +1006,10 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ` : ''}
         </div>
         <div class="plan-actions">
-          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtml(plan.id)}" data-name="${escapeHtml(plan.name)}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtml(plan.id)}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${escapeHtml(plan.id)}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtml(plan.id)}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
         </div>
       </div>
     </div>

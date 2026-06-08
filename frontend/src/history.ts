@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
@@ -544,10 +544,10 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
   if (!p.purchase_id) return '';
   const buttons: string[] = [];
   if (canApprovePendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtml(p.purchase_id)}">Approve</button>`);
+    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}">Approve</button>`);
   }
   if (canCancelPendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtml(p.purchase_id)}">Cancel</button>`);
+    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}">Cancel</button>`);
   }
   return buttons.join(' ');
 }
@@ -587,7 +587,7 @@ function renderActionCell(p: HistoryPurchase): string {
       const overThreshold = retryThresholdReached(p);
       const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
-      return `<button type="button" class="${cls}" data-retry-id="${escapeHtml(p.purchase_id)}">${label}</button>`;
+      return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
   }
 
@@ -681,7 +681,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       }
       return badge;
     })();
-    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
     const monthlyCostCell = p.monthly_cost != null
       ? formatCurrency(p.monthly_cost)
@@ -982,7 +982,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     const monthlyCostCell = p.monthly_cost != null
       ? formatCurrency(p.monthly_cost)
       : '<span class="muted">-</span>';
-    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtml(p.purchase_id)}"` : '';
+    const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
         <td>${formatDate(p.timestamp)}</td>

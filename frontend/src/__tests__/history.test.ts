@@ -18,6 +18,13 @@ jest.mock('../utils', () => ({
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
+  // escapeHtmlAttr must encode " and ' to block attribute-boundary injection.
+  // This mock mirrors the real implementation so tests catch regressions where
+  // code reverts to the quote-transparent escapeHtml in attribute context.
+  escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }),
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
@@ -491,6 +498,42 @@ describe('History Module', () => {
       expect(summary?.innerHTML).toContain('Total Upfront Spent');
       expect(summary?.innerHTML).toContain('<p class="value">--</p>');
       expect(summary?.innerHTML).not.toContain('<p class="value">$0</p>');
+    });
+
+    // Regression: attribute-boundary XSS via purchase_id containing a double-quote.
+    // Pre-fix, data-approve-id / data-cancel-id / data-retry-id / data-execution-id
+    // used escapeHtml which did not encode ", allowing a crafted ID to break out of
+    // the attribute and inject markup. Post-fix, escapeHtmlAttr is used and " becomes
+    // &quot; so the attribute stays well-formed.
+    test('encodes double-quotes in purchase_id for data-* attributes (XSS regression)', async () => {
+      const maliciousId = 'a" onmouseover="alert(1)';
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          {
+            purchase_id: maliciousId,
+            status: 'pending',
+            provider: 'aws',
+            service: 'ec2',
+            resource_type: 't3.medium',
+            region: 'us-east-1',
+            count: 1,
+            term: 1,
+            upfront_cost: 100,
+            estimated_savings: 10,
+            can_approve: true,
+            can_cancel: true,
+          }
+        ]
+      });
+
+      await loadHistory();
+
+      const html = document.getElementById('history-list')?.innerHTML || '';
+      // The encoded form must appear in the attribute value.
+      expect(html).toContain('&quot;');
+      // The raw injection payload must not appear as unescaped markup.
+      expect(html).not.toContain('onmouseover="alert(1)"');
     });
 
     test('renderHistorySummary: null summary shows unknown-state banner with all four cards', async () => {

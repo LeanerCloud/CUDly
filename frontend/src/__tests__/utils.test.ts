@@ -10,6 +10,7 @@ import {
   debounce,
   throttle,
   escapeHtml,
+  escapeHtmlAttr,
   parseQueryParams,
   buildUrl,
   deepClone,
@@ -225,6 +226,35 @@ describe('escapeHtml', () => {
   test('passes through safe strings', () => {
     expect(escapeHtml('Hello World')).toBe('Hello World');
     expect(escapeHtml('123')).toBe('123');
+  });
+});
+
+describe('escapeHtmlAttr', () => {
+  test('encodes double-quote to &quot; (attribute boundary safety)', () => {
+    // A raw " would terminate the surrounding attribute and allow markup injection.
+    expect(escapeHtmlAttr('"')).toBe('&quot;');
+    expect(escapeHtmlAttr('a" onmouseover="alert(1)')).toBe('a&quot; onmouseover=&quot;alert(1)');
+  });
+
+  test('encodes single-quote to &#39;', () => {
+    expect(escapeHtmlAttr("'")).toBe('&#39;');
+    expect(escapeHtmlAttr("it's")).toBe('it&#39;s');
+  });
+
+  test('still encodes & < > (inherits from escapeHtml)', () => {
+    expect(escapeHtmlAttr('&')).toBe('&amp;');
+    expect(escapeHtmlAttr('<img>')).toBe('&lt;img&gt;');
+    expect(escapeHtmlAttr('x"><img src=x onerror=alert(1)>')).toBe('x&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  test('returns empty string for null/undefined', () => {
+    expect(escapeHtmlAttr(null as unknown as string)).toBe('');
+    expect(escapeHtmlAttr(undefined as unknown as string)).toBe('');
+    expect(escapeHtmlAttr('')).toBe('');
+  });
+
+  test('passes through safe strings unchanged', () => {
+    expect(escapeHtmlAttr('abc-123_OK')).toBe('abc-123_OK');
   });
 });
 

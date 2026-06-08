@@ -151,7 +151,8 @@ export function throttle<T extends (...args: unknown[]) => unknown>(
 }
 
 /**
- * Escape HTML to prevent XSS
+ * Escape HTML to prevent XSS in text content (between tags).
+ * Escapes &, <, >, ", and ' so the result is safe in both text and attribute contexts.
  */
 export function escapeHtml(str: string | null | undefined): string {
   if (!str) return '';
@@ -161,6 +162,15 @@ export function escapeHtml(str: string | null | undefined): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Escape a value for safe interpolation inside an HTML attribute value delimited by double quotes.
+ * Encodes &, <, >, ", and ' -- the quote escaping is essential here because a raw " terminates
+ * the attribute and allows injecting new attributes or markup. Use escapeHtml for text nodes.
+ */
+export function escapeHtmlAttr(str: string | null | undefined): string {
+  return escapeHtml(str);
 }
 
 /**
