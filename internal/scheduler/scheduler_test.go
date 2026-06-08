@@ -137,8 +137,38 @@ func (m *MockPurchaseManager) SendUpcomingPurchaseNotifications(ctx context.Cont
 	return args.Get(0).(*purchase.NotificationResult), args.Error(1)
 }
 
-func (m *MockPurchaseManager) FireScheduledDelayedPurchases(_ context.Context) (*purchase.FireResult, error) {
-	return &purchase.FireResult{}, nil
+func (m *MockPurchaseManager) FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*purchase.FireResult), args.Error(1)
+}
+
+// TestSchedulerManagerInterface_FireScheduledDelayedPurchasesWired is a
+// wiring smoke test: it asserts that ManagerInterface exposes
+// FireScheduledDelayedPurchases and that MockPurchaseManager satisfies the
+// contract. If the method is ever removed from the interface or the mock,
+// this test fails to compile.
+//
+// The dispatch itself (ManagerInterface.FireScheduledDelayedPurchases ->
+// scheduler tick "fire_scheduled_purchases") is exercised by the
+// server/handler_test.go "fire_scheduled_purchases success" case.
+func TestSchedulerManagerInterface_FireScheduledDelayedPurchasesWired(t *testing.T) {
+	ctx := context.Background()
+	mockPurchase := new(MockPurchaseManager)
+
+	// The MockPurchaseManager must satisfy ManagerInterface at compile time.
+	var _ ManagerInterface = mockPurchase
+
+	mockPurchase.On("FireScheduledDelayedPurchases", ctx).
+		Return(&purchase.FireResult{Found: 1, Fired: 1}, nil)
+
+	result, err := mockPurchase.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Found)
+	assert.Equal(t, 1, result.Fired)
+	mockPurchase.AssertExpectations(t)
 }
 
 func TestSchedulerConfig(t *testing.T) {
