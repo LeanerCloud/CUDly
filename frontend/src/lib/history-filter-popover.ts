@@ -74,10 +74,12 @@ export function closeOpenHistoryPopover(restoreFocus = false): void {
   el.remove();
   openPopover = null;
   detachGlobalListeners();
+  const trigger = document.querySelector<HTMLElement>(
+    `.history-column-filter-btn[data-column="${CSS.escape(column)}"]`,
+  );
+  // Always clear the stale expanded state, regardless of focus restoration.
+  trigger?.setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
-    const trigger = document.querySelector<HTMLElement>(
-      `.history-column-filter-btn[data-column="${CSS.escape(column)}"]`,
-    );
     trigger?.focus();
   }
   lastAnchorSelector = null;
