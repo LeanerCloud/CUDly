@@ -328,6 +328,20 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case "cancelled":
 		annotateCancelled(row, exec, approver)
+	default:
+		// In-flight (approved/running/scheduled/paused) and audit-gap
+		// (partially_completed/completed) cases. Split out to keep this switch
+		// under the cyclomatic-complexity limit.
+		annotateInFlightOrAuditGapRow(row, exec, approver)
+	}
+}
+
+// annotateInFlightOrAuditGapRow handles the non-terminal and audit-gap statuses
+// for annotateHistoryRowByStatus: approved/running, scheduled, paused,
+// partially_completed, and completed (audit-gap). Extracted to keep the parent
+// switch under the cyclomatic-complexity limit.
+func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
+	switch exec.Status {
 	case "approved", "running":
 		// In-flight (issue #621): approved/running rows are NOT terminal —
 		// the synchronous AWS purchase is mid-execution or got interrupted

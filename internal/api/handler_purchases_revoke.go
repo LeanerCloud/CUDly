@@ -405,53 +405,9 @@ func (h *Handler) checkRevokeOwnAccountAccess(ctx context.Context, userID string
 // (issue #290 Finding #4). No state is mutated; the result is used by the
 // frontend to populate revokeConfirmBody.ExpectedRefundAmount.
 func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
-	if purchaseID == "" {
-		return nil, NewClientError(400, "purchase_id is required")
-	}
-	if h.auth == nil {
-		return nil, NewClientError(403, "authentication service not configured")
-	}
-
-	session, err := h.requireSession(ctx, req)
+	_, orderID, reservationID, count, err := h.validateAzureRevokeRequest(ctx, req, purchaseID)
 	if err != nil {
 		return nil, err
-	}
-
-	record, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
-	if err != nil {
-		return nil, fmt.Errorf("revoke/calculate: load purchase %s: %w", purchaseID, err)
-	}
-	if record == nil {
-		return nil, NewClientError(404, "purchase not found")
-	}
-
-	if err := h.authorizeSessionRevoke(ctx, session, record); err != nil {
-		return nil, err
-	}
-
-	if record.Provider != "azure" {
-		return nil, NewClientError(422, fmt.Sprintf("provider %q does not support refund calculation", record.Provider))
-	}
-
-	windowClosesAt := record.Timestamp.AddDate(0, 0, AzureRevocationWindowDays)
-	if record.RevocationWindowClosesAt != nil {
-		windowClosesAt = *record.RevocationWindowClosesAt
-	}
-	// Apply the 1h safety margin so we stop offering the button before Azure's
-	// hard edge (clock-skew protection, issue #290 Finding #3).
-	if time.Now().UTC().After(windowClosesAt.Add(-azureRefundSafetyMargin)) {
-		return nil, NewClientError(422, fmt.Sprintf(
-			"Azure reservation return window closed at %s (%d days after purchase)",
-			windowClosesAt.Format(time.RFC3339), AzureRevocationWindowDays,
-		))
-	}
-
-	orderID, reservationID, err := parseAzureReservationIDs(record.PurchaseID)
-	if err != nil {
-		return nil, NewClientError(422, "cannot determine Azure reservation order ID from purchase record; contact Azure Support to request a refund")
-	}
-	if orderID == "" || reservationID == "" {
-		return nil, NewClientError(422, "cannot determine Azure reservation ID from purchase record; contact Azure Support to request a refund")
 	}
 
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
@@ -463,7 +419,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, fmt.Errorf("revoke/calculate: create calculate-refund client: %w", err)
 	}
 
-	quantity := int32(record.Count) //nolint:gosec
+	quantity := int32(count) //nolint:gosec
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -480,22 +436,99 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, fmt.Errorf("revoke/calculate: CalculateRefund failed: %w", err)
 	}
 
-	var refundAmount float64
-	var refundCurrency string
-	if calcResp.Properties != nil && calcResp.Properties.BillingRefundAmount != nil {
-		if calcResp.Properties.BillingRefundAmount.Amount != nil {
-			refundAmount = *calcResp.Properties.BillingRefundAmount.Amount
-		}
-		if calcResp.Properties.BillingRefundAmount.CurrencyCode != nil {
-			refundCurrency = *calcResp.Properties.BillingRefundAmount.CurrencyCode
-		}
-	}
-
+	refundAmount, refundCurrency := extractAzureRefundQuote(calcResp)
 	return &revokeQuoteResult{
 		RefundAmount:   refundAmount,
 		RefundCurrency: refundCurrency,
 		QuotedAt:       time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// validateAzureRevokeRequest runs the shared preflight for the Azure
+// CalculateRefund endpoint: input + auth + session, load + authorize the
+// purchase, enforce provider==azure and the 1h-safety-margin window check, and
+// parse the reservation order/ID from the ARM path. Extracted to keep
+// calculateAzureRevoke under the cyclomatic-complexity limit. Returns the loaded
+// record plus the parsed orderID, reservationID, and commitment count.
+func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (*config.PurchaseHistoryRecord, string, string, int, error) {
+	if purchaseID == "" {
+		return nil, "", "", 0, NewClientError(400, "purchase_id is required")
+	}
+	if h.auth == nil {
+		return nil, "", "", 0, NewClientError(403, "authentication service not configured")
+	}
+
+	session, err := h.requireSession(ctx, req)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
+
+	record, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
+	if err != nil {
+		return nil, "", "", 0, fmt.Errorf("revoke/calculate: load purchase %s: %w", purchaseID, err)
+	}
+	if record == nil {
+		return nil, "", "", 0, NewClientError(404, "purchase not found")
+	}
+
+	if err := h.authorizeSessionRevoke(ctx, session, record); err != nil {
+		return nil, "", "", 0, err
+	}
+
+	orderID, reservationID, err := azureRevokeWindowAndIDs(record)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
+	return record, orderID, reservationID, record.Count, nil
+}
+
+// azureRevokeWindowAndIDs enforces provider==azure and the 1h-safety-margin
+// window check, then parses the reservation order/ID from the ARM path.
+// Extracted from validateAzureRevokeRequest to keep both under the cyclomatic-
+// complexity limit. Returns 422 ClientErrors for every reject case.
+func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, string, error) {
+	if record.Provider != "azure" {
+		return "", "", NewClientError(422, fmt.Sprintf("provider %q does not support refund calculation", record.Provider))
+	}
+
+	windowClosesAt := record.Timestamp.AddDate(0, 0, AzureRevocationWindowDays)
+	if record.RevocationWindowClosesAt != nil {
+		windowClosesAt = *record.RevocationWindowClosesAt
+	}
+	// Apply the 1h safety margin so we stop offering the button before Azure's
+	// hard edge (clock-skew protection, issue #290 Finding #3).
+	if time.Now().UTC().After(windowClosesAt.Add(-azureRefundSafetyMargin)) {
+		return "", "", NewClientError(422, fmt.Sprintf(
+			"Azure reservation return window closed at %s (%d days after purchase)",
+			windowClosesAt.Format(time.RFC3339), AzureRevocationWindowDays,
+		))
+	}
+
+	orderID, reservationID, err := parseAzureReservationIDs(record.PurchaseID)
+	if err != nil {
+		return "", "", NewClientError(422, "cannot determine Azure reservation order ID from purchase record; contact Azure Support to request a refund")
+	}
+	if orderID == "" || reservationID == "" {
+		return "", "", NewClientError(422, "cannot determine Azure reservation ID from purchase record; contact Azure Support to request a refund")
+	}
+	return orderID, reservationID, nil
+}
+
+// extractAzureRefundQuote pulls the refund amount and currency out of a
+// CalculateRefund response, guarding every nil pointer in the chain. Returns
+// zero values when the response carries no billing-refund amount.
+func extractAzureRefundQuote(resp armreservations.CalculateRefundClientPostResponse) (float64, string) {
+	var refundAmount float64
+	var refundCurrency string
+	if resp.Properties != nil && resp.Properties.BillingRefundAmount != nil {
+		if resp.Properties.BillingRefundAmount.Amount != nil {
+			refundAmount = *resp.Properties.BillingRefundAmount.Amount
+		}
+		if resp.Properties.BillingRefundAmount.CurrencyCode != nil {
+			refundCurrency = *resp.Properties.BillingRefundAmount.CurrencyCode
+		}
+	}
+	return refundAmount, refundCurrency
 }
 
 // revokeAzurePurchase handles Azure reservation returns via the Azure
@@ -568,41 +601,11 @@ func (h *Handler) callAzureReturn(
 		return nil, NewClientError(422, "cannot determine Azure reservation ID from purchase record; contact Azure Support to request a refund")
 	}
 
-	// Step 1: CalculateRefund to obtain a sessionId required by the Return API
-	// and the quoted refund amount for TOCTOU-divergence detection.
+	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
 	quantity := int32(record.Count) //nolint:gosec // Count > 0 validated at purchase
-	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
-		Properties: &armreservations.CalculateRefundRequestProperties{
-			ReservationToReturn: &armreservations.ReservationToReturn{
-				ReservationID: &reservationID,
-				Quantity:      &quantity,
-			},
-			Scope: toPtr("Reservation"),
-		},
-	}, nil)
+	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
 	if err != nil {
-		if isAzureClientError(err) {
-			return nil, NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
-		}
-		return nil, fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
-	}
-
-	var sessionID string
-	var calcRefundAmount *float64
-	var calcRefundCurrency string
-	if calcResp.Properties != nil {
-		if calcResp.Properties.SessionID != nil {
-			sessionID = *calcResp.Properties.SessionID
-		}
-		if calcResp.Properties.BillingRefundAmount != nil {
-			if calcResp.Properties.BillingRefundAmount.Amount != nil {
-				v := *calcResp.Properties.BillingRefundAmount.Amount
-				calcRefundAmount = &v
-			}
-			if calcResp.Properties.BillingRefundAmount.CurrencyCode != nil {
-				calcRefundCurrency = *calcResp.Properties.BillingRefundAmount.CurrencyCode
-			}
-		}
+		return nil, err
 	}
 
 	// TOCTOU-divergence check: if the caller supplied an expected refund amount
@@ -641,32 +644,82 @@ func (h *Handler) callAzureReturn(
 		},
 	}, nil)
 	if err != nil {
-		// Azure Return failed. Clear the in-flight flag so the row is not left in
-		// a permanently sticky state that would mislead the finalize_revocations
-		// sweep into thinking Azure already issued a refund (Finding D, second-wave
-		// CR). Best-effort: log and continue even if the clear fails.
-		if clearErr := h.config.ClearRevocationInFlight(ctx, record.PurchaseID); clearErr != nil {
-			logging.Warnf("revoke azure: ClearRevocationInFlight for %s failed after Return error (continuing): %v", record.PurchaseID, clearErr)
-		}
-		// Window-edge: if Azure rejects the Return with RefundPolicyViolated it
-		// means our safety-margin check passed but Azure's clock disagreed (the
-		// reservation crossed the 7-day boundary between our check and the API
-		// call). Surface a clean 422 with code AZURE_WINDOW_EDGE so the frontend
-		// can show a user-friendly "window just closed" message rather than a
-		// generic "Azure rejected" error (issue #290 Finding #3).
-		if isAzureWindowEdgeError(err) {
-			return nil, NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
-		}
-		if isAzureClientError(err) {
-			return nil, NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
-		}
-		return nil, fmt.Errorf("revoke azure: Return failed: %w", err)
+		return nil, h.handleAzureReturnError(ctx, record, err)
 	}
 
-	// Azure Return succeeded. Attempt to persist the revocation state with
-	// exponential-backoff retries so a transient DB hiccup does not surface
-	// as a misleading 500 and does not cause the user to retry (which would
-	// hit "already returned" from Azure).
+	return h.persistAzureRevocation(ctx, record, calcRefundAmount, calcRefundCurrency)
+}
+
+// azureCalculateRefund runs the CalculateRefund step and parses out the session
+// ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
+// check). Errors are classified into 400 (client) vs 500 (transient).
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) {
+	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
+		Properties: &armreservations.CalculateRefundRequestProperties{
+			ReservationToReturn: &armreservations.ReservationToReturn{
+				ReservationID: &reservationID,
+				Quantity:      &quantity,
+			},
+			Scope: toPtr("Reservation"),
+		},
+	}, nil)
+	if err != nil {
+		if isAzureClientError(err) {
+			return "", nil, "", NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+		}
+		return "", nil, "", fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
+	}
+
+	var sessionID string
+	var calcRefundAmount *float64
+	var calcRefundCurrency string
+	if calcResp.Properties != nil {
+		if calcResp.Properties.SessionID != nil {
+			sessionID = *calcResp.Properties.SessionID
+		}
+		if calcResp.Properties.BillingRefundAmount != nil {
+			if calcResp.Properties.BillingRefundAmount.Amount != nil {
+				v := *calcResp.Properties.BillingRefundAmount.Amount
+				calcRefundAmount = &v
+			}
+			if calcResp.Properties.BillingRefundAmount.CurrencyCode != nil {
+				calcRefundCurrency = *calcResp.Properties.BillingRefundAmount.CurrencyCode
+			}
+		}
+	}
+	return sessionID, calcRefundAmount, calcRefundCurrency, nil
+}
+
+// handleAzureReturnError clears the in-flight flag (no refund was issued) and
+// maps the Return error to the right status: 422 on the 7-day window edge, 400
+// on other client errors, 500 otherwise.
+func (h *Handler) handleAzureReturnError(ctx context.Context, record *config.PurchaseHistoryRecord, err error) error {
+	// Azure Return failed. Clear the in-flight flag so the row is not left in
+	// a permanently sticky state that would mislead the finalize_revocations
+	// sweep into thinking Azure already issued a refund (Finding D, second-wave
+	// CR). Best-effort: log and continue even if the clear fails.
+	if clearErr := h.config.ClearRevocationInFlight(ctx, record.PurchaseID); clearErr != nil {
+		logging.Warnf("revoke azure: ClearRevocationInFlight for %s failed after Return error (continuing): %v", record.PurchaseID, clearErr)
+	}
+	// Window-edge: if Azure rejects the Return with RefundPolicyViolated it
+	// means our safety-margin check passed but Azure's clock disagreed (the
+	// reservation crossed the 7-day boundary between our check and the API
+	// call). Surface a clean 422 so the frontend can show a user-friendly
+	// "window just closed" message (issue #290 Finding #3).
+	if isAzureWindowEdgeError(err) {
+		return NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
+	}
+	if isAzureClientError(err) {
+		return NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
+	}
+	return fmt.Errorf("revoke azure: Return failed: %w", err)
+}
+
+// persistAzureRevocation records the successful revocation with exponential-
+// backoff retries. If every attempt fails, Azure has already refunded but the
+// DB write could not land, so it returns a 207 RECONCILE_PENDING result (no
+// retry) for the finalize_revocations sweep to reconcile, rather than a 500.
+func (h *Handler) persistAzureRevocation(ctx context.Context, record *config.PurchaseHistoryRecord, calcRefundAmount *float64, calcRefundCurrency string) (any, error) {
 	now := time.Now().UTC()
 	markErr := h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
 	for attempt, backoff := range revokeMarkRetryBackoffs {

@@ -100,30 +100,26 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 
 // dispatchTask routes a scheduled task to its handler.
 func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
-	switch taskType {
-	case TaskCollectRecommendations:
-		return app.handleCollectRecommendations(ctx)
-	case TaskProcessScheduledPurchases:
-		return app.handleProcessScheduledPurchases(ctx)
-	case TaskSendNotifications:
-		return app.handleSendNotifications(ctx)
-	case TaskCleanupExpiredRecords:
-		return app.handleCleanupExpiredRecords(ctx)
-	case TaskRefreshAnalytics:
-		return app.handleRefreshAnalytics(ctx)
-	case TaskCollectAnalytics:
-		return app.handleCollectAnalytics(ctx)
-	case TaskRIExchangeReshape:
-		return app.handleRIExchangeReshape(ctx)
-	case TaskReapStuckPurchases:
-		return app.handleReapStuckPurchases(ctx)
-	case TaskFireScheduledPurchases:
-		return app.handleFireScheduledPurchases(ctx)
-	case TaskFinalizeRevocations:
-		return app.handleFinalizeRevocations(ctx)
-	default:
+	// Map-based dispatch (rather than a switch) keeps this function under the
+	// cyclomatic-complexity limit as the task roster grows. Each handler adapts
+	// its concrete return type to (any, error) at the call site.
+	handlers := map[ScheduledTaskType]func(context.Context) (any, error){
+		TaskCollectRecommendations:    func(c context.Context) (any, error) { return app.handleCollectRecommendations(c) },
+		TaskProcessScheduledPurchases: func(c context.Context) (any, error) { return app.handleProcessScheduledPurchases(c) },
+		TaskSendNotifications:         func(c context.Context) (any, error) { return app.handleSendNotifications(c) },
+		TaskCleanupExpiredRecords:     func(c context.Context) (any, error) { return app.handleCleanupExpiredRecords(c) },
+		TaskRefreshAnalytics:          func(c context.Context) (any, error) { return app.handleRefreshAnalytics(c) },
+		TaskCollectAnalytics:          func(c context.Context) (any, error) { return app.handleCollectAnalytics(c) },
+		TaskRIExchangeReshape:         func(c context.Context) (any, error) { return app.handleRIExchangeReshape(c) },
+		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
+		TaskFireScheduledPurchases:    func(c context.Context) (any, error) { return app.handleFireScheduledPurchases(c) },
+		TaskFinalizeRevocations:       func(c context.Context) (any, error) { return app.handleFinalizeRevocations(c) },
+	}
+	handler, ok := handlers[taskType]
+	if !ok {
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
+	return handler(ctx)
 }
 
 // taskLocker returns the configured TaskLocker, falling back to DB if set.
