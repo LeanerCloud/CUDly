@@ -516,7 +516,6 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 		term = "1yr"
 	}
 
-
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceCache,
@@ -532,22 +531,21 @@ func (c *MemorystoreClient) convertGCPRecommendation(ctx context.Context, gcpRec
 	rec.EstimatedSavings = extractGCPSavings(gcpRec)
 
 	// Thread pricing into the converter so the scorer can rank/filter GCP recs
-	// correctly (issue #1022 C2).
+	// correctly (issue #1022 C2). fillRedisPricing performs the single billing
+	// lookup and populates CommitmentCost; we reuse that value below to derive
+	// RecurringMonthlyCost rather than issuing a second SKU call.
 	if rec.ResourceType != "" {
-		c.fillRedisPricing(ctx, rec, termYearsFromLabel(rec.Term))
-	}
+		termYears := termYearsFromLabel(rec.Term)
+		c.fillRedisPricing(ctx, rec, termYears)
 
-	// Populate RecurringMonthlyCost from the billing API. Memorystore CUDs are
-	// monthly-payment commitments, so the per-month charge is
-	// CommitmentPrice / termMonths. A billing lookup failure is non-fatal:
-	// log the warning and leave RecurringMonthlyCost nil so the frontend
-	// renders "—" rather than a stale value.
-	termYears := termYearsFromLabel(rec.Term)
-	if pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
-		log.Printf("memorystore: RecurringMonthlyCost lookup failed for %s/%s: %v", rec.ResourceType, c.region, err)
-	} else {
-		monthly := pricing.CommitmentPrice / float64(termYears*12)
-		rec.RecurringMonthlyCost = &monthly
+		// Memorystore CUDs are monthly-payment commitments, so the per-month
+		// charge is CommitmentCost / termMonths. When the billing lookup failed,
+		// CommitmentCost stays 0 and RecurringMonthlyCost remains nil so the
+		// frontend renders "—" rather than a stale value.
+		if rec.CommitmentCost > 0 {
+			monthly := rec.CommitmentCost / float64(termYears*12)
+			rec.RecurringMonthlyCost = &monthly
+		}
 	}
 
 	return rec

@@ -846,11 +846,12 @@ func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *testing
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
-	// Inject a billing mock that returns a known on-demand price. The
-	// getSQLPricing implementation applies a 15% package savings for 1yr
-	// (discount factor 0.85), so CommitmentPrice = onDemandHourly * 8760 * 0.85.
+	// Inject a billing mock with a known on-demand price and a separate
+	// commitment SKU. getSQLPricing derives CommitmentPrice from the
+	// "commitment" SKU (CommitmentPrice = commitmentHourly * 8760), so
 	// RecurringMonthlyCost must equal CommitmentPrice / 12 (one year = 12 months).
-	const hourlyRate = 0.12 // USD/h per vCPU -- representative db-n1-standard-1 value
+	const onDemandHourly = 0.12    // USD/h per vCPU -- representative db-n1-standard-1 value
+	const commitmentHourly = 0.102 // USD/h -- 1yr CUD rate from the catalog
 	mockBilling := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
 			Skus: []*cloudbilling.Sku{
@@ -864,7 +865,28 @@ func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *testing
 									{
 										UnitPrice: &cloudbilling.Money{
 											Units:        0,
-											Nanos:        int64(hourlyRate * 1e9),
+											Nanos:        int64(onDemandHourly * 1e9),
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					// Commitment SKU required by getSQLPricing: without a
+					// "commitment" SKU it errors and RecurringMonthlyCost stays nil.
+					Description:    "db-n1-standard-1 Cloud SQL commitment 1yr",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        int64(commitmentHourly * 1e9),
 											CurrencyCode: "USD",
 										},
 									},
@@ -907,11 +929,11 @@ func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *testing
 	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
 	assert.Greater(t, *rec.RecurringMonthlyCost, 0.0, "RecurringMonthlyCost must be positive for a monthly Cloud SQL CUD")
 
-	// Verify the value matches CommitmentPrice / 12 exactly.
-	// estimateSQLCommitmentPrice applies a 15% savings factor for 1yr (discount=0.85).
+	// Verify the value matches CommitmentPrice / 12 exactly. CommitmentPrice is
+	// the commitment SKU's hourly rate scaled to the 1yr term total.
 	const hoursIn1yr = 8760.0
-	expectedCommitment := hourlyRate * hoursIn1yr * 0.85 // 15% savings for 1yr (see estimateSQLCommitmentPrice)
-	assert.InDelta(t, expectedCommitment/12, *rec.RecurringMonthlyCost, 1e-6)
+	expectedMonthly := commitmentHourly * hoursIn1yr / 12
+	assert.InDelta(t, expectedMonthly, *rec.RecurringMonthlyCost, 1e-6)
 }
 
 func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost_BillingFailure(t *testing.T) {
