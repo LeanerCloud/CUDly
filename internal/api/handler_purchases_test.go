@@ -3715,6 +3715,12 @@ func TestLookupContactEmail_GetAccountDBError_NoPIILeak(t *testing.T) {
 	logged := logBuf.String()
 	assert.NotContains(t, logged, acctUUID, "log must not contain the raw account UUID (issue #965 sibling)")
 	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
+	// The caller maps this failure into a generic 500 ClientError, which the
+	// router returns before reaching logging.Errorf("API error: %v"). This is
+	// therefore the only error-level breadcrumb for the user-visible 500, so it
+	// must be emitted at ERROR severity to preserve alerting (CR PR #969).
+	assert.Contains(t, logged, "[ERROR]", "GetCloudAccount failure must log at error level so the user-visible 500 stays alertable")
+	assert.Contains(t, logged, "lookupContactEmail: GetCloudAccount failed", "the generic breadcrumb message must be present")
 }
 
 // TestGatherAccountContactEmails_DBError_NoPIILeak guards the wrap site at

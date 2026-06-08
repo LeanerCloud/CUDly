@@ -2120,10 +2120,15 @@ func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, er
 	if err != nil {
 		// Do NOT log id or err verbatim: id is the raw account UUID and err
 		// can be a raw DB error string (issue #965, same shape as the
-		// validatePlanAccountProviders fix). The caller wraps this into a
-		// ClientError that reaches the router's logging.Errorf("API error:
-		// %v"); leaking either field here would propagate through that path.
-		logging.Warnf("lookupContactEmail: GetCloudAccount failed")
+		// validatePlanAccountProviders fix). Keep the message generic.
+		//
+		// Log at error level: the caller (gatherAccountContactEmails) maps
+		// this into a generic 500 ClientError, which the router emits via the
+		// non-error-logging ClientError branch (handler.go: it returns the
+		// ce.code/body before reaching logging.Errorf("API error: %v")). This
+		// line is therefore the only error-level breadcrumb for the resulting
+		// user-visible 500, so it must stay at Errorf to preserve alerting.
+		logging.Errorf("lookupContactEmail: GetCloudAccount failed")
 		return "", err
 	}
 	if acct == nil {
