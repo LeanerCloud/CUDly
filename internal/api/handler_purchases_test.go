@@ -4402,3 +4402,92 @@ func TestResolveExecutedNotificationRecipients_Deduplication(t *testing.T) {
 	assert.Equal(t, "same@example.com", to)
 	assert.Empty(t, cc, "duplicate emails must be deduplicated")
 }
+
+// ---------------------------------------------------------------------------
+// Finding #2: GET /revoke must render confirmation form, not mutate state
+// ---------------------------------------------------------------------------
+
+// TestRevokePurchase_GETRendersConfirmationPage_NoMutation verifies that a GET
+// to the revoke handler returns 200 HTML containing a confirmation form and
+// does NOT call TransitionExecutionStatus (no mutation).
+func TestRevokePurchase_GETRendersConfirmationPage_NoMutation(t *testing.T) {
+	ctx := context.Background()
+	execID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	token := "revoke-token-abc"
+
+	// Store must NOT be called at all: the GET path short-circuits before any DB ops.
+	mockStore := new(MockConfigStore)
+
+	handler := &Handler{config: mockStore}
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET"},
+		},
+		QueryStringParameters: map[string]string{"token": token},
+	}
+	result, err := handler.revokePurchase(ctx, req, execID, token)
+	require.NoError(t, err)
+
+	raw, ok := result.(*rawResponse)
+	require.True(t, ok, "GET /revoke must return a *rawResponse (HTML confirmation page)")
+	assert.Contains(t, raw.body, `<form method="POST"`, "confirmation page must contain a POST form")
+	assert.Contains(t, raw.body, execID, "confirmation page must embed the execution ID")
+	assert.Contains(t, raw.body, `type="hidden"`, "token must be in a hidden input")
+	assert.Equal(t, "text/html; charset=utf-8", raw.contentType)
+
+	// No DB calls were made.
+	mockStore.AssertNotCalled(t, "GetExecutionByID")
+	mockStore.AssertNotCalled(t, "TransitionExecutionStatus")
+}
+
+// TestRevokePurchase_POSTPerformsRevoke verifies that a POST to the revoke
+// handler actually flips the status to revocation_requested.
+func TestRevokePurchase_POSTPerformsRevoke(t *testing.T) {
+	ctx := context.Background()
+	execID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	token := "revoke-token-post"
+	revokerEmail := "contact@acct.example.com"
+	accountID := "acct-post"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: token,
+		Status:        "completed",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: revokerEmail}, nil
+	}
+	mockStore.On("TransitionExecutionStatus", ctx, execID,
+		[]string{"completed", "partially_completed"}, "revocation_requested").
+		Return(&config.PurchaseExecution{ExecutionID: execID, Status: "revocation_requested"}, nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == execID && e.CancelledBy != nil && *e.CancelledBy == revokerEmail
+	})).Return(nil)
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: revokerEmail}, nil)
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		QueryStringParameters: map[string]string{"token": token},
+	}
+	result, err := handler.revokePurchase(ctx, req, execID, token)
+	require.NoError(t, err)
+	resultMap, ok := result.(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "revocation_requested", resultMap["status"])
+	mockStore.AssertExpectations(t)
+}
