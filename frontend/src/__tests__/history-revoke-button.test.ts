@@ -36,6 +36,8 @@ jest.mock('../utils', () => ({
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
   escapeHtml: jest.fn((str) => str || ''),
+  escapeHtmlAttr: jest.fn((str) => str || ''),
+  amortizedMonthly: jest.fn((monthly) => monthly),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
 }));
 
@@ -55,6 +57,9 @@ jest.mock('../state', () => ({
   setCurrentAccountIDs: jest.fn(),
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
+  getAmortizeUpfront: jest.fn().mockReturnValue(false),
+  setAmortizeUpfront: jest.fn(),
+  subscribeAmortizeUpfront: jest.fn().mockReturnValue(() => {}),
 }));
 
 import * as api from '../api';
