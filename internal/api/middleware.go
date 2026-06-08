@@ -237,13 +237,49 @@ func extractCSRFToken(req *events.LambdaFunctionURLRequest) string {
 // authenticated request reaches CSRF validation with no token header.
 // Almost always indicates a frontend regression (sessionStorage cleared, or
 // a new fetch site forgot to include the token). ValidateCSRFToken still
-// rejects the request — this just makes the cause obvious in logs.
+// rejects the request -- this just makes the cause obvious in logs.
 func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string) {
 	if csrfToken != "" {
 		return
 	}
-	logging.Warnf("CSRF validation: empty header on session-authenticated %s %s from %s — frontend regression?",
-		req.RequestContext.HTTP.Method, req.RequestContext.HTTP.Path, req.RequestContext.HTTP.SourceIP)
+	logging.Warnf("CSRF validation: empty header on session-authenticated %s %s from %s -- frontend regression?",
+		req.RequestContext.HTTP.Method, redactURL(req.RequestContext.HTTP.Path), req.RequestContext.HTTP.SourceIP)
+}
+
+// redactURL replaces any token= query parameter value with REDACTED so
+// approval/revocation tokens are never written to structured access logs.
+// Applied to every URL or path string before it is passed to a logging call.
+//
+// Matches:
+//
+//	?token=<value>   at the start of the query string
+//	&token=<value>   as a subsequent parameter
+//
+// The replacement is done with a simple string scan so there is no regexp
+// compilation overhead on the hot request path.
+func redactURL(u string) string {
+	return redactQueryParam(u, "token")
+}
+
+// redactQueryParam replaces the value of the named query parameter in u with
+// REDACTED. The match is case-sensitive and handles both ? and & prefixes.
+func redactQueryParam(u, param string) string {
+	// Handle both ?param=val and &param=val forms.
+	for _, prefix := range []string{"?" + param + "=", "&" + param + "="} {
+		idx := strings.Index(u, prefix)
+		if idx == -1 {
+			continue
+		}
+		start := idx + len(prefix)
+		// Find the end of the value (next & or end of string).
+		end := strings.IndexByte(u[start:], '&')
+		if end == -1 {
+			u = u[:start] + "REDACTED"
+		} else {
+			u = u[:start] + "REDACTED" + u[start+end:]
+		}
+	}
+	return u
 }
 
 // requireAuth verifies the request carries a valid authentication credential
