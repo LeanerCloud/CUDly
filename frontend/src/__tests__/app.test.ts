@@ -17,7 +17,10 @@ jest.mock('../state', () => ({
   subscribeProvider: jest.fn(),
   subscribeAccount: jest.fn(),
   getCurrentProvider: jest.fn(() => ''),
-  getCurrentAccountIDs: jest.fn(() => [])
+  getCurrentAccountIDs: jest.fn(() => []),
+  getAmortizeUpfront: jest.fn(() => false),
+  setAmortizeUpfront: jest.fn(),
+  subscribeAmortizeUpfront: jest.fn().mockReturnValue(() => {}),
 }));
 
 jest.mock('../auth', () => ({

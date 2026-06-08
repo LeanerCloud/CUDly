@@ -7,6 +7,13 @@
  * network helpers (those are covered by api-* tests).
  */
 
+// approval-details.ts now reads getAmortizeUpfront() from state at render
+// time. Mock it to return false (default: non-amortized) so existing tests
+// continue to verify the base column layout.
+jest.mock('../state', () => ({
+  getAmortizeUpfront: jest.fn(() => false),
+}));
+
 import {
   computeEffectiveSavingsPct,
   formatAccountLabel,
@@ -82,13 +89,13 @@ describe('renderApprovalDetailsBody', () => {
     expect(text).toContain('Accounts');
   });
 
-  it('renders the per-rec table with all 12 columns', () => {
+  it('renders the per-rec table with all 13 columns (Monthly cost added by issue #1112)', () => {
     const rec = makeRec({});
     const body = renderApprovalDetailsBody(makeDetails([rec]), new Map());
     const headers = Array.from(body.querySelectorAll('.approval-details-table thead th')).map(th => th.textContent);
     expect(headers).toEqual([
       'Account', 'Provider', 'Service', 'Resource', 'Engine', 'Region',
-      'Count', 'Term', 'Payment', 'Upfront', 'Monthly savings', 'Eff. savings %',
+      'Count', 'Term', 'Payment', 'Upfront', 'Monthly cost', 'Monthly savings', 'Eff. savings %',
     ]);
   });
 
@@ -149,8 +156,9 @@ describe('renderApprovalDetailsBody', () => {
     const rec = makeRec({ upfront_cost: 4567.89, savings: 12.5 });
     const body = renderApprovalDetailsBody(makeDetails([rec]), new Map());
     const cells = body.querySelectorAll('.approval-details-table tbody td');
+    // col 9 = Upfront, col 10 = Monthly cost (issue #1112), col 11 = Monthly savings
     expect(cells[9]?.textContent).toBe('$4,568');
-    expect(cells[10]?.textContent).toBe('$13');
+    expect(cells[11]?.textContent).toBe('$13');
   });
 
   it('computes effective savings % when on_demand_cost is set, "—" otherwise', () => {
@@ -158,8 +166,9 @@ describe('renderApprovalDetailsBody', () => {
     const withoutBaseline = makeRec({ id: 'rec-2', savings: 30, on_demand_cost: null, monthly_cost: null });
     const body = renderApprovalDetailsBody(makeDetails([withBaseline, withoutBaseline]), new Map());
     const rows = body.querySelectorAll('.approval-details-table tbody tr');
-    expect(rows[0]?.querySelectorAll('td')[11]?.textContent).toBe('30.0%');
-    expect(rows[1]?.querySelectorAll('td')[11]?.textContent).toBe('—');
+    // col 12 = Eff. savings % (shifted by +1 due to the new Monthly cost col at index 10)
+    expect(rows[0]?.querySelectorAll('td')[12]?.textContent).toBe('30.0%');
+    expect(rows[1]?.querySelectorAll('td')[12]?.textContent).toBe('—');
   });
 
   it('annual-savings tooltip does NOT fire on floating-point rounding noise', () => {

@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
@@ -113,6 +113,48 @@ export function applyExecutionDeepLink(): boolean {
 export function setupHistoryHandlers(): void {
   state.subscribeProvider(() => void loadHistory());
   state.subscribeAccount(() => void loadHistory());
+  // Re-render both tables when the amortize toggle flips (issue #1112).
+  state.subscribeAmortizeUpfront(() => {
+    renderHistoryList(lastPurchases);
+    renderApprovalQueue(lastPurchases);
+    syncAmortizeCheckbox('history-amortize-checkbox');
+    syncAmortizeCheckbox('approval-queue-amortize-checkbox');
+  });
+}
+
+/**
+ * Mount the "Amortize upfront over term" checkbox into a container element
+ * (idempotent -- safe to call on every loadHistory).
+ *
+ * The checkbox is wired to setAmortizeUpfront so a change here is reflected
+ * in all other views via the shared localStorage key + subscriber pattern.
+ */
+function mountAmortizeCheckbox(containerId: string, checkboxId: string): void {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (document.getElementById(checkboxId)) return; // already mounted
+
+  const wrapper = document.createElement('label');
+  wrapper.className = 'amortize-toggle-label';
+  wrapper.htmlFor = checkboxId;
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.id = checkboxId;
+  cb.checked = state.getAmortizeUpfront();
+  cb.addEventListener('change', () => {
+    state.setAmortizeUpfront(cb.checked);
+  });
+
+  wrapper.appendChild(cb);
+  wrapper.appendChild(document.createTextNode(' Amortize upfront over term'));
+  container.appendChild(wrapper);
+}
+
+/** Keep an already-mounted checkbox in sync when state changes externally. */
+function syncAmortizeCheckbox(checkboxId: string): void {
+  const cb = document.getElementById(checkboxId) as HTMLInputElement | null;
+  if (cb) cb.checked = state.getAmortizeUpfront();
 }
 
 /**
@@ -683,8 +725,13 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
-    const monthlyCostCell = p.monthly_cost != null
-      ? formatCurrency(p.monthly_cost)
+    const amortize = state.getAmortizeUpfront();
+    const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
+    const displayMonthly = (rawMonthly != null && amortize)
+      ? amortizedMonthly(rawMonthly, p.upfront_cost, p.term)
+      : rawMonthly;
+    const monthlyCostCell = displayMonthly != null
+      ? formatCurrency(displayMonthly)
       : '<span class="muted">-</span>';
     return `
       <tr${execIdAttr}>
@@ -704,6 +751,8 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
+  const amortize = state.getAmortizeUpfront();
+  const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
     <table>
@@ -718,7 +767,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
           <th>Count</th>
           <th>Term</th>
           <th>Upfront Cost</th>
-          <th>Monthly Cost</th>
+          <th>${escapeHtml(monthlyColHeader)}</th>
           <th>Monthly Savings</th>
           <th>Plan</th>
         </tr>
@@ -729,6 +778,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     </table>
   `;
   container.innerHTML = markup;
+
+  // Mount the amortize checkbox into the controls area (idempotent).
+  mountAmortizeCheckbox('history-controls', 'history-amortize-checkbox');
 
   container.querySelectorAll<HTMLButtonElement>('.status-chip[data-history-status]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -979,8 +1031,13 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       : '<span class="muted">-</span>';
     const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
     const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
-    const monthlyCostCell = p.monthly_cost != null
-      ? formatCurrency(p.monthly_cost)
+    const amortize = state.getAmortizeUpfront();
+    const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
+    const displayMonthly = (rawMonthly != null && amortize)
+      ? amortizedMonthly(rawMonthly, p.upfront_cost, p.term)
+      : rawMonthly;
+    const monthlyCostCell = displayMonthly != null
+      ? formatCurrency(displayMonthly)
       : '<span class="muted">-</span>';
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
@@ -1001,6 +1058,10 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
+  const amortize = state.getAmortizeUpfront();
+  const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
+  // monthlyColHeader is a hardcoded constant string (no user data), so
+  // interpolating it directly into the template is safe.
   container.innerHTML = `
     <table class="approval-queue-table">
       <thead>
@@ -1012,7 +1073,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
           <th>Count</th>
           <th>Term</th>
           <th>Payment</th>
-          <th>Monthly Cost</th>
+          <th>${monthlyColHeader}</th>
           <th>Upfront Cost</th>
           <th>Monthly Savings</th>
           <th>Created by</th>
@@ -1024,6 +1085,9 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       </tbody>
     </table>
   `;
+
+  // Mount the amortize checkbox into the approval queue section (idempotent).
+  mountAmortizeCheckbox('purchases-approval-queue-section', 'approval-queue-amortize-checkbox');
 
   wireRowActionHandlers(container);
 }

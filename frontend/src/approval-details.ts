@@ -29,7 +29,8 @@
 import * as api from './api';
 import type { CloudAccount } from './api/accounts';
 import type { PurchaseDetails, Recommendation } from './api/types';
-import { escapeHtml, formatCurrency, formatTerm } from './utils';
+import { escapeHtml, formatCurrency, formatTerm, amortizedMonthly } from './utils';
+import { getAmortizeUpfront } from './state';
 
 /**
  * accountsById maps the internal CloudAccount UUID (the value carried
@@ -169,22 +170,31 @@ function renderApprovalDetailsTable(recs: Recommendation[], accountsById: Accoun
   const table = document.createElement('table');
   table.className = 'approval-details-table';
 
+  const amortize = getAmortizeUpfront();
   const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr>
-      <th>Account</th>
-      <th>Provider</th>
-      <th>Service</th>
-      <th>Resource</th>
-      <th>Engine</th>
-      <th>Region</th>
-      <th class="num">Count</th>
-      <th>Term</th>
-      <th>Payment</th>
-      <th class="num">Upfront</th>
-      <th class="num">Monthly savings</th>
-      <th class="num">Eff. savings %</th>
-    </tr>`;
+  const headerRow = document.createElement('tr');
+  const headerCols: Array<{ label: string; numeric?: true }> = [
+    { label: 'Account' },
+    { label: 'Provider' },
+    { label: 'Service' },
+    { label: 'Resource' },
+    { label: 'Engine' },
+    { label: 'Region' },
+    { label: 'Count', numeric: true },
+    { label: 'Term' },
+    { label: 'Payment' },
+    { label: 'Upfront', numeric: true },
+    { label: amortize ? 'Monthly cost (amortized)' : 'Monthly cost', numeric: true },
+    { label: 'Monthly savings', numeric: true },
+    { label: 'Eff. savings %', numeric: true },
+  ];
+  for (const col of headerCols) {
+    const th = document.createElement('th');
+    th.textContent = col.label;
+    if (col.numeric) th.className = 'num';
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
@@ -214,9 +224,24 @@ function renderRecRow(rec: Recommendation, accountsById: AccountsById, hostAWSAc
   // both `undefined` and "" are falsy so the single check is enough.
   const engineLabel = rec.engine ? rec.engine : '—';
   const effSavings = computeEffectiveSavingsPct(rec);
+
+  // Compute the monthly cost cell value (issue #1112). When monthly_cost
+  // is null the provider API did not return a breakdown; render "—".
+  // When amortize is on, fold the upfront slice in.
+  const amortize = getAmortizeUpfront();
+  let monthlyCostDisplay: string;
+  if (rec.monthly_cost == null) {
+    monthlyCostDisplay = '—';
+  } else {
+    const displayVal = amortize
+      ? amortizedMonthly(rec.monthly_cost, rec.upfront_cost ?? 0, rec.term)
+      : rec.monthly_cost;
+    monthlyCostDisplay = formatCurrency(displayVal);
+  }
+
   // innerHTML is safe here because every interpolated value goes
   // through escapeHtml or is a numeric/preformatted constant. Using
-  // innerHTML rather than 12 createElement calls per row keeps the
+  // innerHTML rather than 13 createElement calls per row keeps the
   // render code readable for the table layout, mirroring the
   // recommendations.ts pattern.
   row.innerHTML = `
@@ -230,6 +255,7 @@ function renderRecRow(rec: Recommendation, accountsById: AccountsById, hostAWSAc
     <td>${escapeHtml(formatTerm(rec.term))}</td>
     <td>${escapeHtml(rec.payment ?? '')}</td>
     <td class="num">${escapeHtml(formatCurrency(rec.upfront_cost ?? null))}</td>
+    <td class="num">${escapeHtml(monthlyCostDisplay)}</td>
     <td class="num">${escapeHtml(formatCurrency(rec.savings ?? null))}</td>
     <td class="num">${effSavings === null ? '—' : escapeHtml(`${effSavings.toFixed(1)}%`)}</td>`;
   return row;

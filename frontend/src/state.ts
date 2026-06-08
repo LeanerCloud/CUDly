@@ -358,3 +358,45 @@ export function setPlansColumnFilter(
 export function clearAllPlansColumnFilters(): void {
   plansColumnFilters = {};
 }
+
+// ---------------------------------------------------------------------------
+// Amortize-upfront toggle (issue #1112).
+// Persisted in localStorage('cudly.amortizeUpfront'). In-memory fallback
+// when localStorage is unavailable (private browsing, quota-exceeded).
+// Subscribers are notified on every change so all views re-render in sync.
+// ---------------------------------------------------------------------------
+
+const AMORTIZE_UPFRONT_LS_KEY = 'cudly.amortizeUpfront';
+
+let amortizeUpfrontMemory = false;
+
+export function getAmortizeUpfront(): boolean {
+  try {
+    const raw = localStorage.getItem(AMORTIZE_UPFRONT_LS_KEY);
+    if (raw === null) return amortizeUpfrontMemory;
+    amortizeUpfrontMemory = raw === 'true';
+    return amortizeUpfrontMemory;
+  } catch {
+    // localStorage unavailable (private browsing, iframe sandbox) -- use memory.
+  }
+  return amortizeUpfrontMemory;
+}
+
+export function setAmortizeUpfront(value: boolean): void {
+  amortizeUpfrontMemory = value;
+  try {
+    localStorage.setItem(AMORTIZE_UPFRONT_LS_KEY, String(value));
+  } catch {
+    // Non-fatal; in-memory fallback remains correct for the session.
+  }
+  amortizeListeners.forEach((cb) => {
+    try { cb(); } catch (err) { console.warn('subscribeAmortizeUpfront listener error:', err); }
+  });
+}
+
+const amortizeListeners: Set<() => void> = new Set();
+
+export function subscribeAmortizeUpfront(cb: () => void): () => void {
+  amortizeListeners.add(cb);
+  return () => amortizeListeners.delete(cb);
+}

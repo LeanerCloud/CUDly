@@ -67,6 +67,9 @@ jest.mock('../state', () => ({
   setCurrentAccountIDs: jest.fn(),
   subscribeProvider: jest.fn().mockReturnValue(() => {}),
   subscribeAccount: jest.fn().mockReturnValue(() => {}),
+  getAmortizeUpfront: jest.fn().mockReturnValue(false),
+  setAmortizeUpfront: jest.fn(),
+  subscribeAmortizeUpfront: jest.fn().mockReturnValue(() => {}),
 }));
 
 import * as api from '../api';
