@@ -217,6 +217,25 @@ var _ EmailSenderInterface = (*MockEmailSender)(nil)
 // calling a real key-generation path.
 var testCSRFKey = []byte("test-csrf-key-32-bytes-padded---")
 
+// TestCSRFKey returns the fixed 32-byte CSRF key shared by test services.
+// Pass it as ServiceConfig.CSRFKey so a service built via NewService derives
+// CSRF tokens deterministically (no ephemeral random key), letting tests in
+// other packages reproduce the expected token with DeriveTestCSRFToken.
+func TestCSRFKey() []byte {
+	// Return a copy so callers cannot mutate the package-level key.
+	key := make([]byte, len(testCSRFKey))
+	copy(key, testCSRFKey)
+	return key
+}
+
+// DeriveTestCSRFToken returns the CSRF token a service configured with
+// TestCSRFKey expects for the given raw session token. It reuses the
+// production derivation (HMAC-SHA256(key, rawSessionToken)) so tests assert
+// the real contract rather than duplicating the crypto.
+func DeriveTestCSRFToken(rawSessionToken string) string {
+	return deriveCSRFToken(testCSRFKey, rawSessionToken)
+}
+
 // newTestService returns a minimal Service with fast bcrypt for unit tests.
 // It has no store or email sender — use createTestService() for tests that need mocks.
 func newTestService() *Service {
