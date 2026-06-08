@@ -1140,6 +1140,110 @@ func TestCallAzureReturn_RefundPolicyViolatedReturns422WindowEdge(t *testing.T) 
 	mockStore.AssertNotCalled(t, "MarkPurchaseRevoked")
 }
 
+// --- Finding D: revocation_in_flight sticky on Azure error paths (second-wave CR) ---
+
+// TestCallAzureReturn_TransientError_ClearsInFlight verifies that when the
+// Azure Return call fails with a transient (non-window-edge, non-client) error,
+// callAzureReturn calls ClearRevocationInFlight so the row is not left sticky.
+func TestCallAzureReturn_TransientError_ClearsInFlight(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-transient"}
+	returnClient := &stubReturnClient{err: errors.New("dial tcp: connection refused")}
+
+	r := armReservationRecord()
+	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.Error(t, err)
+	// Must not be a ClientError -- transient errors surface as a 500 from the caller.
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "transient Azure error must not be a ClientError")
+	mockStore.AssertExpectations(t)
+}
+
+// TestCallAzureReturn_ClientError_ClearsInFlight verifies that an Azure client
+// error (400-class rejection) also clears the in-flight flag so the row reverts
+// to its original status and future retries are not blocked.
+func TestCallAzureReturn_ClientError_ClearsInFlight(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-client"}
+	returnClient := &stubReturnClient{
+		err: &azcore.ResponseError{StatusCode: 400, ErrorCode: "InvalidReservationID"},
+	}
+
+	r := armReservationRecord()
+	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertExpectations(t)
+}
+
+// TestCallAzureReturn_WindowEdge_ClearsInFlight verifies that a RefundPolicyViolated
+// window-edge error also clears the in-flight flag (Azure did not refund).
+func TestCallAzureReturn_WindowEdge_ClearsInFlight(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-edge"}
+	returnClient := &stubReturnClient{
+		err: &azcore.ResponseError{StatusCode: 400, ErrorCode: "RefundPolicyViolated"},
+	}
+
+	r := armReservationRecord()
+	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	mockStore.AssertExpectations(t)
+}
+
+// TestCallAzureReturn_Success_DoesNotClearInFlight verifies that on a successful
+// Azure Return, ClearRevocationInFlight is NOT called (the flag should remain
+// true until the finalize sweep or MarkPurchaseRevoked clears it).
+func TestCallAzureReturn_Success_DoesNotClearInFlight(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-ok"}
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+
+	r := armReservationRecord()
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"),
+		"direct-api", "", mock.Anything, mock.Anything).Return(nil).Once()
+
+	h := &Handler{config: mockStore}
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.NoError(t, err)
+	rr, ok := result.(*revokePurchaseResult)
+	require.True(t, ok)
+	assert.Equal(t, "revoked", rr.Status)
+	// ClearRevocationInFlight must NOT have been called on the success path.
+	mockStore.AssertNotCalled(t, "ClearRevocationInFlight", mock.Anything, mock.Anything)
+	mockStore.AssertExpectations(t)
+}
+
 // --- Finding #9: DST-crossing window math + 4-eyes placeholder ---
 
 // TestRevocationWindowClosesAtFor_DSTCrossing verifies that the revocation

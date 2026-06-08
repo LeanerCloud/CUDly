@@ -1990,6 +1990,26 @@ func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purc
 	return nil
 }
 
+// ClearRevocationInFlight sets revocation_in_flight=false on a purchase_history
+// row. Called when the Azure Return call fails transiently (before Azure actually
+// issued a refund) so the row is not left stuck in the in-flight state, which
+// would mislead the finalize_revocations sweep into thinking Azure succeeded
+// (issue #290, second-wave CR Finding D). No-op when already false.
+func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revocation_in_flight = false
+		 WHERE purchase_id = $1
+	`, purchaseID)
+	if err != nil {
+		return fmt.Errorf("ClearRevocationInFlight: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("ClearRevocationInFlight: purchase_id %q not found", purchaseID)
+	}
+	return nil
+}
+
 // GetPurchaseHistoryInFlight returns all purchase_history rows with
 // revocation_in_flight=true and revoked_at IS NULL. Used by the
 // finalize_revocations scheduled sweep to retry MarkPurchaseRevoked for rows

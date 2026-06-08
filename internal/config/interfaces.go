@@ -164,6 +164,15 @@ type StoreInterface interface {
 	// true (idempotent). Returns a not-found error when no row matches.
 	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
 
+	// ClearRevocationInFlight resets revocation_in_flight=false on a
+	// purchase_history row. Called when the Azure Return call fails with a
+	// transient or client error (not "already returned"), so the row is not
+	// left in a permanently-sticky in-flight state that would prevent future
+	// retries or mislead the finalize_revocations sweep (issue #290, second-wave
+	// CR Finding D). No-op when the row is already false. Best-effort: callers
+	// should log on error but not surface it to the user.
+	ClearRevocationInFlight(ctx context.Context, purchaseID string) error
+
 	// GetPurchaseHistoryInFlight returns all purchase_history rows with
 	// revocation_in_flight=true and revoked_at IS NULL.  These are rows where
 	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the

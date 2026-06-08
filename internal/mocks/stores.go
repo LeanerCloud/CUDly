@@ -330,6 +330,17 @@ func (m *MockConfigStore) FlipPurchaseRevocationInFlight(ctx context.Context, pu
 	return args.Error(0)
 }
 
+// ClearRevocationInFlight mocks ClearRevocationInFlight (issue #290 second-wave CR Finding D).
+// Uses the isExpected default-or-dispatch pattern: tests that only test error paths
+// where Azure never actually returned do not need to register an expectation.
+func (m *MockConfigStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
+	if !isExpected(&m.Mock, "ClearRevocationInFlight") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
 // GetPurchaseHistoryInFlight mocks GetPurchaseHistoryInFlight (issue #290 Finding #6).
 func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*config.PurchaseHistoryRecord, error) {
 	args := m.Called(ctx)

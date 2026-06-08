@@ -639,6 +639,13 @@ func (h *Handler) callAzureReturn(
 		},
 	}, nil)
 	if err != nil {
+		// Azure Return failed. Clear the in-flight flag so the row is not left in
+		// a permanently sticky state that would mislead the finalize_revocations
+		// sweep into thinking Azure already issued a refund (Finding D, second-wave
+		// CR). Best-effort: log and continue even if the clear fails.
+		if clearErr := h.config.ClearRevocationInFlight(ctx, record.PurchaseID); clearErr != nil {
+			logging.Warnf("revoke azure: ClearRevocationInFlight for %s failed after Return error (continuing): %v", record.PurchaseID, clearErr)
+		}
 		// Window-edge: if Azure rejects the Return with RefundPolicyViolated it
 		// means our safety-margin check passed but Azure's clock disagreed (the
 		// reservation crossed the 7-day boundary between our check and the API
