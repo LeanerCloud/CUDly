@@ -212,11 +212,11 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
 		[]string{"approved", "pending", "notified"}, "running").Return(&claimedExec, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Twice()
+	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-456").Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -461,14 +461,14 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	// CAS claim: approved -> running. The re-drive proceeds only after winning this.
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running").
 		Return(&runningRow, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-aws-456").Return(plan, nil).Twice()
+	mockStore.On("GetPurchasePlan", ctx, "plan-aws-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-aws-456").Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -549,14 +549,14 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 	// CAS claim: approved -> running before re-drive.
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running").
 		Return(&runningRow, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-azure-res").Return(plan, nil).Twice()
+	mockStore.On("GetPurchasePlan", ctx, "plan-azure-res").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-azure-res").Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
@@ -630,14 +630,14 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 	// CAS claim: approved -> running before re-drive.
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running").
 		Return(&runningRow, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-gcp").Return(plan, nil).Twice()
+	mockStore.On("GetPurchasePlan", ctx, "plan-gcp").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-gcp").Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "us-central1").Return(mockServiceClient, nil)

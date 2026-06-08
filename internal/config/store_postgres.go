@@ -433,21 +433,21 @@ func (s *PostgresStore) CreatePurchasePlan(ctx context.Context, plan *PurchasePl
 	return nil
 }
 
-// GetPurchasePlan retrieves a purchase plan by ID
-func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*PurchasePlan, error) {
-	query := `
-		SELECT id, name, enabled, auto_purchase, notification_days_before,
-		       services, ramp_schedule, created_at, updated_at,
-		       next_execution_date, last_execution_date, last_notification_sent
-		FROM purchase_plans
-		WHERE id = $1
-	`
+const purchasePlanSelectCols = `
+	SELECT id, name, enabled, auto_purchase, notification_days_before,
+	       services, ramp_schedule, created_at, updated_at,
+	       next_execution_date, last_execution_date, last_notification_sent
+	FROM purchase_plans`
 
+// scanPurchasePlanRow deserialises one purchase_plans row returned by QueryRow
+// or the first row of a query with FOR UPDATE. Extracted so GetPurchasePlan
+// and IncrementPlanCurrentStep share the same scan logic.
+func scanPurchasePlanRow(row pgx.Row) (*PurchasePlan, error) {
 	var plan PurchasePlan
 	var servicesJSON, rampScheduleJSON []byte
 	var nextExecDate, lastExecDate, lastNotifSent sql.NullTime
 
-	err := s.db.QueryRow(ctx, query, planID).Scan(
+	err := row.Scan(
 		&plan.ID,
 		&plan.Name,
 		&plan.Enabled,
@@ -461,24 +461,17 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 		&lastExecDate,
 		&lastNotifSent,
 	)
-
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
-		}
-		return nil, fmt.Errorf("failed to get purchase plan: %w", err)
+		return nil, err
 	}
 
-	// Unmarshal JSONB fields
 	if err := json.Unmarshal(servicesJSON, &plan.Services); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal services: %w", err)
 	}
-
 	if err := json.Unmarshal(rampScheduleJSON, &plan.RampSchedule); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ramp_schedule: %w", err)
 	}
 
-	// Handle nullable timestamps
 	if nextExecDate.Valid {
 		plan.NextExecutionDate = &nextExecDate.Time
 	}
@@ -488,8 +481,59 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 	if lastNotifSent.Valid {
 		plan.LastNotificationSent = &lastNotifSent.Time
 	}
-
 	return &plan, nil
+}
+
+// GetPurchasePlan retrieves a purchase plan by ID
+func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*PurchasePlan, error) {
+	query := purchasePlanSelectCols + ` WHERE id = $1`
+	plan, err := scanPurchasePlanRow(s.db.QueryRow(ctx, query, planID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
+		}
+		return nil, fmt.Errorf("failed to get purchase plan: %w", err)
+	}
+	return plan, nil
+}
+
+// IncrementPlanCurrentStep atomically advances the ramp schedule for planID
+// inside a transaction. The row is locked with SELECT FOR UPDATE so concurrent
+// callers (overlapping Lambda invocations, multi-tick cron) cannot both read
+// the same CurrentStep value and both write CurrentStep+1, skipping a step.
+// Returns nil when the plan no longer exists (deleted between execution and
+// progress update) so the caller is not penalised for a race it cannot control.
+func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, purchasePlanSelectCols+` WHERE id = $1 FOR UPDATE`, planID)
+		plan, err := scanPurchasePlanRow(row)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return fmt.Errorf("failed to lock purchase plan %s: %w", planID, err)
+		}
+
+		if !plan.RampSchedule.IsComplete() {
+			plan.RampSchedule.CurrentStep++
+		}
+
+		if !plan.RampSchedule.IsComplete() {
+			nextDate := plan.RampSchedule.GetNextPurchaseDate()
+			plan.NextExecutionDate = &nextDate
+		} else {
+			plan.NextExecutionDate = nil
+		}
+
+		now := time.Now()
+		plan.LastExecutionDate = &now
+		// Refresh updated_at on every increment. The plan was read from the DB
+		// with its previous UpdatedAt, so UpdatePurchasePlanTx's zero-value
+		// guard would otherwise persist a stale updated_at timestamp.
+		plan.UpdatedAt = now
+
+		return s.UpdatePurchasePlanTx(ctx, tx, plan)
+	})
 }
 
 // UpdatePurchasePlan updates an existing purchase plan. Delegates to

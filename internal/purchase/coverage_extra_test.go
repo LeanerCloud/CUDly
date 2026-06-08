@@ -212,7 +212,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-approved").Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
 
 	manager := &Manager{
@@ -368,7 +368,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	mockStore.On("IncrementPlanCurrentStep", ctx, planID).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,

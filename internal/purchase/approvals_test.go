@@ -45,8 +45,8 @@ func stubExecuteChain(t *testing.T, store *MockConfigStore, sender *MockEmailSen
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	// finalizeExecution writes status=completed via SavePurchaseExecution.
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	// updatePlanProgress fetches+updates the plan.
-	store.On("UpdatePurchasePlan", mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	// updatePlanProgress calls IncrementPlanCurrentStep (atomic, issue #1071).
+	store.On("IncrementPlanCurrentStep", mock.Anything, planID).Return(nil)
 }
 
 func TestManager_ApproveExecution_Success(t *testing.T) {
