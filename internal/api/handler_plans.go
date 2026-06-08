@@ -203,10 +203,15 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Fetch existing plan to preserve data not sent in request
+	// Fetch existing plan to preserve data not sent in request. Do NOT wrap
+	// err with the raw plan UUID: a non-ClientError propagates to the router's
+	// logging.Errorf("API error: %v"), leaking the plan UUID and the raw DB
+	// error string (issue #965, same shape as the createPlan-side fix).
 	existingPlan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get plan %s: %w", planID, err)
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"updatePlan: GetPurchasePlan failed")
 	}
 
 	// Create new plan from request
@@ -337,14 +342,23 @@ func (h *Handler) parseCreatePurchasesRequest(body string) (*CreatePlannedPurcha
 	return &req, startDate, nil
 }
 
-// getPlanForPurchaseCreation retrieves and validates the purchase plan
+// getPlanForPurchaseCreation retrieves and validates the purchase plan.
+//
+// Errors are routed through mapCreatePlanStorageError so a DB failure never
+// leaks the raw error string through the router's
+// logging.Errorf("API error: %v") path (issue #965, same shape as the
+// validatePlanAccountProviders fix). The "plan not found" case (nil, nil) is
+// returned as a 404 ClientError; planID is the caller-supplied value, so
+// echoing it back in the 404 body is acceptable.
 func (h *Handler) getPlanForPurchaseCreation(ctx context.Context, planID string) (*config.PurchasePlan, error) {
 	plan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get plan: %w", err)
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"getPlanForPurchaseCreation: GetPurchasePlan failed")
 	}
 	if plan == nil {
-		return nil, fmt.Errorf("plan not found: %s", planID)
+		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
 	}
 	return plan, nil
 }
@@ -463,9 +477,15 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, NewClientError(400, "invalid request body")
 	}
 
+	// Do NOT wrap err with the raw plan UUID: a non-ClientError propagates to
+	// the router's logging.Errorf("API error: %v"), leaking the plan UUID and
+	// the raw DB error string (issue #965, same shape as the createPlan-side
+	// fix).
 	plan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get plan %s: %w", planID, err)
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"patchPlan: GetPurchasePlan failed")
 	}
 	if plan == nil {
 		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))

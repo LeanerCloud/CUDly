@@ -1230,7 +1230,16 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 	for _, aid := range accountIDs {
 		acct, getErr := h.config.GetCloudAccount(ctx, aid)
 		if getErr != nil {
-			return fmt.Errorf("accounts: failed to get account %s: %w", aid, getErr)
+			// Do NOT wrap getErr with the raw account UUID: a non-ClientError
+			// here propagates to the router's `logging.Errorf("API error: %v")`,
+			// which would leak the account UUID and the raw DB error string
+			// into logs (issue #944(b): log account counts, never raw IDs).
+			// Map to a 404 if the store reports not-found, else a structured
+			// 500 that logs only the derived providers + account count.
+			return mapCreatePlanStorageError(getErr,
+				"account not found", "failed to validate plan accounts",
+				"validatePlanAccountProviders: GetCloudAccount failed (providers=%v accounts=%d)",
+				expected, len(accountIDs))
 		}
 		if acct == nil {
 			return NewClientError(404, fmt.Sprintf("account not found: %s", aid))
@@ -1254,10 +1263,13 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 func (h *Handler) getPlanForAccountProviderValidation(ctx context.Context, planID string) (*config.PurchasePlan, error) {
 	plan, err := h.config.GetPurchasePlan(ctx, planID)
 	if err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
-		}
-		return nil, fmt.Errorf("accounts: failed to get plan: %w", err)
+		// Do NOT wrap err with the raw plan UUID: a non-ClientError propagates
+		// to the router's logging.Errorf("API error: %v"), leaking the raw DB
+		// error string (issue #965). Map to 404 on ErrNotFound; else log a
+		// structured 500 without the DB error or the plan UUID.
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to validate plan",
+			"getPlanForAccountProviderValidation: GetPurchasePlan failed")
 	}
 	if plan == nil {
 		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))

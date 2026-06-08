@@ -404,12 +404,22 @@ func (h *Handler) disablePlan(ctx context.Context, planID string) error {
 		if errors.Is(err, config.ErrNotFound) {
 			return NewClientError(404, fmt.Sprintf("disable plan: plan %s not found", planID))
 		}
-		return fmt.Errorf("disable plan: failed to fetch plan %s: %w", planID, err)
+		// Do NOT wrap err with the raw plan UUID: a non-ClientError propagates
+		// to the router's logging.Errorf("API error: %v"), leaking the plan
+		// UUID and the raw DB error string (issue #965, same shape as the
+		// validatePlanAccountProviders fix).
+		return mapCreatePlanStorageError(err,
+			"plan not found", "failed to disable plan",
+			"disablePlan: GetPurchasePlan failed")
 	}
 	if plan.Enabled {
 		plan.Enabled = false
 		if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
-			return fmt.Errorf("disable plan: failed to update plan %s: %w", planID, err)
+			// Same rationale: avoid leaking planID + raw DB error through the
+			// router's API error log.
+			return mapCreatePlanStorageError(err,
+				"plan not found", "failed to disable plan",
+				"disablePlan: UpdatePurchasePlan failed")
 		}
 	}
 	return nil
@@ -2050,7 +2060,14 @@ func (h *Handler) gatherAccountContactEmails(ctx context.Context, recs []config.
 	for _, id := range orderedIDs {
 		addr, err := h.lookupContactEmail(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("lookup contact email for account %s: %w", id, err)
+			// Do NOT wrap err with the raw account UUID: this error is
+			// returned up to the caller which surfaces it through the
+			// router's logging.Errorf("API error: %v") path, leaking the
+			// account UUID and the raw DB error string (issue #965, same
+			// shape as the validatePlanAccountProviders fix). Return a
+			// generic 500 ClientError; lookupContactEmail has already logged
+			// the failure point without PII.
+			return nil, NewClientError(500, "failed to resolve contact emails")
 		}
 		if addr == "" {
 			continue
@@ -2101,7 +2118,17 @@ func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
 func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, error) {
 	acct, err := h.config.GetCloudAccount(ctx, id)
 	if err != nil {
-		logging.Warnf("lookupContactEmail: GetCloudAccount(%s) failed: %v", id, err)
+		// Do NOT log id or err verbatim: id is the raw account UUID and err
+		// can be a raw DB error string (issue #965, same shape as the
+		// validatePlanAccountProviders fix). Keep the message generic.
+		//
+		// Log at error level: the caller (gatherAccountContactEmails) maps
+		// this into a generic 500 ClientError, which the router emits via the
+		// non-error-logging ClientError branch (handler.go: it returns the
+		// ce.code/body before reaching logging.Errorf("API error: %v")). This
+		// line is therefore the only error-level breadcrumb for the resulting
+		// user-visible 500, so it must stay at Errorf to preserve alerting.
+		logging.Errorf("lookupContactEmail: GetCloudAccount failed")
 		return "", err
 	}
 	if acct == nil {

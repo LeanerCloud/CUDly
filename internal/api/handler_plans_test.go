@@ -766,7 +766,14 @@ func TestHandler_createPlannedPurchases_PlanNotFound(t *testing.T) {
 	result, err := handler.createPlannedPurchases(ctx, req, "99999999-9999-9999-9999-999999999999")
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to get plan")
+	// Post-#965-followup: getPlanForPurchaseCreation routes DB errors through
+	// mapCreatePlanStorageError, returning a generic 500 ClientError without
+	// the raw plan UUID or the raw DB error string in the user-facing message.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), "99999999-9999-9999-9999-999999999999", "500 message must not echo the plan UUID")
+	assert.NotContains(t, ce.Error(), "plan not found", "500 message must not be the 404 branch (it would mask a real DB outage)")
 }
 
 func TestCalculateNextExecutionDate(t *testing.T) {
@@ -979,7 +986,112 @@ func TestHandler_patchPlan_NotFound(t *testing.T) {
 	result, err := handler.patchPlan(ctx, req, "99999999-9999-9999-9999-999999999999")
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to get plan")
+	// Post-#965-followup: patchPlan routes generic DB errors through
+	// mapCreatePlanStorageError, returning a generic 500 ClientError without
+	// the raw plan UUID or the raw DB error string in the user-facing message.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), "99999999-9999-9999-9999-999999999999", "500 message must not echo the plan UUID")
+}
+
+// TestHandler_patchPlan_GetPlanDBError_NoPIILeak is a regression test for the
+// PII-leak sibling of issue #965: the GetPurchasePlan DB-error path in patchPlan
+// previously wrapped the raw error with the raw plan UUID
+// (`fmt.Errorf("failed to get plan %s: %w", planID, err)`), and that non-
+// ClientError propagated to the router's logging.Errorf("API error: %v"),
+// leaking both the UUID and the raw DB error string. Asserts that on a DB
+// error: (1) a 500 ClientError is returned, (2) neither the returned message
+// nor the captured default-log line contains the plan UUID or the raw DB
+// error string.
+func TestHandler_patchPlan_GetPlanDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		planUUID = "99999999-9999-9999-9999-999999999999"
+		rawDBErr = "pq: SSL connection has been closed unexpectedly by host db-plans-99.example.com"
+	)
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetPurchasePlan", ctx, planUUID).Return(nil, errors.New(rawDBErr))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	logBuf := captureDefaultLog(t)
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"enabled": true}`,
+	}
+	result, err := handler.patchPlan(ctx, req, planUUID)
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code, "a DB error fetching the plan is a server-side fault")
+	assert.NotContains(t, ce.Error(), planUUID, "500 message must not echo the plan UUID")
+	assert.NotContains(t, ce.Error(), rawDBErr, "500 message must not leak the raw DB error string")
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, planUUID, "log must not contain the raw plan UUID (issue #965 sibling)")
+	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
+}
+
+// TestHandler_updatePlan_GetPlanDBError_NoPIILeak guards the same shape on the
+// PUT updatePlan path (handler_plans.go:209): the existingPlan-fetch DB error
+// path used to wrap with the raw plan UUID.
+func TestHandler_updatePlan_GetPlanDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		planUUID = "99999999-9999-9999-9999-999999999999"
+		rawDBErr = "pq: connection refused to host db-internal-99.example.com"
+	)
+
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetPurchasePlan", ctx, planUUID).Return(nil, errors.New(rawDBErr))
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	logBuf := captureDefaultLog(t)
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		// Minimal valid body; updatePlan validates fields after the fetch.
+		Body: `{"name":"x","provider":"aws","service":"ec2"}`,
+	}
+	result, err := handler.updatePlan(ctx, req, planUUID)
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), planUUID, "500 message must not echo the plan UUID")
+	assert.NotContains(t, ce.Error(), rawDBErr, "500 message must not leak the raw DB error string")
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, planUUID)
+	assert.NotContains(t, logged, rawDBErr)
 }
 
 func TestHandler_patchPlan_NilPlan(t *testing.T) {

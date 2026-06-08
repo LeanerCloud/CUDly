@@ -699,6 +699,13 @@ func TestHandler_resolveApprovalRecipients_NoContactEmail(t *testing.T) {
 // Instead, the lookup error propagates to the caller, which surfaces
 // it as a retriable failure so the operator's next attempt sees the
 // real approver list.
+//
+// Post-#965-followup: the underlying transient is intentionally NOT exposed
+// in the returned error chain — gatherAccountContactEmails maps DB failures
+// to a generic 500 ClientError so the router's `API error: %v` log cannot
+// leak the raw account UUID or DB error string. Equivalence of "propagate as
+// a server-side failure" is asserted via the 500 ClientError code, not via
+// errors.Is on the underlying transient.
 func TestHandler_resolveApprovalRecipients_LookupErrorPropagates(t *testing.T) {
 	ctx := context.Background()
 	globalNotify := "global@cudly.example"
@@ -715,8 +722,14 @@ func TestHandler_resolveApprovalRecipients_LookupErrorPropagates(t *testing.T) {
 		{ID: "r1", CloudAccountID: &accountID},
 	}
 	to, cc, approvers, err := h.resolveApprovalRecipients(ctx, recs, globalNotify)
-	require.Error(t, err, "transient lookup error must propagate")
-	assert.ErrorIs(t, err, transient, "wrapped error chain must preserve the underlying cause")
+	require.Error(t, err, "transient lookup error must propagate (no silent globalNotify fallback)")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "lookup error must surface as a ClientError so the router does not log the raw DB cause")
+	assert.Equal(t, 500, ce.code, "transient DB failure is a server-side fault, not a client fault")
+	// PII-leak guards: neither the raw account ID nor the underlying transient
+	// error message must appear in the surfaced error.
+	assert.NotContains(t, err.Error(), accountID)
+	assert.NotContains(t, err.Error(), transient.Error())
 	assert.Empty(t, to)
 	assert.Nil(t, cc)
 	assert.Nil(t, approvers)
@@ -3599,4 +3612,154 @@ func TestHandler_authorizeExecutionManagement_LegacyNullCreator(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
+}
+
+// TestDisablePlan_GetPlanDBError_NoPIILeak is a regression test for the
+// PII-leak sibling of issue #965: disablePlan previously wrapped its
+// GetPurchasePlan and UpdatePurchasePlan failures with the raw plan UUID
+// (`fmt.Errorf("disable plan: failed to ... %s: %w", planID, err)`), and that
+// non-ClientError propagated to the router's logging.Errorf("API error: %v"),
+// leaking both the UUID and the raw DB error string. Asserts: 500 ClientError;
+// neither the returned message nor the captured default-log line contains the
+// plan UUID or the raw DB error string.
+func TestDisablePlan_GetPlanDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		planUUID = "99999999-9999-9999-9999-999999999999"
+		rawDBErr = "pq: SSL connection has been closed unexpectedly by host db-plans-99.example.com"
+	)
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetPurchasePlan", ctx, planUUID).Return(nil, errors.New(rawDBErr))
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{config: mockStore}
+
+	logBuf := captureDefaultLog(t)
+
+	err := handler.disablePlan(ctx, planUUID)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), planUUID, "500 message must not echo the plan UUID")
+	assert.NotContains(t, ce.Error(), rawDBErr, "500 message must not leak the raw DB error string")
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, planUUID, "log must not contain the raw plan UUID (issue #965 sibling)")
+	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
+}
+
+// TestDisablePlan_UpdatePlanDBError_NoPIILeak guards the same shape on the
+// UpdatePurchasePlan failure path (the second leak site).
+func TestDisablePlan_UpdatePlanDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		planUUID = "99999999-9999-9999-9999-999999999999"
+		rawDBErr = "pq: deadlock detected on relation plans"
+	)
+
+	enabledPlan := &config.PurchasePlan{ID: planUUID, Enabled: true}
+
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetPurchasePlan", ctx, planUUID).Return(enabledPlan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(errors.New(rawDBErr))
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{config: mockStore}
+
+	logBuf := captureDefaultLog(t)
+
+	err := handler.disablePlan(ctx, planUUID)
+	require.Error(t, err)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError, not propagate raw to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), planUUID)
+	assert.NotContains(t, ce.Error(), rawDBErr)
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, planUUID)
+	assert.NotContains(t, logged, rawDBErr)
+}
+
+// TestLookupContactEmail_GetAccountDBError_NoPIILeak guards that the
+// GetCloudAccount failure path in lookupContactEmail no longer logs the raw
+// account UUID or the raw DB error string (issue #965 sibling at
+// handler_purchases.go:2006).
+func TestLookupContactEmail_GetAccountDBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		acctUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+		rawDBErr = "pq: connection refused to host db-internal-99.example.com"
+	)
+
+	mockStore := new(MockConfigStore)
+	mockStore.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return nil, errors.New(rawDBErr)
+	}
+
+	handler := &Handler{config: mockStore}
+
+	logBuf := captureDefaultLog(t)
+
+	addr, err := handler.lookupContactEmail(ctx, acctUUID)
+	require.Error(t, err)
+	assert.Empty(t, addr)
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, acctUUID, "log must not contain the raw account UUID (issue #965 sibling)")
+	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
+	// The caller maps this failure into a generic 500 ClientError, which the
+	// router returns before reaching logging.Errorf("API error: %v"). This is
+	// therefore the only error-level breadcrumb for the user-visible 500, so it
+	// must be emitted at ERROR severity to preserve alerting (CR PR #969).
+	assert.Contains(t, logged, "[ERROR]", "GetCloudAccount failure must log at error level so the user-visible 500 stays alertable")
+	assert.Contains(t, logged, "lookupContactEmail: GetCloudAccount failed", "the generic breadcrumb message must be present")
+}
+
+// TestGatherAccountContactEmails_DBError_NoPIILeak guards the wrap site at
+// gatherAccountContactEmails (handler_purchases.go:1955) which previously
+// re-wrapped lookupContactEmail's error with the raw account UUID
+// (`fmt.Errorf("lookup contact email for account %s: %w", id, err)`) and
+// propagated it up to the router's `API error: %v` log.
+func TestGatherAccountContactEmails_DBError_NoPIILeak(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		acctUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+		rawDBErr = "pq: connection refused to host db-internal-99.example.com"
+	)
+
+	mockStore := new(MockConfigStore)
+	mockStore.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		return nil, errors.New(rawDBErr)
+	}
+
+	handler := &Handler{config: mockStore}
+
+	logBuf := captureDefaultLog(t)
+
+	id := acctUUID
+	recs := []config.RecommendationRecord{{CloudAccountID: &id}}
+	emails, err := handler.gatherAccountContactEmails(ctx, recs)
+	require.Error(t, err)
+	assert.Nil(t, emails)
+
+	// The returned error must be a ClientError so it does not propagate the
+	// raw account UUID or the raw DB error through the router's API-error log.
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "DB error must surface as a ClientError; raw error must not propagate to the router log")
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), acctUUID, "ClientError message must not echo the account UUID")
+	assert.NotContains(t, ce.Error(), rawDBErr, "ClientError message must not leak the raw DB error string")
+
+	logged := logBuf.String()
+	assert.NotContains(t, logged, acctUUID, "log must not contain the raw account UUID (issue #965 sibling)")
+	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
 }
