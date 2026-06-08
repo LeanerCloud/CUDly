@@ -26,7 +26,8 @@ function loadAuth(): { api: typeof import('../api'); handler: (e: StorageEvent) 
     if (!call) throw new Error('initAuth() did not install a storage listener');
     out = { api, handler: call[1] as (e: StorageEvent) => void, reload, addSpy };
   });
-  return out!;
+  if (!out) throw new Error('loadAuth failed to capture storage listener');
+  return out;
 }
 
 // jsdom rejects the jest.fn() storage mock as storageArea, so omit it
@@ -55,6 +56,14 @@ describe('cross-tab logout sync (issue #493)', () => {
     const { api, handler, reload } = loadAuth();
     api.setAuthToken('t');
     handler(evt('authToken', 'rotated'));
+    expect(api.isAuthenticated()).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test('ignores events with null key (e.g. localStorage.clear())', () => {
+    const { api, handler, reload } = loadAuth();
+    api.setAuthToken('t');
+    handler(evt(null, null));
     expect(api.isAuthenticated()).toBe(true);
     expect(reload).not.toHaveBeenCalled();
   });
