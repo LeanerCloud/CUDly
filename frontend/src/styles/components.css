@@ -708,6 +708,24 @@ th .column-filter-btn.active {
     font-size: 0.85em;
     color: var(--cudly-text-muted);
 }
+/* "Show costs: <period>" selector: keep the label and select inline and
+   vertically centered so the control sits on the same line as the count,
+   Expand all and Columns, instead of the small label stacking above the
+   taller select (the base `select` style is bigger than the bar's buttons). */
+.recommendations-filter-status .cost-period-selector-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+}
+.recommendations-filter-status .cost-period-selector-label {
+    color: var(--cudly-text-muted);
+}
+.recommendations-filter-status .cost-period-select {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    line-height: 1.2;
+}
 .recommendations-filter-status .clear-filters {
     background: var(--cudly-info-bg);
     border: 1px solid #a9c7f5;
