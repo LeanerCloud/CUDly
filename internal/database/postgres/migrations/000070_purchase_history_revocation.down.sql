@@ -1,4 +1,4 @@
--- Rollback 000068: remove revocation columns from purchase_history
+-- Rollback 000070: remove revocation columns from purchase_history
 DROP INDEX IF EXISTS idx_purchase_history_revocation_window;
 
 -- Drop audit consistency constraints before dropping the columns.

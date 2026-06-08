@@ -1,4 +1,4 @@
--- Migration 000068: add revocation columns to purchase_history
+-- Migration 000070: add revocation columns to purchase_history
 --
 -- AWS EC2 RIs: no direct cancel API; the 24h free-cancel window requires an
 -- AWS Support case (support:CreateCase). AWS support-case revocation is
