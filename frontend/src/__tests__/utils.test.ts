@@ -58,8 +58,10 @@ describe('formatCurrency', () => {
 
 describe('formatDate', () => {
   test('renders canonical "Mon DD, YYYY" form regardless of browser locale', () => {
-    // 2024-03-15 → "Mar 15, 2024" in en-US short-month format. The check
-    // is locale-invariant because formatDate forces en-US.
+    // 2024-03-15 → "Mar 15, 2024" in en-US short-month format. The check is
+    // locale-invariant (formatDate forces en-US) and timezone-invariant: a
+    // bare "YYYY-MM-DD" is parsed as local midnight, so the displayed day
+    // stays 15 even in browsers west of UTC (previously rendered "Mar 14").
     expect(formatDate('2024-03-15')).toBe('Mar 15, 2024');
   });
 
@@ -75,7 +77,17 @@ describe('formatDate', () => {
 
   test('returns empty string for invalid date', () => {
     expect(formatDate('not-a-date')).toBe('');
+    // Digit-shaped but out-of-range: must not silently roll over (month 13,
+    // day 45) into a valid date — parseDateInput round-trips and rejects it.
     expect(formatDate('2024-13-45')).toBe('');
+  });
+
+  test('does not shift a bare calendar day across the day boundary', () => {
+    // A date-only string is the intended calendar day; it must render the
+    // same day regardless of the runner's timezone (regression for the
+    // UTC-midnight off-by-one that showed "Mar 14" west of UTC).
+    expect(formatDate('2024-01-01')).toBe('Jan 1, 2024');
+    expect(formatDate('2024-12-31')).toBe('Dec 31, 2024');
   });
 });
 
@@ -135,6 +147,15 @@ describe('getDateParts', () => {
 
   test('returns zeros for invalid date', () => {
     expect(getDateParts('invalid')).toEqual({ day: 0, month: '' });
+    // Out-of-range digits must be rejected, not rolled over.
+    expect(getDateParts('2024-13-45')).toEqual({ day: 0, month: '' });
+  });
+
+  test('keeps a bare calendar day stable across timezones', () => {
+    // Regression: a date-only string parsed as UTC midnight previously
+    // reported the previous day's date west of UTC.
+    expect(getDateParts('2024-03-15').day).toBe(15);
+    expect(getDateParts('2024-01-01').day).toBe(1);
   });
 });
 

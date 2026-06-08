@@ -18,6 +18,11 @@ func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) 
 	service := auth.NewService(auth.ServiceConfig{
 		Store:           mockStore,
 		SessionDuration: time.Hour,
+		// Pin a deterministic CSRF key so CSRF-token derivation is
+		// reproducible and hermetic. Without this, NewService generates a
+		// random ephemeral key, so any test asserting a specific derived CSRF
+		// token (TestAuthServiceAdapter_ValidateCSRFToken) cannot reproduce it.
+		CSRFKey: auth.TestCSRFKey(),
 	})
 	adapter := newAuthServiceAdapter(service)
 	return adapter, mockStore
@@ -238,7 +243,13 @@ func TestAuthServiceAdapter_ValidateCSRFToken(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}, nil)
 
-	err := adapter.ValidateCSRFToken(ctx, "session-token", "csrf-token")
+	// ValidateCSRFToken recomputes the expected token as
+	// HMAC-SHA256(csrfKey, rawSessionToken); it never reads the stored
+	// CSRFToken column. Derive the matching token from the same fixed key the
+	// service was built with (auth.TestCSRFKey) so the assertion is hermetic
+	// and does not depend on an ambient CSRFKey from the environment.
+	csrfToken := auth.DeriveTestCSRFToken("session-token")
+	err := adapter.ValidateCSRFToken(ctx, "session-token", csrfToken)
 	require.NoError(t, err)
 }
 

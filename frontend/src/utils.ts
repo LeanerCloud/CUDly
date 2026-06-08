@@ -39,6 +39,43 @@ export function formatCurrency(
 }
 
 /**
+ * Parse a date input into a Date, treating bare calendar dates correctly.
+ *
+ * A date-only ISO string ("2024-03-15") is parsed by `new Date()` as UTC
+ * midnight; rendering it with a locale formatter then shifts it into the
+ * browser's local timezone, so a user west of UTC sees the *previous* day
+ * ("Mar 14") for a date the backend meant as a plain calendar day (e.g. a
+ * purchase's scheduled_date or a reservation end_date). Parse bare
+ * "YYYY-MM-DD" values as local midnight instead so the displayed day matches
+ * the intended calendar day in every timezone. Strings carrying a time/zone
+ * component ("2024-03-15T14:30:00Z") and Date objects are left untouched.
+ */
+function parseDateInput(date: string | Date): Date {
+  if (typeof date === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    if (m) {
+      const year = Number(m[1]);
+      const month = Number(m[2]); // 1-based as written
+      const day = Number(m[3]);
+      // Local midnight for the given calendar day (Date month is 0-based).
+      const d = new Date(year, month - 1, day);
+      // Reject out-of-range components (e.g. "2024-13-45"): the Date
+      // constructor silently rolls them over instead of producing NaN, so
+      // verify the round-trip and return an Invalid Date if it doesn't match.
+      if (
+        d.getFullYear() !== year ||
+        d.getMonth() !== month - 1 ||
+        d.getDate() !== day
+      ) {
+        return new Date(NaN);
+      }
+      return d;
+    }
+  }
+  return new Date(date);
+}
+
+/**
  * Canonical date-only format used everywhere in the UI: "Apr 17, 2026".
  * The en-US locale + `month: 'short'` removes ambiguity from pure numeric
  * forms ("3/25/2026" vs "25.3.2026") and stays compact enough for table
@@ -46,7 +83,7 @@ export function formatCurrency(
  */
 export function formatDate(date: string | Date | null | undefined): string {
   if (!date) return '';
-  const d = new Date(date);
+  const d = parseDateInput(date);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -111,7 +148,7 @@ export interface DateParts {
  */
 export function getDateParts(date: string | Date | null | undefined): DateParts {
   if (!date) return { day: 0, month: '' };
-  const d = new Date(date);
+  const d = parseDateInput(date);
   if (isNaN(d.getTime())) return { day: 0, month: '' };
   return {
     day: d.getDate(),
