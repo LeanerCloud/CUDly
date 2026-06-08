@@ -220,10 +220,10 @@ func TestExecuteExchange_Validation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "max_payment_due_usd is required")
 
-	// Invalid max_payment_due_usd
+	// Invalid max_payment_due_usd -- region provided so validation reaches the ParseDecimalRat check.
 	_, err = h.executeExchange(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"offering-1","target_count":1,"max_payment_due_usd":"abc"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"offering-1","target_count":1,"max_payment_due_usd":"abc","region":"us-east-1"}`,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid max_payment_due_usd")
@@ -1268,6 +1268,97 @@ func TestMapAWSExchangeError_NonAWSError(t *testing.T) {
 	ce, ok := IsClientError(mapped)
 	require.True(t, ok)
 	assert.Equal(t, 500, ce.code)
+}
+
+// TestExecuteExchange_EmptyRegionReturns400 pins finding 01-L4:
+// executeExchange must reject a request with no region rather than
+// silently routing the exchange to us-east-1, where RIs may not live.
+// A wrong-region execute is a financially irreversible mistake.
+func TestExecuteExchange_EmptyRegionReturns400(t *testing.T) {
+	h := &Handler{auth: &mockAuthForExchange{}}
+
+	_, err := h.executeExchange(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"10.00"}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "region is required")
+}
+
+// TestGetExchangeQuote_EmptyRegionResolvesFromSDK pins finding 01-L4:
+// getExchangeQuote must resolve the region from the AWS SDK chain when
+// the caller omits it, matching getReshapeRecommendations, instead of
+// hardcoding us-east-1. We pre-seal awsCfgOnce with a non-default region
+// and verify the quote call receives that region (the call fails because
+// there is no real AWS SDK, but the region check happens first via body
+// validation passing; here we verify no 400 for missing region).
+func TestGetExchangeQuote_EmptyRegionResolvesFromSDK(t *testing.T) {
+	const cfgRegion = "eu-west-1"
+	h := &Handler{auth: &mockAuthForExchange{}}
+	// Pre-seal awsCfgOnce so loadAWSConfigWithRegion returns cfgRegion
+	// without making a real SDK call.
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg = aws.Config{Region: cfgRegion}
+	})
+
+	// The quote call will fail (no real AWS endpoint), but it must NOT fail
+	// with a 400 "region is required" — region resolution from the SDK is
+	// the accepted path for quote (non-mutation). The error will be a 500
+	// from exchange.GetExchangeQuote failing against no real AWS.
+	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer test-token"},
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1"}`,
+	})
+	// We expect either no error or a 500 from the AWS call — never a 400
+	// complaining about a missing region.
+	if err != nil {
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "expected ClientError, got: %v", err)
+		assert.NotEqual(t, 400, ce.code,
+			"getExchangeQuote must not return 400 for a missing region; it must resolve from the SDK chain")
+	}
+}
+
+// TestExecuteApprovedExchange_EmptyRecordRegionFails pins finding 01-L4:
+// executeApprovedExchange must fail the exchange (not default to us-east-1)
+// when the stored record has no region. A hardcoded fallback would execute
+// a financially irreversible operation in the wrong region.
+func TestExecuteApprovedExchange_EmptyRecordRegionFails(t *testing.T) {
+	ctx := context.Background()
+	id := "550e8400-e29b-41d4-a716-000000000001"
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	h := &Handler{config: mockStore}
+
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD:       1000,
+		RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	// Record has no region — the handler must call failExchange, not proceed.
+	mockStore.On("FailRIExchange", ctx, id, mock.MatchedBy(func(reason string) bool {
+		return len(reason) > 0
+	})).Return(nil)
+
+	record := &config.RIExchangeRecord{
+		ID:               id,
+		Region:           "", // intentionally empty
+		SourceRIIDs:      []string{"ri-1"},
+		TargetOfferingID: "offering-1",
+		TargetCount:      1,
+		PaymentDue:       "50.00",
+	}
+
+	resp, err := h.executeApprovedExchange(ctx, id, record)
+	require.NoError(t, err, "executeApprovedExchange surfaces the failure via failExchange, not via error return")
+	respMap, ok := resp.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "failed", respMap["status"])
+	assert.Contains(t, respMap["reason"], "no region")
 }
 
 // TestClassifyRecsAge pins the staleness classification thresholds for

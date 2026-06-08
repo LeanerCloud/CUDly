@@ -274,6 +274,60 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 	return cfg, nil
 }
 
+// reshapeCloudAccountInScope checks whether the session's allowed_accounts
+// permit access to the deployment's registered AWS cloud account. It returns
+// (true, nil) when the session is unrestricted or the cloud account matches,
+// (false, nil) when the cloud account is outside the session's scope (caller
+// should return an empty response), and (false, err) on any lookup failure.
+// Used by listConvertibleRIs, getRIUtilization, and getReshapeRecommendations
+// to eliminate duplicated account-scoping blocks.
+func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Session) (bool, error) {
+	allowed, aErr := h.getAllowedAccounts(ctx, session)
+	if aErr != nil {
+		return false, fmt.Errorf("failed to get allowed accounts: %w", aErr)
+	}
+	if auth.IsUnrestrictedAccess(allowed) {
+		return true, nil
+	}
+	cloudAccountID, aErr := h.resolveReshapeCloudAccountID(ctx)
+	if aErr != nil {
+		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
+	}
+	nameByID := h.resolveAccountNamesByID(ctx)
+	return auth.MatchesAccount(allowed, cloudAccountID, nameByID[cloudAccountID]), nil
+}
+
+// resolveReshapeCloudAccountID returns the cloud account ID for the running
+// deployment, using the test-injected reshapeAccountResolver when set and
+// falling back to the production resolveAWSCloudAccountID (STS-backed).
+func (h *Handler) resolveReshapeCloudAccountID(ctx context.Context) (string, error) {
+	if h.reshapeAccountResolver != nil {
+		return h.reshapeAccountResolver(ctx)
+	}
+	return h.resolveAWSCloudAccountID(ctx)
+}
+
+// checkListRIsAccountIDParam enforces the ?account_id= chip filter for
+// listConvertibleRIs. Returns (true, nil) when the running AWS account matches
+// the requested account (or when no account_id param is given), (false, nil)
+// when it does not match (caller should return an empty list), and
+// (false, err) on STS failure.
+func (h *Handler) checkListRIsAccountIDParam(ctx context.Context, params map[string]string) (bool, error) {
+	accountID := params["account_id"]
+	if accountID == "" {
+		return true, nil
+	}
+	resolve := h.resolveAWSAccountID
+	if h.riInstancesAccountResolver != nil {
+		resolve = h.riInstancesAccountResolver
+	}
+	runningAccountID, err := resolve(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve running AWS account for RI scope: %w", err)
+	}
+	return runningAccountID == accountID, nil
+}
+
 // listConvertibleRIs returns all active convertible Reserved Instances for
 // the running AWS account.
 //
@@ -286,22 +340,23 @@ func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (a
 // closed (returns an error) instead of silently leaking the ambient account's
 // RIs under another account's filter.
 func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
 	}
 
-	if accountID := req.QueryStringParameters["account_id"]; accountID != "" {
-		resolve := h.resolveAWSAccountID
-		if h.riInstancesAccountResolver != nil {
-			resolve = h.riInstancesAccountResolver
-		}
-		runningAccountID, err := resolve(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve running AWS account for RI scope: %w", err)
-		}
-		if runningAccountID != accountID {
-			return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
-		}
+	// Apply the session's allowed_accounts scope: a restricted user must
+	// only see RIs for the deployment's registered AWS account.
+	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
+	}
+
+	if inScope, sErr := h.checkListRIsAccountIDParam(ctx, req.QueryStringParameters); sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
 	}
 
 	region := req.QueryStringParameters["region"]
@@ -321,8 +376,16 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 
 // getRIUtilization returns per-RI utilization from Cost Explorer.
 func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope.
+	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &RIUtilizationResponse{Utilization: []recommendations.RIUtilization{}}, nil
 	}
 
 	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
@@ -426,25 +489,54 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 	return riInfos, utilInfos
 }
 
+// reshapeRequestParams groups parsed query parameters for getReshapeRecommendations.
+type reshapeRequestParams struct {
+	threshold    float64
+	lookbackDays int
+	region       string
+}
+
+// parseReshapeParams parses the threshold, lookback_days, and region query
+// parameters for getReshapeRecommendations in a single call, reducing the
+// number of error-check branches in the handler to keep it within the
+// gocyclo limit.
+func parseReshapeParams(params map[string]string) (reshapeRequestParams, error) {
+	threshold, err := parseThresholdParam(params)
+	if err != nil {
+		return reshapeRequestParams{}, err
+	}
+	lookbackDays, err := parseLookbackDaysParam(params)
+	if err != nil {
+		return reshapeRequestParams{}, err
+	}
+	return reshapeRequestParams{
+		threshold:    threshold,
+		lookbackDays: lookbackDays,
+		region:       params["region"],
+	}, nil
+}
+
 // getReshapeRecommendations orchestrates fetching convertible RIs + utilization
 // and returns reshape recommendations.
 func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
-		return nil, err
-	}
-
-	threshold, err := parseThresholdParam(req.QueryStringParameters)
+	session, err := h.requirePermission(ctx, req, "view", "purchases")
 	if err != nil {
 		return nil, err
 	}
 
-	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
+	// Apply the session's allowed_accounts scope.
+	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &ReshapeRecommendationsResponse{Recommendations: []exchange.ReshapeRecommendation{}}, nil
+	}
+
+	p, err := parseReshapeParams(req.QueryStringParameters)
 	if err != nil {
 		return nil, err
 	}
 
-	region := req.QueryStringParameters["region"]
-	cfg, err := h.loadAWSConfigWithRegion(ctx, region)
+	cfg, err := h.loadAWSConfigWithRegion(ctx, p.region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -454,8 +546,8 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	// unscoped, leaking alternatives from other regions onto the reshape page.
 	// Adopt the resolved region so every downstream consumer sees the same
 	// value the AWS clients are actually talking to.
-	if region == "" {
-		region = cfg.Region
+	if p.region == "" {
+		p.region = cfg.Region
 	}
 
 	ec2Client := h.buildReshapeEC2Client(cfg)
@@ -465,7 +557,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	recsAdapter := h.buildReshapeRecsClient(cfg)
-	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, recsAdapter.GetRIUtilization)
+	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, p.region, p.lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, recsAdapter.GetRIUtilization)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
@@ -481,19 +573,13 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	// CloudAccount registration hasn't happened yet; a real ListCloudAccounts
 	// error aborts the request instead of silently falling through to an
 	// unscoped query that could match the wrong tenant's recs.
-	resolveAccount := h.resolveAWSCloudAccountID
-	if h.reshapeAccountResolver != nil {
-		// Test injection — bypasses sts.GetCallerIdentity so the
-		// integration suite runs without AWS credentials.
-		resolveAccount = h.reshapeAccountResolver
-	}
-	cloudAccountID, err := resolveAccount(ctx)
+	cloudAccountID, err := h.resolveReshapeCloudAccountID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve cloud account scope for reshape: %w", err)
 	}
 	currencyCode := firstNonEmptyCurrency(instances)
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
-	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, threshold, region, currencyCode, lookup)
+	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup)
 
 	resp := &ReshapeRecommendationsResponse{Recommendations: recs}
 	h.attachReshapeStaleness(ctx, resp)
@@ -574,10 +660,14 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	region := body.Region
-	if region == "" {
-		region = "us-east-1"
+	// Resolve region from the AWS SDK chain when the caller omits it,
+	// matching getReshapeRecommendations. Hardcoding us-east-1 would
+	// return an incorrect quote for deployments in other regions.
+	cfg, err := h.loadAWSConfigWithRegion(ctx, body.Region)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	region := cfg.Region
 
 	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
 		Region:           region,
@@ -612,6 +702,13 @@ func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
 	}
+	// Region is required on execute: RI exchanges are region-scoped and
+	// financially irreversible. Silently defaulting to us-east-1 would
+	// execute the exchange in the wrong region for deployments hosted
+	// elsewhere, with no way to undo the operation.
+	if body.Region == "" {
+		return NewClientError(400, "region is required for execute; omitting it risks exchanging RIs in the wrong region")
+	}
 	return nil
 }
 
@@ -637,9 +734,6 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	region := body.Region
-	if region == "" {
-		region = "us-east-1"
-	}
 
 	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,
@@ -1153,7 +1247,10 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 
 	region := record.Region
 	if region == "" {
-		region = "us-east-1"
+		// Region is a required field captured at record-creation time.
+		// Defaulting to us-east-1 here would execute a financial mutation
+		// in the wrong region for records created without a region stamp.
+		return h.failExchange(ctx, id, "exchange record has no region; cannot execute safely")
 	}
 
 	if globalCfg.RIExchangeMaxPerExchangeUSD == 0 {
