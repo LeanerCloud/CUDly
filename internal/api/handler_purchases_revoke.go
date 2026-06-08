@@ -21,11 +21,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	armreservations "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -691,19 +693,30 @@ func parseAzureReservationIDs(purchaseID string) (orderID, reservationID string,
 	return orderID, reservationID, nil
 }
 
-// isAzureClientError returns true when the error message contains indicators
-// of a 4xx (client-side) Azure API rejection. Used to map Azure errors onto
-// the correct HTTP status for the frontend.
+// isAzureClientError reports whether err represents a 4xx (client-side) Azure
+// API rejection that the frontend should see as a user-actionable error rather
+// than an internal server error.
+//
+// The check uses typed error inspection (errors.As to *azcore.ResponseError)
+// rather than substring matching on err.Error(). The substring approach had two
+// failure modes:
+//  1. False positives: a network timeout whose message happens to contain "400"
+//     or "404" would be misclassified as a client error, hiding transient infra
+//     problems from the operator.
+//  2. False negatives: Azure may return refund-policy errors with HTTP status
+//     codes we did not enumerate as string literals (e.g. 403, 405).
+//
+// The typed approach classifies exactly the HTTP status codes Azure uses for
+// policy violations and bad requests; all other errors (transport errors,
+// 5xx, unknown error types) correctly classify as server-side.
 func isAzureClientError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	for _, indicator := range []string{
-		"400", "409", "422",
-		"refundpolicyviolated", "refund not allowed", "returnpolicyviolated",
-	} {
-		if strings.Contains(msg, indicator) {
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) {
+		switch respErr.StatusCode {
+		case 400, 403, 404, 405, 409, 422:
 			return true
 		}
 	}

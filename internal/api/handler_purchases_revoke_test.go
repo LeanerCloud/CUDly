@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	armreservations "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
@@ -281,7 +283,9 @@ func TestRevokePurchase_AzureCalcRefundClientError(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	calcClient := &stubCalcRefundClient{err: errors.New("400: RefundPolicyViolated")}
+	// Use a typed *azcore.ResponseError so isAzureClientError classifies it
+	// correctly after the Finding #7 fix (typed check, not substring match).
+	calcClient := &stubCalcRefundClient{err: &azcore.ResponseError{StatusCode: 400}}
 	returnClient := &stubReturnClient{}
 
 	h := &Handler{config: mockStore}
@@ -890,6 +894,45 @@ func TestCallAzureReturn_AuditRowPopulatedWithQuote(t *testing.T) {
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+}
+
+// --- Finding #7: typed Azure error classification ---
+
+// TestIsAzureClientError_SubstringFalsePositive verifies that an error whose
+// string representation contains "400" (e.g. a timeout message) but is NOT an
+// *azcore.ResponseError is correctly classified as a server-side (non-client)
+// error. The old substring-match approach would have misclassified this.
+func TestIsAzureClientError_SubstringFalsePositive(t *testing.T) {
+	t.Parallel()
+	// An error whose message contains "400" but is just a plain error.
+	err := errors.New("timeout after 400ms waiting for connection")
+	assert.False(t, isAzureClientError(err),
+		"a plain error containing '400' in its message should NOT be a client error")
+}
+
+// TestIsAzureClientError_TypedResponseError verifies that a real
+// *azcore.ResponseError with a 4xx status code is correctly classified as a
+// client error.
+func TestIsAzureClientError_TypedResponseError(t *testing.T) {
+	t.Parallel()
+	for _, code := range []int{400, 403, 404, 409, 422} {
+		code := code
+		t.Run(fmt.Sprintf("HTTP%d", code), func(t *testing.T) {
+			t.Parallel()
+			err := &azcore.ResponseError{StatusCode: code}
+			assert.True(t, isAzureClientError(err), "HTTP %d should be a client error", code)
+		})
+	}
+
+	// 5xx must not be classified as a client error.
+	for _, code := range []int{500, 502, 503} {
+		code := code
+		t.Run(fmt.Sprintf("HTTP%d_not_client", code), func(t *testing.T) {
+			t.Parallel()
+			err := &azcore.ResponseError{StatusCode: code}
+			assert.False(t, isAzureClientError(err), "HTTP %d should NOT be a client error", code)
+		})
+	}
 }
 
 // --- Finding #6: partial-success reconciliation (RECONCILE_PENDING 207 path) ---
