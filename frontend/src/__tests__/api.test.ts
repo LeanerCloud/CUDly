@@ -709,19 +709,69 @@ describe('Recommendations API', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/recommendations', expect.anything());
     });
 
-    test('applies filters to query string', async () => {
+    // Regression test for issue #1089: minSavingsUsd (dollar) and minSavingsPct
+    // (percentage) must map to distinct query params -- min_savings_usd and
+    // min_savings_pct -- and must NEVER both map to the same legacy `min_savings`
+    // key. Conflating them would silently treat a percentage as a dollar amount
+    // or vice versa.
+    test('minSavingsUsd maps to min_savings_usd (dollar) query param', async () => {
       await getRecommendations({
         provider: 'aws',
         service: 'ec2',
         region: 'us-east-1',
-        minSavings: 100
+        minSavingsUsd: 100
       });
 
       const url = fetchMock.mock.calls[0][0] as string;
       expect(url).toContain('provider=aws');
       expect(url).toContain('service=ec2');
       expect(url).toContain('region=us-east-1');
-      expect(url).toContain('min_savings=100');
+      // Dollar filter uses the distinct usd-suffixed key.
+      expect(url).toContain('min_savings_usd=100');
+      // Must NOT appear as the bare (ambiguous) key or as the pct key.
+      expect(url).not.toContain('min_savings=');
+      expect(url).not.toContain('min_savings_pct=');
+    });
+
+    test('minSavingsPct maps to min_savings_pct (percentage) query param', async () => {
+      await getRecommendations({
+        minSavingsPct: 30
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      // Percentage filter uses the distinct pct-suffixed key.
+      expect(url).toContain('min_savings_pct=30');
+      // Must NOT appear as the bare (ambiguous) key or as the usd key.
+      expect(url).not.toContain('min_savings=');
+      expect(url).not.toContain('min_savings_usd=');
+    });
+
+    test('usd and pct filters can be combined and remain distinct', async () => {
+      await getRecommendations({
+        minSavingsUsd: 50,
+        minSavingsPct: 20
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('min_savings_usd=50');
+      expect(url).toContain('min_savings_pct=20');
+      // The same value "50" for usd must not appear on the pct key and vice versa.
+      expect(url).not.toContain('min_savings_pct=50');
+      expect(url).not.toContain('min_savings_usd=20');
+      expect(url).not.toContain('min_savings=');
+    });
+
+    test('applies other filters to query string', async () => {
+      await getRecommendations({
+        provider: 'aws',
+        service: 'ec2',
+        region: 'us-east-1',
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain('provider=aws');
+      expect(url).toContain('service=ec2');
+      expect(url).toContain('region=us-east-1');
     });
   });
 

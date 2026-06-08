@@ -454,6 +454,126 @@ func TestBuildRecommendationsResponse_CapacityFields(t *testing.T) {
 	}
 }
 
+// TestGetRecommendations_MinSavingsFilters is the regression test for issue #1089:
+// it asserts that min_savings_usd (dollar floor) and min_savings_pct (percentage
+// floor) are distinct parameters with separate semantics and cannot be confused.
+//
+// Key invariants proven:
+//   - A dollar value passed as min_savings_usd does NOT conflate with a percentage
+//     (e.g. min_savings_usd=30 means "$30", not "30%").
+//   - A percentage passed as min_savings_pct does NOT conflate with a dollar amount.
+//   - Both can be specified independently and are applied independently.
+//   - min_savings_pct validates the range 0-100.
+//   - Non-numeric values are rejected with 400.
+func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("min_savings_usd filter is wired to RecommendationFilter.MinSavingsUSD not MinSavingsPct", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+			// Dollar filter must be set; percentage filter must be zero.
+			return f.MinSavingsUSD == 30 && f.MinSavingsPct == 0
+		})).Return([]config.RecommendationRecord{}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		params := map[string]string{"min_savings_usd": "30"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("min_savings_pct filter is wired to RecommendationFilter.MinSavingsPct not MinSavingsUSD", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+			// Percentage filter must be set; dollar filter must be zero.
+			return f.MinSavingsPct == 30 && f.MinSavingsUSD == 0
+		})).Return([]config.RecommendationRecord{}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		// Sending "30" as min_savings_pct must NOT be treated as $30 by the server.
+		params := map[string]string{"min_savings_pct": "30"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("both filters can be combined independently", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+			return f.MinSavingsUSD == 50 && f.MinSavingsPct == 20
+		})).Return([]config.RecommendationRecord{}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		params := map[string]string{"min_savings_usd": "50", "min_savings_pct": "20"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("min_savings_pct above 100 returns 400", func(t *testing.T) {
+		handler := &Handler{apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		params := map[string]string{"min_savings_pct": "101"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 400, ce.code)
+	})
+
+	t.Run("min_savings_usd with non-numeric value returns 400", func(t *testing.T) {
+		handler := &Handler{apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		params := map[string]string{"min_savings_usd": "thirty"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 400, ce.code)
+	})
+
+	t.Run("min_savings_pct with non-numeric value returns 400", func(t *testing.T) {
+		handler := &Handler{apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		params := map[string]string{"min_savings_pct": "thirty"}
+
+		result, err := handler.getRecommendations(ctx, req, params)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 400, ce.code)
+	})
+
+	t.Run("absent filters pass through zero values in RecommendationFilter", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+			return f.MinSavingsUSD == 0 && f.MinSavingsPct == 0
+		})).Return([]config.RecommendationRecord{}, nil)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+
+		handler := &Handler{scheduler: mockScheduler, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "test-key"}}
+		// No min_savings params at all.
+		result, err := handler.getRecommendations(ctx, req, map[string]string{})
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+}
+
 func TestConfidenceBucketFor(t *testing.T) {
 	cases := []struct {
 		name    string

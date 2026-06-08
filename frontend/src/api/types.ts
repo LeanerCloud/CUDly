@@ -175,7 +175,24 @@ export interface RecommendationFilters {
   provider?: Provider | '';
   service?: string;
   region?: string;
-  minSavings?: number;
+  /**
+   * Minimum absolute dollar savings per month. Sent to the API as
+   * `min_savings_usd`. 0 or absent means no floor.
+   *
+   * IMPORTANT: this is a DOLLAR amount, not a percentage. The CLI equivalent
+   * is `--min-savings-pct` which filters by percentage -- these are two
+   * distinct concepts. Use `minSavingsPct` to filter by percentage.
+   */
+  minSavingsUsd?: number;
+  /**
+   * Minimum effective savings percentage (0-100 scale). Sent to the API as
+   * `min_savings_pct`. 0 or absent means no floor.
+   *
+   * IMPORTANT: this is a PERCENTAGE (0-100), not a dollar amount. The CLI
+   * `--min-savings-pct` flag uses the same semantics. Use `minSavingsUsd`
+   * to filter by an absolute dollar floor.
+   */
+  minSavingsPct?: number;
   account_ids?: string[];
 }
 
