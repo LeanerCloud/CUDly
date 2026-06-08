@@ -354,9 +354,9 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
-	// verifyAsyncApprovalActor + ApproveExecution both load the
-	// execution; mock returns it twice.
-	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
+	// verifyAsyncApprovalActor + ApproveExecution both load the execution;
+	// rotateApprovalToken adds a third fetch after the successful approve.
+	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Times(3)
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// Atomic approve transition (issue #372 fix).
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved", (*string)(nil)).Return(approved, nil)
@@ -398,9 +398,9 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	}
 	account := &config.CloudAccount{ID: accountID, ContactEmail: "owner@example.com"}
 
-	// verifyAsyncApprovalActor + CancelExecution both load the
-	// execution; mock returns it twice.
-	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Twice()
+	// verifyAsyncApprovalActor + CancelExecution + rotateApprovalToken all
+	// load the execution; mock returns it three times.
+	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Times(3)
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in
 	// tests); actor_email is non-empty so cancelledBy is non-nil.
@@ -410,6 +410,8 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	// Suppression cleanup must follow a successful atomic cancel.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-cancel").
 		Return(nil)
+	// Token rotation after successful cancel.
+	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
