@@ -536,14 +536,17 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 }
 
 // canRevokeCompletedRow returns true when the current session may revoke the
-// given completed purchase row via the inline Revoke button (issue #290).
+// given purchase row via the inline Revoke button (issue #290).
 // UX gate only -- the backend authorizeSessionRevoke remains the real
 // security boundary.
 //
 // Conditions:
-//   * status must be "completed";
+//   * status must be "completed", "" (legacy blank), or "scheduled"
+//     (pre-fire delay: the cloud SDK has not been called yet -- free cancel);
 //   * provider must be "azure" (AWS and GCP have no direct cancel API);
 //   * revocation_window_closes_at must be in the future;
+//     for "scheduled" rows this field is populated with scheduled_execution_at
+//     by the backend (issue #290, second-wave CR Finding E);
 //   * row must not already be revoked (revoked_at absent);
 //   * session must have revoke-any:purchases or revoke-own:purchases. Without
 //     this the button rendered for every signed-in user and the backend just
@@ -552,7 +555,7 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 //     canApprovePendingRow, canRetryFailedRow) which all check canAccess.
 function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
-  if (status !== 'completed' && status !== '') return false;
+  if (status !== 'completed' && status !== '' && status !== 'scheduled') return false;
   if ((p.provider || '').toLowerCase() !== 'azure') return false;
   if (p.revoked_at) return false; // already revoked
   if (!p.revocation_window_closes_at) return false;

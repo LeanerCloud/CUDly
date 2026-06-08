@@ -269,4 +269,26 @@ describe('History inline Revoke button (issue #290)', () => {
 
     expect(revokeIds()).toContain('commit-legacy-blank-status');
   });
+
+  // Regression guard: Gmail-style pre-fire delay creates rows with
+  // status='scheduled' (cloud SDK not yet called). canRevokeCompletedRow must
+  // accept this status so the Revoke button renders before the execution fires
+  // (issue #290, second-wave CR Findings E + G).
+  test('shows Revoke for a scheduled Azure row with a future revocation window', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          status: 'scheduled',
+          provider: 'azure',
+          purchase_id: 'commit-scheduled',
+          revocation_window_closes_at: FUTURE,
+        }),
+      ],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toContain('commit-scheduled');
+  });
 });
