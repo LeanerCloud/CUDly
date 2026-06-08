@@ -48,6 +48,22 @@ const (
 	TaskFireScheduledPurchases ScheduledTaskType = "fire_scheduled_purchases"
 )
 
+// scheduledEventActions maps a raw scheduled-event action string to its
+// ScheduledTaskType. Kept as a table (rather than a switch) so adding a task
+// type stays a one-line change and ParseScheduledEvent's cyclomatic complexity
+// does not grow with the task list.
+var scheduledEventActions = map[string]ScheduledTaskType{
+	"collect_recommendations":     TaskCollectRecommendations,
+	"process_scheduled_purchases": TaskProcessScheduledPurchases,
+	"send_notifications":          TaskSendNotifications,
+	"cleanup":                     TaskCleanupExpiredRecords,
+	"analytics_refresh":           TaskRefreshAnalytics,
+	"analytics_collect":           TaskCollectAnalytics,
+	"ri_exchange_reshape":         TaskRIExchangeReshape,
+	"reap_stuck_purchases":        TaskReapStuckPurchases,
+	"fire_scheduled_purchases":    TaskFireScheduledPurchases,
+}
+
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
 func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
@@ -286,26 +302,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 	}
 
 	// Map action to task type
-	switch event.Action {
-	case "collect_recommendations":
-		return TaskCollectRecommendations, nil
-	case "process_scheduled_purchases":
-		return TaskProcessScheduledPurchases, nil
-	case "send_notifications":
-		return TaskSendNotifications, nil
-	case "cleanup":
-		return TaskCleanupExpiredRecords, nil
-	case "analytics_refresh":
-		return TaskRefreshAnalytics, nil
-	case "analytics_collect":
-		return TaskCollectAnalytics, nil
-	case "ri_exchange_reshape":
-		return TaskRIExchangeReshape, nil
-	case "reap_stuck_purchases":
-		return TaskReapStuckPurchases, nil
-	case "fire_scheduled_purchases":
-		return TaskFireScheduledPurchases, nil
-	default:
-		return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
+	if taskType, ok := scheduledEventActions[event.Action]; ok {
+		return taskType, nil
 	}
+	return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
 }

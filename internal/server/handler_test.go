@@ -372,6 +372,11 @@ func TestParseScheduledEvent(t *testing.T) {
 			expectedTask: TaskReapStuckPurchases,
 		},
 		{
+			name:         "fire_scheduled_purchases event",
+			rawEvent:     `{"action": "fire_scheduled_purchases"}`,
+			expectedTask: TaskFireScheduledPurchases,
+		},
+		{
 			name:        "unknown action returns error",
 			rawEvent:    `{"action": "unknown"}`,
 			expectError: true,
