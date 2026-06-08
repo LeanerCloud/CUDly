@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -35,10 +36,14 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	}
 
 	// Validate token using constant-time comparison to prevent timing attacks.
+	// SHA-256 both inputs first so that variable-length strings can't leak
+	// token length via the comparison path (Finding #4).
 	if execution.ApprovalToken == "" || token == "" {
 		return fmt.Errorf("invalid approval token")
 	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
 		return fmt.Errorf("invalid approval token")
 	}
 
@@ -287,7 +292,9 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 	if execution.ApprovalToken == "" || token == "" {
 		return nil, fmt.Errorf("invalid approval token")
 	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
 		return nil, fmt.Errorf("invalid approval token")
 	}
 

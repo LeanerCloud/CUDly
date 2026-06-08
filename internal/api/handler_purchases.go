@@ -1176,7 +1176,9 @@ func validateRevokeToken(execution *config.PurchaseExecution, token string) erro
 	if windowErr := checkRevocationWindow(execution); windowErr != nil {
 		return windowErr
 	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
 		return NewClientError(403, "invalid revocation token")
 	}
 	return nil
