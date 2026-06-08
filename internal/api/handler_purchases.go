@@ -1268,11 +1268,13 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
 	if err != nil {
-		// Map any DB-level "not found" error to 404 so callers cannot infer
-		// whether a UUID exists by observing a 500 vs a 404 (issue #431).
-		return nil, NewClientError(404, "execution not found")
+		// Real DB failure (connection error, timeout, etc.) - surface as 500
+		// so infrastructure issues are visible to operators and not silently
+		// masked as 404s (issue #976).
+		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
 	if execution == nil {
+		// GetExecutionByID returns (nil, nil) for a missing row (issue #976).
 		return nil, NewClientError(404, "execution not found")
 	}
 
