@@ -3421,7 +3421,14 @@ async function openFanOutModal(
               }
             }
           }
-          perRecPayments.set(rec.id, recPayment);
+          // Only record an explicit override; recs that match the bucket
+          // default are intentionally left out of the map so they keep
+          // following the bucket-level dropdown via the `?? b.payment`
+          // fallback on the execute path. Eagerly populating every rec would
+          // make the bucket-level control a no-op for unedited rows.
+          if (recPayment !== bucketPayment) {
+            perRecPayments.set(rec.id, recPayment);
+          }
         }
       }
 
@@ -3566,6 +3573,23 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     }
     b.payment = next;
     renderStatus();
+    // Re-sync any visible per-rec selects whose ids are NOT explicit
+    // overrides: those rows follow the bucket default, so their displayed
+    // value must track the new bucket payment. Rows with an explicit
+    // override (present in perRecPayments) keep their own value.
+    if (b.perRecPayments) {
+      const perRecSelects = section.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment');
+      perRecSelects.forEach((sel) => {
+        const recId = sel.dataset['recId'];
+        if (!recId || b.perRecPayments!.has(recId)) return;
+        // Only re-sync when this rec actually supports the new payment.
+        // Per-rec options derive from rec.service, which can differ from
+        // b.service in mixed-SP buckets; skip rows where `next` isn't an
+        // option so the displayed value never diverges from what posts.
+        const supported = Array.from(sel.options).some((o) => o.value === next);
+        if (supported) sel.value = next;
+      });
+    }
   });
   paymentLabel.appendChild(paymentSelect);
   paymentRow.appendChild(paymentLabel);
@@ -3612,14 +3636,25 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
       }
       recSelect.addEventListener('change', () => {
         const next = recSelect.value as BulkPurchasePayment;
+        // Keep perRecPayments as the explicit-override set: when the user
+        // picks the current bucket default, drop the entry so the row tracks
+        // future bucket-level changes again; otherwise record the override.
+        const applyToMap = (map: Map<string, BulkPurchasePayment> | undefined): void => {
+          if (!map) return;
+          if (next === b.payment) {
+            map.delete(rec.id);
+          } else {
+            map.set(rec.id, next);
+          }
+        };
         // Update module state and the local bucket reference.
         if (currentFanOutBuckets) {
           const idx = currentFanOutBuckets.findIndex((cb) => cb.recs === b.recs);
           if (idx >= 0) {
-            currentFanOutBuckets[idx]!.perRecPayments?.set(rec.id, next);
+            applyToMap(currentFanOutBuckets[idx]!.perRecPayments);
           }
         }
-        b.perRecPayments?.set(rec.id, next);
+        applyToMap(b.perRecPayments);
       });
 
       li.appendChild(recSelect);

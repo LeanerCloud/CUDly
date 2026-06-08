@@ -3196,10 +3196,14 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     const before = getFanOutBuckets();
     const bucket1yr = before!.find((b) => b.term === 1)!;
     expect(bucket1yr.perRecPayments).toBeDefined();
-    // Initially seeded from toolbar fallback (all-upfront, no overrides).
-    expect(bucket1yr.perRecPayments!.get('i1')).toBe('all-upfront');
+    // No overrides: both recs match the bucket default (all-upfront), so the
+    // map holds ONLY explicit overrides — i1/i2 are absent and fall back to
+    // b.payment via the execute path. (Eager population would make the
+    // bucket-level dropdown a no-op for these rows.)
+    expect(bucket1yr.perRecPayments!.has('i1')).toBe(false);
+    expect(bucket1yr.perRecPayments!.has('i2')).toBe(false);
 
-    // User changes the i1 dropdown to no-upfront.
+    // User changes the i1 dropdown to no-upfront — now an explicit override.
     const i1Select = Array.from(
       document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment'),
     ).find((s) => s.dataset['recId'] === 'i1')!;
@@ -3210,8 +3214,68 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
     const after = getFanOutBuckets();
     const afterBucket1yr = after!.find((b) => b.term === 1)!;
     expect(afterBucket1yr.perRecPayments!.get('i1')).toBe('no-upfront');
-    // i2 unchanged.
-    expect(afterBucket1yr.perRecPayments!.get('i2')).toBe('all-upfront');
+    // i2 still follows the bucket default — absent from the override map.
+    expect(afterBucket1yr.perRecPayments!.has('i2')).toBe(false);
+
+    // Setting i1 back to the bucket default removes the override again so the
+    // row resumes tracking the bucket-level dropdown.
+    i1Select.value = 'all-upfront';
+    i1Select.dispatchEvent(new Event('change'));
+    const reset = getFanOutBuckets();
+    expect(reset!.find((b) => b.term === 1)!.perRecPayments!.has('i1')).toBe(false);
+  });
+
+  // Issue #197 regression (CR #838): the bucket-level Payment dropdown must
+  // remain effective for multi-account rows that follow the bucket default.
+  // Before the fix, openFanOutModal eagerly wrote every rec into
+  // perRecPayments, so changing the bucket dropdown only mutated b.payment
+  // while the execute path still read the stale per-rec entry — making the
+  // visible control a no-op for unedited rows.
+  test('(j) issue #197: bucket-level Payment change propagates to non-overridden recs in the POST payload', async () => {
+    const recs = [
+      { id: 'j1', provider: 'aws', cloud_account_id: 'acct-r', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 500 },
+      { id: 'j2', provider: 'aws', cloud_account_id: 'acct-s', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'all-upfront', savings: 120, upfront_cost: 550 },
+      { id: 'j3', provider: 'aws', cloud_account_id: 'acct-r', service: 'ec2', resource_type: 'm5.large', region: 'us-east-1', count: 1, term: 3, payment: 'all-upfront', savings: 300, upfront_cost: 1200 },
+    ];
+    setupMixedTermRecs(recs);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // Change the multi-account 1yr bucket's bucket-level Payment dropdown.
+    const bucketSelects = Array.from(
+      document.querySelectorAll<HTMLSelectElement>('.fanout-bucket-payment'),
+    );
+    // The 1yr bucket is the multi-account one (renders per-rec selects); find
+    // the bucket section that contains per-rec rows.
+    const targetSelect = bucketSelects.find((sel) => {
+      const section = sel.closest('.fanout-bucket');
+      return section?.querySelector('.fanout-per-rec-payment') != null;
+    })!;
+    expect(targetSelect).toBeDefined();
+    targetSelect.value = 'no-upfront';
+    targetSelect.dispatchEvent(new Event('change'));
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    const buckets = getFanOutBuckets()!;
+    const bucket1yr = buckets.find((b) => b.term === 1)!;
+    // Execute path: payment = perRecPayments.get(id) ?? b.payment. With the
+    // override map empty for unedited rows, both recs must post the NEW
+    // bucket payment.
+    const resolved = (id: string): string => bucket1yr.perRecPayments?.get(id) ?? bucket1yr.payment;
+    expect(resolved('j1')).toBe('no-upfront');
+    expect(resolved('j2')).toBe('no-upfront');
+
+    // The visible per-rec selects must reflect the new bucket default too.
+    const perRecSelects = Array.from(
+      document.querySelectorAll<HTMLSelectElement>('.fanout-per-rec-payment'),
+    );
+    const j1Select = perRecSelects.find((s) => s.dataset['recId'] === 'j1');
+    const j2Select = perRecSelects.find((s) => s.dataset['recId'] === 'j2');
+    expect(j1Select?.value).toBe('no-upfront');
+    expect(j2Select?.value).toBe('no-upfront');
   });
 });
 
