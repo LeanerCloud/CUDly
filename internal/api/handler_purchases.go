@@ -1144,12 +1144,17 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 	}
 }
 
+// revocationWindowDuration is the time window after a purchase completes
+// during which the buyer may request revocation. 24 hours matches the AWS
+// RI/SP support-case window and is advertised in the post-execution email.
+// Adjust this constant to change the window without touching call sites.
+const revocationWindowDuration = 24 * time.Hour
+
 // validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken, that the token has not expired, and that it matches the
-// supplied token using constant-time comparison (same guard as
-// ApproveExecution in internal/purchase/approvals.go). Pre-migration rows
-// without an ApprovalTokenExpiresAt (legacy executions created before
-// migration 000051) pass the expiry check, mirroring ApproveExecution.
+// ApprovalToken, that the token has not expired, that the revocation window
+// has not closed (revocationWindowDuration after CompletedAt), and that the
+// token matches using constant-time comparison. Pre-migration rows without an
+// ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
 // Extracted from revokePurchase to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
 	if execution.ApprovalToken == "" {
@@ -1159,10 +1164,56 @@ func validateRevokeToken(execution *config.PurchaseExecution, token string) erro
 		return NewClientError(409, fmt.Sprintf(
 			"execution %s cannot be revoked: the revocation link has expired", execution.ExecutionID))
 	}
+	// Enforce the 24-hour revocation window (issue #291 Finding #6).
+	// Use CompletedAt as the reference timestamp; fall back to ExecutedAt
+	// for direct-execute rows which may not have a CompletedAt yet.
+	if windowErr := checkRevocationWindow(execution); windowErr != nil {
+		return windowErr
+	}
 	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
 		return NewClientError(403, "invalid revocation token")
 	}
 	return nil
+}
+
+// checkRevocationWindow returns a 403 ClientError when the 24-hour revocation
+// window has passed. The reference timestamp is CompletedAt if set, otherwise
+// ExecutedAt. When neither is set (legacy rows without these columns) the
+// check is skipped to preserve backward compatibility.
+func checkRevocationWindow(execution *config.PurchaseExecution) error {
+	var ref *time.Time
+	if execution.CompletedAt != nil {
+		ref = execution.CompletedAt
+	} else if execution.ExecutedAt != nil {
+		ref = execution.ExecutedAt
+	}
+	if ref == nil {
+		// Legacy row: no timestamp to anchor the window; allow the revoke.
+		return nil
+	}
+	windowCloses := ref.Add(revocationWindowDuration)
+	if time.Now().After(windowCloses) {
+		return NewClientError(403, fmt.Sprintf(
+			"revocation window has closed (window closed at %s)", windowCloses.UTC().Format(time.RFC3339)))
+	}
+	return nil
+}
+
+// revocationWindowClosesAt returns the human-readable UTC string at which the
+// 24-hour revocation window closes. Used by sendPurchaseExecutedEmail to
+// populate the RevocationWindowClosesAt field in the email template.
+// Returns "" when no reference timestamp is available (legacy rows).
+func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
+	var ref *time.Time
+	if execution.CompletedAt != nil {
+		ref = execution.CompletedAt
+	} else if execution.ExecutedAt != nil {
+		ref = execution.ExecutedAt
+	}
+	if ref == nil {
+		return ""
+	}
+	return ref.Add(revocationWindowDuration).UTC().Format("2006-01-02 15:04 UTC")
 }
 
 // revokeViaSession performs the post-execution revocation action by recording
@@ -2466,12 +2517,15 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 		// trigger a post-execution cancel via the /revoke route. A dedicated
 		// revocation token will be added when the sibling "AWS RI/SP revocation"
 		// issue lands its own DB column.
-		RevocationToken:  execution.ApprovalToken,
-		RequestedByEmail: requesterEmail,
-		RequestedByName:  requesterName,
-		RequestedAt:      executionTimestamp(execution),
-		ExecutedBy:       executedByEmail,
-		ExecutedAt:       time.Now().UTC().Format(time.RFC3339),
+		RevocationToken: execution.ApprovalToken,
+		// Populate the revocation window deadline so the email copy matches
+		// the enforced 24-hour window in validateRevokeToken (Finding #6).
+		RevocationWindowClosesAt: revocationWindowClosesAt(execution),
+		RequestedByEmail:         requesterEmail,
+		RequestedByName:          requesterName,
+		RequestedAt:              executionTimestamp(execution),
+		ExecutedBy:               executedByEmail,
+		ExecutedAt:               time.Now().UTC().Format(time.RFC3339),
 	}
 	if dashboardBase != "" {
 		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"

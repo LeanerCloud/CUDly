@@ -4392,6 +4392,61 @@ func TestRevokePurchase_RejectsRotatedToken(t *testing.T) {
 // Finding #2: GET /revoke must render confirmation form, not mutate state
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Finding #6: 24-hour revocation window enforcement
+// ---------------------------------------------------------------------------
+
+// TestRevoke_WithinWindow_Allowed verifies that a revoke token is accepted
+// when the purchase completed less than 24 hours ago.
+func TestRevoke_WithinWindow_Allowed(t *testing.T) {
+	recentCompleted := time.Now().Add(-2 * time.Hour)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-in-window",
+		Status:        "completed",
+		ApprovalToken: "valid-token",
+		CompletedAt:   &recentCompleted,
+	}
+	err := validateRevokeToken(exec, "valid-token")
+	require.NoError(t, err, "revoke within 24h window must succeed")
+}
+
+// TestRevoke_AfterWindow_Denied verifies that validateRevokeToken returns 403
+// when the 24-hour revocation window has passed.
+func TestRevoke_AfterWindow_Denied(t *testing.T) {
+	staleCompleted := time.Now().Add(-25 * time.Hour)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-past-window",
+		Status:        "completed",
+		ApprovalToken: "valid-token",
+		CompletedAt:   &staleCompleted,
+	}
+	err := validateRevokeToken(exec, "valid-token")
+	require.Error(t, err, "revoke after 24h window must be denied")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError")
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "revocation window has closed")
+}
+
+// TestRevoke_NoTimestamp_Allowed verifies that legacy rows without CompletedAt
+// or ExecutedAt skip the window check and are allowed through.
+func TestRevoke_NoTimestamp_Allowed(t *testing.T) {
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-legacy",
+		Status:        "completed",
+		ApprovalToken: "valid-token",
+		// No CompletedAt or ExecutedAt set (legacy row).
+	}
+	err := validateRevokeToken(exec, "valid-token")
+	require.NoError(t, err, "legacy rows without timestamp must not be blocked by window check")
+}
+
+// TestRevoke_4EyesMode_TODO is a placeholder to surface the 4-eyes-mode
+// interaction once issue #1005 lands.
+func TestRevoke_4EyesMode_TODO(t *testing.T) {
+	t.Skip("placeholder until #1005 lands: verify that 4-eyes-mode approval flows interact correctly with the revocation window")
+}
+
 // TestRevokePurchase_GETRendersConfirmationPage_NoMutation verifies that a GET
 // to the revoke handler returns 200 HTML containing a confirmation form and
 // does NOT call TransitionExecutionStatus (no mutation).
