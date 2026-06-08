@@ -46,6 +46,13 @@ const (
 	// issue #291 wave-2). Wires the "fire_scheduled_purchases" event action
 	// to purchase.Manager.FireScheduledDelayedPurchases.
 	TaskFireScheduledPurchases ScheduledTaskType = "fire_scheduled_purchases"
+	// TaskFinalizeRevocations sweeps purchase_history rows with
+	// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
+	// These rows represent partial-success cases where the Azure Return API call
+	// succeeded but the subsequent DB write failed. The sweep ensures the audit
+	// record is eventually consistent without requiring the user to retry (which
+	// would be rejected by Azure). See issue #290 Finding #6.
+	TaskFinalizeRevocations ScheduledTaskType = "finalize_revocations"
 )
 
 // scheduledEventActions maps a raw scheduled-event action string to its
@@ -62,6 +69,7 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 	"ri_exchange_reshape":         TaskRIExchangeReshape,
 	"reap_stuck_purchases":        TaskReapStuckPurchases,
 	"fire_scheduled_purchases":    TaskFireScheduledPurchases,
+	"finalize_revocations":        TaskFinalizeRevocations,
 }
 
 // HandleScheduledTask processes a scheduled task by type.
@@ -111,6 +119,8 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		return app.handleReapStuckPurchases(ctx)
 	case TaskFireScheduledPurchases:
 		return app.handleFireScheduledPurchases(ctx)
+	case TaskFinalizeRevocations:
+		return app.handleFinalizeRevocations(ctx)
 	default:
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
@@ -240,6 +250,23 @@ func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purc
 	}
 	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d errored=%d",
 		result.Found, result.Fired, result.RaceLost, result.Errored)
+	return result, nil
+}
+
+// handleFinalizeRevocations sweeps purchase_history rows with
+// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
+// Part of the partial-success reconciliation for Azure revocations (issue #290
+// Finding #6): if the Azure Return call succeeded but the DB write failed,
+// this sweep ensures the audit row is eventually consistent.
+func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchase.FinalizeResult, error) {
+	log.Println("Finalizing in-flight revocations...")
+	result, err := app.Purchase.FinalizeInFlightRevocations(ctx)
+	if err != nil {
+		log.Printf("Failed to finalize in-flight revocations: %v", err)
+		return nil, err
+	}
+	log.Printf("Finalize sweep complete: found=%d finalized=%d errored=%d",
+		result.Found, result.Finalized, result.Errored)
 	return result, nil
 }
 

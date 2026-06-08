@@ -133,6 +133,26 @@ func TestHandleScheduledTask(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:     "finalize_revocations success",
+			taskType: TaskFinalizeRevocations,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FinalizeInFlightRevocationsFunc = func(ctx context.Context) (*purchase.FinalizeResult, error) {
+					return &purchase.FinalizeResult{Found: 1, Finalized: 1}, nil
+				}
+			},
+			expectError: false,
+		},
+		{
+			name:     "finalize_revocations propagates error",
+			taskType: TaskFinalizeRevocations,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FinalizeInFlightRevocationsFunc = func(ctx context.Context) (*purchase.FinalizeResult, error) {
+					return nil, errors.New("db down")
+				}
+			},
+			expectError: true,
+		},
+		{
 			name:        "unknown task type",
 			taskType:    ScheduledTaskType("unknown"),
 			setupMocks:  func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {},
@@ -375,6 +395,11 @@ func TestParseScheduledEvent(t *testing.T) {
 			name:         "fire_scheduled_purchases event",
 			rawEvent:     `{"action": "fire_scheduled_purchases"}`,
 			expectedTask: TaskFireScheduledPurchases,
+		},
+		{
+			name:         "finalize_revocations event",
+			rawEvent:     `{"action": "finalize_revocations"}`,
+			expectedTask: TaskFinalizeRevocations,
 		},
 		{
 			name:        "unknown action returns error",

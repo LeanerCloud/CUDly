@@ -304,6 +304,14 @@ func (m *mockConfigStoreForHealth) MarkPurchaseRevoked(_ context.Context, _ stri
 	return nil
 }
 
+func (m *mockConfigStoreForHealth) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }

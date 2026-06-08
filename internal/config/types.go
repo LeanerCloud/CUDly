@@ -754,6 +754,15 @@ type PurchaseHistoryRecord struct {
 	// CalcRefundCurrency is the ISO-4217 currency code from the CalculateRefund quote
 	// (e.g. "USD"). NULL when CalcRefundAmount is NULL.
 	CalcRefundCurrency string `json:"calc_refund_currency,omitempty" dynamodbav:"calc_refund_currency,omitempty"`
+
+	// --- Partial-success reconciliation (issue #290 Finding #6, migration 000072) ---
+	//
+	// RevocationInFlight is set to true immediately before the Azure Return API call
+	// and cleared (set to false) by a successful MarkPurchaseRevoked. When all DB
+	// retries fail, the flag stays true so the finalize_revocations scheduled sweep
+	// can detect and retry the MarkPurchaseRevoked write without re-calling Azure
+	// (preventing a duplicate-refund error).
+	RevocationInFlight bool `json:"revocation_in_flight,omitempty" dynamodbav:"revocation_in_flight,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

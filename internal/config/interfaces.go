@@ -156,6 +156,20 @@ type StoreInterface interface {
 	// it is already non-null). Used by the revoke endpoint (issue #290).
 	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error
 
+	// FlipPurchaseRevocationInFlight atomically sets revocation_in_flight=true
+	// on a purchase_history row. Called immediately before the Azure Return API
+	// call so that the row can be identified by the finalize sweep if the
+	// subsequent MarkPurchaseRevoked DB write fails (partial-success reconciliation,
+	// issue #290 Finding #6, migration 000072). No-op when the flag is already
+	// true (idempotent). Returns a not-found error when no row matches.
+	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
+
+	// GetPurchaseHistoryInFlight returns all purchase_history rows with
+	// revocation_in_flight=true and revoked_at IS NULL.  These are rows where
+	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
+	// finalize_revocations scheduled sweep calls this to retry the DB write.
+	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
+
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)

@@ -89,6 +89,25 @@ type revokePurchaseResult struct {
 	RevokedVia string `json:"revoked_via"`
 }
 
+// revokeReconcilePendingResult is the JSON body returned with HTTP 207
+// Multi-Status when the Azure refund succeeded but the subsequent DB write
+// failed after all retries. The frontend reads the "code" field and shows a
+// non-retryable toast ("Refund issued. We will reconcile your audit shortly.")
+// with no retry button (issue #290 Finding #6).
+type revokeReconcilePendingResult struct {
+	Code          string `json:"code"`
+	AzureReturned bool   `json:"azure_returned"`
+	Message       string `json:"message"`
+}
+
+// revokeMarkRetryBackoffs are the sleep durations between consecutive
+// MarkPurchaseRevoked attempts after the first failure (1s, 3s, 9s).
+var revokeMarkRetryBackoffs = []time.Duration{
+	1 * time.Second,
+	3 * time.Second,
+	9 * time.Second,
+}
+
 // revokePurchase handles POST /api/purchases/{purchaseId}/revoke.
 //
 // Authorization: session required + revoke-own:purchases (or revoke-any for
@@ -150,6 +169,19 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 			Status:     "already_revoked",
 			RevokedAt:  record.RevokedAt.Format(time.RFC3339),
 			RevokedVia: record.RevokedVia,
+		}, nil
+	}
+
+	// Partial-success reconciliation (issue #290 Finding #6): if the
+	// revocation_in_flight flag is set but revoked_at is still NULL, Azure
+	// already issued the refund but our DB write failed. Return 207 so the
+	// frontend does not retry the Azure call (which would fail with "already
+	// returned"). The finalize_revocations sweep will reconcile the row.
+	if record.RevocationInFlight {
+		return &revokeReconcilePendingResult{
+			Code:          "RECONCILE_PENDING",
+			AzureReturned: true,
+			Message:       "Refund already issued. We will reconcile your audit record shortly. Do not retry.",
 		}, nil
 	}
 
@@ -560,6 +592,15 @@ func (h *Handler) callAzureReturn(
 		}
 	}
 
+	// Partial-success guard (issue #290 Finding #6): flip the in-flight flag
+	// BEFORE calling Azure Return so that if the subsequent MarkPurchaseRevoked
+	// write fails, the row is visible to the finalize_revocations sweep rather
+	// than silently stuck. Best-effort: if the flip itself fails, log and
+	// continue — the in-flight flag is a safety net, not a hard precondition.
+	if flipErr := h.config.FlipPurchaseRevocationInFlight(ctx, record.PurchaseID); flipErr != nil {
+		logging.Warnf("revoke azure: FlipPurchaseRevocationInFlight for %s failed (continuing): %v", record.PurchaseID, flipErr)
+	}
+
 	// Step 2: Return (post the actual refund request).
 	_, err = returnClient.Post(ctx, orderID, armreservations.RefundRequest{
 		Properties: &armreservations.RefundRequestProperties{
@@ -579,10 +620,33 @@ func (h *Handler) callAzureReturn(
 		return nil, fmt.Errorf("revoke azure: Return failed: %w", err)
 	}
 
+	// Azure Return succeeded. Attempt to persist the revocation state with
+	// exponential-backoff retries so a transient DB hiccup does not surface
+	// as a misleading 500 and does not cause the user to retry (which would
+	// hit "already returned" from Azure).
 	now := time.Now().UTC()
-	if markErr := h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency); markErr != nil {
-		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after successful Azure return: %v", record.PurchaseID, markErr)
-		return nil, fmt.Errorf("revoke azure: refund submitted but failed to persist revocation state: %w", markErr)
+	markErr := h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
+	for attempt, backoff := range revokeMarkRetryBackoffs {
+		if markErr == nil {
+			break
+		}
+		logging.Warnf("revoke azure: MarkPurchaseRevoked attempt %d failed for %s: %v (retrying in %s)",
+			attempt+1, record.PurchaseID, markErr, backoff)
+		time.Sleep(backoff)
+		markErr = h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
+	}
+	if markErr != nil {
+		// All retries failed. Azure has already refunded but we cannot persist
+		// the revocation state. Return 207 Multi-Status so the frontend knows
+		// the refund issued but not to retry — the finalize_revocations sweep
+		// will reconcile the DB write on its next tick.
+		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after %d attempts (Azure already returned): %v",
+			record.PurchaseID, len(revokeMarkRetryBackoffs)+1, markErr)
+		return &revokeReconcilePendingResult{
+			Code:          "RECONCILE_PENDING",
+			AzureReturned: true,
+			Message:       "Refund issued. We will reconcile your audit record shortly. Do not retry.",
+		}, nil
 	}
 
 	// PII policy: log execution and account IDs only, not user identifiers.

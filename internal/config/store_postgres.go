@@ -1859,7 +1859,8 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       revocation_in_flight
 		FROM purchase_history
 		WHERE purchase_id = $1
 		LIMIT 1
@@ -1901,6 +1902,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		&revokedAt,
 		&revokedVia,
 		&supportCaseID,
+		&r.RevocationInFlight,
 	); err != nil {
 		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
 	}
@@ -1966,6 +1968,102 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 		// Already revoked — idempotent, treat as success.
 	}
 	return nil
+}
+
+// FlipPurchaseRevocationInFlight sets revocation_in_flight=true on the
+// purchase_history row for purchaseID. Called immediately before the Azure
+// Return API call to enable partial-success reconciliation (issue #290
+// Finding #6). Idempotent: already-true rows are not modified. Returns a
+// not-found error when no row matches.
+func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revocation_in_flight = true
+		 WHERE purchase_id = $1
+	`, purchaseID)
+	if err != nil {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q not found", purchaseID)
+	}
+	return nil
+}
+
+// GetPurchaseHistoryInFlight returns all purchase_history rows with
+// revocation_in_flight=true and revoked_at IS NULL. Used by the
+// finalize_revocations scheduled sweep to retry MarkPurchaseRevoked for rows
+// where the Azure Return succeeded but the subsequent DB write failed
+// (issue #290 Finding #6).
+func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		FROM purchase_history
+		WHERE revocation_in_flight = true
+		  AND revoked_at IS NULL
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryInFlight: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*PurchaseHistoryRecord
+	for rows.Next() {
+		var r PurchaseHistoryRecord
+		var planID, planName, cloudAccountID sql.NullString
+		var revocationWindowClosesAt, revokedAt *time.Time
+		var revokedVia, supportCaseID sql.NullString
+
+		if err := rows.Scan(
+			&r.AccountID,
+			&r.PurchaseID,
+			&r.Timestamp,
+			&r.Provider,
+			&r.Service,
+			&r.Region,
+			&r.ResourceType,
+			&r.Count,
+			&r.Term,
+			&r.Payment,
+			&r.UpfrontCost,
+			&r.MonthlyCost,
+			&r.EstimatedSavings,
+			&planID,
+			&planName,
+			&r.RampStep,
+			&cloudAccountID,
+			&revocationWindowClosesAt,
+			&revokedAt,
+			&revokedVia,
+			&supportCaseID,
+		); err != nil {
+			return nil, fmt.Errorf("GetPurchaseHistoryInFlight scan: %w", err)
+		}
+
+		if planID.Valid {
+			r.PlanID = planID.String
+		}
+		if planName.Valid {
+			r.PlanName = planName.String
+		}
+		if cloudAccountID.Valid {
+			r.CloudAccountID = &cloudAccountID.String
+		}
+		r.RevocationWindowClosesAt = revocationWindowClosesAt
+		r.RevokedAt = revokedAt
+		if revokedVia.Valid {
+			r.RevokedVia = revokedVia.String
+		}
+		if supportCaseID.Valid {
+			r.SupportCaseID = supportCaseID.String
+		}
+		r.RevocationInFlight = true
+		result = append(result, &r)
+	}
+	return result, rows.Err()
 }
 
 // ==========================================

@@ -940,3 +940,11 @@ func (m *mockConfigStoreForExchange) GetPurchaseHistoryByPurchaseID(_ context.Co
 func (m *mockConfigStoreForExchange) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string, _ *float64, _ string) error {
 	return nil
 }
+
+func (m *mockConfigStoreForExchange) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForExchange) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}

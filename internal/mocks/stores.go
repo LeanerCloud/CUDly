@@ -319,6 +319,26 @@ func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID st
 	return args.Error(0)
 }
 
+// FlipPurchaseRevocationInFlight mocks FlipPurchaseRevocationInFlight (issue #290 Finding #6).
+// Uses the isExpected default-or-dispatch pattern: tests that only verify
+// MarkPurchaseRevoked do not need to set an expectation for this best-effort call.
+func (m *MockConfigStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	if !isExpected(&m.Mock, "FlipPurchaseRevocationInFlight") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
+// GetPurchaseHistoryInFlight mocks GetPurchaseHistoryInFlight (issue #290 Finding #6).
+func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*config.PurchaseHistoryRecord), args.Error(1)
+}
+
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
 	args := m.Called(ctx, record)
 	return args.Error(0)

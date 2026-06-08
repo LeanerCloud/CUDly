@@ -891,3 +891,73 @@ func TestCallAzureReturn_AuditRowPopulatedWithQuote(t *testing.T) {
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
 }
+
+// --- Finding #6: partial-success reconciliation (RECONCILE_PENDING 207 path) ---
+
+// TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries verifies that when
+// MarkPurchaseRevoked fails on all attempts, callAzureReturn returns a
+// revokeReconcilePendingResult (207 Multi-Status body) rather than an error,
+// so the frontend does not offer a retry button (which would hit Azure's
+// "already returned" error).
+func TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	// Override revokeMarkRetryBackoffs to zero duration so the test doesn't actually sleep.
+	orig := revokeMarkRetryBackoffs
+	revokeMarkRetryBackoffs = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { revokeMarkRetryBackoffs = orig })
+
+	r := armReservationRecord()
+	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-fail"}
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+
+	// MarkPurchaseRevoked is called 1 + len(backoffs) = 4 times total (initial + 3 retries).
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).
+		Return(errors.New("db down")).Times(4)
+
+	h := &Handler{config: mockStore}
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.NoError(t, err, "a DB failure after Azure success should not surface as an error")
+
+	pending, ok := result.(*revokeReconcilePendingResult)
+	require.True(t, ok, "expected revokeReconcilePendingResult when all retries fail")
+	assert.Equal(t, "RECONCILE_PENDING", pending.Code)
+	assert.True(t, pending.AzureReturned)
+	mockStore.AssertExpectations(t)
+}
+
+// TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207 verifies that
+// when GetPurchaseHistoryByPurchaseID returns a row with revocation_in_flight=true
+// and revoked_at=nil, the endpoint returns 207 RECONCILE_PENDING rather than
+// re-attempting the Azure Return (which would fail "already returned").
+func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
+
+	r := armReservationRecord()
+	r.RevocationInFlight = true
+	r.RevokedAt = nil
+
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	require.NoError(t, err)
+
+	pending, ok := result.(*revokeReconcilePendingResult)
+	require.True(t, ok, "expected revokeReconcilePendingResult for in-flight row")
+	assert.Equal(t, "RECONCILE_PENDING", pending.Code)
+	assert.True(t, pending.AzureReturned)
+}
