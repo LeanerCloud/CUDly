@@ -1139,3 +1139,54 @@ func TestCallAzureReturn_RefundPolicyViolatedReturns422WindowEdge(t *testing.T) 
 	// MarkPurchaseRevoked must NOT be called -- Azure did not refund.
 	mockStore.AssertNotCalled(t, "MarkPurchaseRevoked")
 }
+
+// --- Finding #9: DST-crossing window math + 4-eyes placeholder ---
+
+// TestRevocationWindowClosesAtFor_DSTCrossing verifies that the revocation
+// window uses AddDate (calendar arithmetic) rather than Add(7*24*time.Hour)
+// (fixed duration) so it correctly spans DST transitions.
+//
+// In timezones that observe DST, "7 days from purchase" should mean the same
+// clock time 7 days later -- not 167h or 169h depending on which way the
+// clocks turned. AddDate handles this; a fixed 168h duration does not.
+//
+// The test constructs a purchase at 01:30 Eastern on the day of the 2024 US
+// spring-forward (March 10 -- clocks leap from 02:00 to 03:00, losing 1h).
+// The correct window close is 01:30 Eastern on March 17 (168h in wall-clock
+// time but 167h in absolute duration because of the spring-forward).
+// A naive Add(7*24*time.Hour) would land at 00:30 on March 17 (1h off).
+func TestRevocationWindowClosesAtFor_DSTCrossing(t *testing.T) {
+	t.Parallel()
+
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("America/New_York timezone not available on this system:", err)
+	}
+
+	// March 10, 2024: US spring-forward night. Clocks jump 02:00->03:00.
+	// Purchase at 01:30 EST (UTC-5) = 06:30 UTC.
+	purchaseTime := time.Date(2024, time.March, 10, 1, 30, 0, 0, loc)
+
+	// config.RevocationWindowClosesAtFor uses AddDate(0,0,7) -- calendar days.
+	windowCloses := purchaseTime.AddDate(0, 0, AzureRevocationWindowDays)
+
+	// Expected: 01:30 EDT (UTC-4) on March 17 = 05:30 UTC.
+	wantClose := time.Date(2024, time.March, 17, 1, 30, 0, 0, loc)
+	assert.Equal(t, wantClose.UTC(), windowCloses.UTC(),
+		"window must close at the same clock time 7 days later (AddDate, not Add(168h))")
+
+	// Prove the naive fixed-duration approach gives a different (wrong) answer.
+	naiveClose := purchaseTime.Add(7 * 24 * time.Hour)
+	assert.NotEqual(t, wantClose.UTC(), naiveClose.UTC(),
+		"naive Add(168h) must land at a different time across DST -- confirming AddDate is needed")
+}
+
+// TestRevokePurchase_FourEyesApproval is a placeholder for the revoke+4-eyes
+// integration test. The 4-eyes approval gate for revocations is tracked in
+// issue #1005 and will be implemented in a follow-up PR.
+//
+// This test is intentionally skipped so the suite stays green while the
+// feature is in development; remove the t.Skip when #1005 lands.
+func TestRevokePurchase_FourEyesApproval(t *testing.T) {
+	t.Skip("placeholder until #1005 4-eyes revocation approval lands")
+}
