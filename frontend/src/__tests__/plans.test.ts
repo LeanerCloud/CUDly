@@ -107,6 +107,10 @@ jest.mock('../utils', () => ({
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
+  escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }),
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
   // providerBadgeHtml added for H1 fix: returns a deterministic span so XSS
