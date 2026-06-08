@@ -1134,6 +1134,55 @@ describe('Recommendations Module', () => {
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
+    test('action-box summary shows financial range when selection spans cells with multiple variants (#281)', async () => {
+      // One cell (same provider+account+service+region+resource_type) with two
+      // term variants: 1yr savings=$100/upfront=$500, 3yr savings=$300/upfront=$1200.
+      // pageLevelRange sums per-cell envelopes: min=$100, max=$300 (one cell).
+      // A second single-variant cell adds savings=$200/upfront=$600.
+      // Total: savingsMin=100+200=$300, savingsMax=300+200=$500;
+      //        upfrontMin=500+600=$1100, upfrontMax=1200+600=$1800; 2 cells.
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.large', region: 'us-east-1' };
+      const v1yr = { ...base, id: 'rv-1yr', count: 2, term: 1, savings: 100, upfront_cost: 500  };
+      const v3yr = { ...base, id: 'rv-3yr', count: 2, term: 3, savings: 300, upfront_cost: 1200 };
+      const cell2 = { id: 'rv-c2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.m5.large', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 600 };
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {}, recommendations: [v1yr, v3yr, cell2], regions: [],
+      });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['rv-1yr', 'rv-3yr', 'rv-c2']));
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([v1yr, v3yr, cell2]);
+
+      await loadRecommendations();
+
+      const summary = document.getElementById('recommendations-action-summary');
+      // #281: min!=max so formatSavingsRange emits the "X – Y" form. The
+      // commas in $1,100 / $1,800 depend on the runtime's default locale
+      // (formatCurrency uses toLocaleString(undefined, ...)); JSDOM may emit
+      // "$1100" without a separator, so the regex makes the comma optional.
+      expect(summary?.textContent).toMatch(/\$300\s*[–\-]\s*\$500\/mo/);
+      expect(summary?.textContent).toMatch(/\$1,?100\s*[–\-]\s*\$1,?800 upfront/);
+      expect(summary?.textContent).toMatch(/2 cells\b/);
+    });
+
+    test('action-box summary collapses to single value when all per-cell variant ranges are identical (#281)', async () => {
+      // Both cells have only a single variant each, so min==max per cell and the
+      // page-level sums also have min==max. formatSavingsRange collapses to one value.
+      const recC = { id: 'r-c', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 600 };
+      const recD = { id: 'r-d', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.m5.large', region: 'us-east-1', count: 1, term: 1, savings: 200, upfront_cost: 600 };
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {}, recommendations: [recC, recD], regions: [],
+      });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['r-c', 'r-d']));
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([recC, recD]);
+
+      await loadRecommendations();
+
+      const summary = document.getElementById('recommendations-action-summary');
+      // savingsMin==savingsMax==$400; formatSavingsRange collapses to "$400".
+      expect(summary?.textContent).toMatch(/\$400\/mo/);
+      expect(summary?.textContent).not.toMatch(/[–\-]\s*\$400/);
+      expect(summary?.textContent).toMatch(/2 cells\b/);
+    });
+
     test('bottom action box prompts for selection when no row is selected (#273)', async () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue(twoRecs);
