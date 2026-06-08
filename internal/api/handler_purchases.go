@@ -997,10 +997,43 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 // window requests the cancellation and returns {"status":"revocation_requested"}.
 // Past the window it returns a friendly 409 with a plain-language message
 // rather than a stack trace.
+// revokeConfirmPageTmpl is the minimal HTML form rendered on GET /revoke.
+// The form POSTs the token from a hidden input so the actual mutation never
+// fires via a GET request (prevents email prefetchers from accidentally
+// triggering the revocation).
+const revokeConfirmPageTmpl = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Confirm Revocation</title>
+<style>body{font-family:sans-serif;max-width:480px;margin:60px auto;padding:0 16px}
+.btn{display:inline-block;padding:10px 24px;background:#dc2626;color:#fff;border:none;
+border-radius:4px;font-size:15px;cursor:pointer;text-decoration:none}
+.btn:hover{background:#b91c1c}.note{color:#64748b;font-size:13px;margin-top:12px}</style>
+</head>
+<body>
+<h2>Confirm Revocation</h2>
+<p>You are about to request revocation for purchase execution <code>{{.ExecutionID}}</code>.</p>
+<p>This will record a revocation request. Contact AWS Support to complete the
+cancellation within the allowed window.</p>
+<form method="POST" action="/api/purchases/revoke/{{.ExecutionID}}">
+  <input type="hidden" name="token" value="{{.Token}}">
+  <button type="submit" class="btn">Confirm Revoke</button>
+</form>
+<p class="note">If you did not request this, ignore this page. No action has been taken.</p>
+</body>
+</html>`
+
 func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
 	}
+
+	// GET: render a confirmation page so email prefetchers cannot auto-trigger
+	// the revocation. The token travels in the URL query string (unavoidable for
+	// the email one-click link), but no mutation occurs on GET.
+	if req.RequestContext.HTTP.Method == "GET" {
+		return renderRevokeConfirmPage(execID, token), nil
+	}
+
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
@@ -1044,6 +1077,29 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, err
 	}
 	return h.revokeViaSession(ctx, execution, actor)
+}
+
+// renderRevokeConfirmPage returns a rawResponse containing the HTML
+// confirmation form for GET /revoke. The form POSTs the token so the actual
+// mutation only happens when the user explicitly clicks "Confirm Revoke".
+func renderRevokeConfirmPage(execID, token string) *rawResponse {
+	// Manual substitution to avoid importing html/template just for this one
+	// small page. The values substituted here (execID and token) are both
+	// treated as opaque strings — execID is a UUID (hex+hyphens only),
+	// token is a generated random string. HTML-escape them defensively anyway.
+	escaped := func(s string) string {
+		s = strings.ReplaceAll(s, "&", "&amp;")
+		s = strings.ReplaceAll(s, "<", "&lt;")
+		s = strings.ReplaceAll(s, ">", "&gt;")
+		s = strings.ReplaceAll(s, "\"", "&#34;")
+		return s
+	}
+	page := strings.ReplaceAll(revokeConfirmPageTmpl, "{{.ExecutionID}}", escaped(execID))
+	page = strings.ReplaceAll(page, "{{.Token}}", escaped(token))
+	return &rawResponse{
+		contentType: "text/html; charset=utf-8",
+		body:        page,
+	}
 }
 
 // tryRevokeViaSession attempts the session-authenticated branch of the
