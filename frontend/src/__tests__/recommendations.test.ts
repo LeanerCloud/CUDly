@@ -3843,16 +3843,16 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
   // upfront over term * 12 months) — NOT the highest raw `savings`.
   // Concrete example: a 3yr/all-upfront with $36000 upfront + $1200/mo
   // headline savings has effective = 1200 - 36000/36 = $200. A 1yr/no-upfront
-  // with $0 upfront + $300/mo headline savings has effective = $300. The
-  // 1yr/no-upfront wins despite the 3yr's higher raw `savings`.
-  test('(d) select-all picks highest-effective-savings (amortized) per cell', async () => {
+  // `savings` is already the net monthly savings (provider-reported, post-amortization).
+  // select-all picks the variant with the highest net savings per cell.
+  test('(d) select-all picks highest-effective-savings (net) per cell', async () => {
     const recs = [
-      // 3yr/all-upfront — high raw savings ($1200/mo) but huge upfront drags effective to $200/mo.
-      { id: 'big-upfront', provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 1200, upfront_cost: 36000 },
-      // 1yr/no-upfront — lower raw ($300/mo) but $0 upfront → effective stays at $300/mo.
+      // 3yr/all-upfront — net savings already $200/mo (upfront already factored in by the provider).
+      { id: 'big-upfront', provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 200, upfront_cost: 36000 },
+      // 1yr/no-upfront — net savings $300/mo.
       { id: 'no-upfront',  provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 1, savings: 300,  upfront_cost: 0 },
-      // 3yr/partial-upfront — middle of the road ($600/mo savings, $7200 upfront → effective = 600 - 7200/36 = $400).
-      { id: 'middle',      provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 600,  upfront_cost: 7200 },
+      // 3yr/partial-upfront — highest net savings $400/mo.
+      { id: 'middle',      provider: 'aws', cloud_account_id: 'acct-1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', engine: '', count: 1, term: 3, savings: 400,  upfront_cost: 7200 },
     ];
     (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
     (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
@@ -3865,7 +3865,7 @@ describe('Issue #224: one-variant-per-cell radio selection', () => {
     // Exactly one add call (single cell, one variant picked).
     const addCalls = (state.addSelectedRecommendation as jest.Mock).mock.calls;
     expect(addCalls).toHaveLength(1);
-    // The "middle" variant has the highest effective ($400/mo > $300 > $200) — picked.
+    // The "middle" variant has the highest net savings ($400/mo > $300 > $200) -- picked.
     expect(addCalls[0]![0]).toBe('middle');
   });
 });
@@ -3917,10 +3917,10 @@ describe('issue #223: pickBestVariantPerCell config-match tiebreaker', () => {
   });
 
   test('falls back to highest-effective when no variant matches configured defaults', () => {
-    // Neither variant matches term=1/all-upfront; fallback picks highest effective.
+    // Neither variant matches term=1/all-upfront; fallback picks highest net savings.
     const recs = [
-      rec('low-effective', 3, 'all-upfront', 1200, 36000), // effective = 1200 - 1000 = $200
-      rec('high-effective', 3, 'no-upfront', 400, 0), // effective = $400
+      rec('low-effective', 3, 'all-upfront', 200, 36000), // net savings = $200/mo
+      rec('high-effective', 3, 'no-upfront', 400, 0), // net savings = $400/mo
     ];
     seedGlobalDefaults(1, 'all-upfront'); // neither matches
     const result = pickBestVariantPerCell(recs);
@@ -3978,21 +3978,23 @@ describe('effectiveMonthlySavings', () => {
     expect(effectiveMonthlySavings(mk({ savings: 100, upfront_cost: 0, term: 1 }))).toBeCloseTo(100);
   });
 
-  test('all-upfront: effective = savings - upfront / (term * 12)', () => {
-    expect(effectiveMonthlySavings(mk({ savings: 50, upfront_cost: 600, term: 1 }))).toBeCloseTo(0);
-    expect(effectiveMonthlySavings(mk({ savings: 1200, upfront_cost: 36000, term: 3 }))).toBeCloseTo(200);
+  test('all-upfront: savings is already net so returns savings directly', () => {
+    // Provider reports net monthly savings after factoring in the upfront cost.
+    // effectiveMonthlySavings must NOT subtract amortized upfront again (#1103).
+    expect(effectiveMonthlySavings(mk({ savings: 50, upfront_cost: 600, term: 1 }))).toBeCloseTo(50);
+    expect(effectiveMonthlySavings(mk({ savings: 1200, upfront_cost: 36000, term: 3 }))).toBeCloseTo(1200);
   });
 
-  test('partial-upfront: intermediate amortization', () => {
-    expect(effectiveMonthlySavings(mk({ savings: 600, upfront_cost: 7200, term: 3 }))).toBeCloseTo(400);
+  test('partial-upfront: savings is already net, returns savings directly', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 600, upfront_cost: 7200, term: 3 }))).toBeCloseTo(600);
   });
 
-  test('term=0 clamps to 1yr (12 months) to avoid division by zero', () => {
-    expect(effectiveMonthlySavings(mk({ savings: 60, upfront_cost: 120, term: 0 }))).toBeCloseTo(50);
+  test('term=0: returns raw savings (no division by term needed)', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 60, upfront_cost: 120, term: 0 }))).toBeCloseTo(60);
   });
 
-  test('can return negative when upfront dominates (data anomaly signal)', () => {
-    expect(effectiveMonthlySavings(mk({ savings: 10, upfront_cost: 1200, term: 1 }))).toBeCloseTo(-90);
+  test('savings is returned as-is regardless of upfront size', () => {
+    expect(effectiveMonthlySavings(mk({ savings: 10, upfront_cost: 1200, term: 1 }))).toBeCloseTo(10);
   });
 });
 
@@ -4021,16 +4023,19 @@ describe('effectiveSavingsPct', () => {
     expect(pct!).toBeCloseTo(66.67, 1);
   });
 
-  test('all-upfront with monthly_cost=0: pct uses amortized upfront in onDemand', () => {
+  test('all-upfront with monthly_cost=0: numerator is savings (already net, no double-subtract)', () => {
+    // savings=50 is already net of amortized upfront; denominator reconstruction
+    // keeps amortized in onDemand so we get 50/100=50%, not 0/100=0% (#1103).
     const pct = effectiveSavingsPct(mk({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1 }));
     expect(pct).not.toBeNull();
-    expect(pct!).toBeCloseTo(0, 1);
+    expect(pct!).toBeCloseTo(50, 1);
   });
 
   test('partial-upfront: standard case', () => {
+    // savings=600 net; amortized=200; onDemand=200+600+200=1000; pct=600/1000=60%.
     const pct = effectiveSavingsPct(mk({ savings: 600, upfront_cost: 7200, monthly_cost: 200, term: 3 }));
     expect(pct).not.toBeNull();
-    expect(pct!).toBeCloseTo(40, 1);
+    expect(pct!).toBeCloseTo(60, 1);
   });
 
   test('on_demand_monthly=0 returns null (no division by zero)', () => {
@@ -4043,11 +4048,13 @@ describe('effectiveSavingsPct', () => {
     expect(pct).toBeNull();
   });
 
-  test('negative effective savings returns a negative percentage', () => {
+  test('positive net savings even with large upfront: no double-subtract (#1103)', () => {
+    // savings=10 is already net; amortized=100; onDemand=400+10+100=510.
+    // Old formula gave -90/510=-17.65%; correct result is 10/510=1.96%.
     const pct = effectiveSavingsPct(mk({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1 }));
     expect(pct).not.toBeNull();
-    expect(pct!).toBeLessThan(0);
-    expect(pct!).toBeCloseTo(-17.65, 1);
+    expect(pct!).toBeGreaterThan(0);
+    expect(pct!).toBeCloseTo(1.96, 1);
   });
 
   test('undefined/null monthly_cost returns null (data not provided)', () => {
@@ -4107,11 +4114,12 @@ describe('effectiveSavingsPct', () => {
     test('repro of the live Azure D11_v2 row with provider-supplied on_demand_cost', () => {
       // Reconstructed (no on_demand_cost): savings=$29, upfront=$26,
       // monthly=$0, term=1 → onDemand = 0 + 29 + 2.17 = $31.17 →
-      // pct ≈ 86% (the inflated value the user complained about).
+      // pct = 29 / 31.17 ≈ 93% (reconstruction inflates because monthly_cost=0
+      // collapses the denominator; the provider baseline is far more accurate).
       // With provider-supplied on_demand_cost = $122.64 (the real Azure
       // CostWithNoReservedInstances for 2 × Standard_D11_v2 in eastus),
-      // pct ≈ (29 - 2.17) / 122.64 = ~21.9% — within realistic 1-year
-      // RI savings.
+      // pct = 29 / 122.64 ≈ 23.65% -- within realistic 1-year RI savings.
+      // (Old formula subtracted amortized from numerator too: 26.83/122.64=21.88%.)
       const pctReconstructed = effectiveSavingsPct(
         mk({ savings: 29, upfront_cost: 26, monthly_cost: 0, term: 1 }),
       );
@@ -4121,7 +4129,7 @@ describe('effectiveSavingsPct', () => {
         mk({ savings: 29, upfront_cost: 26, monthly_cost: 0, term: 1, on_demand_cost: 122.64 }),
       );
       expect(pctWithBaseline).not.toBeNull();
-      expect(pctWithBaseline!).toBeCloseTo(21.88, 1);
+      expect(pctWithBaseline!).toBeCloseTo(23.65, 1);
     });
 
     test('on_demand_cost overrides reconstruction even when monthly_cost is non-zero', () => {
@@ -4178,17 +4186,14 @@ describe('effectiveSavingsPct', () => {
         // Real-world shape: 2 × m5.large 1yr partial-upfront.
         // EstimatedMonthlyOnDemandCost = $150 (AWS CE field plumbed via
         // parseAWSCostDetails → common.Recommendation.OnDemandCost).
-        // savings = $45, upfront = $120 → amortized = $10/mo.
-        // effectiveSavings = 45 - 10 = $35.
-        // pct = 35 / 150 × 100 ≈ 23.3%.
-        // Without on_demand_cost the reconstruction would give:
-        //   onDemand = 60 + 45 + 10 = $115 → pct ≈ 30.4% (wrong).
+        // savings = $45 (already net of the $10/mo amortized upfront per #1103).
+        // pct = 45 / 150 × 100 = 30%.
+        // (Old formula double-subtracted amortized: (45-10)/150=23.33%.)
         const pct = effectiveSavingsPct(
           mk({ savings: 45, upfront_cost: 120, monthly_cost: 60, term: 1, on_demand_cost: 150 }),
         );
         expect(pct).not.toBeNull();
-        // pct = (45 - 10) / 150 × 100 = 23.33…
-        expect(pct!).toBeCloseTo(23.33, 1);
+        expect(pct!).toBeCloseTo(30, 1);
       });
 
       test('AWS Compute SP: on_demand_cost from CurrentAverageHourlyOnDemandSpend×730 is used as denominator', () => {
@@ -4215,8 +4220,21 @@ describe('effectiveSavingsPct', () => {
           mk({ savings: 300, upfront_cost: 0, monthly_cost: null, term: 1, on_demand_cost: 1500 }),
         );
         expect(pct).not.toBeNull();
-        // effectiveSavings = 300 - 0 = 300; pct = 300 / 1500 × 100 = 20%
+        // savings already net; pct = 300 / 1500 × 100 = 20%
         expect(pct!).toBeCloseTo(20, 1);
+      });
+
+      test('regression #1103: high-upfront 3yr AWS RI no longer shows negative pct', () => {
+        // Pre-fix: savings=30 (net), upfront=2988, term=3, on_demand=100.
+        // Old formula: amortized=2988/36=83, effectiveSavings=30-83=-53,
+        //   pct=-53/100=-53% (wrong -- purchase genuinely saves money).
+        // Fixed formula: pct=30/100=30%.
+        const pct = effectiveSavingsPct(
+          mk({ provider: 'aws', savings: 30, upfront_cost: 2988, monthly_cost: 0, term: 3, on_demand_cost: 100 }),
+        );
+        expect(pct).not.toBeNull();
+        expect(pct!).toBeGreaterThan(0);
+        expect(pct!).toBeCloseTo(30, 1);
       });
     });
   });
@@ -4354,9 +4372,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
     expect(cells.some((c) => c.includes('%') && !c.includes('em'))).toBe(true);
   });
 
-  test('all-upfront row: Monthly Cost shows $0, Effective % accounts for amortization', async () => {
-    // AWS row requires on_demand_cost (#323). savings=50, upfront=600, term=1
-    // => amortized=50, effectiveSavings=0. on_demand_cost=100 => pct=0.0%.
+  test('all-upfront row: Monthly Cost shows $0, Effective % uses net savings directly (#1103)', async () => {
+    // AWS row requires on_demand_cost (#323). savings=50 (already net), upfront=600, term=1.
+    // Old formula: effectiveSavings=0 => 0.0%. Fixed: pct=50/100=50.0%.
     const rec = baseRec({ savings: 50, upfront_cost: 600, monthly_cost: 0, term: 1, on_demand_cost: 100 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
@@ -4368,7 +4386,7 @@ describe('Monthly Cost + Effective % column rendering', () => {
 
     const cells = Array.from(document.querySelectorAll('tbody td')).map((td) => td.textContent ?? '');
     expect(cells.some((c) => c === '$0')).toBe(true);
-    expect(cells.some((c) => c === '0.0%')).toBe(true);
+    expect(cells.some((c) => c === '50.0%')).toBe(true);
   });
 
   test('on_demand_monthly=0 row: Effective % renders as em-dash', async () => {
@@ -4386,9 +4404,9 @@ describe('Monthly Cost + Effective % column rendering', () => {
   });
 
   test('negative-effective row: Effective % cell has effective-pct-negative class', async () => {
-    // AWS row requires on_demand_cost (#323). savings=10, upfront=1200, term=1
-    // => amortized=100, effectiveSavings=-90. on_demand_cost=510 => pct<0.
-    const rec = baseRec({ savings: 10, upfront_cost: 1200, monthly_cost: 400, term: 1, on_demand_cost: 510 });
+    // Provider reports negative net savings (cost anomaly -- rec would cost more than on-demand).
+    // savings=-90 (already net negative), on_demand_cost=510 => pct<0.
+    const rec = baseRec({ savings: -90, upfront_cost: 0, monthly_cost: 400, term: 1, on_demand_cost: 510 });
     (api.getRecommendations as jest.Mock).mockResolvedValue({
       summary: {},
       recommendations: [rec],
