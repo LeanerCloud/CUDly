@@ -206,8 +206,9 @@ func TestGetRecommendations_singlePage(t *testing.T) {
 	assert.InDelta(t, 5000.0, r.OnDemandCost, 0.01)
 	assert.InDelta(t, 3500.0, r.CommitmentCost, 0.01)
 	assert.InDelta(t, 1500.0, r.EstimatedSavings, 0.01)
+	// Covered/effective cost (paid WITH the reservation) = CommitmentCost.
 	require.NotNil(t, r.RecurringMonthlyCost)
-	assert.Equal(t, 0.0, *r.RecurringMonthlyCost)
+	assert.InDelta(t, 3500.0, *r.RecurringMonthlyCost, 0.01)
 
 	details, ok := r.Details.(common.DataWarehouseDetails)
 	require.True(t, ok, "Details should be DataWarehouseDetails")

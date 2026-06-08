@@ -49,11 +49,22 @@ type ExtractedFields struct {
 	// subscription scoped recommendations are ever requested. See finding M1/M2
 	// in docs/code-review/09-provider-azure.md.
 	Scope string
-	// RecurringMonthlyCost is the monthly recurring charge for this
-	// commitment. Azure Reservation recommendations are all all-upfront
-	// (a single payment, no recurring monthly charge), so this is always
-	// a pointer to 0.0 — meaning "no recurring charge" rather than
-	// "data not available" (which would be nil).
+	// RecurringMonthlyCost is the covered/effective recurring cost for this
+	// commitment, i.e. what the customer pays WITH the reservation in place.
+	// The frontend renders this column as the "covered" spend; leaving it 0
+	// makes the GUI fall back to displaying OnDemandCost (the spend WITHOUT
+	// any reservation), which is the opposite of the intended figure.
+	//
+	// The value is sourced from TotalCostWithReservedInstances (preferred);
+	// if that field is absent it is reconstructed as OnDemandCost - NetSavings
+	// (covered = on-demand minus net savings). Like OnDemandCost and
+	// EstimatedSavings, the figure is over Azure's lookback period and is
+	// treated downstream as a monthly run-rate.
+	//
+	// nil means the provider returned neither a total-with-RI nor an
+	// (on-demand, net-savings) pair to reconstruct it from. nil renders as
+	// "—" (data not available); it is NEVER set to a fabricated 0 (which
+	// would falsely claim "free recurring charge").
 	RecurringMonthlyCost *float64
 }
 
@@ -61,6 +72,35 @@ type ExtractedFields struct {
 // distinguish "explicitly zero" from "not provided" (nil) on pointer fields.
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+// deriveCoveredMonthlyCost computes the covered/effective recurring cost
+// (what the customer pays WITH the reservation) used to populate
+// ExtractedFields.RecurringMonthlyCost. Inputs are the already-normalised
+// pointers from either response shape:
+//
+//   - totalWithRI: TotalCostWithReservedInstances (preferred, authoritative).
+//   - onDemand / netSavings: used to reconstruct covered = on-demand - net
+//     savings only when totalWithRI is absent.
+//
+// Returns nil (NOT 0) when neither source is available, and logs a warning
+// so the gap surfaces instead of silently shipping a fabricated figure. The
+// returned value is over Azure's lookback period and treated as a monthly
+// run-rate downstream, consistent with OnDemandCost/EstimatedSavings.
+func deriveCoveredMonthlyCost(resourceType string, totalWithRI, onDemand, netSavings *float64) *float64 {
+	if totalWithRI != nil {
+		return float64Ptr(*totalWithRI)
+	}
+	if onDemand != nil && netSavings != nil {
+		return float64Ptr(*onDemand - *netSavings)
+	}
+	logging.Warnf(
+		"azure recommendations: covered monthly cost unavailable for %q "+
+			"(no TotalCostWithReservedInstances and no on-demand/net-savings pair); "+
+			"leaving RecurringMonthlyCost nil",
+		resourceType,
+	)
+	return nil
 }
 
 // Extract reads the Azure reservation recommendation payload into
@@ -126,10 +166,15 @@ func extractLegacy(rec *armconsumption.LegacyReservationRecommendation) *Extract
 		// depends on (issue #215 audit).
 		out.EstimatedSavings = *props.NetSavings
 	}
-	// Azure Reservation recommendations are always all-upfront (single payment,
-	// no monthly recurring charge). Set to 0 (not nil) so the frontend renders
-	// "$0" rather than "—" (which would imply "data not available").
-	out.RecurringMonthlyCost = float64Ptr(0)
+	// Covered/effective recurring cost = what the customer pays WITH the
+	// reservation. Prefer the provider-reported total-with-RI; fall back to
+	// on-demand minus net savings; nil (never 0) when neither is available.
+	out.RecurringMonthlyCost = deriveCoveredMonthlyCost(
+		out.ResourceType,
+		props.TotalCostWithReservedInstances,
+		props.CostWithNoReservedInstances,
+		props.NetSavings,
+	)
 	return out
 }
 
@@ -162,10 +207,17 @@ func extractModern(rec *armconsumption.ModernReservationRecommendation) *Extract
 	out.OnDemandCost = amountValue(props.CostWithNoReservedInstances)
 	out.CommitmentCost = amountValue(props.TotalCostWithReservedInstances)
 	out.EstimatedSavings = amountValue(props.NetSavings)
-	// Azure Reservation recommendations are always all-upfront (single payment,
-	// no monthly recurring charge). Set to 0 (not nil) so the frontend renders
-	// "$0" rather than "—" (which would imply "data not available").
-	out.RecurringMonthlyCost = float64Ptr(0)
+	// Covered/effective recurring cost = what the customer pays WITH the
+	// reservation. Prefer the provider-reported total-with-RI; fall back to
+	// on-demand minus net savings; nil (never 0) when neither is available.
+	// amountValuePtr preserves the "field absent" signal (nil) so the
+	// fallback/nil logic matches the Legacy path's *float64 inputs.
+	out.RecurringMonthlyCost = deriveCoveredMonthlyCost(
+		out.ResourceType,
+		amountValuePtr(props.TotalCostWithReservedInstances),
+		amountValuePtr(props.CostWithNoReservedInstances),
+		amountValuePtr(props.NetSavings),
+	)
 
 	return out
 }
@@ -251,6 +303,17 @@ func amountValue(a *armconsumption.Amount) float64 {
 		return 0
 	}
 	return *a.Value
+}
+
+// amountValuePtr unwraps Modern's *Amount to a *float64, preserving the
+// "field absent" signal: it returns nil (not a pointer to 0) when the
+// *Amount or its Value is missing. Used where the caller must distinguish
+// "value absent" from "value is zero" (e.g. deriveCoveredMonthlyCost).
+func amountValuePtr(a *armconsumption.Amount) *float64 {
+	if a == nil || a.Value == nil {
+		return nil
+	}
+	return float64Ptr(*a.Value)
 }
 
 func strDeref(s *string) string {

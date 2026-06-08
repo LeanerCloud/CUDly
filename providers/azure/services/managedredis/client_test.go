@@ -778,8 +778,9 @@ func TestConvertRecommendation_legacy(t *testing.T) {
 	assert.InDelta(t, 1000.0, rec.OnDemandCost, 0.01)
 	assert.InDelta(t, 700.0, rec.CommitmentCost, 0.01)
 	assert.InDelta(t, 300.0, rec.EstimatedSavings, 0.01)
+	// Covered/effective cost (paid WITH the reservation) = CommitmentCost.
 	require.NotNil(t, rec.RecurringMonthlyCost)
-	assert.Equal(t, 0.0, *rec.RecurringMonthlyCost)
+	assert.InDelta(t, 700.0, *rec.RecurringMonthlyCost, 0.01)
 }
 
 // -- RedisPricing struct --
