@@ -1,6 +1,71 @@
 /* Responsive styles: Media queries */
 
 /* ---------------------------------------------------------------------------
+ * Mobile foundations
+ * ------------------------------------------------------------------------- */
+
+/* Tap-highlight: remove the default iOS/Android blue flash on touch; each
+ * interactive element supplies its own :active style instead so the tap
+ * feedback is intentional rather than accidental. */
+button,
+a,
+[role="button"] {
+    -webkit-tap-highlight-color: transparent;
+}
+
+button:active,
+a:active,
+[role="button"]:active {
+    opacity: 0.85;
+}
+
+/* Safe-area insets: protect content from the iOS notch (top) and home
+ * indicator (bottom). The fixed topbar sits at top:0 so it needs the top
+ * inset; the main scrollable area needs bottom padding so the last row of
+ * content is not obscured by the home bar. */
+.app-topbar {
+    padding-top: max(0px, env(safe-area-inset-top));
+}
+
+.app-shell {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Touch-target minimums: apply only on coarse-pointer (touch) devices so
+ * the compact desktop layout is unaffected. 44x44px matches Apple HIG and
+ * WCAG 2.5.8 guidance for minimum touch-target size. */
+@media (pointer: coarse) {
+    .btn,
+    button,
+    [role="button"],
+    input[type="submit"],
+    input[type="button"],
+    input[type="reset"],
+    select,
+    input[type="checkbox"],
+    input[type="radio"] {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    /* Checkboxes and radio buttons are small by design; grow them via
+     * padding on the wrapping label so the hit area expands without
+     * visually bloating the glyph. */
+    input[type="checkbox"],
+    input[type="radio"] {
+        min-height: unset;
+        min-width: unset;
+    }
+
+    label:has(> input[type="checkbox"]),
+    label:has(> input[type="radio"]) {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Mobile navigation drawer (below 768px)
  *
  * Pattern: hamburger button in topbar toggles .sidebar-open on <body>.
@@ -11,7 +76,7 @@
  * - aria-expanded / aria-hidden toggled from app.ts:setupMobileNav().
  * ------------------------------------------------------------------------- */
 
-/* Hamburger button — mobile only */
+/* Hamburger button - mobile only */
 .hamburger {
     display: none; /* hidden above breakpoint */
     background: transparent;
@@ -47,7 +112,6 @@
 body.sidebar-open {
     overflow: hidden;
 }
-
 @media (max-width: 768px) {
     header {
         flex-direction: column;
