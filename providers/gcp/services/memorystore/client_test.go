@@ -780,11 +780,12 @@ func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *test
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
-	// Inject a billing mock with a known on-demand hourly price. The
-	// getRedisPricing implementation applies a 30% CUD discount for 1yr, so
-	// CommitmentPrice = onDemandHourly * 8760 * 0.70. RecurringMonthlyCost
-	// must equal CommitmentPrice / 12 (one year = 12 months).
-	const hourlyRate = 0.10 // USD/h -- representative basic Memorystore value
+	// Inject a billing mock with a known on-demand hourly price and a separate
+	// commitment SKU. getRedisPricing derives CommitmentPrice from the
+	// "commitment" SKU (CommitmentPrice = commitmentHourly * 8760), so
+	// RecurringMonthlyCost must equal CommitmentPrice / 12 (one year = 12 months).
+	const onDemandHourly = 0.10   // USD/h -- representative basic Memorystore value
+	const commitmentHourly = 0.07 // USD/h -- 1yr CUD rate from the catalog
 	client.SetBillingService(&MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
 			Skus: []*cloudbilling.Sku{
@@ -798,7 +799,28 @@ func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *test
 									{
 										UnitPrice: &cloudbilling.Money{
 											Units:        0,
-											Nanos:        int64(hourlyRate * 1e9),
+											Nanos:        int64(onDemandHourly * 1e9),
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					// Commitment SKU required by getRedisPricing: without a
+					// "commitment" SKU it errors and RecurringMonthlyCost stays nil.
+					Description:    "redis-basic Cloud Memorystore Redis commitment 1yr",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        int64(commitmentHourly * 1e9),
 											CurrencyCode: "USD",
 										},
 									},
@@ -824,7 +846,7 @@ func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *test
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 
 	// RecurringMonthlyCost must be a non-nil pointer to a positive value for
@@ -832,10 +854,11 @@ func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *test
 	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
 	assert.Greater(t, *rec.RecurringMonthlyCost, 0.0, "RecurringMonthlyCost must be positive for a monthly Memorystore CUD")
 
-	// Verify the value matches CommitmentPrice / 12 exactly.
+	// Verify the value matches CommitmentPrice / 12 exactly. CommitmentPrice is
+	// the commitment SKU's hourly rate scaled to the 1yr term total.
 	const hoursIn1yr = 8760.0
-	expectedCommitment := hourlyRate * hoursIn1yr * 0.70 // 30% discount for 1yr
-	assert.InDelta(t, expectedCommitment/12, *rec.RecurringMonthlyCost, 1e-6)
+	expectedMonthly := commitmentHourly * hoursIn1yr / 12
+	assert.InDelta(t, expectedMonthly, *rec.RecurringMonthlyCost, 1e-6)
 }
 
 func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost_BillingFailure(t *testing.T) {
@@ -851,7 +874,7 @@ func TestMemorystoreClient_ConvertGCPRecommendation_RecurringMonthlyCost_Billing
 		Content: &recommenderpb.RecommendationContent{},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Nil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be nil when billing lookup fails")
 }

@@ -525,7 +525,6 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 		term = "1yr"
 	}
 
-
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceStorage,
@@ -541,22 +540,21 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 	rec.EstimatedSavings = extractGCPSavings(gcpRec)
 
 	// Thread pricing into the converter so the scorer can rank/filter GCP recs
-	// correctly (issue #1022 C2).
+	// correctly (issue #1022 C2). fillStoragePricing performs the single billing
+	// lookup and populates CommitmentCost; we reuse that value below to derive
+	// RecurringMonthlyCost rather than issuing a second SKU call.
 	if rec.ResourceType != "" {
-		c.fillStoragePricing(ctx, rec, termYearsFromLabel(rec.Term))
-	}
+		termYears := termYearsFromLabel(rec.Term)
+		c.fillStoragePricing(ctx, rec, termYears)
 
-	// Populate RecurringMonthlyCost from the billing API. Cloud Storage
-	// committed-use discounts are monthly-payment commitments, so the
-	// per-month charge is CommitmentPrice / termMonths. A billing lookup
-	// failure is non-fatal: log the warning and leave RecurringMonthlyCost
-	// nil so the frontend renders "—" rather than a stale value.
-	termYears := termYearsFromLabel(rec.Term)
-	if pricing, err := c.getStoragePricing(ctx, rec.ResourceType, c.region, termYears); err != nil {
-		log.Printf("cloudstorage: RecurringMonthlyCost lookup failed for %s/%s: %v", rec.ResourceType, c.region, err)
-	} else {
-		monthly := pricing.CommitmentPrice / float64(termYears*12)
-		rec.RecurringMonthlyCost = &monthly
+		// Cloud Storage committed-use discounts are monthly-payment commitments,
+		// so the per-month charge is CommitmentCost / termMonths. When the
+		// billing lookup failed, CommitmentCost stays 0 and RecurringMonthlyCost
+		// remains nil so the frontend renders "—" rather than a stale value.
+		if rec.CommitmentCost > 0 {
+			monthly := rec.CommitmentCost / float64(termYears*12)
+			rec.RecurringMonthlyCost = &monthly
+		}
 	}
 
 	return rec
