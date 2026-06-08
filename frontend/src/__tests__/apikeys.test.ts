@@ -927,5 +927,50 @@ describe('API Keys Module', () => {
       // The exact format depends on locale, but it should contain date parts
       expect(container?.innerHTML).toContain('2024');
     });
+
+    // #492: last_used_at null renders "Never", not "0 min ago" or empty
+    test('renders Never for null last_used_at (issue #492)', async () => {
+      const mockKeys = [
+        {
+          id: 'key-1',
+          name: 'Unused Key',
+          key_prefix: 'abc123',
+          is_active: true,
+          created_at: '2024-01-15T10:00:00Z'
+          // last_used_at intentionally absent
+        }
+      ];
+
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+      await loadApiKeys();
+
+      const container = document.getElementById('apikeys-list');
+      expect(container?.innerHTML).toContain('Never');
+    });
+
+    // #492: populated last_used_at renders relative time with ISO title for hover
+    test('renders relative time with ISO title for populated last_used_at (issue #492)', async () => {
+      const recentTs = new Date(Date.now() - 2 * 3600 * 1000).toISOString(); // 2 hours ago
+      const mockKeys = [
+        {
+          id: 'key-1',
+          name: 'Used Key',
+          key_prefix: 'abc123',
+          is_active: true,
+          created_at: '2024-01-15T10:00:00Z',
+          last_used_at: recentTs
+        }
+      ];
+
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+      await loadApiKeys();
+
+      const container = document.getElementById('apikeys-list');
+      // Relative label: ends with "h ago" for a 2-hour-old timestamp
+      expect(container?.innerHTML).toMatch(/\d+h ago/);
+      // Absolute ISO on the title attribute for hover
+      const span = container?.querySelector<HTMLElement>('[title]');
+      expect(span?.getAttribute('title')).toBe(new Date(recentTs).toISOString());
+    });
   });
 });

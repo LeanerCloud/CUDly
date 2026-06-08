@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
-import { formatDateTime } from './utils';
+import { formatDateTime, formatRelativeTime } from './utils';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { openModal, closeModal } from './modal';
@@ -85,7 +85,7 @@ export function renderApiKeysList(): void {
               <td><code>${escapeHtml(key.key_prefix)}...</code></td>
               <td><span class="badge ${statusClass}">${statusText}</span></td>
               <td>${formatDateTime(key.created_at)}</td>
-              <td>${key.last_used_at ? formatDateTime(key.last_used_at) : '<span class="text-muted">Never</span>'}</td>
+              <td>${key.last_used_at ? `<span title="${escapeHtml(new Date(key.last_used_at).toISOString())}">${escapeHtml(formatRelativeTime(key.last_used_at))}</span>` : '<span class="text-muted">Never</span>'}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
                 ${key.is_active && !isExpired ? `<button class="btn-small btn-warning revoke-key-btn" data-key-id="${escapeHtml(key.id)}">Revoke</button>` : ''}
