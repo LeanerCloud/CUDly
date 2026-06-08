@@ -76,6 +76,15 @@ jest.mock('../utils', () => ({
   formatRampSchedule: jest.fn((v) => v ?? ''),
   getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
   escapeHtml: jest.fn((s) => s ?? ''),
+  escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
+    if (str == null) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }),
   formatCurrency: jest.fn((v) => `$${v}`),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
 }));
