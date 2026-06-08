@@ -148,10 +148,13 @@ type StoreInterface interface {
 	GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error)
 	// MarkPurchaseRevoked stamps revoked_at, revoked_via, and optionally
 	// support_case_id on a purchase_history row identified by purchase_id.
+	// calcRefundAmount and calcRefundCurrency capture the Azure CalculateRefund
+	// quote for audit (migration 000071, Finding #4); both nil/empty for
+	// non-Azure paths or legacy rows written before the migration.
 	// Returns a not-found error when no row matches. Idempotent: a second
 	// call for the same row is a no-op (revoked_at is not overwritten when
 	// it is already non-null). Used by the revoke endpoint (issue #290).
-	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
+	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

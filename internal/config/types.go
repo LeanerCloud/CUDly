@@ -744,6 +744,16 @@ type PurchaseHistoryRecord struct {
 	// SupportCaseID is non-empty when RevokedVia == "support-case".
 	// Persisted.
 	SupportCaseID string `json:"support_case_id,omitempty" dynamodbav:"support_case_id,omitempty"`
+
+	// --- Refund-quote audit fields (issue #290 Finding #4, migration 000071) ---
+	//
+	// CalcRefundAmount is the amount Azure quoted at CalculateRefund time, captured
+	// for audit and TOCTOU-divergence detection in the two-step revoke confirm flow.
+	// NULL for revocations that predate this feature or where Azure returned no amount.
+	CalcRefundAmount *float64 `json:"calc_refund_amount,omitempty" dynamodbav:"calc_refund_amount,omitempty"`
+	// CalcRefundCurrency is the ISO-4217 currency code from the CalculateRefund quote
+	// (e.g. "USD"). NULL when CalcRefundAmount is NULL.
+	CalcRefundCurrency string `json:"calc_refund_currency,omitempty" dynamodbav:"calc_refund_currency,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

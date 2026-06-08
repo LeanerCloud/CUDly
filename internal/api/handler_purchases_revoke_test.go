@@ -26,11 +26,13 @@ func (s *stubCalcRefundClient) Post(ctx context.Context, orderID string, body ar
 }
 
 type stubReturnClient struct {
-	resp armreservations.ReturnClientPostResponse
-	err  error
+	resp  armreservations.ReturnClientPostResponse
+	err   error
+	calls int // incremented on each Post call; lets tests assert "was NOT called"
 }
 
 func (s *stubReturnClient) Post(ctx context.Context, orderID string, body armreservations.RefundRequest, opts *armreservations.ReturnClientPostOptions) (armreservations.ReturnClientPostResponse, error) {
+	s.calls++
 	return s.resp, s.err
 }
 
@@ -247,7 +249,7 @@ func TestRevokePurchase_AzureSuccess(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "").Return(nil)
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	sessID := "test-session"
 	calcClient := &stubCalcRefundClient{
@@ -264,7 +266,7 @@ func TestRevokePurchase_AzureSuccess(t *testing.T) {
 	h := &Handler{config: mockStore}
 	orderID := "order-abc"
 	resID := "res-xyz"
-	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, orderID, resID)
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, orderID, resID, nil)
 	require.NoError(t, err)
 	m, ok := result.(*revokePurchaseResult)
 	require.True(t, ok)
@@ -283,7 +285,7 @@ func TestRevokePurchase_AzureCalcRefundClientError(t *testing.T) {
 	returnClient := &stubReturnClient{}
 
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz")
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -310,7 +312,7 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 
 	r := armReservationRecord()
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz")
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
 	require.Error(t, err)
 	// 500 is not a client error -- expect wrapped error, not ClientError.
 	_, isClient := IsClientError(err)
@@ -366,7 +368,7 @@ func TestRevokePurchase_EmptyReservationIDRejected(t *testing.T) {
 
 	r := armReservationRecord()
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "")
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "", nil)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -789,4 +791,103 @@ func TestAuthorizeSessionRevokeExecution_NilCreatorDenied(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.message, "cannot revoke another user")
+}
+
+// --- Two-step quote-then-confirm: Finding #4 TOCTOU tests ---
+
+// stubCalcRefundClientWithAmount is a CalculateRefund stub that returns a
+// specified refund amount + currency.
+type stubCalcRefundClientWithAmount struct {
+	amount   float64
+	currency string
+	sessID   string
+}
+
+func (s *stubCalcRefundClientWithAmount) Post(_ context.Context, _ string, _ armreservations.CalculateRefundRequest, _ *armreservations.CalculateRefundClientPostOptions) (armreservations.CalculateRefundClientPostResponse, error) {
+	return armreservations.CalculateRefundClientPostResponse{
+		CalculateRefundResponse: armreservations.CalculateRefundResponse{
+			Properties: &armreservations.RefundResponseProperties{
+				SessionID: &s.sessID,
+				BillingRefundAmount: &armreservations.Price{
+					Amount:       &s.amount,
+					CurrencyCode: &s.currency,
+				},
+			},
+		},
+	}, nil
+}
+
+// TestCallAzureReturn_TOCTOUDivergenceRejectedWith422 verifies that when the
+// user confirmed a refund of $100.00 but Azure's CalculateRefund now quotes
+// $99.00 (beyond revokeQuoteEpsilon), the call is rejected with 422 before
+// the Return API is called.
+func TestCallAzureReturn_TOCTOUDivergenceRejectedWith422(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	// User confirmed $100.00; Azure now quotes $99.00 (> $0.01 divergence).
+	userConfirmed := 100.0
+	calcClient := &stubCalcRefundClientWithAmount{amount: 99.0, currency: "USD", sessID: "s-1"}
+	returnClient := &stubReturnClient{}
+
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", &userConfirmed)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, ce.message, "refund amount diverged")
+	// Return API must NOT be called — no state mutation after divergence.
+	assert.Empty(t, returnClient.calls)
+}
+
+// TestCallAzureReturn_TOCTOUWithinEpsilonSucceeds verifies that a divergence
+// within revokeQuoteEpsilon ($0.01) is accepted and the Return is called.
+func TestCallAzureReturn_TOCTOUWithinEpsilonSucceeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	// User confirmed $100.00; Azure now quotes $100.005 (within $0.01).
+	userConfirmed := 100.0
+	calcClient := &stubCalcRefundClientWithAmount{amount: 100.005, currency: "USD", sessID: "s-1"}
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+
+	h := &Handler{config: mockStore}
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", &userConfirmed)
+	require.NoError(t, err)
+	m, ok := result.(*revokePurchaseResult)
+	require.True(t, ok)
+	assert.Equal(t, "revoked", m.Status)
+}
+
+// TestCallAzureReturn_AuditRowPopulatedWithQuote verifies that MarkPurchaseRevoked
+// is called with the non-nil calcRefundAmount and calcRefundCurrency from
+// CalculateRefund, so the audit row captures the quoted values.
+func TestCallAzureReturn_AuditRowPopulatedWithQuote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	calcClient := &stubCalcRefundClientWithAmount{amount: 42.50, currency: "EUR", sessID: "s-2"}
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+
+	// Assert MarkPurchaseRevoked receives the quote amount and currency.
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "",
+		mock.MatchedBy(func(v *float64) bool { return v != nil && *v == 42.50 }),
+		"EUR",
+	).Return(nil)
+
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.NoError(t, err)
+	mockStore.AssertExpectations(t)
 }

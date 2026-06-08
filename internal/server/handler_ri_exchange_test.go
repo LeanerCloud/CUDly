@@ -937,6 +937,6 @@ func (m *mockConfigStoreForExchange) GetPurchaseHistoryByPurchaseID(_ context.Co
 	return nil, nil
 }
 
-func (m *mockConfigStoreForExchange) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string) error {
+func (m *mockConfigStoreForExchange) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string, _ *float64, _ string) error {
 	return nil
 }

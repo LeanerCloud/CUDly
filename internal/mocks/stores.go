@@ -314,8 +314,8 @@ func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, pu
 }
 
 // MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
-func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error {
-	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID)
+func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID, calcRefundAmount, calcRefundCurrency)
 	return args.Error(0)
 }
 

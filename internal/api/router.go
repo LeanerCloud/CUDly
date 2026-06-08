@@ -183,6 +183,11 @@ func (r *Router) registerRoutes() {
 		// AuthUser: router-level gate; per-handler requirePermission is the
 		// real security boundary.
 		{PathPrefix: "/api/purchases/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokePurchaseHandler, Auth: AuthUser},
+		// GET /api/purchases/{id}/revoke/calculate: returns the Azure refund quote
+		// (amount + currency) for the two-step quote-then-confirm revoke UX
+		// (issue #290 Finding #4). No state mutation; result used to populate
+		// expected_refund_amount in the POST /revoke body.
+		{PathPrefix: "/api/purchases/", PathSuffix: "/revoke/calculate", Method: "GET", Handler: r.calculateRevokeHandler, Auth: AuthUser},
 
 		// Planned purchases endpoints (must come before generic /api/purchases/{id}).
 		// All now AuthUser (PR-A of #660): handler-level requirePermission
@@ -552,6 +557,10 @@ func (r *Router) retryPurchaseHandler(ctx context.Context, req *events.LambdaFun
 
 func (r *Router) revokePurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.revokePurchase(ctx, req, params["id"])
+}
+
+func (r *Router) calculateRevokeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.calculateAzureRevoke(ctx, req, params["id"])
 }
 
 func (r *Router) getPlannedPurchasesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

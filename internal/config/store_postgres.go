@@ -1926,23 +1926,30 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 	return &r, rows.Err()
 }
 
-// MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id on
+// MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id and
+// the refund-quote audit columns (calc_refund_amount, calc_refund_currency) on
 // the purchase_history row identified by purchaseID. The UPDATE is a no-op
 // when revoked_at is already non-null (idempotency guard). Returns a not-found
 // error when zero rows are affected and revoked_at was previously NULL.
-func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error {
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
 		supportCaseIDPtr = &supportCaseID
 	}
+	var calcCurrencyPtr *string
+	if calcRefundCurrency != "" {
+		calcCurrencyPtr = &calcRefundCurrency
+	}
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
-		   SET revoked_at       = $2,
-		       revoked_via      = $3,
-		       support_case_id  = $4
+		   SET revoked_at            = $2,
+		       revoked_via           = $3,
+		       support_case_id       = $4,
+		       calc_refund_amount    = $5,
+		       calc_refund_currency  = $6
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
-	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr)
+	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr, calcRefundAmount, calcCurrencyPtr)
 	if err != nil {
 		return fmt.Errorf("MarkPurchaseRevoked: %w", err)
 	}
