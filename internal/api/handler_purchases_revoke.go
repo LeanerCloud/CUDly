@@ -43,6 +43,18 @@ import (
 // rejected with 422 so the user can re-quote and confirm.
 const revokeQuoteEpsilon = 0.01
 
+// azureRefundSafetyMargin is subtracted from the local window-close time before
+// presenting the revoke button or accepting a revoke request. Azure's 7-day
+// window has a hard edge: a reservation returned in the last few minutes of the
+// window occasionally fails with RefundPolicyViolated due to clock skew between
+// CUDly's clock and Azure's. Shrinking the local window by 1 hour eliminates
+// the tail of clock-skew failures at the edge (issue #290 Finding #3).
+//
+// The safety margin applies only to the local pre-flight check -- the value
+// stored in purchase_history.revocation_window_closes_at is the unmodified
+// Azure deadline so operators can see the true expiry.
+const azureRefundSafetyMargin = 1 * time.Hour
+
 // revokeQuoteResult is the JSON body returned by
 // GET /api/purchases/revoke/calculate/{id}.
 type revokeQuoteResult struct {
@@ -416,7 +428,9 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 	if record.RevocationWindowClosesAt != nil {
 		windowClosesAt = *record.RevocationWindowClosesAt
 	}
-	if time.Now().UTC().After(windowClosesAt) {
+	// Apply the 1h safety margin so we stop offering the button before Azure's
+	// hard edge (clock-skew protection, issue #290 Finding #3).
+	if time.Now().UTC().After(windowClosesAt.Add(-azureRefundSafetyMargin)) {
 		return nil, NewClientError(422, fmt.Sprintf(
 			"Azure reservation return window closed at %s (%d days after purchase)",
 			windowClosesAt.Format(time.RFC3339), AzureRevocationWindowDays,
@@ -487,7 +501,9 @@ func (h *Handler) revokeAzurePurchase(ctx context.Context, record *config.Purcha
 	if record.RevocationWindowClosesAt != nil {
 		windowClosesAt = *record.RevocationWindowClosesAt
 	}
-	if time.Now().UTC().After(windowClosesAt) {
+	// Apply the 1h safety margin so we stop accepting revoke requests before
+	// Azure's hard edge (clock-skew protection, issue #290 Finding #3).
+	if time.Now().UTC().After(windowClosesAt.Add(-azureRefundSafetyMargin)) {
 		return nil, NewClientError(422, fmt.Sprintf(
 			"Azure reservation return window closed at %s (%d days after purchase)",
 			windowClosesAt.Format(time.RFC3339), AzureRevocationWindowDays,
@@ -616,6 +632,15 @@ func (h *Handler) callAzureReturn(
 		},
 	}, nil)
 	if err != nil {
+		// Window-edge: if Azure rejects the Return with RefundPolicyViolated it
+		// means our safety-margin check passed but Azure's clock disagreed (the
+		// reservation crossed the 7-day boundary between our check and the API
+		// call). Surface a clean 422 with code AZURE_WINDOW_EDGE so the frontend
+		// can show a user-friendly "window just closed" message rather than a
+		// generic "Azure rejected" error (issue #290 Finding #3).
+		if isAzureWindowEdgeError(err) {
+			return nil, NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
+		}
 		if isAzureClientError(err) {
 			return nil, NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
 		}
@@ -719,6 +744,24 @@ func isAzureClientError(err error) bool {
 		case 400, 403, 404, 405, 409, 422:
 			return true
 		}
+	}
+	return false
+}
+
+// isAzureWindowEdgeError reports whether err is an Azure RefundPolicyViolated
+// rejection from the Return API. This specific error code is returned when the
+// reservation's 7-day return window has closed (either because the request
+// arrived just after expiry due to clock skew, or because a partial return
+// was already submitted). It is distinct from general client errors because
+// the appropriate HTTP response is 422 with code AZURE_WINDOW_EDGE rather
+// than the generic 400 "Azure refund rejected" path.
+func isAzureWindowEdgeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) {
+		return respErr.ErrorCode == "RefundPolicyViolated"
 	}
 	return false
 }

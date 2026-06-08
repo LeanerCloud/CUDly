@@ -1004,3 +1004,138 @@ func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T)
 	assert.Equal(t, "RECONCILE_PENDING", pending.Code)
 	assert.True(t, pending.AzureReturned)
 }
+
+// --- Finding #3: 1h safety margin + AZURE_WINDOW_EDGE ---
+
+// TestRevokePurchase_AzureWithinSafetyMarginRejected verifies that a purchase
+// made exactly (7d - 30min) ago is rejected by the local window check even
+// though Azure's hard 7-day deadline has not yet passed. The 1h safety margin
+// means the in-app button disappears 1h before Azure's actual edge to eliminate
+// clock-skew failures (issue #290 Finding #3).
+func TestRevokePurchase_AzureWithinSafetyMarginRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
+
+	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
+
+	r := armReservationRecord()
+	// Purchase made 6d23h30m ago: Azure's hard deadline is 30min away but our
+	// 1h safety margin means the local check should reject it now.
+	purchasedAt := time.Now().UTC().Add(-(7*24*time.Hour - 30*time.Minute))
+	r.Timestamp = purchasedAt
+	windowCloses := purchasedAt.AddDate(0, 0, AzureRevocationWindowDays)
+	r.RevocationWindowClosesAt = &windowCloses
+
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), errors.New("not found"))
+	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
+
+	h := &Handler{config: mockStore, auth: mockAuth}
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, ce.message, "window closed")
+}
+
+// TestRevokePurchase_AzureJustOutsideSafetyMarginAllowed verifies that a
+// purchase made (7d - 90min) ago (outside the 1h safety margin) is still
+// accepted by the local window check.
+func TestRevokePurchase_AzureJustOutsideSafetyMarginAllowed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	r := armReservationRecord()
+	// Purchase 6d22h30m ago: 90min before the Azure edge, outside our 1h margin.
+	purchasedAt := time.Now().UTC().Add(-(7*24*time.Hour - 90*time.Minute))
+	r.Timestamp = purchasedAt
+	windowCloses := purchasedAt.AddDate(0, 0, AzureRevocationWindowDays)
+	r.RevocationWindowClosesAt = &windowCloses
+
+	calcClient := &stubCalcRefundClientWithAmount{amount: 50.0, currency: "USD", sessID: "s-margin"}
+	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
+	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+
+	h := &Handler{config: mockStore}
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.NoError(t, err)
+	m, ok := result.(*revokePurchaseResult)
+	require.True(t, ok)
+	assert.Equal(t, "revoked", m.Status)
+}
+
+// TestIsAzureWindowEdgeError verifies that isAzureWindowEdgeError identifies
+// exactly the RefundPolicyViolated error code and nothing else.
+func TestIsAzureWindowEdgeError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		err     error
+		wantYes bool
+	}{
+		{
+			name:    "RefundPolicyViolated",
+			err:     &azcore.ResponseError{StatusCode: 400, ErrorCode: "RefundPolicyViolated"},
+			wantYes: true,
+		},
+		{
+			name:    "other 400 error code",
+			err:     &azcore.ResponseError{StatusCode: 400, ErrorCode: "InvalidParameter"},
+			wantYes: false,
+		},
+		{
+			name:    "nil error",
+			err:     nil,
+			wantYes: false,
+		},
+		{
+			name:    "plain error with RefundPolicyViolated in message",
+			err:     errors.New("400: RefundPolicyViolated"),
+			wantYes: false,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isAzureWindowEdgeError(tc.err)
+			assert.Equal(t, tc.wantYes, got)
+		})
+	}
+}
+
+// TestCallAzureReturn_RefundPolicyViolatedReturns422WindowEdge verifies that
+// when the Return API returns RefundPolicyViolated (window expired mid-flight),
+// callAzureReturn returns a 422 ClientError with code AZURE_WINDOW_EDGE rather
+// than a generic 400 "Azure refund rejected" message (issue #290 Finding #3).
+func TestCallAzureReturn_RefundPolicyViolatedReturns422WindowEdge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	sessID := "s-edge"
+	calcClient := &stubCalcRefundClientWithAmount{amount: 30.0, currency: "USD", sessID: sessID}
+	returnClient := &stubReturnClient{
+		err: &azcore.ResponseError{StatusCode: 400, ErrorCode: "RefundPolicyViolated"},
+	}
+
+	r := armReservationRecord()
+	h := &Handler{config: mockStore}
+	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", nil)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 422, ce.code)
+	assert.Contains(t, ce.message, "window has closed")
+	// MarkPurchaseRevoked must NOT be called -- Azure did not refund.
+	mockStore.AssertNotCalled(t, "MarkPurchaseRevoked")
+}
