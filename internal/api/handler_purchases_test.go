@@ -4304,6 +4304,68 @@ func TestResolveExecutedNotificationRecipients_Deduplication(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Finding #3: redactURL strips token from logged URLs
+// ---------------------------------------------------------------------------
+
+// TestRedactURL_StripsTokenQueryParam verifies the redactURL helper removes
+// the token value from URLs before they are written to logs.
+func TestRedactURL_StripsTokenQueryParam(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{
+			input: "/api/purchases/revoke/exec-id?token=supersecret",
+			want:  "/api/purchases/revoke/exec-id?token=REDACTED",
+		},
+		{
+			input: "/api/purchases/revoke/exec-id?other=val&token=supersecret",
+			want:  "/api/purchases/revoke/exec-id?other=val&token=REDACTED",
+		},
+		{
+			input: "/api/purchases/revoke/exec-id?token=supersecret&other=val",
+			want:  "/api/purchases/revoke/exec-id?token=REDACTED&other=val",
+		},
+		{
+			input: "/api/purchases/approve/exec-id?token=abc123",
+			want:  "/api/purchases/approve/exec-id?token=REDACTED",
+		},
+		{
+			// No token param: pass through unchanged.
+			input: "/api/purchases/approve/exec-id?other=x",
+			want:  "/api/purchases/approve/exec-id?other=x",
+		},
+		{
+			// No query string: pass through unchanged.
+			input: "/api/purchases/revoke/exec-id",
+			want:  "/api/purchases/revoke/exec-id",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, redactURL(tc.input))
+		})
+	}
+}
+
+// TestRevokePOSTReadsTokenFromBody verifies that resolveApprovalToken reads
+// the token from the HTML form POST body (application/x-www-form-urlencoded)
+// rather than the query string, so the token does not appear in access logs.
+// This test lives in the api package and calls the router-level function.
+func TestRevokePOSTReadsTokenFromBody(t *testing.T) {
+	req := &events.LambdaFunctionURLRequest{
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST"},
+		},
+		// Token present in BOTH body and query string; body must win.
+		Body:                  "token=body-token",
+		QueryStringParameters: map[string]string{"token": "query-token"},
+	}
+	got := resolveApprovalToken(req)
+	assert.Equal(t, "body-token", got, "POST body token must take priority over query string")
+}
+
+// ---------------------------------------------------------------------------
 // Finding #1: Revoke must reject a rotated (empty) approval token
 // ---------------------------------------------------------------------------
 
