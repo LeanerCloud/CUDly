@@ -511,7 +511,7 @@ func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID str
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
-			return fmt.Errorf("failed to lock purchase plan: %w", err)
+			return fmt.Errorf("failed to lock purchase plan %s: %w", planID, err)
 		}
 
 		if !plan.RampSchedule.IsComplete() {
@@ -527,6 +527,10 @@ func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID str
 
 		now := time.Now()
 		plan.LastExecutionDate = &now
+		// Refresh updated_at on every increment. The plan was read from the DB
+		// with its previous UpdatedAt, so UpdatePurchasePlanTx's zero-value
+		// guard would otherwise persist a stale updated_at timestamp.
+		plan.UpdatedAt = now
 
 		return s.UpdatePurchasePlanTx(ctx, tx, plan)
 	})
