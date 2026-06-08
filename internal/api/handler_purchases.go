@@ -645,20 +645,35 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 	}, nil
 }
 
-// scheduleApprovedExecution transitions an execution to status=scheduled
-// and stamps ScheduledExecutionAt = now+delay. No SDK call is made.
+// scheduleApprovedExecution atomically transitions an execution from
+// status=pending or status=notified to status=scheduled, then stamps
+// ScheduledExecutionAt = now+delay and ApprovedBy. No SDK call is made.
 // Returns the updated execution on success.
+//
+// The atomic CAS (TransitionExecutionStatus WHERE status IN (pending,notified))
+// prevents a silent revoke loss: if a concurrent Cancel flipped the row to
+// "cancelled" between the caller's SELECT and this write, TransitionExecutionStatus
+// returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
+// blindly overwriting the cancelled state.
 func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string) (*config.PurchaseExecution, error) {
+	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled")
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition execution %s to scheduled: %w", execution.ExecutionID, err)
+	}
+
+	// Stamp the scheduled time and actor onto the post-CAS row, then persist.
+	// SavePurchaseExecution is a full-row upsert, so we set all extra fields on
+	// the returned (freshly-transitioned) execution to avoid overwriting fields
+	// a concurrent writer may have set between the CAS and here.
 	scheduledAt := time.Now().Add(delay)
-	execution.Status = "scheduled"
-	execution.ScheduledExecutionAt = &scheduledAt
+	updated.ScheduledExecutionAt = &scheduledAt
 	if actor != "" {
-		execution.ApprovedBy = &actor
+		updated.ApprovedBy = &actor
 	}
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		return nil, fmt.Errorf("failed to save execution %s: %w", execution.ExecutionID, err)
+	if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+		return nil, fmt.Errorf("failed to stamp scheduled_execution_at on execution %s: %w", execution.ExecutionID, err)
 	}
-	return execution, nil
+	return updated, nil
 }
 
 // buildScheduledEmailData constructs the email.NotificationData from the execution
