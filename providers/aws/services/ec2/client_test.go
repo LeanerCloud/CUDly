@@ -955,11 +955,10 @@ func TestFindOfferingID_OfferingClassReachesSDKCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			inner := &MockEC2Client{}
-			inner.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+			cap := &capturingMockEC2Client{}
+			cap.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
 				Return(offeringOutput, nil).Once()
 
-			cap := &capturingMockEC2Client{MockEC2Client: *inner}
 			client := &Client{client: cap, region: "us-east-1"}
 
 			id, err := client.findOfferingID(context.Background(), rec, "", tc.offeringClassStr)
@@ -970,7 +969,7 @@ func TestFindOfferingID_OfferingClassReachesSDKCall(t *testing.T) {
 				assert.Equal(t, tc.wantOfferingClass, cap.LastDescribeOfferingsInput.OfferingClass,
 					"OfferingClass on the SDK call must match the configured value")
 			}
-			inner.AssertExpectations(t)
+			cap.AssertExpectations(t)
 		})
 	}
 }
