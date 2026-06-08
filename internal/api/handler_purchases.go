@@ -2595,10 +2595,15 @@ func (h *Handler) lookupRequesterInfo(ctx context.Context, execution *config.Pur
 		return "", ""
 	}
 	u, err := h.auth.GetUser(ctx, *execution.CreatedByUserID)
-	if err == nil && u != nil {
-		return u.Email, ""
+	if err != nil {
+		logging.Warnf("lookupRequesterInfo: GetUser(%s) failed: %v", *execution.CreatedByUserID, err)
+		return "", ""
 	}
-	return "", ""
+	if u == nil {
+		logging.Warnf("lookupRequesterInfo: GetUser(%s) returned nil user", *execution.CreatedByUserID)
+		return "", ""
+	}
+	return u.Email, ""
 }
 
 // resolveExecutedNotificationRecipients builds the To / Cc pair for the
