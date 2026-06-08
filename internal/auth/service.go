@@ -33,6 +33,11 @@ const (
 
 	// AccountLockoutDuration is how long an account is locked after max failed attempts
 	AccountLockoutDuration = 15 * time.Minute
+
+	// genericLoginError is returned for every authentication failure so callers
+	// cannot distinguish a missing account from a wrong password (anti-enumeration,
+	// closes issues #416 and #993).
+	genericLoginError = "Check your email address and password and try again"
 )
 
 // Service handles authentication and authorization
@@ -176,18 +181,18 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		// errors so callers cannot distinguish a missing account from a DB
 		// failure (issue #416). The caller (Login) runs a dummy bcrypt compare
 		// after this to equalise response time with the wrong-password path.
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf(genericLoginError)
 	}
 
 	if !user.Active {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf(genericLoginError)
 	}
 
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, fmt.Errorf(genericLoginError)
 	}
 	// NOTE: when LockedUntil is set but the window has already expired, the user falls
 	// through here with FailedLoginAttempts and LockedUntil still set in memory.
@@ -220,12 +225,12 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 	// Both branches return the same message as the "user not found" path so the
 	// full login failure surface is uniform (issue #416).
 	if user.PasswordHash == "" {
-		return fmt.Errorf("invalid email or password")
+		return fmt.Errorf(genericLoginError)
 	}
 
 	if !s.verifyPassword(req.Password, user.PasswordHash) {
 		s.recordFailedLogin(ctx, user)
-		return fmt.Errorf("invalid email or password")
+		return fmt.Errorf(genericLoginError)
 	}
 
 	if user.MFAEnabled {
@@ -237,7 +242,7 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 			// Log internally for operator visibility without leaking internal state
 			// to the caller -- a distinct message would confirm the password was correct.
 			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
-			return fmt.Errorf("Check your email address and password and try again")
+			return fmt.Errorf(genericLoginError)
 		}
 		// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
 		// secret, and base32-decode errors all return false rather than a match.
