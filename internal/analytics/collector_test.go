@@ -279,6 +279,10 @@ func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return nil, nil
 }
 
+func (m *mockConfigStore) SetCancelledBy(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }
