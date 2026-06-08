@@ -79,8 +79,8 @@ export function setGlobalDefaultsForTest(defaults: { term: number; payment: stri
 
 /** Returns true when an API error signals a 403 permission-denied response. */
 function isPermissionDeniedError(error: unknown): boolean {
-  return (error as { status?: number }).status === 403
-    && error instanceof Error
+  return error instanceof Error
+    && (error as { status?: number }).status === 403
     && error.message.startsWith('permission denied');
 }
 
