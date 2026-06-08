@@ -227,18 +227,20 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 // completed-purchase revoke path), then atomically transitions the execution
 // to "cancelled" and removes its purchase_suppressions.
 //
-// Returns 410 Gone when the execution window has already closed (the scheduler
-// has fired the SDK call and the execution is no longer in "scheduled" state
-// — if our CAS misses, that is the natural result and the caller retries via
-// the GetPurchaseHistoryByPurchaseID path that follows in revokePurchase).
+// Returns 410 Gone only when the CAS observes the row already transitioned out
+// of "scheduled" (the scheduler fired the SDK call between our SELECT and the
+// CAS UPDATE). We do NOT pre-reject on a past ScheduledExecutionAt: a row still
+// in "scheduled" is cancellable for free no matter how stale the timestamp,
+// which keeps free-cancel working during scheduler lag/backpressure.
 func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session, execution *config.PurchaseExecution) (any, error) {
-	// Window-expiry check: if ScheduledExecutionAt is in the past the
-	// scheduler may have already fired the SDK call. Return 410 so the
-	// frontend can redirect to the completed-purchase revoke flow.
-	if execution.ScheduledExecutionAt != nil && time.Now().UTC().After(execution.ScheduledExecutionAt.UTC()) {
-		return nil, NewClientError(410, "revocation window has closed; the purchase may have already executed")
-	}
-
+	// No early window-expiry check on ScheduledExecutionAt: a row that is still
+	// status=="scheduled" has NOT been transitioned by the scheduler, so the SDK
+	// call has not fired regardless of how far the timestamp is in the past
+	// (scheduler lag / backpressure). Returning 410 purely on a past timestamp
+	// would break free-cancel during lag even though the CAS below can still
+	// cancel it before any cloud call. Let CancelScheduledExecutionAtomic be the
+	// sole arbiter: it returns cancelled=false (-> 410) only when the row has
+	// actually moved out of "scheduled".
 	if err := h.authorizeSessionRevokeExecution(ctx, session, execution); err != nil {
 		return nil, err
 	}

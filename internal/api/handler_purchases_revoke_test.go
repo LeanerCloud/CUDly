@@ -592,9 +592,14 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
-// TestRevokePurchase_ScheduledExecution_WindowExpired verifies that revoking a
-// scheduled execution whose ScheduledExecutionAt is in the past returns 410.
-func TestRevokePurchase_ScheduledExecution_WindowExpired(t *testing.T) {
+// TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable verifies
+// that a row still in status=="scheduled" is cancellable for FREE even when its
+// ScheduledExecutionAt is already in the past (scheduler lag / backpressure).
+// The handler no longer pre-rejects on a past timestamp; the CAS
+// (CancelScheduledExecutionAtomic) is the sole arbiter and, because the row is
+// still "scheduled", it cancels successfully with no SDK call. Regression guard
+// for the early-410 check that broke free-cancel during scheduler lag.
+func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -615,19 +620,22 @@ func TestRevokePurchase_ScheduledExecution_WindowExpired(t *testing.T) {
 		ScheduledExecutionAt: &past,
 	}
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+		Return(true, "cancelled", nil).Once()
+	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
-	require.Error(t, err)
-	ce, ok := IsClientError(err)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	require.NoError(t, err)
+	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, 410, ce.code)
-	assert.Contains(t, ce.message, "revocation window has closed")
+	assert.Equal(t, "cancelled", m["status"])
+	assert.Contains(t, m["message"], "No cloud API call")
 }
 
 // TestRevokePurchase_ScheduledExecution_CASRace verifies that a concurrent
-// scheduler tick that fires the execution between our window-check SELECT and
-// the CancelScheduledExecutionAtomic UPDATE is surfaced as a 410 (not a 500).
+// scheduler tick that fires the execution between our SELECT and the
+// CancelScheduledExecutionAtomic UPDATE is surfaced as a 410 (not a 500).
 func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -644,7 +652,7 @@ func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	// Simulate the scheduler transitioning the row to "approved" between our
-	// window-check and the CAS update (zero rows matched -> "approved").
+	// SELECT and the CAS update (zero rows matched -> "approved").
 	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
 		Return(false, "approved", nil)
 
