@@ -4404,6 +4404,29 @@ func TestResolveExecutedNotificationRecipients_Deduplication(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Finding #1: Revoke must reject a rotated (empty) approval token
+// ---------------------------------------------------------------------------
+
+// TestRevokePurchase_RejectsRotatedToken verifies that after approve/cancel
+// clears the ApprovalToken, an attempt to revoke with the original token
+// is rejected with 403. This guards against a leaked approval token being
+// replayed as a revocation token.
+func TestRevokePurchase_RejectsRotatedToken(t *testing.T) {
+	// validateRevokeToken is the function under test: it must reject an
+	// empty stored token regardless of what the caller supplies.
+	exec := &config.PurchaseExecution{
+		ExecutionID:   "exec-post-approve",
+		Status:        "completed",
+		ApprovalToken: "", // rotated to empty by rotateApprovalToken after approve
+	}
+	err := validateRevokeToken(exec, "pre-rotate-token")
+	require.Error(t, err, "rotated (empty) stored token must be rejected")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError")
+	assert.Equal(t, 403, ce.code, "must return 403 for a rotated token")
+}
+
+// ---------------------------------------------------------------------------
 // Finding #2: GET /revoke must render confirmation form, not mutate state
 // ---------------------------------------------------------------------------
 

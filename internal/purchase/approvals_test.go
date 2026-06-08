@@ -319,6 +319,10 @@ func TestManager_CancelExecution(t *testing.T) {
 		Return(true, "canceled", nil)
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
 		Return(nil)
+	// Token rotation: SavePurchaseExecution is called after a successful cancel.
+	mockStore.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == "exec-123" && e.ApprovalToken == ""
+	})).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -456,6 +460,8 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 			// Suppression cleanup must follow a successful atomic cancel.
 			mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
 				Return(nil)
+			// Token rotation after successful cancel.
+			mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 			manager := &Manager{
 				config:       mockStore,
@@ -735,5 +741,69 @@ func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
 	store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertExpectations(t)
+}
+
+// ---------------------------------------------------------------------------
+// Finding #1: Token rotation on approve/cancel
+// ---------------------------------------------------------------------------
+
+// TestApproveExecution_RotatesApprovalToken verifies that after a successful
+// approve the ApprovalToken is cleared to prevent the same token from being
+// used to trigger a revoke (or any other action) later.
+func TestApproveExecution_RotatesApprovalToken(t *testing.T) {
+	ctx := context.Background()
+	manager, store, sender := newApproveManager(t)
+
+	execution := &config.PurchaseExecution{
+		ExecutionID:   "exec-rotate",
+		PlanID:        "plan-rotate",
+		Status:        "pending",
+		ApprovalToken: "pre-rotate-token",
+	}
+	updated := &config.PurchaseExecution{
+		ExecutionID:   "exec-rotate",
+		PlanID:        "plan-rotate",
+		Status:        "approved",
+		ApprovalToken: "pre-rotate-token",
+	}
+
+	store.On("GetExecutionByID", ctx, "exec-rotate").Return(execution, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "approved").Return(updated, nil)
+	stubExecuteChain(t, store, sender, "plan-rotate")
+
+	err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "")
+	require.NoError(t, err)
+
+	// After approve, the token on the persisted execution must be empty.
+	// stubExecuteChain registers SavePurchaseExecution with
+	// mock.AnythingOfType so it consumes the rotation call too.
+	// Verify directly on the struct: rotateApprovalToken fetches by ID
+	// (returns the same pointer) and clears ApprovalToken on it.
+	assert.Equal(t, "", execution.ApprovalToken, "ApprovalToken must be cleared after successful approve")
+	assert.Nil(t, execution.ApprovalTokenExpiresAt, "ApprovalTokenExpiresAt must be nil after rotation")
+}
+
+// TestRotateApprovalToken_PersistsEmpty is a unit test for rotateApprovalToken
+// that verifies the helper clears both ApprovalToken and ApprovalTokenExpiresAt
+// on the persisted row.
+func TestRotateApprovalToken_PersistsEmpty(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newApproveManager(t)
+
+	future := time.Now().Add(24 * time.Hour)
+	execution := &config.PurchaseExecution{
+		ExecutionID:            "exec-tok-clear",
+		Status:                 "completed",
+		ApprovalToken:          "some-token",
+		ApprovalTokenExpiresAt: &future,
+	}
+	store.On("GetExecutionByID", ctx, "exec-tok-clear").Return(execution, nil)
+	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == "exec-tok-clear" && e.ApprovalToken == "" && e.ApprovalTokenExpiresAt == nil
+	})).Return(nil)
+
+	err := manager.rotateApprovalToken(ctx, "exec-tok-clear")
+	require.NoError(t, err)
 	store.AssertExpectations(t)
 }
