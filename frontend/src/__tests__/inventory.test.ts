@@ -32,6 +32,9 @@ jest.mock('../state', () => ({
   subscribeAccount: jest.fn(() => jest.fn()),
   getCurrentProvider: jest.fn(() => ''),
   getCurrentAccountIDs: jest.fn(() => []),
+  getAmortizeUpfront: jest.fn(() => false),
+  setAmortizeUpfront: jest.fn(),
+  subscribeAmortizeUpfront: jest.fn(() => jest.fn()),
 }));
 
 // inventory.ts routes sub-nav clicks through navigation.switchInventorySubTab

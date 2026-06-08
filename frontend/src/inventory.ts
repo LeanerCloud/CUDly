@@ -14,7 +14,7 @@ import * as api from './api';
 import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
-import { formatCurrency, formatDate } from './utils';
+import { formatCurrency, formatDate, amortizedMonthly } from './utils';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
 
@@ -104,6 +104,7 @@ export async function loadActiveCommitments(): Promise<void> {
   if (!container) return;
 
   wireRefreshButton();
+  wireAmortizeSubscription();
 
   const provider = state.getCurrentProvider();
   const accountIDs = state.getCurrentAccountIDs();
@@ -117,6 +118,10 @@ export async function loadActiveCommitments(): Promise<void> {
 
   try {
     const commitments = await api.listActiveCommitments({ provider: provider || undefined, accountID });
+    // Cache for amortize-toggle re-renders (issue #1112).
+    lastCommitments = commitments;
+    lastCommitmentsProvider = provider || undefined;
+    lastCommitmentsAccountID = accountID;
     renderActiveCommitmentsTable(container, commitments, provider, accountID);
   } catch (error) {
     teardownSkeleton(container);
@@ -227,7 +232,9 @@ function renderActiveCommitmentsTable(
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Monthly savings', 'Expires'];
+  const amortize = state.getAmortizeUpfront();
+  const monthlyLabel = amortize ? 'Monthly cost (amortized)' : 'Monthly cost';
+  const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', monthlyLabel, 'Monthly savings', 'Expires'];
   for (const label of headers) {
     const th = document.createElement('th');
     th.textContent = label;
@@ -243,6 +250,9 @@ function renderActiveCommitmentsTable(
   table.appendChild(tbody);
 
   container.appendChild(table);
+
+  // Mount the amortize toggle into the section-header-actions area (idempotent).
+  mountInventoryAmortizeCheckbox();
 }
 
 function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
@@ -256,7 +266,15 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   appendCell(tr, String(c.count));
   appendCell(tr, `${c.term_years}y`);
   appendCell(tr, c.payment_option ?? '');
-  appendCell(tr, c.monthly_cost != null ? formatCurrency(c.monthly_cost) : '—');
+
+  // When amortize is on, fold the upfront cost over the term years.
+  const amortize = state.getAmortizeUpfront();
+  let displayMonthly: number | null = c.monthly_cost;
+  if (displayMonthly != null && amortize) {
+    displayMonthly = amortizedMonthly(displayMonthly, c.upfront_cost, c.term_years);
+  }
+  appendCell(tr, displayMonthly != null ? formatCurrency(displayMonthly) : '—');
+
   appendCell(tr, formatCurrency(c.estimated_savings));
   appendCell(tr, formatDate(c.end_date));
 
@@ -267,6 +285,39 @@ function appendCell(tr: HTMLTableRowElement, text: string): void {
   const td = document.createElement('td');
   td.textContent = text;
   tr.appendChild(td);
+}
+
+/**
+ * Mount the "Amortize upfront over term" checkbox into the active-commitments
+ * section-header-actions area (idempotent). Wires to setAmortizeUpfront so
+ * the same localStorage key is shared with all other views (issue #1112).
+ */
+function mountInventoryAmortizeCheckbox(): void {
+  const actions = document.querySelector<HTMLElement>('#inventory-active-commitments .section-header-actions');
+  if (!actions) return;
+  const checkboxId = 'inventory-amortize-checkbox';
+  if (document.getElementById(checkboxId)) {
+    // Already mounted -- sync checked state in case another view changed it.
+    const cb = document.getElementById(checkboxId) as HTMLInputElement;
+    cb.checked = state.getAmortizeUpfront();
+    return;
+  }
+
+  const wrapper = document.createElement('label');
+  wrapper.className = 'amortize-toggle-label';
+  wrapper.htmlFor = checkboxId;
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.id = checkboxId;
+  cb.checked = state.getAmortizeUpfront();
+  cb.addEventListener('change', () => {
+    state.setAmortizeUpfront(cb.checked);
+  });
+
+  wrapper.appendChild(cb);
+  wrapper.appendChild(document.createTextNode(' Amortize upfront over term'));
+  actions.appendChild(wrapper);
 }
 
 function buildAccountCell(c: api.InventoryCommitment): HTMLTableCellElement {
@@ -489,9 +540,34 @@ function isInventoryTabActive(): boolean {
 
 // Unsubscribe handles for the chip subscriptions. Re-assigned each time
 // loadInventory() wires them so repeated tab-switches don't stack duplicate
-// listeners — the old pair is torn down before a new pair is registered.
+// listeners -- the old pair is torn down before a new pair is registered.
 let unsubscribeProvider: (() => void) | null = null;
 let unsubscribeAccount: (() => void) | null = null;
+
+// Cache of the last-fetched commitments so the amortize toggle can
+// re-render without a round-trip to the API (issue #1112). Also caches
+// the provider/accountID context so the empty-state message stays accurate.
+let lastCommitments: api.InventoryCommitment[] | null = null;
+let lastCommitmentsProvider: string | undefined;
+let lastCommitmentsAccountID: string | undefined;
+
+// Wired once; tracks whether the amortize subscriber has been registered
+// for this module so repeated loadInventory() calls don't stack listeners.
+let amortizeUnsubscribe: (() => void) | null = null;
+
+function wireAmortizeSubscription(): void {
+  if (amortizeUnsubscribe) return; // already wired
+  amortizeUnsubscribe = state.subscribeAmortizeUpfront(() => {
+    const container = document.getElementById(ACTIVE_COMMITMENTS_LIST_ID);
+    if (!container || lastCommitments === null) return;
+    renderActiveCommitmentsTable(
+      container,
+      lastCommitments,
+      lastCommitmentsProvider,
+      lastCommitmentsAccountID,
+    );
+  });
+}
 
 /**
  * Wire provider + account chip subscriptions (issue #866).

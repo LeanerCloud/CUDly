@@ -341,3 +341,29 @@ export function providerBadgeHtml(provider: string | null | undefined): string {
   const label = escapeHtml((provider || '').toUpperCase());
   return `<span class="provider-badge${cls ? ` ${cls}` : ''}">${label}</span>`;
 }
+
+/**
+ * Compute the amortized monthly cost: the recurring monthly cost plus the
+ * upfront cost spread evenly over the term.
+ *
+ * Used when the "Amortize upfront over term" toggle is enabled, so every
+ * commitment type (No Upfront, Partial Upfront, All Upfront) is compared
+ * on an apples-to-apples total-cost-per-month basis.
+ *
+ * Guard rules (return monthlyCost unchanged):
+ *   - termYears <= 0 or not finite: cannot divide by zero / infinity.
+ *   - upfrontCost is null, undefined, or not a finite number: no upfront data.
+ *
+ * No Upfront (upfrontCost === 0): amortized term is 0, result equals monthlyCost.
+ * Partial Upfront: result is monthlyCost + upfrontCost / (termYears * 12).
+ * All Upfront (monthlyCost === 0): result is just the amortized upfront slice.
+ */
+export function amortizedMonthly(
+  monthlyCost: number,
+  upfrontCost: number | null | undefined,
+  termYears: number,
+): number {
+  if (!termYears || !isFinite(termYears) || termYears <= 0) return monthlyCost;
+  if (upfrontCost == null || !isFinite(upfrontCost)) return monthlyCost;
+  return monthlyCost + upfrontCost / (termYears * 12);
+}

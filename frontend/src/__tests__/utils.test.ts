@@ -20,7 +20,8 @@ import {
   getStatusBadge,
   calculatePaybackMonths,
   providerBadgeClass,
-  providerBadgeHtml
+  providerBadgeHtml,
+  amortizedMonthly,
 } from '../utils';
 
 describe('formatCurrency', () => {
@@ -537,5 +538,50 @@ describe('formatCurrency (11-N2: absent vs real zero)', () => {
 
   test('real zero still renders as $0', () => {
     expect(formatCurrency(0)).toBe('$0');
+  });
+});
+
+describe('amortizedMonthly', () => {
+  test('All Upfront: zero recurring cost produces positive amortized value', () => {
+    // $0/mo recurring + $1200 upfront over 1 year = $100/mo amortized
+    expect(amortizedMonthly(0, 1200, 1)).toBeCloseTo(100, 5);
+  });
+
+  test('All Upfront: 3-year term spreads upfront over 36 months', () => {
+    // $0/mo recurring + $3600 upfront over 3 years = $100/mo amortized
+    expect(amortizedMonthly(0, 3600, 3)).toBeCloseTo(100, 5);
+  });
+
+  test('Partial Upfront: recurring + amortized-upfront slice', () => {
+    // $50/mo recurring + $600 upfront over 1 year = $50 + $50 = $100/mo
+    expect(amortizedMonthly(50, 600, 1)).toBeCloseTo(100, 5);
+  });
+
+  test('No Upfront (upfront === 0): result equals monthlyCost unchanged', () => {
+    expect(amortizedMonthly(80, 0, 1)).toBeCloseTo(80, 5);
+    expect(amortizedMonthly(80, 0, 3)).toBeCloseTo(80, 5);
+  });
+
+  test('term <= 0: returns monthlyCost unchanged (guard against divide-by-zero)', () => {
+    expect(amortizedMonthly(50, 600, 0)).toBe(50);
+    expect(amortizedMonthly(50, 600, -1)).toBe(50);
+  });
+
+  test('non-finite term: returns monthlyCost unchanged', () => {
+    expect(amortizedMonthly(50, 600, Infinity)).toBe(50);
+    expect(amortizedMonthly(50, 600, NaN)).toBe(50);
+  });
+
+  test('null upfrontCost: returns monthlyCost unchanged', () => {
+    expect(amortizedMonthly(80, null, 1)).toBe(80);
+  });
+
+  test('undefined upfrontCost: returns monthlyCost unchanged', () => {
+    expect(amortizedMonthly(80, undefined, 1)).toBe(80);
+  });
+
+  test('non-finite upfrontCost: returns monthlyCost unchanged', () => {
+    expect(amortizedMonthly(80, Infinity, 1)).toBe(80);
+    expect(amortizedMonthly(80, NaN, 1)).toBe(80);
   });
 });
