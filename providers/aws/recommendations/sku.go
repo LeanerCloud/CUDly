@@ -70,12 +70,12 @@ func fetchInstanceTypeCatalogue(ctx context.Context, pager InstanceTypePager) ma
 	out := make(map[string]instanceTypeSKUEntry)
 	for pager.HasMorePages() {
 		if err := ctx.Err(); err != nil {
-			logging.Warnf("aws ec2: instance type catalogue fetch interrupted: %v — Details.VCPU/MemoryGB left at 0", err)
+			logging.Warnf("aws ec2: instance type catalogue fetch interrupted: %v -- Details.VCPU/MemoryGB left at 0", err)
 			return nil
 		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			logging.Warnf("aws ec2: instance type catalogue page fetch failed: %v — Details.VCPU/MemoryGB left at 0", err)
+			logging.Warnf("aws ec2: instance type catalogue page fetch failed: %v -- Details.VCPU/MemoryGB left at 0", err)
 			return nil
 		}
 		populateInstanceTypeSKUMap(out, page.InstanceTypes)

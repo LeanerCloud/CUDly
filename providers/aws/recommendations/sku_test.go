@@ -111,6 +111,15 @@ func TestExtractInstanceTypeSKUEntry(t *testing.T) {
 			wantVCPU:  1,
 			wantMemGB: 0.5,
 		},
+		{
+			name: "MemoryInfo present but SizeInMiB nil -- MemGB zero",
+			info: ec2types.InstanceTypeInfo{
+				VCpuInfo:   &ec2types.VCpuInfo{DefaultVCpus: aws.Int32(8)},
+				MemoryInfo: &ec2types.MemoryInfo{},
+			},
+			wantVCPU:  8,
+			wantMemGB: 0.0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -157,6 +166,8 @@ func TestFetchInstanceTypeCatalogue_ContextCanceled(t *testing.T) {
 	pager := newStubPager(knownInstanceTypes()...)
 	m := fetchInstanceTypeCatalogue(ctx, pager)
 	assert.Nil(t, m, "catalogue must be nil when ctx is already canceled")
+	// NextPage must not have been called on a pre-canceled ctx.
+	assert.Equal(t, int32(0), atomic.LoadInt32(&pager.callCount))
 }
 
 // TestInstanceTypeLookup_CachedOnce asserts that a single GetRecommendations

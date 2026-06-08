@@ -94,7 +94,7 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 // instanceTypeLookup returns the cached SKU entry for instanceType.
 // On the first call the catalogue is built by calling the pager factory.
 // ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue — the caller falls back to
+// the instance type was not in the catalogue -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
