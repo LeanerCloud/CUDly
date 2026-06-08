@@ -403,8 +403,10 @@ func TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell(t *testing.
 	// sum of all variants (100+200+300+50 = 650).
 	assert.InDelta(t, 350.0, byService["ec2"].PotentialSavings, 0.0001,
 		"by_service potential must sum per-cell MAX (300+50), not all variants")
-	assert.InDelta(t, 350.0, byService["ec2"].CurrentSavings, 0.0001,
-		"by_service current must dedupe identically to potential")
+	// CurrentSavings is NOT set by this reducer; getDashboardSummary populates
+	// it from active purchase history (issue #1031). It must stay 0 here.
+	assert.Equal(t, 0.0, byService["ec2"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
 	// The headline total dedupes the same way.
 	assert.InDelta(t, 350.0, total, 0.0001,
 		"total must sum per-cell MAX (300+50), not all variants")
