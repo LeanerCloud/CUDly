@@ -99,6 +99,16 @@ export interface LocalRecommendation {
   // `monthly_cost + savings + amortized_upfront`. When populated it's
   // preferred — see #274.
   on_demand_cost?: number | null;
+  // Provider-authoritative effective savings % reported directly by the cloud
+  // provider (AWS EstimatedMonthlySavingsPercentage, Azure/GCP converter
+  // SavingsPercentage), the same figure the CLI/reporter prints. When it is
+  // a finite, non-null number the effective-% column and its sort prefer it
+  // over the client-side reconstruction (effectiveSavingsPct), so the GUI
+  // shows the identical value the CLI shows and AWS recs missing
+  // on_demand_cost still render a real % instead of an em-dash (see #323).
+  // Optional/null when the provider did not report a percentage; the column
+  // then falls back to effectiveSavingsPct.
+  savings_percentage?: number | null;
   cloud_account_id?: string;
   // Populated by the scheduler when any active purchase_suppression
   // matches this rec's 6-tuple. The three fields drive the "recently

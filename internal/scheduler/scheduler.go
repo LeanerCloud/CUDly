@@ -1351,23 +1351,24 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			rec.ResourceType, engine, term, rec.PaymentOption)
 
 		records = append(records, config.RecommendationRecord{
-			ID:           recordID,
-			Provider:     providerName,
-			Service:      string(rec.Service),
-			Region:       rec.Region,
-			ResourceType: rec.ResourceType,
-			Engine:       engine,
-			Details:      detailsBlob, // full ServiceDetails payload (issue #453)
-			Count:        rec.Count,
-			Term:         term,
-			Payment:      rec.PaymentOption,
-			UpfrontCost:  rec.CommitmentCost,
-			MonthlyCost:  rec.RecurringMonthlyCost, // nil when provider API didn't return a monthly breakdown
-			Savings:      rec.EstimatedSavings,
-			OnDemandCost: nonZeroPtr(rec.OnDemandCost), // nil when provider API didn't return a baseline; frontend falls back to reconstruction (#274)
-			UsageHistory: rec.UsageHistory,             // daily coverage pcts (nil when provider not yet wired; see #239)
-			Selected:     true,                         // Default to selected
-			Purchased:    false,
+			ID:                recordID,
+			Provider:          providerName,
+			Service:           string(rec.Service),
+			Region:            rec.Region,
+			ResourceType:      rec.ResourceType,
+			Engine:            engine,
+			Details:           detailsBlob, // full ServiceDetails payload (issue #453)
+			Count:             rec.Count,
+			Term:              term,
+			Payment:           rec.PaymentOption,
+			UpfrontCost:       rec.CommitmentCost,
+			MonthlyCost:       rec.RecurringMonthlyCost, // nil when provider API didn't return a monthly breakdown
+			Savings:           rec.EstimatedSavings,
+			OnDemandCost:      nonZeroPtr(rec.OnDemandCost),      // nil when provider API didn't return a baseline; frontend falls back to reconstruction (#274)
+			SavingsPercentage: nonZeroPtr(rec.SavingsPercentage), // provider-authoritative %; nil when not reported, frontend falls back to effectiveSavingsPct
+			UsageHistory:      rec.UsageHistory,                  // daily coverage pcts (nil when provider not yet wired; see #239)
+			Selected:          true,                              // Default to selected
+			Purchased:         false,
 		})
 	}
 

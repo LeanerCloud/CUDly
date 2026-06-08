@@ -808,11 +808,14 @@ const SORTABLE_NUMERIC_COLUMNS: Record<string, (r: LocalRecommendation) => numbe
     const period = state.getCostPeriod();
     return scaleCost(onDemandMonthly(r), period) ?? Number.POSITIVE_INFINITY;
   },
-  // effectiveSavingsPct returns null for term=0 / on_demand=0 / null monthly_cost.
-  // POSITIVE_INFINITY places null rows at the bottom in ascending order and
-  // at the top in descending — the least surprising behaviour for a savings
-  // column where "no data" rows should be de-emphasised.
-  effective_savings_pct: (r) => effectiveSavingsPct(r) ?? Number.POSITIVE_INFINITY,
+  // displaySavingsPct prefers the provider-authoritative % and falls back to
+  // effectiveSavingsPct; it returns null for term=0 / on_demand=0 / null
+  // monthly_cost when no provider % is present. POSITIVE_INFINITY places null
+  // rows at the bottom in ascending order and at the top in descending: the
+  // least surprising behaviour for a savings column where "no data" rows
+  // should be de-emphasised. Sorting on the displayed value keeps the order
+  // consistent with what the column shows.
+  effective_savings_pct: (r) => displaySavingsPct(r) ?? Number.POSITIVE_INFINITY,
   count: (r) => r.count,
   term: (r) => r.term,
 };
@@ -1159,7 +1162,9 @@ function cellScoreFor(
   if (column === 'effective_savings_pct') {
     const finite: number[] = [];
     for (const v of variants) {
-      const pct = effectiveSavingsPct(v);
+      // Prefer the provider-authoritative % (parity with the column render);
+      // fall back to the reconstruction for variants without one.
+      const pct = displaySavingsPct(v);
       if (pct != null) finite.push(pct);
     }
     // Best-case framing: highest savings pct is the cell's best pitch.
@@ -1328,6 +1333,32 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
     : (r.monthly_cost as number) + r.savings + amortized;
   if (onDemand === 0) return null;
   return (r.savings / onDemand) * 100;
+}
+
+/**
+ * Returns the effective savings percentage to DISPLAY (and sort) for a
+ * recommendation, preferring the provider-authoritative value over the
+ * client-side reconstruction.
+ *
+ * CLI/GUI parity: the CLI/reporter prints `rec.SavingsPercentage` straight
+ * from the provider (AWS EstimatedMonthlySavingsPercentage, Azure/GCP
+ * converter SavingsPercentage), but that figure used to be dropped at the API
+ * boundary, forcing the GUI to re-derive the % via effectiveSavingsPct. The
+ * recomputation could drift from the authoritative number and returned null
+ * (an em-dash) whenever on_demand_cost was missing even though the provider reported
+ * a real % (the #323 case). Now that `savings_percentage` is plumbed through,
+ * the GUI shows the same number the CLI shows.
+ *
+ * Preference rule: use `r.savings_percentage` when it is a finite, non-null
+ * number; otherwise fall back to the (fixed, net-savings) effectiveSavingsPct.
+ * Returns null only when both are unavailable (renders as an em-dash).
+ */
+export function displaySavingsPct(r: LocalRecommendation): number | null {
+  const provided = r.savings_percentage;
+  if (provided != null && Number.isFinite(provided)) {
+    return provided;
+  }
+  return effectiveSavingsPct(r);
 }
 
 /**
@@ -1685,8 +1716,10 @@ function numericCellValue(r: LocalRecommendation, col: state.RecommendationsColu
     // numeric filter targets what the user sees.
     case 'on_demand_monthly':    return scaleCost(onDemandMonthly(r), period) ?? Number.NaN;
     // Return NaN for null effective_savings_pct so any numeric predicate
-    // returns false rather than coincidentally matching 0.
-    case 'effective_savings_pct': return effectiveSavingsPct(r) ?? Number.NaN;
+    // returns false rather than coincidentally matching 0. Filter on the
+    // displayed value (provider % preferred) so typing the visible number
+    // matches the row.
+    case 'effective_savings_pct': return displaySavingsPct(r) ?? Number.NaN;
     // Categorical / visual columns shouldn't reach this branch; return NaN so any
     // numeric predicate returns false rather than coincidentally matching 0.
     case 'provider':
@@ -2816,7 +2849,7 @@ function buildVariantRowMarkup(
   const accountName = rec.cloud_account_id ? (accountNamesCache.get(rec.cloud_account_id) || rec.cloud_account_id) : '\u2014';
   const badge = renderSuppressionBadge(rec);
   const recId = escapeHtml(rec.id);
-  const pct = effectiveSavingsPct(rec);
+  const pct = displaySavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
@@ -5063,9 +5096,10 @@ function renderPurchaseModalRow(idx: number, paymentSource: 'override' | 'rec' |
   effSavTd.appendChild(document.createTextNode(formatCurrency(effectiveMonthlySavings(rec))));
   tr.appendChild(effSavTd);
 
-  // Effective % (col 8): reuses effectiveSavingsPct helper.
+  // Effective % (col 8): reuses displaySavingsPct (provider % preferred,
+  // falls back to effectiveSavingsPct).
   const effPctTd = document.createElement('td');
-  const pct = effectiveSavingsPct(rec);
+  const pct = displaySavingsPct(rec);
   if (pct !== null && pct < 0) effPctTd.className = 'effective-pct-negative';
   effPctTd.appendChild(document.createTextNode(pct !== null ? pct.toFixed(1) + '%' : '—'));
   tr.appendChild(effPctTd);
