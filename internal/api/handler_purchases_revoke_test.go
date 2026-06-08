@@ -687,11 +687,12 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 		Return(true, "cancelled", nil).Once()
 	// Suppression cleanup must run inside the same tx as the CAS.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
-	// Negative invariant: the WRONG method must never be called for a scheduled row.
-	mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	// Negative invariant: the WRONG method must never be called for a scheduled row.
+	// Placed AFTER the handler call so it actually fires post-execution (Finding F-1, second-wave CR).
+	mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
@@ -943,7 +944,10 @@ func TestIsAzureClientError_TypedResponseError(t *testing.T) {
 // so the frontend does not offer a retry button (which would hit Azure's
 // "already returned" error).
 func TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries(t *testing.T) {
-	t.Parallel()
+	// NOT parallel: this test mutates the package-global revokeMarkRetryBackoffs
+	// to zero duration so the retries complete instantly. Running it in parallel
+	// with other tests that read the same global would cause a data race
+	// (Finding F-2, second-wave CR).
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
