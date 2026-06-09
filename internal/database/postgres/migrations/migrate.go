@@ -31,40 +31,14 @@ const defaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 // adminEmail is optional - if provided, admin user will be created after migrations complete
 // adminPassword is optional - if provided, admin is created with hashed password and active=true
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, adminEmail string, adminPassword string) error {
-	// Get database connection string from pool config (without admin email parameter - RDS Proxy doesn't support options)
-	dsn := buildMigrateDSN(pool.Config(), "")
-
-	// Create migrator
-	m, err := migrate.New(
-		fmt.Sprintf("file://%s", migrationsPath),
-		dsn,
-	)
+	// Create the migrator and run the pre-Up recovery hooks (operator force,
+	// then default-on dirty auto-heal). Kept in a helper so RunMigrations stays
+	// under the cyclomatic-complexity budget as recovery paths grow.
+	m, err := newMigratorWithRecovery(pool, migrationsPath)
 	if err != nil {
-		return fmt.Errorf("failed to create migrator: %w", err)
+		return err
 	}
 	defer m.Close()
-
-	// One-shot operator recovery: if CUDLY_FORCE_MIGRATION_VERSION is set,
-	// call Force(N) before Up(). Clears the dirty flag and pins state to
-	// the given version. Used to recover from a partially-applied
-	// migration without direct DB access. Remove the env var after the
-	// next successful deploy.
-	if err := maybeForceMigrationVersion(m); err != nil {
-		return err
-	}
-
-	// Default-on dirty auto-heal: when the schema_migrations row is dirty,
-	// clear the dirty flag at the CURRENT recorded version so the subsequent
-	// Up() re-applies any pending migrations, letting a cold start self-recover
-	// instead of staying broken until a manual force. Runs AFTER
-	// maybeForceMigrationVersion so an explicit CUDLY_FORCE_MIGRATION_VERSION
-	// always takes precedence (it pins+cleans first, leaving nothing dirty for
-	// auto-heal to act on). Disable with CUDLY_MIGRATION_AUTOHEAL=false. Its
-	// error propagates so a heal failure is recorded (and the app fail-opens in
-	// ensureDB) rather than being masked by the later dirty check.
-	if err := maybeAutoHealDirty(m); err != nil {
-		return err
-	}
 
 	// Run migrations
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
@@ -96,6 +70,52 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 	}
 
 	return nil
+}
+
+// newMigratorWithRecovery builds the golang-migrate migrator for migrationsPath
+// and runs the pre-Up recovery hooks in order: the one-shot operator force
+// (CUDLY_FORCE_MIGRATION_VERSION) first, then the default-on dirty auto-heal.
+// On success it returns a migrator the caller must Close(); on any error it
+// closes the migrator itself and returns the error so the caller never sees a
+// half-initialized migrator.
+//
+// Ordering note: maybeAutoHealDirty runs AFTER maybeForceMigrationVersion so an
+// explicit force always takes precedence (it pins+cleans first, leaving nothing
+// dirty for auto-heal to act on). The auto-heal error propagates so a heal
+// failure is recorded (and the app fail-opens in ensureDB) rather than being
+// masked by the later dirty check.
+func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrate.Migrate, error) {
+	// Get database connection string from pool config (without admin email parameter - RDS Proxy doesn't support options)
+	dsn := buildMigrateDSN(pool.Config(), "")
+
+	m, err := migrate.New(
+		fmt.Sprintf("file://%s", migrationsPath),
+		dsn,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create migrator: %w", err)
+	}
+
+	// One-shot operator recovery: if CUDLY_FORCE_MIGRATION_VERSION is set,
+	// call Force(N) before Up(). Clears the dirty flag and pins state to
+	// the given version. Used to recover from a partially-applied
+	// migration without direct DB access. Remove the env var after the
+	// next successful deploy.
+	if err := maybeForceMigrationVersion(m); err != nil {
+		m.Close()
+		return nil, err
+	}
+
+	// Default-on dirty auto-heal: when the schema_migrations row is dirty,
+	// clear the dirty flag at the CURRENT recorded version so the subsequent
+	// Up() re-applies any pending migrations, letting a cold start self-recover
+	// instead of staying broken until a manual force.
+	if err := maybeAutoHealDirty(m); err != nil {
+		m.Close()
+		return nil, err
+	}
+
+	return m, nil
 }
 
 // ensureAdminUser creates the admin user if it doesn't exist.
