@@ -15,7 +15,7 @@
 #   - AWS_ROLE_TO_ASSUME: IAM role ARN for OIDC keyless auth
 #
 # Triggered by:
-#   - Pushes to main or feat/multicloud-web-frontend branch
+#   - Pushes to main branch
 #   - Manual workflow dispatch with environment selection
 #   - Release creation (auto-deploy to prod)
 #   - Workflow call from other workflows
@@ -32,7 +32,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, feat/multicloud-web-frontend]
+    branches: [main]
     paths:
       - 'cmd/**'
       - 'internal/**'

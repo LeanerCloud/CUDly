@@ -14,7 +14,7 @@
 #   - ARTIFACT_REGISTRY_REPO: Artifact Registry repository name (default: cudly)
 #
 # Triggered by:
-#   - Pushes to main or feat/multicloud-web-frontend branch
+#   - Pushes to main branch
 #   - Manual workflow dispatch
 #   - Workflow call from deploy-all.yml
 
@@ -30,7 +30,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, feat/multicloud-web-frontend]
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:

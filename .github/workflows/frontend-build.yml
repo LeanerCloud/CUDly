@@ -20,7 +20,6 @@ name: Frontend build (PR)
 on:
   pull_request:
     branches:
-      - feat/multicloud-web-frontend
       - main
     paths:
       - "frontend/**"
