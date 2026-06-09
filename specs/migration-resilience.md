@@ -48,6 +48,14 @@ category of pages:
   schema will return 500s at query time. Follow the "Recovery" section
   below.
 
+On AWS, you do not have to rely on polling `/health`: the Lambda compute
+module ships a CloudWatch alarm (`<stack>-migration-failed`) backed by a
+log metric filter on the `"Migration failed"` log line. Because the app
+fail-opens, the built-in `AWS/Lambda` `Errors` metric stays clean during a
+broken migration; this alarm is what surfaces it. Wire the
+`alarm_sns_topic_arn` variable (a list of SNS topic ARNs) to the monitoring
+module's SNS topic(s) to get paged.
+
 ## Recovery from a failed migration
 
 1. **Inspect logs to find the specific error.**
@@ -63,39 +71,71 @@ category of pages:
    - `Dirty database version N. Fix and force version.` — migration N
      was interrupted mid-run (Lambda timeout, ENI drop, etc.) and
      `schema_migrations.dirty = true`.
-   - `migration timed out after 20s` — migration N ran longer than
+   - `migration timed out after 120s` — migration N ran longer than
      `CUDLY_MIGRATION_TIMEOUT`. Either the migration is genuinely long
      (DDL on large table) or the DB is slow. Tune `CUDLY_MIGRATION_TIMEOUT`
      upwards and redeploy.
    - SQL errors (constraint violations, missing tables, etc.) — the
      migration file itself is broken. Fix the file, redeploy.
 
-3. **Clear dirty state** if that's the cause. Use
-   `CUDLY_FORCE_MIGRATION_VERSION` — see `internal/database/postgres/migrations/migrate.go`
-   for the full operator flow. Short version:
-   - If migration N's SQL landed on-disk (check the schema), set
-     `CUDLY_FORCE_MIGRATION_VERSION=N`. Next cold start marks clean and
-     resumes from N+1.
-   - If it didn't land, set `CUDLY_FORCE_MIGRATION_VERSION=N-1` to
-     retry N.
-   - Remove the env var after the deploy reports `healthy`.
+3. **Clear dirty state** if that's the cause. Two options:
+
+   a. **Auto-heal (default-on; usually nothing to do).** On every cold start,
+      if `schema_migrations` is dirty, the app `Force()`s the CURRENT recorded
+      version to clear the flag and re-applies any pending migrations, so the
+      next boot self-recovers without operator action. This is safe because
+      every migration in this repo is idempotent (guarded with `IF EXISTS` /
+      `IF NOT EXISTS` / `DO`-blocks); the `TestMigrations_FullStackIdempotent`
+      integration test enforces that invariant. It is **enabled by default**;
+      set `CUDLY_MIGRATION_AUTOHEAL=false` only to disable it in an environment
+      whose migrations are not idempotent. If auto-heal still can't reach head
+      (a genuinely broken migration), the app fail-opens (it always starts) and
+      the migration-failed alarm fires — fall through to option (b) or fix the
+      migration file. Auto-heal always forces the current version, never lower:
+      forcing below already-applied seed migrations would re-run guards that
+      raise on a second run (e.g. `000059` "Purchaser already exists").
+
+   b. **Manual force.** Use `CUDLY_FORCE_MIGRATION_VERSION` — see
+      `internal/database/postgres/migrations/migrate.go` for the full
+      operator flow. Short version:
+      - If migration N's SQL landed on-disk (check the schema), set
+        `CUDLY_FORCE_MIGRATION_VERSION=N`. Next cold start marks clean and
+        resumes from N+1.
+      - If it didn't land, set `CUDLY_FORCE_MIGRATION_VERSION=N-1` to
+        retry N.
+      - Remove the env var after the deploy reports `healthy`.
+
+   `CUDLY_FORCE_MIGRATION_VERSION` takes precedence over auto-heal: it runs
+   first and pins+cleans the version, leaving nothing for auto-heal to act on.
 
 4. **Verify recovery.** `/health` should return `migrations.status =
    "healthy"` after the next cold start completes successfully.
 
 ## Configuration
 
-- `CUDLY_MIGRATION_TIMEOUT` (default `20s`) — parsed by
+- `CUDLY_MIGRATION_TIMEOUT` (default `120s`) — parsed by
   `time.ParseDuration`. Invalid values fall back to the default with a
-  log warning. Shorter than the default Lambda 30s timeout so a runaway
-  migration gets cancelled cleanly inside `ensureDB` (preventing the
-  exact dirty-flag scenario) rather than by Lambda mid-invocation.
+  log warning. Set well above a normal index build / DDL (the prior 20s
+  could be blown mid-run by a single index build on a growing table,
+  leaving `schema_migrations.dirty = true`) yet comfortably under the
+  Lambda 300s hard limit, so a slow-but-legitimate migration completes
+  rather than being killed inside `ensureDB`.
+
+- `CUDLY_MIGRATION_AUTOHEAL` (**default-on**) — dirty auto-heal. When
+  `schema_migrations` is dirty on cold start, the app `Force()`s the CURRENT
+  recorded version to clear the dirty flag, then re-applies pending
+  migrations via `m.Up()`, so the next boot self-recovers. Relies on
+  migrations being idempotent (see `TestMigrations_FullStackIdempotent`).
+  Set to a `strconv.ParseBool` falsey value (`false`/`0`/...) to disable it
+  where idempotency is not guaranteed — a dirty DB then surfaces the usual
+  error instead of being auto-forced (the app still starts; it fail-opens).
+  Unset / empty / unparseable values keep it enabled.
 
 - `CUDLY_FORCE_MIGRATION_VERSION` (unset by default) — one-shot
   operator recovery. When set to a non-negative integer, calls
   `migrate.Force(N)` before `m.Up()`. Rejected with a loud error on
   non-numeric input — typos should surface immediately, not corrupt
-  state.
+  state. Takes precedence over `CUDLY_MIGRATION_AUTOHEAL`.
 
 - `DB_AUTO_MIGRATE` (default `false`, set to `true` in deployments that
   want lazy-init migrations) — when off, the `/health` migrations check
@@ -105,10 +145,11 @@ category of pages:
 
 - Moving migrations to a dedicated CI deploy step (the longer-term
   fix — migrations run once per deploy with clear failure visibility,
-  not lazily per cold-start). Separate plan.
-- Per-migration retry / auto-heal logic — if a migration fails, an
-  operator is still the right recovery mechanism. This feature just
-  stops the failure from nuking the user-facing app.
+  not lazily per cold-start). Separate plan / follow-up issue.
+- Per-migration retry logic — auto-heal (above) clears a dirty flag and
+  re-applies idempotent migrations, but it does not retry a migration
+  whose SQL itself is broken; that still requires fixing the migration
+  file and redeploying.
 
 ## Related
 

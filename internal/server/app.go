@@ -148,11 +148,14 @@ type ExternalDeps struct {
 }
 
 // defaultMigrationsTimeout bounds how long ensureDB waits for migrations
-// before giving up and proceeding. Deliberately shorter than the default
-// Lambda timeout (30s at this writing) so a runaway migration gets
-// cancelled cleanly inside ensureDB rather than by Lambda mid-invocation
-// (which is exactly what leaves schema_migrations.dirty = true).
-const defaultMigrationsTimeout = 20 * time.Second
+// before giving up and proceeding. Set well above the time a normal index
+// build / DDL takes (the prior 20s could be blown mid-run by a single index
+// build on a growing table, leaving schema_migrations.dirty = true and
+// fail-opening every later boot) yet still comfortably under the Lambda
+// 300s hard limit, so a slow-but-legitimate migration completes rather than
+// being killed inside ensureDB. Override per-environment with
+// CUDLY_MIGRATION_TIMEOUT (e.g. "180s") for genuinely long migrations.
+const defaultMigrationsTimeout = 120 * time.Second
 
 // resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
 // It is called once in NewApplicationFromDeps to initialise

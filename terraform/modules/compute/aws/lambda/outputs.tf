@@ -37,3 +37,13 @@ output "signing_key_id" {
   description = "KMS asymmetric key ID used by the CUDly OIDC issuer"
   value       = aws_kms_key.signing.key_id
 }
+
+output "migration_failed_alarm_arn" {
+  description = "ARN of the CloudWatch alarm that fires when a database migration fails on cold start"
+  value       = aws_cloudwatch_metric_alarm.migration_failed.arn
+}
+
+output "migration_failed_metric_filter_name" {
+  description = "Name of the log metric filter counting migration-failure log lines"
+  value       = aws_cloudwatch_log_metric_filter.migration_failed.name
+}

@@ -36,6 +36,20 @@
 -- feedback_migration_full_restore).
 
 -- ------------------------------------------------------------------
+-- H3 (prerequisite): drop the materialized views FIRST.
+-- monthly_savings_summary / daily_savings_trend / provider_savings_summary
+-- all reference savings_snapshots.account_id, so the H4 ALTER COLUMN TYPE
+-- below fails with "cannot alter type of a column used by a view or rule"
+-- while they still exist. They are unconditionally recreated further down,
+-- so dropping them up front is safe and makes this migration applyable on a
+-- fresh DB (where an earlier migration already created them). DROP ... IF
+-- EXISTS keeps the step idempotent across re-runs / auto-heal.
+-- ------------------------------------------------------------------
+DROP MATERIALIZED VIEW IF EXISTS provider_savings_summary CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS daily_savings_trend CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS monthly_savings_summary CASCADE;
+
+-- ------------------------------------------------------------------
 -- H4: widen account_id on the partitioned parent.
 -- Postgres propagates the type change to all existing partitions.
 -- ------------------------------------------------------------------
@@ -71,12 +85,9 @@ ALTER TABLE savings_snapshots ALTER COLUMN coverage_percentage DROP DEFAULT;
 -- DROP + CREATE because a materialized view's column list / GROUP BY
 -- cannot be altered in place. Unique indexes are recreated for the
 -- CONCURRENTLY refresh path. AVG(coverage_percentage) now skips NULLs
--- automatically (H2).
+-- automatically (H2). The DROPs ran above (before the ALTER COLUMN) so
+-- the CREATEs below land on a clean slate.
 -- ------------------------------------------------------------------
-DROP MATERIALIZED VIEW IF EXISTS provider_savings_summary CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS daily_savings_trend CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS monthly_savings_summary CASCADE;
-
 CREATE MATERIALIZED VIEW monthly_savings_summary AS
 SELECT
     DATE_TRUNC('month', timestamp) as month,
