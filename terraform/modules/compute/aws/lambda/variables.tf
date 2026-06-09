@@ -3,6 +3,12 @@ variable "stack_name" {
   type        = string
 }
 
+variable "enable_migration_alarm" {
+  description = "Create the migration-failure CloudWatch metric filter + alarm. Defaults to false because the metric filter requires logs:PutMetricFilter on the deploy SA, which is granted via the ci-cd-permissions bootstrap (root CLAUDE.md CI/CD IAM split). Leaving it false keeps deploys unblocked when that permission is absent; set true only after re-applying the bootstrap so the deploy role can manage the filter."
+  type        = bool
+  default     = false
+}
+
 variable "environment" {
   description = "Environment name (dev/staging/prod)"
   type        = string

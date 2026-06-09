@@ -22,6 +22,13 @@
 # inventing new SNS notification infrastructure here.
 
 resource "aws_cloudwatch_log_metric_filter" "migration_failed" {
+  # Gated off by default. Creating a metric filter needs logs:PutMetricFilter,
+  # which the CI deploy SA does not hold until the ci-cd-permissions bootstrap
+  # grants it (root CLAUDE.md "CI/CD IAM" bootstrap-vs-runtime split). Leaving
+  # this ungated 403s every terraform apply and blocks all deploys. Set
+  # enable_migration_alarm=true only after re-applying the bootstrap.
+  count = var.enable_migration_alarm ? 1 : 0
+
   name           = "${var.stack_name}-migration-failed"
   log_group_name = aws_cloudwatch_log_group.lambda.name
 
@@ -38,11 +45,13 @@ resource "aws_cloudwatch_log_metric_filter" "migration_failed" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "migration_failed" {
+  count = var.enable_migration_alarm ? 1 : 0
+
   alarm_name          = "${var.stack_name}-migration-failed"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
-  metric_name         = aws_cloudwatch_log_metric_filter.migration_failed.metric_transformation[0].name
-  namespace           = aws_cloudwatch_log_metric_filter.migration_failed.metric_transformation[0].namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.migration_failed[0].metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.migration_failed[0].metric_transformation[0].namespace
   period              = 300
   statistic           = "Sum"
   threshold           = 0
