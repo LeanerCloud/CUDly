@@ -614,6 +614,17 @@ function canSellOnMarketplace(p: HistoryPurchase): boolean {
   if ((p.listing_state || '').toLowerCase() === 'active') return false;
   const user = getCurrentUser();
   if (!user) return false;
+  // Gate on the sell verbs, not bare sign-in, so we don't show Sell to a
+  // role that lacks sell-own/sell-any and avoid frontend/backend auth drift
+  // (the backend authorizeSessionSell would 403 anyway). admin:* satisfies
+  // sell-own here since it is not carved out of admin.
+  if (
+    !canAccess('admin', '*') &&
+    !canAccess('sell-any', 'purchases') &&
+    !canAccess('sell-own', 'purchases')
+  ) {
+    return false;
+  }
   // Guard against listing a matured RI: compute remaining months from the
   // purchase timestamp and the total term. term is in months; timestamp is
   // the purchase date. We require at least 1 full month remaining.
@@ -633,6 +644,16 @@ function canCancelMarketplaceListing(p: HistoryPurchase): boolean {
   if ((p.listing_state || '').toLowerCase() !== 'active') return false;
   const user = getCurrentUser();
   if (!user) return false;
+  // Same sell-verb gate as canSellOnMarketplace: cancelling a listing is a
+  // marketplace write, so require sell-own/sell-any (or admin) rather than
+  // bare sign-in to keep the UX gate aligned with authorizeSessionSell.
+  if (
+    !canAccess('admin', '*') &&
+    !canAccess('sell-any', 'purchases') &&
+    !canAccess('sell-own', 'purchases')
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -1154,7 +1175,14 @@ function wireRowActionHandlers(container: HTMLElement): void {
         const remainingMonths = Math.max(0, Math.round(termMonths - elapsedMonths));
         const upfront = purchase.upfront_cost ?? 0;
         const monthly = purchase.monthly_cost ?? 0;
-        const totalValue = upfront + monthly * remainingMonths;
+        // Prorate the upfront cost to its residual value over the remaining
+        // term. Using the full upfront overstates the listing value for a
+        // partially elapsed RI (a 12-month RI at month 6 has only half its
+        // upfront value left). Mirrors resolveMarketplacePriceSchedule in
+        // internal/api/handler_marketplace.go, which drops the upfront term to
+        // 0 when the original term is unknown (<=0); we do the same here.
+        const upfrontRemaining = termMonths > 0 ? upfront * (remainingMonths / termMonths) : 0;
+        const totalValue = upfrontRemaining + monthly * remainingMonths;
         const listPrice = totalValue * 0.95;
         const netProceeds = listPrice * 0.88;
 

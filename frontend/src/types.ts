@@ -284,7 +284,7 @@ export interface HistoryPurchase {
   revoked_via?: string;
 
   // OfferingClass is "standard" or "convertible" for EC2 RIs. Absent
-  // on non-EC2 rows and on rows written before migration 000060.
+  // on non-EC2 rows and on rows written before migration 000068.
   // The "Sell on Marketplace" button only renders when this equals
   // "standard" (issue #292).
   offering_class?: string;
