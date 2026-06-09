@@ -13,13 +13,16 @@ import (
 
 // isPublicEndpoint returns true for endpoints that don't require authentication
 func (h *Handler) isPublicEndpoint(path string) bool {
-	publicEndpoints := []string{
+	// Prefix-matched public endpoints: dynamic routes where the path carries
+	// a resource ID (approval/cancel/revoke tokens, register tokens, docs
+	// sub-paths) and static prefixes that are always fully public.
+	publicPrefixEndpoints := []string{
 		"/health",     // Root health endpoint (no /api prefix)
 		"/api/health", // API health endpoint
 		"/api/info",
-		"/version", // Public build-version endpoint (version / git SHA / build time)
 		"/api/purchases/approve/",
 		"/api/purchases/cancel/",
+		"/api/purchases/revoke/",
 		"/api/ri-exchange/approve/",
 		"/api/ri-exchange/reject/",
 		"/api/auth/login",
@@ -31,13 +34,17 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 		"/docs",
 		"/api/docs",
 	}
-	for _, ep := range publicEndpoints {
+	for _, ep := range publicPrefixEndpoints {
 		if strings.HasPrefix(path, ep) {
 			return true
 		}
 	}
-	// Exact match for POST /api/register (no trailing slash).
-	if path == "/api/register" {
+	// Exact-match singleton public endpoints. These must not be prefix-matched
+	// to prevent "/version-anything" or "/api/register-anything" from
+	// bypassing auth via accidental prefix overlap.
+	switch path {
+	case "/version", // Public build-version endpoint (version / git SHA / build time)
+		"/api/register": // POST /api/register (no trailing slash)
 		return true
 	}
 	return false
@@ -132,24 +139,28 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 		return false
 	}
 
-	// Auth endpoints that don't have a session yet are exempt unconditionally.
-	// Prefix matching is safe for these /api/auth/* paths because no admin
-	// sub-paths share those prefixes.
-	csrfExemptAlwaysPrefix := []string{
-		"/api/auth/login",
+	// Auth endpoints that don't have a session yet are exempt.
+	//
+	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
+	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
+	// validateSecurity() short-circuits before requiresCSRFValidation() is
+	// reached on the token-only (email-link) path. For the session-authed path
+	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
+	// directly inside those functions -- a blanket middleware exemption would
+	// leave session-authenticated POSTs to these endpoints unprotected (CSRF).
+	//
+	// Similarly, /api/ri-exchange/approve/ and /api/ri-exchange/reject/ are
+	// AuthPublic and therefore exempted by isPublicEndpoint(), not here.
+	//
+	// All exemptions use exact-match to prevent a path like
+	// /api/register-malicious from bypassing CSRF via accidental prefix overlap.
+	// This mirrors the exact-match approach in isPublicEndpoint().
+	switch path {
+	case "/api/auth/login",
 		"/api/auth/setup-admin",
 		"/api/auth/forgot-password",
 		"/api/auth/reset-password",
-	}
-	for _, exempt := range csrfExemptAlwaysPrefix {
-		if strings.HasPrefix(path, exempt) {
-			return false
-		}
-	}
-	// Exact match for the public self-registration endpoint (issue #1017).
-	// HasPrefix would also exempt /api/registrations/<id>/approve|reject|delete,
-	// which are AuthAdmin state-changing routes that MUST be CSRF-protected.
-	if path == "/api/register" {
+		"/api/register": // POST /api/register (public registration, no session)
 		return false
 	}
 
@@ -226,13 +237,49 @@ func extractCSRFToken(req *events.LambdaFunctionURLRequest) string {
 // authenticated request reaches CSRF validation with no token header.
 // Almost always indicates a frontend regression (sessionStorage cleared, or
 // a new fetch site forgot to include the token). ValidateCSRFToken still
-// rejects the request — this just makes the cause obvious in logs.
+// rejects the request -- this just makes the cause obvious in logs.
 func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string) {
 	if csrfToken != "" {
 		return
 	}
-	logging.Warnf("CSRF validation: empty header on session-authenticated %s %s from %s — frontend regression?",
-		req.RequestContext.HTTP.Method, req.RequestContext.HTTP.Path, req.RequestContext.HTTP.SourceIP)
+	logging.Warnf("CSRF validation: empty header on session-authenticated %s %s from %s -- frontend regression?",
+		req.RequestContext.HTTP.Method, redactURL(req.RequestContext.HTTP.Path), req.RequestContext.HTTP.SourceIP)
+}
+
+// redactURL replaces any token= query parameter value with REDACTED so
+// approval/revocation tokens are never written to structured access logs.
+// Applied to every URL or path string before it is passed to a logging call.
+//
+// Matches:
+//
+//	?token=<value>   at the start of the query string
+//	&token=<value>   as a subsequent parameter
+//
+// The replacement is done with a simple string scan so there is no regexp
+// compilation overhead on the hot request path.
+func redactURL(u string) string {
+	return redactQueryParam(u, "token")
+}
+
+// redactQueryParam replaces the value of the named query parameter in u with
+// REDACTED. The match is case-sensitive and handles both ? and & prefixes.
+func redactQueryParam(u, param string) string {
+	// Handle both ?param=val and &param=val forms.
+	for _, prefix := range []string{"?" + param + "=", "&" + param + "="} {
+		idx := strings.Index(u, prefix)
+		if idx == -1 {
+			continue
+		}
+		start := idx + len(prefix)
+		// Find the end of the value (next & or end of string).
+		end := strings.IndexByte(u[start:], '&')
+		if end == -1 {
+			u = u[:start] + "REDACTED"
+		} else {
+			u = u[:start] + "REDACTED" + u[start+end:]
+		}
+	}
+	return u
 }
 
 // requireAuth verifies the request carries a valid authentication credential

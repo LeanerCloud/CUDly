@@ -122,49 +122,104 @@ var revokeMarkRetryBackoffs = []time.Duration{
 	9 * time.Second,
 }
 
-// revokePurchase handles POST /api/purchases/{purchaseId}/revoke.
+// revokePurchase is the single revocation entry point. It unifies two flows
+// that both target a purchase by ID (issue #290 in-app revoke + issue #291
+// email one-click revoke), dispatching on token presence and the row's state:
 //
-// Authorization: session required + revoke-own:purchases (or revoke-any for
-// admins). The handler is fail-closed: if the auth service is nil the request
-// is rejected with 403.
+//   - GET (any path): render an HTML confirmation form so email prefetchers
+//     cannot auto-trigger a mutation. The token travels in the query string for
+//     the email one-click link, but nothing is mutated on GET — only the POST
+//     from the rendered form (or the dashboard) actually revokes.
 //
-// Gmail-style pre-fire delay (issue #291 wave-2): when the ID resolves to a
-// purchase_execution in status="scheduled" (cloud SDK not yet called), the
-// execution is cancelled at zero cost and control returns immediately — no
-// provider SDK call is made. This path handles AWS, GCP, and Azure uniformly
-// since nothing has been committed to any cloud yet.
-func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
+//   - The ID resolves to a purchase_execution:
+//
+//   - status=scheduled (Gmail-style pre-fire delay, #290): cancelled at
+//     zero cost via the scheduled-execution CAS. Session-only — the
+//     dashboard Revoke button drives this; there is no email one-click for
+//     a not-yet-executed purchase.
+//
+//   - status=completed / partially_completed (#291): records a
+//     "revocation_requested" status. token-OR-session dispatch, mirroring
+//     approvePurchase / cancelPurchase — the email one-click link (token)
+//     and the dashboard Revoke button (session) both land here.
+//
+//   - The ID resolves to a purchase_history row (a completed Azure reservation,
+//     #290): real Azure reservation Return within the free-cancel window.
+//     Session-only.
+//
+// Authorization is fail-closed: if the auth service is nil the request is
+// rejected with 403 on every path (without it we can verify neither a session
+// nor a token's contact-email binding). The session-only paths additionally
+// require a valid session; the completed-execution path enforces its own
+// token-or-session matrix inside revokeCompletedExecution.
+func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID, token string) (any, error) {
 	if purchaseID == "" {
 		return nil, NewClientError(400, "purchase_id is required")
 	}
 
-	// Fail-closed: auth service nil means we cannot verify permissions.
-	// Check before requireSession so this always surfaces as a 403 ClientError.
+	// GET: render a confirmation page so email prefetchers cannot auto-trigger
+	// the revocation. No mutation occurs on GET (issue #291: email prefetchers).
+	if req.RequestContext.HTTP.Method == "GET" {
+		return renderRevokeConfirmPage(purchaseID, token), nil
+	}
+
+	// Fail-closed: auth service nil means we can verify neither a session nor a
+	// token's contact-email binding. Reject before any lookup so every path
+	// (session-only and token) surfaces a uniform 403.
 	if h.auth == nil {
 		return nil, NewClientError(403, "authentication service not configured")
 	}
 
+	// Resolve the ID against purchase_executions first. A genuine DB error
+	// surfaces as 500; (nil, nil) means the ID is not an execution (or is not
+	// yet visible) and we fall through to the purchase_history lookup below.
+	execution, execErr := h.config.GetExecutionByID(ctx, purchaseID)
+	if execErr != nil {
+		return nil, fmt.Errorf("revoke: GetExecutionByID %s: %w", purchaseID, execErr)
+	}
+	if execution != nil {
+		switch execution.Status {
+		case "completed", "partially_completed":
+			// Post-execution revoke (#291): token-OR-session. The email
+			// one-click link carries a token; the dashboard Revoke button
+			// carries a session. revokeCompletedExecution does its own auth.
+			return h.revokeCompletedExecution(ctx, req, execution, token)
+		case "pending", "notified":
+			// Not yet scheduled or executed: there is nothing to revoke — the
+			// caller wants Cancel, not Revoke. Return the friendly 409 (#291)
+			// rather than letting the scheduled-CAS path produce a confusing
+			// 410. No mutation, so no session is required to surface this.
+			return nil, NewClientError(409, fmt.Sprintf(
+				"execution %s is still pending — use the Cancel link instead of Revoke", execution.ExecutionID))
+		default:
+			// Scheduled (free pre-fire cancel, #290) and any other state:
+			// session-only. revokeScheduledExecution's CAS (WHERE
+			// status='scheduled') is the sole arbiter — it returns 410 when the
+			// scheduler already fired, and a non-scheduled row simply fails the
+			// CAS, so we do not pre-reject on status here (avoids a TOCTOU race).
+			session, err := h.requireSession(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+			return h.revokeScheduledExecution(ctx, session, execution)
+		}
+	}
+
+	// No execution row. A token means this came from an email one-click link
+	// whose target execution no longer exists (or never did): the email flow
+	// only ever points at executions, never at purchase_history rows, so return
+	// 404 rather than demanding a session for the unrelated Azure path.
+	if token != "" {
+		return nil, NewClientError(404, "execution not found")
+	}
+
+	// No token: a completed Azure reservation in purchase_history (the in-app
+	// dashboard flow, #290). Session-only (real Azure Return within the
+	// free-cancel window).
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-
-	// Gmail-style pre-fire delay: if the ID resolves to a purchase_execution
-	// (cloud SDK not yet called), attempt to cancel it for free at the execution
-	// layer. The status=="scheduled" check is intentionally omitted here: reading
-	// "scheduled" then checking the status is a TOCTOU race. Instead we pass the
-	// row straight to revokeScheduledExecution which calls CancelScheduledExecutionAtomic
-	// (WHERE status='scheduled' CAS) and returns 410 if the scheduler already fired.
-	//
-	// A genuine DB error from GetExecutionByID surfaces as 500; (nil, nil) means
-	// the ID is not an execution (or is not yet visible) and we fall through to
-	// the purchase_history lookup below.
-	if execution, execErr := h.config.GetExecutionByID(ctx, purchaseID); execErr != nil {
-		return nil, fmt.Errorf("revoke: GetExecutionByID %s: %w", purchaseID, execErr)
-	} else if execution != nil {
-		return h.revokeScheduledExecution(ctx, session, execution)
-	}
-
 	return h.loadAndRevokePurchaseHistory(ctx, req, session, purchaseID)
 }
 

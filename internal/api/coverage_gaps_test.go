@@ -929,6 +929,9 @@ func (s *stubEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, _ ema
 func (s *stubEmailNotifier) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
 	return nil
 }
+func (s *stubEmailNotifier) SendPurchaseExecutedNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
 func (s *stubEmailNotifier) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }

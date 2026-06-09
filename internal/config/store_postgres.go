@@ -928,6 +928,17 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 	return &records[0], nil
 }
 
+// SetCancelledBy stamps the cancelled_by column for a single execution without
+// touching any other column. This avoids the full-row overwrite that a
+// SavePurchaseExecution follow-up would perform, eliminating the lost-update
+// window between TransitionExecutionStatus and the attribution write (Finding #5).
+func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error {
+	q := `UPDATE purchase_executions SET cancelled_by = $2, updated_at = NOW()
+	       WHERE execution_id = $1`
+	_, err := s.db.Exec(ctx, q, executionID, cancelledBy)
+	return err
+}
+
 // CancelExecutionAtomic atomically transitions an execution from
 // pending or notified to cancelled, setting cancelled_by to the supplied
 // actor (NULL when actor is nil). The UPDATE is conditional on

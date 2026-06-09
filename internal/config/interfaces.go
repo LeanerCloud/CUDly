@@ -78,6 +78,11 @@ type StoreInterface interface {
 	ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error)
+	// SetCancelledBy stamps a cancelled_by / revoked_by email on an execution
+	// without overwriting any other columns. Used after TransitionExecutionStatus
+	// to fold the actor attribution into the same logical write without the
+	// full-row SavePurchaseExecution clobber risk (Finding #5 / PR #889).
+	SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error
 	// CancelExecutionAtomic atomically flips status from pending / notified /
 	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
 	// supports the Gmail-style pre-fire delay revoke path (issue #290).
