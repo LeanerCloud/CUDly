@@ -287,3 +287,35 @@ func TestRateLimiter_ExhaustsRetries(t *testing.T) {
 	assert.Equal(t, 2, limiter.GetRetryCount())
 	assert.Error(t, lastErr)
 }
+
+// TestComputeJitter verifies that computeJitter produces values in [0, 0.2*delay]
+// and that the output varies (i.e. is not stuck at zero). The test is deterministic:
+// it calls the pure function directly and never sleeps, so OS scheduling cannot cause
+// spurious failures (replaces the former wall-clock-based TestWait_JitterRange).
+func TestComputeJitter(t *testing.T) {
+	const iterations = 10_000
+	delay := 100 * time.Millisecond
+	maxJitter := time.Duration(float64(delay) * 0.2) // 20 ms
+
+	var observedMax time.Duration
+	for i := 0; i < iterations; i++ {
+		// Use evenly-spaced r values to cover the full [0,1) range deterministically.
+		r := float64(i) / float64(iterations)
+		j := computeJitter(delay, r)
+
+		require.GreaterOrEqualf(t, j, time.Duration(0),
+			"jitter must be non-negative for r=%f", r)
+		require.LessOrEqualf(t, j, maxJitter,
+			"jitter %s exceeds 20%% of delay %s for r=%f", j, delay, r)
+
+		if j > observedMax {
+			observedMax = j
+		}
+	}
+
+	// The spread check: with r spanning [0,1) the maximum jitter should reach
+	// close to maxJitter (within 1 step of iterations). We use 95% as the floor.
+	minSpread := time.Duration(float64(maxJitter) * 0.95)
+	assert.GreaterOrEqual(t, observedMax, minSpread,
+		"jitter spread appears stuck: max observed %s, expected >= %s", observedMax, minSpread)
+}
