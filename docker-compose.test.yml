@@ -1,0 +1,119 @@
+# Docker Compose for Testing CUDly
+# Use this for local E2E testing and integration tests
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: cudly-test-postgres
+    environment:
+      POSTGRES_DB: cudly_test
+      POSTGRES_USER: cudly_test
+      POSTGRES_PASSWORD: test_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cudly_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cudly-test
+
+  # CUDly Application (HTTP mode)
+  cudly-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cudly-test-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Runtime configuration
+      RUNTIME_MODE: http
+      PORT: 8080
+      ENVIRONMENT: test
+      VERSION: test
+
+      # Database configuration
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cudly_test
+      DB_USER: cudly_test
+      DB_PASSWORD: test_password
+      DB_SSL_MODE: disable
+      DB_AUTO_MIGRATE: "true"
+      DB_MIGRATIONS_PATH: /app/migrations
+
+      # Secret provider (use env for testing)
+      SECRET_PROVIDER: env
+
+      # DynamoDB tables (for backward compatibility testing)
+      CONFIG_TABLE: test-config
+      PLANS_TABLE: test-plans
+      HISTORY_TABLE: test-history
+      USERS_TABLE: test-users
+      GROUPS_TABLE: test-groups
+      SESSIONS_TABLE: test-sessions
+
+      # Email configuration (mock)
+      EMAIL_ADDRESS: test@example.com
+
+      # Feature flags
+      ENABLE_DASHBOARD: "true"
+
+      # CORS
+      CORS_ALLOWED_ORIGIN: http://localhost:3000
+
+    ports:
+      - "8080:8080"
+    networks:
+      - cudly-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # Test runner (optional - for running integration tests in container)
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: cudly-test-runner
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cudly-app:
+        condition: service_healthy
+    environment:
+      # Point to test services
+      API_URL: http://cudly-app:8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cudly_test
+      DB_USER: cudly_test
+      DB_PASSWORD: test_password
+      DB_SSL_MODE: disable
+    networks:
+      - cudly-test
+    command: >
+      sh -c "
+        echo 'Waiting for services to be ready...';
+        sleep 5;
+        echo 'Running E2E tests...';
+        go test -v -tags=integration ./...;
+      "
+    profiles:
+      - test  # Only start with: docker-compose --profile test up
+
+networks:
+  cudly-test:
+    driver: bridge
+
+volumes:
+  postgres_test_data:

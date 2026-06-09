@@ -1,0 +1,95 @@
+// Package secrets provides cloud-agnostic secret management
+package secrets
+
+import (
+	"context"
+	"fmt"
+	"os"
+)
+
+// Resolver defines the interface for retrieving secrets from various secret managers
+type Resolver interface {
+	// GetSecret retrieves a secret value by ID/ARN/name
+	GetSecret(ctx context.Context, secretID string) (string, error)
+
+	// GetSecretJSON retrieves a secret and parses it as JSON
+	GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error)
+
+	// PutSecret creates or updates a secret value by ID/ARN/name
+	PutSecret(ctx context.Context, secretID string, value string) error
+
+	// ListSecrets lists available secrets.
+	// Filter behavior varies by provider:
+	//   - AWS: uses API-side substring matching (FilterNameStringTypeName)
+	//   - Azure: uses prefix matching (strings.HasPrefix)
+	//   - GCP: uses prefix matching (strings.HasPrefix)
+	//   - Env: uses prefix matching (strings.HasPrefix)
+	ListSecrets(ctx context.Context, filter string) ([]string, error)
+
+	// Close cleans up any resources
+	Close() error
+}
+
+// Config holds secrets resolver configuration
+type Config struct {
+	// Provider specifies which secret manager to use
+	// Valid values: "aws", "gcp", "azure", "env"
+	Provider string
+
+	// AWS specific
+	AWSRegion string
+
+	// GCP specific
+	GCPProjectID string
+
+	// Azure specific
+	AzureVaultURL string
+}
+
+// LoadConfigFromEnv loads resolver configuration from environment variables.
+// Defaults to the "env" (environment variable) provider when SECRET_PROVIDER is unset,
+// which is suitable for local development only. In production, ensure SECRET_PROVIDER
+// is explicitly set (aws, gcp, or azure) to avoid accidental use of the dev-only resolver.
+func LoadConfigFromEnv() *Config {
+	return &Config{
+		Provider:      getEnv("SECRET_PROVIDER", "env"),
+		AWSRegion:     getEnv("AWS_REGION", "us-east-1"),
+		GCPProjectID:  getEnv("GCP_PROJECT_ID", ""),
+		AzureVaultURL: getEnv("AZURE_KEY_VAULT_URL", ""),
+	}
+}
+
+// NewResolver creates a new secret resolver based on the provider
+func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
+	if config == nil {
+		return nil, fmt.Errorf("secrets config must not be nil")
+	}
+	switch config.Provider {
+	case "aws":
+		// AWSRegion defaults to us-east-1 when empty (via LoadConfigFromEnv).
+		// Callers constructing Config manually should set AWSRegion explicitly.
+		return NewAWSResolver(ctx, config.AWSRegion)
+	case "gcp":
+		if config.GCPProjectID == "" {
+			return nil, fmt.Errorf("GCP_PROJECT_ID is required for GCP secret manager")
+		}
+		return NewGCPResolver(ctx, config.GCPProjectID)
+	case "azure":
+		if config.AzureVaultURL == "" {
+			return nil, fmt.Errorf("AZURE_KEY_VAULT_URL is required for Azure Key Vault")
+		}
+		return NewAzureResolver(ctx, config.AzureVaultURL)
+	case "env":
+		return NewEnvResolver(), nil
+	default:
+		return nil, fmt.Errorf("unsupported secret provider: %s (must be one of: aws, gcp, azure, env)", config.Provider)
+	}
+}
+
+// Helper function
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}

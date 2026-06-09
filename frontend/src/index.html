@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="format-detection" content="telephone=no">
+    <!-- Content Security Policy: Restrict resource loading to prevent XSS.
+         frame-ancestors is intentionally omitted here because browsers ignore
+         it in <meta>; it is delivered via the response header from
+         internal/server/http.go (container) and internal/server/lambda.go
+         (Lambda Function URL). Invalid mid-hostname wildcards like
+         *.execute-api.*.amazonaws.com are silently dropped by browsers, so
+         connect-src lists only valid single-level wildcard hosts the
+         frontend may contact cross-origin (Azure Container Apps, Cloud Run)
+         in addition to 'self'. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.azurecontainerapps.io https://*.run.app; base-uri 'self'; form-action 'self'">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="description" content="CUDly — Cloud Commitment Optimizer. Discover savings opportunities, plan and automate Reserved Instance / Savings Plan purchases, and manage commitment inventory across AWS, Azure, and GCP.">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <title>CUDly - Cloud Commitment Optimizer</title>
+</head>
+<body>
+    <a href="#main-content" class="skip-to-main">Skip to main content</a>
+    <div id="app" class="app-shell">
+        <header class="app-topbar">
+            <!-- Mobile-only hamburger button. Toggles the sidebar drawer
+                 below 768px via .sidebar-open on <body>. Hidden on desktop
+                 via CSS. aria-controls points at the <aside id="sidebar">. -->
+            <button type="button" class="hamburger" id="hamburger-btn"
+                    aria-label="Open navigation menu"
+                    aria-controls="sidebar"
+                    aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <div class="app-topbar-brand">
+                <span class="app-logo-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                </span>
+                <h1>CUDly</h1>
+            </div>
+            <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+            <div id="user-info">
+                <span id="user-email-display"></span>
+                <span id="user-role-display" class="role-badge"></span>
+                <a href="/docs/" target="_blank" class="header-link">API Docs</a>
+                <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
+                <button id="logout-btn">Logout</button>
+            </div>
+        </header>
+        <!-- Overlay: covers content when sidebar drawer is open on mobile.
+             Clicking it closes the drawer. Hidden above 768px via CSS. -->
+        <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
+        <div class="app-body">
+            <aside class="app-sidebar" id="sidebar" aria-label="Primary navigation">
+                <button class="app-sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-expanded="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <nav class="app-sidebar-nav" role="tablist" aria-label="Main navigation" aria-orientation="vertical">
+                    <!-- Sidebar items are real <a href> so the browser's
+                         "Open Link in New Tab" affordance works (issue #462).
+                         The SPA hijacks un-modified left clicks via
+                         preventDefault in app.ts; modifier-key clicks fall
+                         through to the browser default. -->
+                    <a class="tab-btn active" id="home-tab-btn" href="/home" data-tab="home" role="tab" aria-selected="true" aria-controls="home-tab" aria-label="Home">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>
+                        <span class="sidebar-label">Home</span>
+                    </a>
+                    <a class="tab-btn" id="opportunities-tab-btn" href="/opportunities" data-tab="opportunities" role="tab" aria-selected="false" aria-controls="opportunities-tab" aria-label="Opportunities">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M15 14c.97-.84 2-1.81 2-4a5 5 0 0 0-10 0c0 2.19 1.03 3.16 2 4"/><line x1="9" y1="18" x2="15" y2="18"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+                        <span class="sidebar-label">Opportunities</span>
+                    </a>
+                    <a class="tab-btn" id="plans-tab-btn" href="/plans" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab" aria-label="Plans">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12l2 2 4-4"/></svg>
+                        <span class="sidebar-label">Plans</span>
+                    </a>
+                    <a class="tab-btn requires-purchases" id="purchases-tab-btn" href="/purchases" data-tab="purchases" role="tab" aria-selected="false" aria-controls="purchases-tab" aria-label="Purchases">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+                        <span class="sidebar-label">Purchases</span>
+                    </a>
+                    <a class="tab-btn requires-purchases" id="inventory-tab-btn" href="/inventory" data-tab="inventory" role="tab" aria-selected="false" aria-controls="inventory-tab" aria-label="Inventory &amp; Coverage">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27,6.96 12,12.01 20.73,6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                        <span class="sidebar-label">Inventory &amp; Coverage</span>
+                    </a>
+                    <a class="tab-btn admin-only" id="admin-tab-btn" href="/admin/general" data-tab="admin" role="tab" aria-selected="false" aria-controls="admin-tab" aria-label="Admin">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <span class="sidebar-label">Admin</span>
+                    </a>
+                </nav>
+            </aside>
+            <main class="app-main" id="main-content">
+            <!-- Home Tab. Provider/Account filters live in the topbar
+                 (#topbar-filters); they're global across all sections. -->
+            <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
+                <section id="summary"></section>
+                <section id="savings-trend-section" class="card chart-section">
+                    <div class="section-header">
+                        <h3>Savings over time</h3>
+                        <div class="trend-range-toggle" role="group" aria-label="Savings trend range">
+                            <button type="button" class="btn btn-small trend-range" data-range="7">7d</button>
+                            <button type="button" class="btn btn-small trend-range" data-range="30">30d</button>
+                            <button type="button" class="btn btn-small trend-range active" data-range="90">90d</button>
+                            <button type="button" class="btn btn-small trend-range" data-range="all">All</button>
+                        </div>
+                    </div>
+                    <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>
+                    <p id="savings-trend-empty" class="empty hidden">No purchase history yet — the chart will populate once you start executing plans.</p>
+                </section>
+                <section id="savings-by-service-section" class="card chart-section">
+                    <h3>Potential savings range per service</h3>
+                    <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a darker current committed-savings bar per service"></canvas>
+                    <p id="savings-by-service-empty" class="empty hidden">No positive potential savings found for current recommendations.</p>
+                </section>
+                <section id="upcoming-purchases">
+                    <h2>Upcoming Scheduled Purchases</h2>
+                    <div id="upcoming-list"></div>
+                </section>
+            </div>
+
+            <!-- Opportunities Tab (renamed from Recommendations in #340) -->
+            <div id="opportunities-tab" class="tab-content" role="tabpanel" aria-labelledby="opportunities-tab-btn">
+                <section id="recommendations-summary"></section>
+                <!-- Issue #909: AWS lookback selector + scope tooltip.
+                     Populated by recommendations.ts:renderLookbackToolbar on
+                     load (prefilled from /api/config; disabled for non-admin
+                     sessions). Changing it persists recommendations_lookback_days
+                     and triggers a recommendations re-collect for the new window. -->
+                <section id="recommendations-toolbar" class="recommendations-toolbar"></section>
+                <!-- Per-column header filters replace the old top filter bar.
+                     The Clear-filters badge + aria-live count are injected
+                     by recommendations.ts:renderFilterStatusBar above the
+                     list. Bottom action box (Payment / Capacity % / Purchase /
+                     Create Plan) is rendered after the table by
+                     mountBottomActionBox. -->
+                <section id="recommendations-list"></section>
+            </div>
+
+            <!-- Purchase Plans Tab -->
+            <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
+                <section id="plans-header" class="card page-hero">
+                    <h2>Purchase Plans</h2>
+                    <!-- Provider/Account filters now live in the topbar
+                         (#topbar-filters), globally shared across sections. -->
+                    <button id="new-plan-btn" class="primary">New Plan</button>
+                </section>
+                <section id="plans-list"></section>
+
+                <section id="planned-purchases-header" class="card page-hero">
+                    <h2>Planned Purchases</h2>
+                    <p class="help-text page-hero-description">Individual purchases scheduled from your plans. You can run, pause, edit, or delete each purchase.</p>
+                </section>
+                <section id="planned-purchases-list"></section>
+            </div>
+
+            <!-- History Tab -->
+            <div id="purchases-tab" class="tab-content" role="tabpanel" aria-labelledby="purchases-tab-btn">
+                <!-- Approval Queue Card (issue #340 sub-task): surfaces
+                     pending-approval purchases at the top of the Purchases
+                     tab so users don't have to scan the full Purchase
+                     History table for them. Rows render with inline
+                     Approve / Cancel buttons (issues #46 + #286) and the
+                     same click flow as the history table. Auto-loaded on
+                     tab switch via loadHistory(); also re-rendered after
+                     any Approve / Cancel from either view. -->
+                <section id="purchases-approval-queue-section" class="card page-hero">
+                    <h2>Approval queue</h2>
+                    <p class="help-text page-hero-description">Purchases awaiting approval. Review and approve or cancel each one. The same actions are available from the Purchase History table below.</p>
+                    <section id="purchases-approval-queue"></section>
+                </section>
+
+                <!-- Savings History Chart Section -->
+                <section id="savings-history-section" class="card page-hero">
+                    <div class="section-header">
+                        <h2>Savings History</h2>
+                        <div class="controls-bar">
+                            <label>Period:
+                                <select id="savings-period">
+                                    <option value="24h">Last 24 Hours</option>
+                                    <option value="7d">Last 7 Days</option>
+                                    <option value="30d">Last 30 Days</option>
+                                    <option value="90d" selected>Last 90 Days</option>
+                                </select>
+                            </label>
+                            <label>Unit:
+                                <select id="savings-unit">
+                                    <option value="hourly">Hourly</option>
+                                    <option value="monthly" selected>Monthly</option>
+                                    <option value="yearly">Yearly</option>
+                                </select>
+                            </label>
+                            <button id="refresh-savings-btn" class="btn-small">Refresh</button>
+                        </div>
+                    </div>
+
+                    <!-- Savings Stats Cards -->
+                    <div id="savings-stats" class="stats-grid">
+                        <div class="stat-card">
+                            <h4 id="period-savings-label">Period Savings</h4>
+                            <p id="period-savings" class="stat-value">$0.00</p>
+                            <p class="stat-unit-context" id="period-savings-unit">shown in monthly equivalents</p>
+                        </div>
+                        <div class="stat-card">
+                            <h4 id="avg-savings-label">Avg Monthly Savings</h4>
+                            <p id="avg-hourly-savings" class="stat-value">$0.00/mo</p>
+                        </div>
+                        <div class="stat-card">
+                            <h4 id="peak-savings-label">Peak Savings</h4>
+                            <p id="peak-savings" class="stat-value">$0.00/mo</p>
+                        </div>
+                    </div>
+
+                    <!-- Savings Chart Container -->
+                    <div class="chart-container">
+                        <canvas id="savings-history-chart" role="img" aria-label="Chart showing savings history over time"></canvas>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="savings-history-empty" class="empty-state hidden">
+                        <p>No savings history data available yet.</p>
+                        <p class="help-text">Data will be collected hourly once you have active purchases.</p>
+                    </div>
+                </section>
+
+                <!-- Purchase History Section -->
+                <section id="purchase-history-section" class="card page-hero">
+                    <h2>Purchase History</h2>
+                    <section id="history-controls">
+                        <div class="date-range-picker">
+                            <label>From: <input type="date" id="history-start"></label>
+                            <label>To: <input type="date" id="history-end"></label>
+                            <!-- Provider/Account filters now live in the
+                                 topbar (#topbar-filters); date-range stays
+                                 here because it's history-specific. -->
+                            <button id="load-history-btn">Load History</button>
+                        </div>
+                    </section>
+                    <section id="history-summary"></section>
+                    <section id="history-list"></section>
+                </section>
+            </div>
+
+            <!-- Inventory & Coverage Tab (umbrella section folding in RI Exchange, issue #340 T4) -->
+            <div id="inventory-tab" class="tab-content" role="tabpanel" aria-labelledby="inventory-tab-btn">
+                <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
+                    <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" aria-controls="inventory-active-commitments">Active commitments</button>
+                    <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
+                    <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" aria-controls="inventory-ri-exchange">RI Exchange</button>
+                </div>
+
+                <!-- Active commitments — per-commitment list backed by
+                     /api/inventory/commitments (issue #340 deferred sub-task).
+                     The table is rendered into #active-commitments-list by
+                     loadActiveCommitments in inventory.ts. -->
+                <section id="inventory-active-commitments" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Active commitments</h2>
+                            <div class="section-header-actions">
+                                <button id="active-commitments-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">All non-expired Reserved Instances, Savings Plans, and Compute Units committed across your registered accounts. Soonest-expiring first.</p>
+                    </section>
+
+                    <section class="card">
+                        <div id="active-commitments-list"></div>
+                    </section>
+                </section>
+
+                <!-- Coverage — per-provider breakdowns (issue #754). -->
+                <section id="inventory-coverage" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-coverage">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Coverage</h2>
+                            <div class="section-header-actions">
+                                <button id="coverage-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
+                    </section>
+                    <div id="coverage-providers"></div>
+                </section>
+
+                <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
+                <section id="inventory-ri-exchange" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Convertible RI Exchange</h2>
+                            <div class="section-header-actions">
+                                <button id="ri-exchange-settings-btn" class="btn btn-small" title="Jump to Exchange Automation settings in Admin → Purchasing policies">⚙︎ Exchange settings</button>
+                                <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
+                    </section>
+
+                    <section class="card">
+                        <h3>Active Convertible RIs</h3>
+                        <div id="ri-exchange-instances-list"></div>
+                    </section>
+
+                    <section class="card">
+                        <h3>Reshape Recommendations</h3>
+                        <p class="settings-description">Underutilized convertible RIs that could be exchanged for better-fitting instance types.</p>
+                        <div id="ri-exchange-recommendations-list"></div>
+                    </section>
+
+                    <section class="card">
+                        <h3>Exchange History</h3>
+                        <p class="settings-description">Recent RI exchange operations (last 12 months).</p>
+                        <div id="ri-exchange-history-list"></div>
+                    </section>
+                </section>
+            </div>
+
+            <!-- Admin Tab (renamed from Settings in #340) -->
+            <div id="admin-tab" class="tab-content" role="tabpanel" aria-labelledby="admin-tab-btn">
+                <div class="settings-tabs" role="tablist" aria-label="Admin navigation">
+                    <button class="sub-tab-btn active" id="admin-subtab-general" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-section">General</button>
+                    <button class="sub-tab-btn" id="admin-subtab-purchasing" data-settings-tab="purchasing" role="tab" aria-selected="false" aria-controls="purchasing-panel">Purchasing policies</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-accounts" data-settings-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts-section">Accounts &amp; onboarding</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-users" data-settings-tab="users" role="tab" aria-selected="false" aria-controls="users-section">Users, roles &amp; API keys</button>
+                </div>
+                <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
+                    <h2>Global Configuration</h2>
+                    <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                    <div id="settings-loading" class="loading">Loading settings...</div>
+                    <form id="global-settings-form" class="settings-form hidden">
+                        <fieldset class="settings-category">
+                            <legend>General Settings</legend>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <!-- The orphan `<label for="setting-enabled-providers">` was removed:
+                                         there is no element with that id, and the actual controls are the
+                                         three checkboxes below. Use a span with an id that the grouping
+                                         div references via aria-labelledby instead. -->
+                                    <span id="enabled-providers-label" class="label-like">Enabled Providers</span>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
+                                </div>
+                                <div class="setting-input" role="group" aria-labelledby="enabled-providers-label">
+                                    <label><input type="checkbox" id="provider-aws" value="aws" checked> AWS</label>
+                                    <label><input type="checkbox" id="provider-azure" value="azure"> Azure</label>
+                                    <label><input type="checkbox" id="provider-gcp" value="gcp"> GCP</label>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-notification-email">Notification Email</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email">
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <!-- Plain span (not <label for=>) so clicking the descriptive text doesn't
+                                         flip the toggle. The toggle's own <label class="toggle-label"> wraps the
+                                         input and provides the click target. aria-labelledby on the input keeps
+                                         the descriptive text as the toggle's accessible name. Issue #464. -->
+                                    <span id="setting-auto-collect-label">Auto-collect Recommendations</span>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" id="setting-auto-collect" aria-labelledby="setting-auto-collect-label" checked>
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="setting-row sub-setting" id="collection-schedule-row">
+                                <div class="setting-info">
+                                    <label for="setting-collection-schedule">Collection Schedule</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">How often to automatically fetch recommendations.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <select id="setting-collection-schedule">
+                                        <option value="hourly">Every Hour</option>
+                                        <option value="daily" selected>Daily</option>
+                                        <option value="weekly">Weekly</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-notification-days">Notification Days Before Purchase</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label for="setting-recs-stale-hours">Recommendations Cache Stale Threshold (hours)</label>
+                                    <span class="info-icon">&#9432;<span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
+                                </div>
+                                <div class="setting-input">
+                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <div class="settings-buttons">
+                            <button type="button" id="reset-settings-btn" class="btn btn-destructive">Reset to Defaults</button>
+                            <button type="submit" id="save-settings-btn" class="btn btn-primary">Save Settings</button>
+                        </div>
+                    </form>
+                    <div id="settings-error" class="error-message hidden"></div>
+                </section>
+
+                <!-- Purchasing Section -->
+                <section id="purchasing-panel" class="card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
+                    <h2>Purchasing Settings</h2>
+                    <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
+
+                    <fieldset class="settings-category" id="purchasing-global-defaults">
+                        <legend>Global Purchase Defaults</legend>
+                        <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options map differently per provider: AWS uses no/partial/all upfront; Azure reservations support upfront or monthly; GCP commitments are billed monthly only.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-term">Default Term</label>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-default-term">
+                                    <option value="1">1 Year</option>
+                                    <option value="3" selected>3 Years</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-payment">Default Payment Option</label>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-default-payment">
+                                    <option value="no-upfront">No Upfront</option>
+                                    <option value="partial-upfront">Partial Upfront</option>
+                                    <option value="all-upfront" selected>All Upfront</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-default-coverage">Target Coverage (%)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*">
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="purchasing-recommendations-lookback">
+                        <legend>Recommendations Lookback</legend>
+                        <p class="settings-help">Controls how far back AWS Cost Explorer looks when computing fresh recommendations. Must be 7, 30, or 60 days (AWS Cost Explorer API constraint). Azure Cost Management and GCP CUD Recommender have no equivalent parameter — each uses its own internal window — so this setting affects AWS only.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-recs-lookback-days"><span class="provider-badge aws">AWS</span> lookback period</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-recs-lookback-days">
+                                    <option value="7" selected>7 days</option>
+                                    <option value="30">30 days</option>
+                                    <option value="60">60 days</option>
+                                </select>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="purchasing-grace-period">
+                        <legend>Post-Purchase Grace Period</legend>
+                        <p class="settings-help">After a purchase is submitted, CUDly hides the just-covered capacity from the Recommendations view for this many days so you don't re-buy the same capacity while cloud-provider utilisation metrics catch up. Set to 0 to disable the feature for a provider. Range: 0–30 days.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-aws"><span class="provider-badge aws">AWS</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-aws" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-azure"><span class="provider-badge azure">Azure</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-azure" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-grace-gcp"><span class="provider-badge gcp">GCP</span> grace period (days)</label>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="setting-grace-gcp" value="7" min="0" max="30" step="1" inputmode="numeric" pattern="[0-9]*">
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- AWS Settings -->
+                    <fieldset class="settings-category provider-settings" id="aws-settings">
+                        <legend><span class="provider-badge aws">AWS</span> Service Defaults</legend>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label>Credentials</label>
+                            </div>
+                            <div class="setting-input">
+                                <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
+                            </div>
+                        </div>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>EC2 Reserved Instances</h5>
+                                <label>Term: <select id="aws-ec2-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-ec2-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>RDS Reserved Instances</h5>
+                                <label>Term: <select id="aws-rds-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-rds-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>ElastiCache Reserved Nodes</h5>
+                                <label>Term: <select id="aws-elasticache-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-elasticache-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>OpenSearch Reserved Instances</h5>
+                                <label>Term: <select id="aws-opensearch-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-opensearch-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Redshift Reserved Nodes</h5>
+                                <label>Term: <select id="aws-redshift-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-redshift-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Compute Savings Plans</h5>
+                                <p class="service-default-hint">EC2, Fargate, Lambda — most flexible</p>
+                                <label>Term: <select id="aws-savings-plans-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-compute-enabled" checked> Enabled</label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>EC2 Instance Savings Plans</h5>
+                                <p class="service-default-hint">EC2 only, region-locked — deepest discount</p>
+                                <label>Term: <select id="aws-savings-plans-ec2instance-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-ec2instance-enabled" checked> Enabled</label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>SageMaker Savings Plans</h5>
+                                <p class="service-default-hint">SageMaker training/inference</p>
+                                <label>Term: <select id="aws-savings-plans-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-sagemaker-enabled" checked> Enabled</label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Database Savings Plans</h5>
+                                <p class="service-default-hint">Reserved for future AWS Database Savings Plans (currently not GA; defaults stored for forward-compatibility)</p>
+                                <label>Term: <select id="aws-savings-plans-database-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="aws-savings-plans-database-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
+                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Azure Settings -->
+                    <fieldset class="settings-category provider-settings hidden" id="azure-settings">
+                        <legend><span class="provider-badge azure">Azure</span> Service Defaults</legend>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>Virtual Machine Reservations</h5>
+                                <label>Term: <select id="azure-vm-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-vm-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>SQL Database Reservations</h5>
+                                <label>Term: <select id="azure-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-sql-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>CosmosDB Reservations</h5>
+                                <label>Term: <select id="azure-cosmosdb-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-cosmosdb-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Redis Cache Reservations</h5>
+                                <label>Term: <select id="azure-redis-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-redis-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Cognitive Search Reservations</h5>
+                                <label>Term: <select id="azure-search-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                                <label>Payment: <select id="azure-search-payment"><option value="all-upfront" selected>Upfront</option><option value="no-upfront">Monthly</option></select></label>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- GCP Settings -->
+                    <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
+                        <legend><span class="provider-badge gcp">GCP</span> Service Defaults</legend>
+                        <h4 class="subsection-title">Service Defaults</h4>
+                        <div class="service-defaults-grid">
+                            <div class="service-default-card">
+                                <h5>Compute Engine CUDs</h5>
+                                <label>Term: <select id="gcp-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Cloud SQL CUDs</h5>
+                                <label>Term: <select id="gcp-sql-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Memorystore CUDs</h5>
+                                <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                            <div class="service-default-card">
+                                <h5>Cloud Storage</h5>
+                                <label>Term: <select id="gcp-storage-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- RI Exchange Automation Settings (loaded dynamically) -->
+                    <div id="ri-exchange-automation-settings"></div>
+
+                    <div class="settings-buttons">
+                        <button type="button" id="reset-purchasing-btn" class="btn btn-destructive">Reset to Defaults</button>
+                        <button type="button" id="save-purchasing-btn" class="btn btn-primary">Save Settings</button>
+                    </div>
+                </section>
+
+                <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
+                <section id="accounts-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-accounts">
+                    <h2>Accounts</h2>
+                    <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
+
+                    <!-- Accounts overview summary (known_issues #29 partial). Counts each
+                         status across providers + registrations; clicking a chip jumps to
+                         the relevant section so users get a single at-a-glance view of
+                         "what's going on with all my accounts" without rebuilding into a
+                         single unified table. -->
+                    <div id="accounts-overview" class="accounts-overview" aria-label="Accounts overview"></div>
+
+                    <fieldset class="settings-category" id="accounts-federation">
+                        <legend>Federation Setup (Add New Account)</legend>
+                        <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>
+                        <div class="target-cloud-row">
+                            <label>Target cloud:</label>
+                            <span class="info-icon">&#9432;<span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
+                            <div id="federation-target-cloud-pills" class="target-cloud-pills" role="group" aria-label="Target cloud"></div>
+                        </div>
+                        <div id="federation-setup-panel" class="federation-accounts"></div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="accounts-registrations">
+                        <legend>Account Registrations</legend>
+                        <p class="settings-description">Target accounts that submitted federation IaC. Approve, reject, or delete entries here.</p>
+                        <div class="controls-bar">
+                            <label>Status:
+                                <select id="registrations-status-filter">
+                                    <option value="">All</option>
+                                    <option value="pending" selected>Pending</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="rejected">Rejected</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div id="registrations-list" class="mt-3"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-aws-block" class="settings-category">
+                        <legend><span class="provider-badge aws">AWS</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable AWS in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-aws-account-btn">+ Add Account</button>
+                            <button type="button" class="btn btn-small" id="discover-org-accounts-btn">Discover Org Accounts</button>
+                        </div>
+                        <div id="aws-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-azure-block" class="settings-category">
+                        <legend><span class="provider-badge azure">Azure</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable Azure in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-azure-account-btn">+ Add Account</button>
+                        </div>
+                        <div id="azure-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+
+                    <fieldset id="accounts-gcp-block" class="settings-category">
+                        <legend><span class="provider-badge gcp">GCP</span> Accounts</legend>
+                        <div class="provider-disabled-banner">Provider is disabled — enable GCP in Global Config to manage these accounts.</div>
+                        <div class="controls-bar">
+                            <button type="button" class="btn btn-small" id="add-gcp-account-btn">+ Add Account</button>
+                        </div>
+                        <div id="gcp-accounts-list" class="accounts-list"></div>
+                    </fieldset>
+                </section>
+
+                <!-- User Management Section (Admin Only) -->
+                <section id="users-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
+                    <h2>User Management</h2>
+                    <p class="settings-description">Manage users and their permissions.</p>
+
+                    <fieldset class="settings-category" id="users-fieldset">
+                        <legend>Users</legend>
+                        <div class="section-header">
+                            <button type="button" id="create-user-btn" class="primary">Create User</button>
+                        </div>
+                        <div id="bulk-actions-bar" class="hidden bulk-actions-bar">
+                            <span class="bulk-actions-count"><span id="selected-count">0</span> users selected</span>
+                            <button type="button" id="bulk-delete-btn" class="btn btn-danger btn-small">Delete selected</button>
+                            <select id="bulk-group-select" aria-label="Add selected users to group">
+                                <option value="">Add to group...</option>
+                            </select>
+                        </div>
+                        <div id="users-list" class="mt-3"></div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="groups-fieldset">
+                        <legend>Groups &amp; Permissions</legend>
+                        <div class="section-header">
+                            <button type="button" id="create-group-btn" class="primary">Create Group</button>
+                        </div>
+                        <div id="groups-list" class="mt-3"></div>
+                    </fieldset>
+
+                    <fieldset class="settings-category" id="permission-overview-fieldset">
+                        <legend>Permission Overview</legend>
+                        <div id="permission-matrix"></div>
+                    </fieldset>
+                </section>
+
+                <!-- API Keys Section (Admin Only) -->
+                <section id="apikeys-section" class="admin-only card hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
+                    <fieldset class="settings-category">
+                        <legend>API Keys</legend>
+                        <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>
+                        <div class="section-header">
+                            <button type="button" id="create-apikey-btn" class="primary">Create API Key</button>
+                        </div>
+                        <div id="apikeys-list" class="mt-3"></div>
+                    </fieldset>
+                </section>
+            </div>
+        </main>
+        </div><!-- /.app-body -->
+
+        <!-- Archera Insurance education overlay. Hidden by default;
+             opened by the "Learn more" link inside the offer modal or by
+             a deep-linked email URL (handleArcheraDeeplink). Content is
+             built dynamically by archera.ts. -->
+        <div id="archera-page-container" class="hidden" role="region" aria-label="Archera Insurance information"></div>
+
+        <!-- Archera Insurance offer modal. Hidden by default; shown by
+             openArcheraOfferModal() after a successful purchase-approval
+             submission (handleExecutePurchase) or plan creation (savePlan).
+             Content is built dynamically by archera.ts. -->
+        <div id="archera-offer-modal-container" class="hidden"></div>
+
+        <!-- Login Modal is created dynamically by auth.ts -->
+
+        <!-- Create/Edit Plan Modal -->
+        <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="plan-modal-title">Create Purchase Plan</h2>
+                <form id="plan-form">
+                    <input type="hidden" id="plan-id">
+
+                    <div class="form-section">
+                        <h3>Plan Details</h3>
+                        <label>Plan Name: <input type="text" id="plan-name" required placeholder="Monthly EC2 RI Purchase"></label>
+                        <label>Description: <textarea id="plan-description" placeholder="Describe this purchase plan..."></textarea></label>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Purchase Configuration</h3>
+                        <div class="form-row">
+                            <label>Provider:
+                                <select id="plan-provider">
+                                    <option value="aws">AWS</option>
+                                    <option value="azure">Azure</option>
+                                    <option value="gcp">GCP</option>
+                                </select>
+                            </label>
+                            <label>Service:
+                                <select id="plan-service">
+                                    <optgroup label="AWS" id="plan-service-aws">
+                                        <option value="ec2">EC2</option>
+                                        <option value="rds">RDS</option>
+                                        <option value="elasticache">ElastiCache</option>
+                                        <option value="opensearch">OpenSearch</option>
+                                        <option value="memorydb">MemoryDB</option>
+                                        <option value="redshift">Redshift</option>
+                                    </optgroup>
+                                    <optgroup label="Savings Plans" id="plan-service-aws-sp">
+                                        <option value="savings-plans-compute">Compute SP</option>
+                                        <option value="savings-plans-ec2instance">EC2 Instance SP</option>
+                                        <option value="savings-plans-sagemaker">SageMaker SP</option>
+                                        <option value="savings-plans-database">Database SP</option>
+                                    </optgroup>
+                                    <optgroup label="Azure" id="plan-service-azure" class="hidden">
+                                        <option value="vm">Virtual Machines</option>
+                                        <option value="sql">SQL Database</option>
+                                        <option value="cosmosdb">Cosmos DB</option>
+                                        <option value="redis">Azure Cache</option>
+                                        <option value="search">Cognitive Search</option>
+                                    </optgroup>
+                                    <optgroup label="GCP" id="plan-service-gcp" class="hidden">
+                                        <option value="compute">Compute Engine</option>
+                                        <option value="cloudsql">Cloud SQL</option>
+                                        <option value="memorystore">Memorystore</option>
+                                        <option value="cloudstorage">Cloud Storage</option>
+                                    </optgroup>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>Term:
+                                <select id="plan-term">
+                                    <option value="1">1 Year</option>
+                                    <option value="3" selected>3 Years</option>
+                                </select>
+                            </label>
+                            <label>Payment:
+                                <select id="plan-payment">
+                                    <option value="no-upfront" selected>No Upfront</option>
+                                    <option value="partial-upfront">Partial Upfront</option>
+                                    <option value="all-upfront">All Upfront</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100" inputmode="numeric" pattern="[0-9]*"></label>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Ramp-up Schedule</h3>
+                        <p class="help-text">Choose how to phase in your commitment purchases over time.</p>
+                        <div class="ramp-options">
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="immediate" checked>
+                                <span class="ramp-label">Immediate</span>
+                                <span class="ramp-desc">Purchase full coverage immediately</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="weekly-25pct">
+                                <span class="ramp-label">Weekly 25%</span>
+                                <span class="ramp-desc">4 weeks to full coverage</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="monthly-10pct">
+                                <span class="ramp-label">Monthly 10%</span>
+                                <span class="ramp-desc">10 months to full coverage</span>
+                            </label>
+                            <label class="ramp-option">
+                                <input type="radio" name="ramp-schedule" value="custom">
+                                <span class="ramp-label">Custom</span>
+                                <span class="ramp-desc">Define your own schedule</span>
+                            </label>
+                        </div>
+                        <div id="custom-ramp-config" class="hidden">
+                            <div class="form-row">
+                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="numeric" pattern="[0-9]*"></label>
+                                <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365" inputmode="numeric" pattern="[0-9]*"></label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Automation Settings</h3>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-auto-purchase">Auto-Purchase</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Automatically execute purchases according to the schedule. You'll receive email notifications before each purchase.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="plan-auto-purchase">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-notify-days">Notify Days Before</label>
+                                <span class="info-icon">&#9432;<span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
+                            </div>
+                            <div class="setting-input">
+                                <input type="number" id="plan-notify-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="plan-enabled">Enabled</label>
+                            </div>
+                            <div class="setting-input">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="plan-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Target Accounts <span aria-hidden="true" class="required-asterisk">*</span></h3>
+                        <p class="help-text">Required. Select at least one account this plan will purchase for. The Save button stays disabled until you add one.</p>
+                        <div class="plan-accounts-search">
+                            <input type="text" id="plan-account-search" placeholder="Search accounts to add...">
+                            <div id="plan-account-suggestions" class="account-suggestions hidden"></div>
+                        </div>
+                        <div id="plan-accounts-selected" class="selected-accounts"></div>
+                        <input type="hidden" id="plan-account-ids" value="">
+                    </div>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-plan-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save Plan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- RI Exchange Modal -->
+        <div id="ri-exchange-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="RI Exchange">
+            <div class="modal-content modal-wide">
+                <!-- Content is built dynamically by openExchangeModal() in riexchange.ts -->
+            </div>
+        </div>
+
+        <!-- Purchase Detail Modal -->
+        <div id="purchase-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="purchase-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="purchase-modal-title">Configure Purchase</h2>
+                <div id="purchase-details"></div>
+                <div class="modal-buttons">
+                    <button type="button" id="close-purchase-modal-btn">Cancel</button>
+                    <button type="button" id="execute-purchase-btn" class="primary">Send for Approval</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recommendation Selection Modal -->
+        <div id="select-recommendations-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="select-recommendations-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="select-recommendations-modal-title">Select Recommendations for Plan</h2>
+                <div id="selectable-recommendations"></div>
+                <div class="modal-buttons">
+                    <button type="button" id="close-select-recommendations-btn">Cancel</button>
+                    <button type="button" id="confirm-select-recommendations-btn" class="primary">Add to Plan</button>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Create API Key Modal -->
+        <div id="create-apikey-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="create-apikey-modal-title">
+            <div class="modal-content">
+                <h2 id="create-apikey-modal-title">Create API Key</h2>
+                <form id="create-apikey-form">
+                    <div class="form-group">
+                        <label for="apikey-name">API Key Name</label>
+                        <input type="text" id="apikey-name" required placeholder="e.g., CI/CD Pipeline Key">
+                        <small class="form-help">Give your API key a descriptive name</small>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="apikey-expires">
+                            Set expiration date
+                        </label>
+                    </div>
+                    <div id="apikey-expires-at-field" class="form-group hidden">
+                        <label for="apikey-expires-at">Expires On</label>
+                        <input type="date" id="apikey-expires-at">
+                        <small class="form-help">API key will automatically become invalid on this date</small>
+                    </div>
+                    <div id="create-apikey-error" class="error-message hidden"></div>
+                    <div class="modal-buttons">
+                        <button type="button" id="close-create-apikey-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Create Key</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- User Management Modals -->
+        <div id="user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
+            <div class="modal-content">
+                <h2 id="user-modal-title">Create User</h2>
+                <form id="user-form">
+                    <input type="hidden" id="user-id">
+                    <div class="form-group">
+                        <label for="user-email">Email</label>
+                        <input type="email" id="user-email" required>
+                    </div>
+                    <div id="password-fields" class="form-group">
+                        <label for="user-password">Password</label>
+                        <input type="password" id="user-password" minlength="12" placeholder="Leave blank to email an invitation">
+                        <small class="form-help">Leave blank to send the user an invitation email; they will set their own password on first login. If you enter a password it must be at least 12 characters and include upper / lower / number / special.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="user-groups">Groups <span class="required-indicator" aria-hidden="true">*</span></label>
+                        <select id="user-groups" multiple required>
+                        </select>
+                        <small class="form-help">At least one group is required. Hold Ctrl/Cmd to select multiple groups. Authorization is determined entirely by group membership.</small>
+                    </div>
+                    <div class="modal-buttons">
+                        <button type="button" id="close-user-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Group Management Modal -->
+        <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="group-modal-title">Create Group</h2>
+                <form id="group-form">
+                    <input type="hidden" id="group-id">
+                    <div class="form-group">
+                        <label for="group-name">Group Name</label>
+                        <input type="text" id="group-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="group-description">Description</label>
+                        <textarea id="group-description" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Permissions</label>
+                        <div id="permissions-list"></div>
+                        <button type="button" class="btn-small mt-2" id="add-permission-btn">Add Permission</button>
+                    </div>
+                    <div class="modal-buttons">
+                        <button type="button" id="close-group-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save Group</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Duplicate Group Modal -->
+        <div id="group-duplicate-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-duplicate-modal-title">
+            <div class="modal-content modal-wide">
+                <div class="modal-header-row">
+                    <h2 id="group-duplicate-modal-title">Duplicate Group</h2>
+                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close">&times;</button>
+                </div>
+                <form id="group-duplicate-form">
+                    <div class="form-group">
+                        <label for="dup-group-name">Name</label>
+                        <input type="text" id="dup-group-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="dup-group-description">Description</label>
+                        <textarea id="dup-group-description" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Source Permissions</label>
+                        <div id="dup-source-permissions" class="perm-preview"></div>
+                    </div>
+                    <fieldset class="settings-category">
+                        <legend>Account Scope (Optional)</legend>
+                        <p class="settings-help">Selected accounts restrict this group to only those accounts. Leave empty to inherit the source group's scope. <strong>Account matches are by name</strong> &mdash; renaming an account later will break this group's scope.</p>
+                        <div id="dup-provider-filter" class="target-cloud-pills" role="group" aria-label="Filter accounts by provider"></div>
+                        <div id="dup-accounts-list" class="dup-accounts-list"></div>
+                    </fieldset>
+                    <div class="modal-buttons">
+                        <button type="button" id="cancel-group-duplicate-btn">Cancel</button>
+                        <button type="submit" class="primary">Create Duplicate</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Per-account overrides modal (issue #122) — replaces the inline
+             expandable panel that stacked all accounts' panels below the
+             accounts table without per-row attachment. Title binds the
+             modal to one specific account; body holds the overrides table
+             rendered dynamically. -->
+        <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="account-overrides-modal-title">Service overrides</h2>
+                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Settings → Purchasing.</p>
+                <div id="account-overrides-modal-body"></div>
+                <div class="modal-buttons">
+                    <button type="button" id="close-account-overrides-modal-btn">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cloud Account Modal -->
+        <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
+            <div class="modal-content">
+                <h2 id="override-modal-title">Add service override</h2>
+                <p class="help-text">Per-account override that takes precedence over the global service defaults. Only AWS services are supported today.</p>
+                <form id="override-form">
+                    <input type="hidden" id="override-account-id">
+                    <input type="hidden" id="override-provider" value="aws">
+
+                    <!-- Single-service mode (default) -->
+                    <div id="override-single-service-row">
+                        <label>Service:
+                            <select id="override-service" required></select>
+                        </label>
+                    </div>
+
+                    <!-- Multi-service toggle (issue #119) -->
+                    <div class="toggle-row">
+                        <span id="override-bulk-toggle-label">Apply to multiple services:</span>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="override-bulk-toggle" aria-labelledby="override-bulk-toggle-label">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <!-- Checkbox list shown only in bulk mode (issue #119) -->
+                    <div id="override-bulk-services" class="hidden" role="group" aria-labelledby="override-bulk-services-legend">
+                        <span id="override-bulk-services-legend" class="form-label">Services:</span>
+                        <div id="override-bulk-services-list"></div>
+                    </div>
+
+                    <label>Term:
+                        <select id="override-term">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="1">1 Year</option>
+                            <option value="3">3 Years</option>
+                        </select>
+                    </label>
+                    <label>Payment:
+                        <select id="override-payment">
+                            <option value="">Inherit (use global default)</option>
+                            <option value="no-upfront">No Upfront</option>
+                            <option value="partial-upfront">Partial Upfront</option>
+                            <option value="all-upfront">All Upfront</option>
+                        </select>
+                    </label>
+                    <label>Coverage (%):
+                        <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)" inputmode="numeric" pattern="[0-9]*">
+                    </label>
+
+                    <p class="help-text" id="override-form-error" role="alert"></p>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-override-modal-btn">Cancel</button>
+                        <button type="submit" class="primary" id="override-submit-btn">Save override</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="account-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+            <div class="modal-content modal-wide">
+                <h2 id="account-modal-title">Add Account</h2>
+                <form id="account-form">
+                    <input type="hidden" id="account-id">
+                    <input type="hidden" id="account-provider">
+
+                    <div class="form-section">
+                        <label>Name: <input type="text" id="account-name" required placeholder="Production AWS"></label>
+                        <label>Description: <textarea id="account-description" placeholder="Optional description"></textarea></label>
+                        <label>Contact Email: <input type="email" id="account-contact-email" placeholder="team@example.com"></label>
+                        <label>Account / Subscription / Project ID: <input type="text" id="account-external-id" required placeholder="123456789012"></label>
+                        <div class="toggle-row">
+                            <span id="account-enabled-label">Enabled:</span>
+                            <label class="toggle-label"><input type="checkbox" id="account-enabled" checked aria-labelledby="account-enabled-label"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <!-- AWS-specific fields -->
+                    <div class="form-section" id="account-aws-fields">
+                        <h3>AWS Authentication</h3>
+                        <label>Auth Mode:
+                            <select id="account-aws-auth-mode">
+                                <option value="workload_identity_federation" title="Exchange an OIDC token from Azure or GCP for temporary AWS credentials via STS AssumeRoleWithWebIdentity — no long-lived keys stored.">Workload Identity Federation (recommended)</option>
+                                <option value="role_arn" title="Assume an IAM role from another AWS account or the same account using the CUDly host's ambient credentials.">IAM Role ARN</option>
+                                <option value="bastion" title="Hop through a designated bastion AWS account that has an assumed-role trust into this target account.">Bastion Account</option>
+                                <option value="access_keys" title="Store static IAM access key ID and secret in CUDly. Avoid if possible — long-lived credentials.">Access Keys</option>
+                            </select>
+                        </label>
+                        <div id="account-aws-keys-fields" class="hidden">
+                            <label>Access Key ID: <input type="text" id="account-aws-access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE"></label>
+                            <label>Secret Access Key: <input type="password" id="account-aws-secret-access-key" placeholder="Secret key"></label>
+                        </div>
+                        <div id="account-aws-role-fields" class="hidden">
+                            <label>Role ARN: <input type="text" id="account-aws-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>External ID:
+                                <span class="input-with-copy">
+                                    <input type="text" id="account-aws-external-id" readonly>
+                                    <button type="button" id="account-aws-external-id-copy" class="copy-btn" aria-label="Copy External ID to clipboard"><span class="copy-icon">Copy</span></button>
+                                </span>
+                            </label>
+                            <small>CUDly auto-generates this value per account. Copy it into the <code>sts:ExternalId</code> condition of your IAM role's trust policy so only CUDly with this account registered can assume the role.</small>
+                            <div class="trust-policy-section">
+                                <label for="account-aws-trust-policy">IAM Trust Policy (paste into the role's trust relationship):</label>
+                                <div class="input-with-copy">
+                                    <pre id="account-aws-trust-policy" class="code-block"></pre>
+                                    <button type="button" id="account-aws-trust-policy-copy" class="copy-btn" aria-label="Copy trust policy JSON to clipboard"><span class="copy-icon">Copy</span></button>
+                                </div>
+                                <small id="account-aws-trust-policy-hint">Attach this policy to the IAM role's trust relationship so CUDly can assume it. The <code>sts:ExternalId</code> condition locks the role to this specific CUDly registration.</small>
+                                <a id="account-aws-iam-console-link" class="btn btn-small" href="https://console.aws.amazon.com/iam/home#/roles$new" target="_blank" rel="noopener noreferrer">Open AWS IAM console &rarr;</a>
+                            </div>
+                        </div>
+                        <div id="account-aws-bastion-fields" class="hidden">
+                            <label>Bastion Account: <select id="account-aws-bastion-id"><option value="">Select bastion account...</option></select></label>
+                            <label>Role ARN in target: <input type="text" id="account-aws-bastion-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>External ID:
+                                <span class="input-with-copy">
+                                    <input type="text" id="account-aws-external-id-bastion" readonly>
+                                    <button type="button" id="account-aws-external-id-bastion-copy" class="copy-btn" aria-label="Copy External ID to clipboard"><span class="copy-icon">Copy</span></button>
+                                </span>
+                            </label>
+                            <small>CUDly auto-generates this value per account. Copy it into the <code>sts:ExternalId</code> condition of the target role's trust policy so only CUDly &mdash; via the selected bastion account &mdash; can assume it (issue #129).</small>
+                            <div class="trust-policy-section">
+                                <label for="account-aws-trust-policy-bastion">IAM Trust Policy (paste into the target role's trust relationship):</label>
+                                <div class="input-with-copy">
+                                    <pre id="account-aws-trust-policy-bastion" class="code-block"></pre>
+                                    <button type="button" id="account-aws-trust-policy-bastion-copy" class="copy-btn" aria-label="Copy trust policy JSON to clipboard"><span class="copy-icon">Copy</span></button>
+                                </div>
+                                <small id="account-aws-trust-policy-bastion-hint">Attach this policy to the target IAM role's trust relationship so CUDly can assume it through the bastion. The Principal is the selected bastion account; the <code>sts:ExternalId</code> condition locks the role to this specific CUDly registration.</small>
+                            </div>
+                        </div>
+                        <div id="account-aws-wif-fields" class="hidden">
+                            <label>Role ARN: <input type="text" id="account-aws-wif-role-arn" placeholder="arn:aws:iam::123456789012:role/CUDly"></label>
+                            <label>Token File Path: <input type="text" id="account-aws-wif-token-file" placeholder="/var/run/secrets/token"></label>
+                            <small>Path to the OIDC token file (Azure/GCP projected token). Leave blank to use AWS_WEB_IDENTITY_TOKEN_FILE env var.</small>
+                        </div>
+                        <div class="toggle-row">
+                            <span id="account-aws-is-org-root-label">AWS Org Root:</span>
+                            <label class="toggle-label"><input type="checkbox" id="account-aws-is-org-root" aria-labelledby="account-aws-is-org-root-label"><span class="slider"></span></label>
+                        </div>
+                    </div>
+
+                    <!-- Azure-specific fields -->
+                    <div class="form-section hidden" id="account-azure-fields">
+                        <h3>Azure Authentication</h3>
+                        <label>Auth Mode:
+                            <select id="account-azure-auth-mode">
+                                <option value="workload_identity_federation" selected title="Authenticate using an RSA certificate assertion — no client secrets stored in CUDly. Requires an App Registration with a certificate credential.">Workload Identity Federation (recommended)</option>
+                                <option value="managed_identity" title="Use the Azure Managed Identity of the host VM or container. Only works when CUDly itself runs on Azure.">Managed Identity (Azure-hosted CUDly only)</option>
+                                <option value="client_secret" title="Store an Azure AD client secret in CUDly. Simple to set up but stores a long-lived credential.">Client Secret</option>
+                            </select>
+                        </label>
+                        <label>Tenant ID: <input type="text" id="account-azure-tenant-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+                        <label>Client ID: <input type="text" id="account-azure-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+                        <!-- client_secret mode -->
+                        <div id="account-azure-secret-fields" class="hidden">
+                            <label>Client Secret: <input type="password" id="account-azure-client-secret" placeholder="Client secret value"></label>
+                            <small>Long-lived credential stored in CUDly. Prefer Workload Identity Federation (above) when possible &mdash; it uses CUDly's OIDC issuer so no secret is stored. If you keep this mode, rotate the client secret before its Azure expiry date to avoid authentication failures.</small>
+                        </div>
+                    </div>
+
+                    <!-- GCP-specific fields -->
+                    <div class="form-section hidden" id="account-gcp-fields">
+                        <h3>GCP Authentication</h3>
+                        <label>Auth Mode:
+                            <select id="account-gcp-auth-mode">
+                                <option value="workload_identity_federation" title="Exchange AWS or Azure credentials for GCP tokens via a Workload Identity Pool — no service account keys stored.">Workload Identity Federation (recommended)</option>
+                                <option value="application_default" title="Use GCP Application Default Credentials from the host environment. Only works when CUDly runs on GCP (GKE, Cloud Run, Compute Engine).">Application Default Credentials (GCP-hosted CUDly only)</option>
+                                <option value="service_account_key" title="Store a GCP service account JSON key in CUDly. Avoid if possible — long-lived credentials.">Service Account Key</option>
+                            </select>
+                        </label>
+                        <label>Service Account Email (optional):
+                            <input type="email" id="account-gcp-client-email" placeholder="name@project.iam.gserviceaccount.com">
+                        </label>
+                        <!-- service_account_key mode -->
+                        <div id="account-gcp-key-fields" class="hidden">
+                            <label>Service Account JSON:
+                                <textarea id="account-gcp-service-account-json" rows="6" placeholder='{"type":"service_account",...}'></textarea>
+                            </label>
+                        </div>
+                        <!-- workload_identity_federation mode -->
+                        <div id="account-gcp-wif-fields" class="hidden">
+                            <label>External Account Credential Config (JSON):
+                                <textarea id="account-gcp-wif-config" rows="8" placeholder='{"type":"external_account","audience":"//iam.googleapis.com/...",...}'></textarea>
+                            </label>
+                            <small>Paste the config generated by setup-gcp-wif.sh. Contains no secrets.</small>
+                        </div>
+                    </div>
+
+                    <div class="modal-buttons">
+                        <button type="button" id="close-account-modal-btn">Cancel</button>
+                        <button type="submit" class="primary">Save Account</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>

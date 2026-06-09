@@ -1,0 +1,3582 @@
+/**
+ * Settings module for CUDly
+ */
+
+import * as api from './api';
+import type { ConfigResponse } from './types';
+import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
+import { initFederationPanel } from './federation';
+import { confirmDialog } from './confirmDialog';
+import { reflectDirtyState } from './settings-subnav';
+import { showToast } from './toast';
+import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig } from './commitmentOptions';
+import { openModal, closeModal } from './modal';
+import { loadRecommendations } from './recommendations';
+import { canAccess } from './permissions';
+
+/**
+ * Issue #196 — after any mutation to an `account_service_overrides` row
+ * (create, edit, reset/delete), refresh the cached recommendations list so
+ * the read-time filters (`enabled`, include/exclude lists) and the
+ * dashboard's coverage cap reflect the new state without a manual reload.
+ *
+ * Errors are swallowed: the override mutation that just succeeded shouldn't
+ * be reported as a failure because the secondary refresh fails. The recs
+ * page re-fetches on the next nav event, so a stale list is recoverable.
+ */
+async function refreshRecommendationsAfterOverrideChange(): Promise<void> {
+  try {
+    await loadRecommendations();
+  } catch (err) {
+    console.warn('Failed to refresh recommendations after override change:', err);
+  }
+}
+
+type AccountProvider = 'aws' | 'azure' | 'gcp';
+
+let cachedSourceCloud: string | undefined;
+
+// Cached global defaults surfaced by loadGlobalSettings. Used by the override
+// modal (issue #112) to show "Inherit (currently: X)" labels so the user can
+// see what they'd be overriding without switching tabs.
+let cachedGlobalDefaults: { term: number; payment: string; coverage: number } = {
+  term: 3,
+  payment: 'all-upfront',
+  coverage: 80,
+};
+
+// In-flight cache for /api/config so each modal open does not refetch (issue
+// #130d). The promise is captured the first time getConfig() is requested
+// and reused for the lifetime of the page; resetConfigCache() lets tests
+// (and future "force reload" UI) clear it explicitly.
+let cachedConfigPromise: Promise<ConfigResponse> | undefined;
+
+function getCachedConfig(): Promise<ConfigResponse> {
+  if (!cachedConfigPromise) {
+    cachedConfigPromise = api.getConfig().catch(err => {
+      // Don't poison the cache on a transient failure — let the next caller
+      // retry. (If we cached the rejection forever, a single early flake
+      // would break the AWS modal for the rest of the session.)
+      cachedConfigPromise = undefined;
+      throw err;
+    });
+  }
+  return cachedConfigPromise;
+}
+
+/** Reset the cached /api/config response. Test-only / future "reload" hook. */
+export function resetConfigCache(): void {
+  cachedConfigPromise = undefined;
+}
+
+/**
+ * Override the cached global defaults used for the "Inherit (currently: X)"
+ * labels. Test-only; production code updates the cache via loadGlobalSettings.
+ */
+export function setGlobalDefaultsForTest(defaults: { term: number; payment: string; coverage: number }): void {
+  cachedGlobalDefaults = { ...defaults };
+}
+
+/** Returns true when an API error signals a 403 permission-denied response. */
+function isPermissionDeniedError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as { status?: number }).status === 403
+    && error.message.startsWith('permission denied');
+}
+
+// sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
+// across modal close/reopen cycles within the same session so the operator
+// can copy the value into AWS, close the modal, and come back to the same
+// value (issue #126). Cleared on successful save.
+const AWS_DRAFT_EXTERNAL_ID_KEY = 'cudly:aws-account-modal:draft-external-id';
+
+/** Options for the account modal (used by the registrations approval flow). */
+export interface AccountModalOptions {
+  onSave?: (provider: AccountProvider, request: api.CloudAccountRequest) => Promise<void>;
+}
+
+// Track which provider's account is being edited (for the modal)
+let accountModalProvider: AccountProvider = 'aws';
+// Optional callback for the registrations approval flow.
+let accountModalOnSave: AccountModalOptions['onSave'] | undefined;
+
+// Per-service field definitions — used for loading and saving service configs.
+const SERVICE_FIELDS = [
+  { provider: 'aws', service: 'ec2',          termId: 'aws-ec2-term',          paymentId: 'aws-ec2-payment' },
+  { provider: 'aws', service: 'rds',          termId: 'aws-rds-term',          paymentId: 'aws-rds-payment' },
+  { provider: 'aws', service: 'elasticache',  termId: 'aws-elasticache-term',  paymentId: 'aws-elasticache-payment' },
+  { provider: 'aws', service: 'opensearch',   termId: 'aws-opensearch-term',   paymentId: 'aws-opensearch-payment' },
+  { provider: 'aws', service: 'redshift',     termId: 'aws-redshift-term',     paymentId: 'aws-redshift-payment' },
+  // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
+  // cards (Compute / EC2 Instance / SageMaker / Database). The earlier
+  // umbrella `savingsplans` and PR #71 `sagemaker` SERVICE_FIELDS entries
+  // are replaced by these four. Migration 000040_split_savingsplans
+  // copies the umbrella row's term/payment into all four new rows and
+  // (when present) overrides the SageMaker slot from PR #71's sagemaker
+  // row. Lambda is intentionally NOT a separate card — Lambda has no
+  // standalone SP product; its commitments roll up into Compute SP.
+  // Issue #136: SP cards carry per-card coverageId and enabledId so users
+  // can set divergent coverage and toggle each plan type independently.
+  { provider: 'aws', service: 'savings-plans-compute',     termId: 'aws-savings-plans-compute-term',     paymentId: 'aws-savings-plans-compute-payment',     coverageId: 'aws-savings-plans-compute-coverage',     enabledId: 'aws-savings-plans-compute-enabled' },
+  { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment', coverageId: 'aws-savings-plans-ec2instance-coverage', enabledId: 'aws-savings-plans-ec2instance-enabled' },
+  { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment',   coverageId: 'aws-savings-plans-sagemaker-coverage',   enabledId: 'aws-savings-plans-sagemaker-enabled' },
+  { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment',    coverageId: 'aws-savings-plans-database-coverage',    enabledId: 'aws-savings-plans-database-enabled' },
+  { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
+  { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
+  { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
+  { provider: 'azure', service: 'redis',      termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
+  { provider: 'azure', service: 'search',     termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
+  { provider: 'gcp',   service: 'compute',    termId: 'gcp-compute-term',      paymentId: null },
+  { provider: 'gcp',   service: 'sql',        termId: 'gcp-sql-term',          paymentId: null },
+  { provider: 'gcp',   service: 'memorystore',termId: 'gcp-memorystore-term',  paymentId: null },
+  { provider: 'gcp',   service: 'storage',    termId: 'gcp-storage-term',      paymentId: null },
+] as const;
+
+// Fields that are persisted to the backend via saveGlobalSettings.
+// Used for dirty tracking and unsaved-changes detection.
+const TRACKED_FIELDS = [
+  'provider-aws', 'provider-azure', 'provider-gcp',
+  'setting-notification-email', 'setting-auto-collect',
+  'setting-collection-schedule', 'setting-notification-days',
+  'setting-default-term', 'setting-default-payment', 'setting-default-coverage',
+  // Per-provider grace-period inputs
+  'setting-grace-aws', 'setting-grace-azure', 'setting-grace-gcp',
+  // Recommendations cycle params
+  'setting-recs-stale-hours', 'setting-recs-lookback-days',
+  // Per-service fields
+  ...SERVICE_FIELDS.map(f => f.termId),
+  ...SERVICE_FIELDS.filter(f => f.paymentId !== null).map(f => f.paymentId as string),
+  // Per-product SP fields (issue #136)
+  ...SERVICE_FIELDS.filter(f => 'coverageId' in f).map(f => (f as { coverageId: string }).coverageId),
+  ...SERVICE_FIELDS.filter(f => 'enabledId' in f).map(f => (f as { enabledId: string }).enabledId),
+];
+
+// Snapshot of field values at last save (or initial load).
+let savedSnapshot: Record<string, string> = {};
+
+// Cached service configs from last load — used as base when saving to preserve
+// non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
+let loadedServiceConfigs: api.ServiceConfig[] = [];
+
+// saveInFlight guards saveGlobalSettings against concurrent invocations
+// (rapid Save clicks, Enter-in-form, etc.). Toggled in a try/finally and
+// mirrored on the Save button's disabled attribute so the UI reflects the
+// in-progress state.
+let saveInFlight = false;
+
+/**
+ * byId is the null-safe replacement for `document.getElementById(...) as T`.
+ * Returning `T | null` forces callers to guard with optional chaining (`?.value`,
+ * `?.checked`) rather than dereferencing blindly, so a missing element in the
+ * DOM produces a silent no-op instead of a TypeError.
+ *
+ * Pattern to migrate from:
+ *   (document.getElementById('foo') as HTMLInputElement).value = v;
+ * to:
+ *   const el = byId<HTMLInputElement>('foo'); if (el) el.value = v;
+ * or:
+ *   byId<HTMLInputElement>('foo')?.value ?? '';  // read site
+ */
+// Grace-period input: 0 is a valid user choice (disables the feature
+// for that provider), so we use empty-string to signal "fall back to
+// default (7)". An explicit 0 must round-trip as 0, not get swallowed.
+function populateGraceInput(id: string, value: number | undefined): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return;
+  el.value = String(value ?? 7);
+}
+
+// readGraceInput parses the grace-period input, returning the numeric
+// value or an error message (out of range, not a number). Empty input
+// defaults to 7.
+//
+// The error wording mirrors what wireInlineRangeValidation renders
+// under the field on input/blur, so the inline indicator and the
+// save-time toast carry the same text — a user who ignores the inline
+// red mark and clicks Save shouldn't see a differently-phrased message
+// describing the same failure (CodeRabbit follow-up to #471).
+function readGraceInput(id: string): { value: number; err?: undefined } | { value: 0; err: string } {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el) return { value: 7 };
+  const raw = el.value.trim();
+  if (raw === '') return { value: 7 };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
+    return { value: 0, err: 'Must be a whole number between 0 and 30' };
+  }
+  return { value: n };
+}
+
+function byId<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+/**
+ * Wire inline range validation on a numeric `<input>` driven by its
+ * existing `min` / `max` HTML5 attributes. Surfaces a single message
+ * under the field as the user types (and on blur) instead of waiting
+ * for Save Settings to reject the value — addresses #465 by collapsing
+ * the two-trip "must be ≥ X" / "must be ≤ Y" pattern into one inline
+ * indication.
+ *
+ * When `requireInteger` is true the validator additionally rejects
+ * fractional values like `1.5` (matching the save-time guards), and
+ * the message reads "Must be a whole number between X and Y" to
+ * explain why an in-range fraction is still rejected. Without it the
+ * inline path accepts 1.5 while save-time rejects it — exactly the
+ * two-trip behaviour this PR sets out to fix (CodeRabbit on #471).
+ *
+ * The element's min/max attributes are the source of truth so the
+ * range stays in sync with the HTML. An empty value clears the error
+ * (the input may have its own "required" enforcement; we don't fight
+ * that here).
+ */
+function wireInlineRangeValidation(
+  inputId: string,
+  { signal, requireInteger = false }: { signal?: AbortSignal; requireInteger?: boolean } = {},
+): void {
+  const input = document.getElementById(inputId) as HTMLInputElement | null;
+  if (!input) return;
+  const min = parseFloat(input.getAttribute('min') ?? '');
+  const max = parseFloat(input.getAttribute('max') ?? '');
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+
+  const errorId = `${inputId}-range-error`;
+  let errorEl = document.getElementById(errorId);
+  if (!errorEl) {
+    errorEl = document.createElement('small');
+    errorEl.id = errorId;
+    errorEl.className = 'field-error hidden';
+    // role=status + aria-live=polite (not role=alert/aria-live=assertive)
+    // so screen readers wait for a typing pause before announcing — an
+    // assertive live region would interrupt the user on every keystroke
+    // while the value is still in flux (WCAG SCR32). CodeRabbit on #471.
+    errorEl.setAttribute('role', 'status');
+    errorEl.setAttribute('aria-live', 'polite');
+    input.insertAdjacentElement('afterend', errorEl);
+    // Append (don't overwrite) any pre-existing aria-describedby so the
+    // input's existing help text (e.g. unit hints) stays announced.
+    const existingDescribedBy = input.getAttribute('aria-describedby');
+    input.setAttribute(
+      'aria-describedby',
+      existingDescribedBy ? `${existingDescribedBy} ${errorId}` : errorId,
+    );
+  }
+  // Capture as const so the closure doesn't need a non-null assertion.
+  const error = errorEl;
+  const message = requireInteger
+    ? `Must be a whole number between ${min} and ${max}`
+    : `Must be between ${min} and ${max}`;
+
+  const check = (): void => {
+    const raw = input.value.trim();
+    if (raw === '') {
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+      return;
+    }
+    const n = Number(raw);
+    const invalid =
+      !Number.isFinite(n) ||
+      (requireInteger && !Number.isInteger(n)) ||
+      n < min ||
+      n > max;
+    if (invalid) {
+      input.setAttribute('aria-invalid', 'true');
+      error.textContent = message;
+      error.classList.remove('hidden');
+    } else {
+      input.removeAttribute('aria-invalid');
+      error.classList.add('hidden');
+    }
+  };
+  input.addEventListener('input', check, { signal });
+  input.addEventListener('blur', check, { signal });
+}
+
+/**
+ * setInputValue writes a value to an <input>/<textarea> looked up by id, no-op
+ * if the element is missing. Consolidates the repetitive
+ * `byId<HTMLInputElement>('x'); if (el) el.value = v;` pattern used across
+ * modal-populate helpers.
+ */
+function setInputValue(id: string, value: string): void {
+  const el = byId<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(id);
+  if (el) el.value = value;
+}
+
+/**
+ * setInputChecked writes `checked` to a checkbox input, no-op if the element
+ * is missing. Same motivation as setInputValue.
+ */
+function setInputChecked(id: string, checked: boolean): void {
+  const el = byId<HTMLInputElement>(id);
+  if (el) el.checked = checked;
+}
+
+function getFieldValue(id: string): string {
+  const el = document.getElementById(id);
+  if (!el) return '';
+  if (el instanceof HTMLInputElement) {
+    return el.type === 'checkbox' ? String(el.checked) : el.value;
+  }
+  if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) return el.value;
+  return '';
+}
+
+function snapshotAllFields(): void {
+  TRACKED_FIELDS.forEach(id => { savedSnapshot[id] = getFieldValue(id); });
+}
+
+function updateDirtyMarkers(): void {
+  let anyDirty = false;
+  TRACKED_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const dirty = getFieldValue(id) !== savedSnapshot[id];
+    if (dirty) anyDirty = true;
+    if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+      // Highlight the containing setting-input div for checkboxes
+      el.closest<HTMLElement>('.setting-input')?.classList.toggle('dirty', dirty);
+    } else {
+      el.classList.toggle('dirty', dirty);
+    }
+  });
+  // Surface aggregate dirty state to the Settings top-tab (badge dot) and
+  // the sticky save bar (toggle "Unsaved changes" affordance).
+  reflectDirtyState(anyDirty);
+}
+
+/** Returns true if any tracked field has been changed since the last save/load. */
+export function isUnsavedChanges(): boolean {
+  return TRACKED_FIELDS.some(id => getFieldValue(id) !== savedSnapshot[id]);
+}
+
+function setupDirtyTracking(signal?: AbortSignal): void {
+  TRACKED_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => updateDirtyMarkers(), { signal });
+    // Also listen to input for text fields so highlighting is immediate
+    if (el instanceof HTMLInputElement && el.type !== 'checkbox') {
+      el.addEventListener('input', () => updateDirtyMarkers(), { signal });
+    }
+  });
+}
+
+/**
+ * Load and render accounts list for a provider
+ */
+export async function loadAccountsForProvider(provider: AccountProvider): Promise<void> {
+  const container = document.getElementById(`${provider}-accounts-list`);
+  if (!container) return;
+  try {
+    const accounts = await api.listAccounts({ provider });
+    renderSelfAccountBanner(container, accounts, provider);
+    renderAccountsList(container, accounts, provider);
+  } catch {
+    container.textContent = 'Failed to load accounts.';
+  }
+}
+
+/**
+ * Show a banner to add CUDly's own host account if not already present.
+ * Only shown for the provider matching CUDLY_SOURCE_CLOUD.
+ */
+async function renderSelfAccountBanner(container: HTMLElement, accounts: api.CloudAccount[], provider: AccountProvider): Promise<void> {
+  // Remove any existing banner first (prevents duplicates on re-render)
+  container.querySelector('.self-account-banner')?.remove();
+
+  const hasSelf = accounts.some(a => a.is_self);
+  if (hasSelf) return;
+
+  // Check if this provider matches the source cloud
+  try {
+    const cfg = await api.getConfig();
+    if (!cfg.source_identity || cfg.source_identity.provider !== provider) return;
+    const extId = cfg.source_identity.account_id || cfg.source_identity.subscription_id || cfg.source_identity.project_id;
+    if (!extId) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'account-row self-account-banner';
+
+    const info = document.createElement('span');
+    info.className = 'account-info';
+    info.textContent = `CUDly host account (${extId})`;
+    banner.appendChild(info);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-small';
+    addBtn.textContent = 'Add';
+    addBtn.addEventListener('click', async () => {
+      addBtn.disabled = true;
+      addBtn.textContent = 'Adding...';
+      try {
+        await api.createSelfAccount();
+        await loadAccountsForProvider(provider);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes('409')) {
+          await loadAccountsForProvider(provider);
+        } else {
+          addBtn.textContent = 'Failed';
+        }
+      }
+    });
+    banner.appendChild(addBtn);
+
+    container.prepend(banner);
+  } catch {
+    // Config fetch failed — skip silently
+  }
+}
+
+/**
+ * Render accounts list into a container element as a scannable table.
+ *
+ * Replaces the prior inline-row layout ("Account Name (12345) Edit Test
+ * Credentials Overrides Delete" as a single text-flow). The table surfaces
+ * each field in its own column, uses a status pill for Active/Disabled,
+ * and isolates the destructive Delete action in the right-most column.
+ */
+type AccountStatusFilter = 'all' | 'active' | 'disabled';
+
+function renderAccountsList(
+  container: HTMLElement,
+  accounts: api.CloudAccount[],
+  provider: AccountProvider,
+  filter: AccountStatusFilter = 'all'
+): void {
+  // Remove prior rendered rows (banner lives in a separate className
+  // managed by renderSelfAccountBanner). `.account-overrides-panel` used
+  // to be cleaned up here too — it was the inline expandable panel each
+  // account carried before #122/#124 moved overrides into a per-account
+  // modal. No such elements exist anymore.
+  container.querySelectorAll(
+    '.accounts-table, .accounts-empty, .status-chip-row'
+  ).forEach(el => el.remove());
+
+  if (!accounts || accounts.length === 0) {
+    if (!container.querySelector('.self-account-banner')) {
+      const empty = document.createElement('p');
+      empty.className = 'accounts-empty';
+      empty.textContent = 'No accounts configured.';
+      container.appendChild(empty);
+    }
+    return;
+  }
+
+  // Status chip filter — mirrors the P3 audit recommendation scoped to
+  // states the per-provider table actually exposes (Active/Disabled).
+  const activeCount = accounts.filter(a => a.enabled).length;
+  const disabledCount = accounts.length - activeCount;
+  const chipRow = document.createElement('div');
+  chipRow.className = 'status-chip-row';
+  chipRow.setAttribute('role', 'tablist');
+  chipRow.setAttribute('aria-label', 'Filter accounts by status');
+  const chips: Array<{ key: AccountStatusFilter; label: string; count: number }> = [
+    { key: 'all', label: 'All', count: accounts.length },
+    { key: 'active', label: 'Active', count: activeCount },
+    { key: 'disabled', label: 'Disabled', count: disabledCount },
+  ];
+  chips.forEach(({ key, label, count }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'status-chip' + (filter === key ? ' active' : '');
+    chip.textContent = `${label} (${count})`;
+    chip.setAttribute('role', 'tab');
+    chip.setAttribute('aria-selected', String(filter === key));
+    chip.addEventListener('click', () => {
+      if (filter === key) return;
+      renderAccountsList(container, accounts, provider, key);
+    });
+    chipRow.appendChild(chip);
+  });
+  container.appendChild(chipRow);
+
+  const visible = accounts.filter(a => {
+    if (filter === 'active') return a.enabled;
+    if (filter === 'disabled') return !a.enabled;
+    return true;
+  });
+
+  const table = document.createElement('table');
+  table.className = 'accounts-table';
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  ['Name', 'Account ID', 'Status', 'Actions'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  visible.forEach((account) => {
+    const accountLabel = `${account.name} (${account.external_id})`;
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = account.name;
+    if (account.is_self) {
+      const self = document.createElement('span');
+      self.className = 'badge badge-info';
+      self.textContent = ' Self';
+      self.setAttribute('title', 'The cloud account running CUDly itself');
+      nameTd.appendChild(self);
+    }
+    tr.appendChild(nameTd);
+
+    const idTd = document.createElement('td');
+    idTd.className = 'monospace';
+    idTd.textContent = account.external_id;
+    tr.appendChild(idTd);
+
+    const statusTd = document.createElement('td');
+    const status = document.createElement('span');
+    status.className = account.enabled
+      ? 'badge badge-success'
+      : 'badge badge-warning';
+    status.textContent = account.enabled ? 'Active' : 'Disabled';
+    statusTd.appendChild(status);
+    tr.appendChild(statusTd);
+
+    const actionsTd = document.createElement('td');
+    actionsTd.className = 'account-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn btn-small';
+    editBtn.textContent = 'Edit';
+    editBtn.setAttribute('aria-label', `Edit ${accountLabel}`);
+    editBtn.addEventListener('click', () => openAccountModal(provider, account));
+    actionsTd.appendChild(editBtn);
+
+    const testBtn = document.createElement('button');
+    testBtn.type = 'button';
+    testBtn.className = 'btn btn-small';
+    testBtn.textContent = 'Test';
+    testBtn.setAttribute('aria-label', `Test credentials for ${accountLabel}`);
+    testBtn.addEventListener('click', () => void testAccount(account.id, accountLabel, testBtn));
+    actionsTd.appendChild(testBtn);
+
+    const overridesBtn = document.createElement('button');
+    overridesBtn.type = 'button';
+    overridesBtn.className = 'btn btn-small';
+    overridesBtn.textContent = 'Overrides';
+    overridesBtn.setAttribute('aria-label', `Service overrides for ${accountLabel}`);
+    overridesBtn.addEventListener('click', () => openAccountOverridesModal(account));
+    actionsTd.appendChild(overridesBtn);
+
+    // Destructive Delete lives in its own subgroup to isolate it from the
+    // routine actions. A small spacer + btn-destructive class (from P2)
+    // signal "be careful".
+    const spacer = document.createElement('span');
+    spacer.className = 'account-actions-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    actionsTd.appendChild(spacer);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-small btn-destructive';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.setAttribute('aria-label', `Delete ${accountLabel}`);
+    deleteBtn.addEventListener('click', () => void deleteAccount(account.id, provider, container));
+    actionsTd.appendChild(deleteBtn);
+
+    tr.appendChild(actionsTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  container.appendChild(table);
+  // Per-account overrides used to render in inline panels appended below
+  // the table; they now live in the account-overrides-modal (issue #122)
+  // so the accounts table stays compact and per-account scoping is
+  // unambiguous.
+}
+
+// AWS services that can carry a per-account override. Mirrors the AWS-only
+// entries in SERVICE_FIELDS. Issue #109 adds AZURE_OVERRIDE_SERVICES and
+// GCP_OVERRIDE_SERVICES below; getOverrideServicesForProvider dispatches to
+// the right list so the create modal is provider-aware.
+// (issue #104) since the backend payment/term semantics differ per provider.
+const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'ec2',                       label: 'EC2 (Reserved Instances)' },
+  { value: 'rds',                       label: 'RDS' },
+  { value: 'elasticache',               label: 'ElastiCache' },
+  { value: 'opensearch',                label: 'OpenSearch' },
+  { value: 'redshift',                  label: 'Redshift' },
+  // Issue #22 follow-up: per-plan-type SP slugs aligned with
+  // SERVICE_FIELDS so per-account overrides target the same rows the
+  // global Settings cards write to. The legacy `savingsplans` and PR
+  // #71 `sagemaker` values were removed because they no longer
+  // correspond to live ServiceConfig rows after migration 000040.
+  { value: 'savings-plans-compute',     label: 'Compute Savings Plans' },
+  { value: 'savings-plans-ec2instance', label: 'EC2 Instance Savings Plans' },
+  { value: 'savings-plans-sagemaker',   label: 'SageMaker Savings Plans' },
+  { value: 'savings-plans-database',    label: 'Database Savings Plans' },
+];
+
+// Human-readable labels for Azure and GCP services used in the override
+// service dropdown. AWS labels are carried by AWS_OVERRIDE_SERVICES above.
+const AZURE_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'vm',        label: 'Virtual Machines' },
+  { value: 'sql',       label: 'SQL Database' },
+  { value: 'cosmosdb',  label: 'Cosmos DB' },
+  { value: 'redis',     label: 'Cache for Redis' },
+  { value: 'search',    label: 'AI Search' },
+];
+
+const GCP_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'compute',     label: 'Compute Engine' },
+  { value: 'sql',         label: 'Cloud SQL' },
+  { value: 'memorystore', label: 'Memorystore' },
+  { value: 'storage',     label: 'Cloud Storage' },
+];
+
+/** Return the service list for the given provider's override modal. */
+function getOverrideServicesForProvider(provider: string): ReadonlyArray<{ value: string; label: string }> {
+  if (provider === 'azure') return AZURE_OVERRIDE_SERVICES;
+  if (provider === 'gcp')   return GCP_OVERRIDE_SERVICES;
+  return AWS_OVERRIDE_SERVICES;
+}
+
+/**
+ * Build the per-row Payment <select> for the overrides panel. Issue #23.
+ *
+ * - "Inherit (default)" keeps the override silent on payment so the global
+ *   default applies. We only emit it as the chosen value when the override
+ *   currently has no payment set; once a payment is set, switching back
+ *   would require deleting/recreating the override (out of scope for #23).
+ * - The change handler PUTs only `{ payment }` — the backend's
+ *   applyOverrideScalars (handler_accounts.go) treats unset request fields
+ *   as "leave alone", so other override fields (term, coverage, etc.) are
+ *   preserved.
+ */
+function buildPaymentOverrideSelect(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLSelectElement {
+  const select = document.createElement('select');
+  select.className = 'override-payment-select';
+  select.setAttribute(
+    'aria-label',
+    `Payment option for ${override.provider}/${override.service} override`,
+  );
+
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  // Issue #112: show the current global payment so the user knows what
+  // "Inherit" means without switching to the Purchasing tab.
+  inheritOpt.textContent = inheritCurrentlyLabel(paymentLabel(cachedGlobalDefaults.payment));
+  select.appendChild(inheritOpt);
+
+  // Filter the payment dropdown to only the (term, payment) combinations
+  // the provider/service actually supports. e.g. RDS rejects 3yr no-upfront;
+  // Azure has upfront/monthly only; GCP has monthly only. Per #107.
+  // Falls back to the full provider payment list when term is missing (override
+  // row was saved without a term) — the global default's term will resolve at
+  // recommendation time, and we can't pre-validate without it.
+  const overrideTerm = override.term ?? 0;
+  const providerPayments = getCommitmentConfig(override.provider).payments;
+  const validPayments = overrideTerm > 0
+    ? getValidPaymentOptions(override.provider, override.service, overrideTerm)
+    : providerPayments.map(p => ({ value: p.value, label: p.label }));
+
+  for (const { value, label } of validPayments) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+
+  const initial = override.payment ?? '';
+
+  // If the row's CURRENT payment isn't in the valid set (e.g., the row was
+  // saved via direct API curl before this filter shipped, or AWS tightened
+  // the rules), still render the current value so the row isn't silently
+  // mutated — but mark it as a problem so the user notices.
+  const currentIsValid = initial === '' || validPayments.some(p => p.value === initial);
+  if (!currentIsValid) {
+    const stale = document.createElement('option');
+    stale.value = initial;
+    stale.textContent = `${getPaymentLabel(initial)} (invalid for term ${overrideTerm}y — Delete the override and recreate)`;
+    stale.dataset['stale'] = 'true';
+    select.appendChild(stale);
+  }
+
+  select.value = initial;
+  select.dataset['previous'] = initial;
+
+  // If a payment is already set, "Inherit" is not a clean transition (the
+  // backend has no clear-field channel — it would require resetting the
+  // whole override). Disable the option so the user can still pick another
+  // payment value but can't accidentally pick a no-op state.
+  if (initial !== '') {
+    inheritOpt.disabled = true;
+    inheritOpt.title = 'Use Delete to remove the override entirely (clears all fields including payment)';
+  }
+
+  select.addEventListener('change', () => {
+    void handlePaymentOverrideChange(accountId, override, select, panel);
+  });
+
+  return select;
+}
+
+async function handlePaymentOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  select: HTMLSelectElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = select.dataset['previous'] ?? '';
+  const next = select.value;
+  if (next === previous) return;
+  if (next === '') {
+    // Reverting to Inherit while a payment is set is blocked above; defensive
+    // no-op here keeps types narrow if the option becomes selectable later.
+    select.value = previous;
+    return;
+  }
+  select.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      payment: next,
+    });
+    select.dataset['previous'] = next;
+    showToast({
+      message: `Payment override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    select.value = previous;
+    showToast({
+      message: `Failed to update payment override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    select.disabled = false;
+  }
+}
+
+/**
+ * Build the per-row Term <select> for the overrides panel. Issue #110.
+ *
+ * Mirrors buildPaymentOverrideSelect (#23) verbatim: Inherit option +
+ * provider/service-specific valid options + sparse PUT on change. The
+ * options are filtered by the row's CURRENT payment via
+ * `getValidTermOptions('aws', service, payment)`, so an RDS row with
+ * payment=no-upfront does not list term=3 (the one hard AWS rule per
+ * commitmentOptions.ts).
+ *
+ * When `term` is already set on the row, the Inherit option is disabled
+ * for the same reason as Payment's Inherit: the backend has no
+ * clear-field channel, so reverting to "no term" would require Delete.
+ */
+function buildTermOverrideSelect(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLSelectElement {
+  const select = document.createElement('select');
+  select.className = 'override-term-select';
+  select.setAttribute(
+    'aria-label',
+    `Term for ${override.provider}/${override.service} override`,
+  );
+
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  // Issue #112: show the current global term so the user knows what
+  // "Inherit" means without switching to the Purchasing tab.
+  inheritOpt.textContent = inheritCurrentlyLabel(termLabel(String(cachedGlobalDefaults.term)));
+  select.appendChild(inheritOpt);
+
+  // Filter the term dropdown to the (term, payment) combinations AWS
+  // supports for THIS service given the row's CURRENT payment. e.g. an
+  // RDS row with payment=no-upfront cannot upgrade to term=3.
+  // When payment is unset, getValidTermOptions falls back to the
+  // service's full term list (the underlying `getValidTermOptions`
+  // returns all terms whose invalidCombinations don't match the given
+  // payment; with payment='' nothing matches, so all terms are valid).
+  const currentPayment = override.payment ?? '';
+  const validTerms = getValidTermOptions(override.provider, override.service, currentPayment);
+
+  for (const { value, label } of validTerms) {
+    const opt = document.createElement('option');
+    opt.value = String(value);
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
+
+  const initial = override.term !== undefined && override.term > 0 ? String(override.term) : '';
+
+  // If the row's CURRENT term isn't in the valid set (e.g., the row was
+  // saved before the filter shipped, or AWS tightened the rules), still
+  // render the current value so the row isn't silently mutated, but
+  // mark it as a problem.
+  const currentIsValid = initial === '' || validTerms.some(t => String(t.value) === initial);
+  if (!currentIsValid) {
+    const stale = document.createElement('option');
+    stale.value = initial;
+    stale.textContent = `${initial}yr (invalid for current payment — Delete the override and recreate)`;
+    stale.dataset['stale'] = 'true';
+    select.appendChild(stale);
+  }
+
+  select.value = initial;
+  select.dataset['previous'] = initial;
+
+  // If a term is already set, "Inherit" is not a clean transition (the
+  // backend has no clear-field channel). Same rationale as Payment.
+  if (initial !== '') {
+    inheritOpt.disabled = true;
+    inheritOpt.title = 'Use Delete to remove the override entirely (clears all fields including term)';
+  }
+
+  select.addEventListener('change', () => {
+    void handleTermOverrideChange(accountId, override, select, panel);
+  });
+
+  return select;
+}
+
+async function handleTermOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  select: HTMLSelectElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = select.dataset['previous'] ?? '';
+  const next = select.value;
+  if (next === previous) return;
+  if (next === '') {
+    // Reverting to Inherit while a term is set is blocked above; defensive
+    // no-op here keeps types narrow if the option becomes selectable later.
+    select.value = previous;
+    return;
+  }
+  const termNum = parseInt(next, 10);
+  if (Number.isNaN(termNum)) {
+    select.value = previous;
+    return;
+  }
+  select.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      term: termNum,
+    });
+    select.dataset['previous'] = next;
+    showToast({
+      message: `Term override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    select.value = previous;
+    showToast({
+      message: `Failed to update term override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    select.disabled = false;
+  }
+}
+
+/**
+ * Build the per-row Coverage <input> for the overrides panel. Issue #110.
+ *
+ * Numeric input bound to the row's coverage % (0–100, integer). PUT
+ * fires on the 'change' event (blur or Enter), not 'input', so we don't
+ * issue one PUT per keystroke. Out-of-range or non-numeric input
+ * reverts to the previous value with an error toast.
+ *
+ * Empty value when no coverage is set: placeholder shows "Inherit".
+ * Clearing a previously-set value reverts (same no-clear-field
+ * rationale as Term and Payment).
+ */
+function buildCoverageOverrideInput(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = '100';
+  input.step = '1';
+  input.className = 'override-coverage-input';
+  input.setAttribute(
+    'aria-label',
+    `Coverage for ${override.provider}/${override.service} override`,
+  );
+
+  const initial = override.coverage !== undefined ? String(override.coverage) : '';
+  input.value = initial;
+  input.dataset['previous'] = initial;
+  if (initial === '') {
+    input.placeholder = 'Inherit';
+  }
+
+  input.addEventListener('change', () => {
+    void handleCoverageOverrideChange(accountId, override, input, panel);
+  });
+
+  return input;
+}
+
+async function handleCoverageOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  input: HTMLInputElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const previous = input.dataset['previous'] ?? '';
+  const raw = input.value.trim();
+  if (raw === previous) return;
+  if (raw === '') {
+    // No clear-field channel — clearing a coverage value would leave the
+    // override row in a no-op state. Revert and tell the user.
+    input.value = previous;
+    showToast({
+      message: 'Use Delete to remove the override entirely (clears all fields including coverage).',
+      kind: 'info',
+    });
+    return;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 100) {
+    input.value = previous;
+    showToast({
+      message: 'Coverage must be an integer between 0 and 100.',
+      kind: 'error',
+    });
+    return;
+  }
+  input.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      coverage: n,
+    });
+    input.dataset['previous'] = String(n);
+    showToast({
+      message: `Coverage override updated for ${override.provider}/${override.service}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    input.value = previous;
+    showToast({
+      message: `Failed to update coverage override: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    input.disabled = false;
+  }
+}
+
+/**
+ * Build the per-row Enabled checkbox for the overrides panel. Issue #110.
+ *
+ * Toggles the `enabled` column on `account_service_overrides`. When
+ * unchecked, the override row exists but does not influence
+ * recommendations (the backend's read path filters by `enabled`). The
+ * UI dims the row to make the inactive state obvious.
+ *
+ * Default state: an override with `enabled === undefined` (legacy rows,
+ * or rows never explicitly toggled) is treated as ACTIVE. Only explicit
+ * `enabled: false` renders as unchecked.
+ *
+ * Non-AWS rows render the checkbox disabled with an explanatory tooltip
+ * to preserve column alignment between provider types — Azure/GCP
+ * editing is tracked separately under the provider-aware modal work.
+ */
+function buildEnabledOverrideCheckbox(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  panel: HTMLElement,
+  row: HTMLTableRowElement,
+): HTMLInputElement {
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = 'override-enabled-toggle';
+  input.checked = override.enabled !== false;
+  input.dataset['previous'] = input.checked ? 'true' : 'false';
+  input.setAttribute(
+    'aria-label',
+    `Enable ${override.provider}/${override.service} override`,
+  );
+
+  input.addEventListener('change', () => {
+    void handleEnabledOverrideChange(accountId, override, input, panel, row);
+  });
+
+  return input;
+}
+
+async function handleEnabledOverrideChange(
+  accountId: string,
+  override: api.AccountServiceOverride,
+  input: HTMLInputElement,
+  panel: HTMLElement,
+  row: HTMLTableRowElement,
+): Promise<void> {
+  const next = input.checked;
+  const previousStr = input.dataset['previous'] ?? 'true';
+  const previous = previousStr === 'true';
+  if (next === previous) return;
+  input.disabled = true;
+  // Optimistically reflect the new state in the row's visual treatment
+  // so the user sees feedback before the network round-trip completes;
+  // we revert on error below.
+  row.classList.toggle('override-disabled', !next);
+  try {
+    await api.saveAccountServiceOverride(accountId, override.provider, override.service, {
+      enabled: next,
+    });
+    input.dataset['previous'] = next ? 'true' : 'false';
+    showToast({
+      message: `${override.provider}/${override.service} override ${next ? 'enabled' : 'disabled'}.`,
+      kind: 'success',
+    });
+    await loadOverridesPanel(accountId, panel, override.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    input.checked = previous;
+    row.classList.toggle('override-disabled', !previous);
+    showToast({
+      message: `Failed to update enabled state: ${(err as Error).message}`,
+      kind: 'error',
+    });
+  } finally {
+    input.disabled = false;
+  }
+}
+
+/**
+ * Load and render the service overrides panel for an account.
+ *
+ * Empty state (no overrides yet for this account) auto-opens the create
+ * modal \u2014 the previous "No service overrides set." text was a dead-end
+ * because there was no UI affordance to create one. See issue #104.
+ *
+ * Populated state: render the existing table + an "Add override" button at
+ * the top so users can add another override for a different service.
+ *
+ * Issue #109: Azure and GCP accounts now also get the "Add override" button
+ * and full inline editing (term, payment, coverage, enabled) on existing rows.
+ * Provider-specific payment options are derived via getCommitmentConfig so
+ * GCP shows "Monthly only" and Azure shows "Upfront / Monthly".
+ */
+/**
+ * Open the per-account overrides modal (issue #122). Replaces the inline
+ * expandable panel that used to render below the accounts table — the
+ * panels stacked without per-row attachment, so two open panels gave the
+ * user no way to tell which override row belonged to which account.
+ *
+ * The modal title binds explicitly to the account; the body uses the same
+ * `loadOverridesPanel` rendering function as before, so all CRUD wiring
+ * (Reset button, inline payment select, Add override button, empty-state
+ * auto-open of the create modal) carries forward unchanged.
+ */
+function openAccountOverridesModal(account: api.CloudAccount): void {
+  const modal = document.getElementById('account-overrides-modal');
+  if (!modal) return;
+  const titleEl = document.getElementById('account-overrides-modal-title');
+  if (titleEl) {
+    titleEl.textContent = `Service overrides for ${account.name} (${account.external_id})`;
+  }
+  const body = document.getElementById('account-overrides-modal-body');
+  if (!body) return;
+  modal.classList.remove('hidden');
+  void loadOverridesPanel(account.id, body, account.provider);
+}
+
+function closeAccountOverridesModal(): void {
+  const modal = document.getElementById('account-overrides-modal');
+  modal?.classList.add('hidden');
+  // Drop the body content so the next open doesn't briefly flash stale
+  // data from a previous account before loadOverridesPanel populates it.
+  const body = document.getElementById('account-overrides-modal-body');
+  if (body) body.replaceChildren();
+  // Close the inner create modal too if it's still open. The user can't
+  // visually reach the outer's close affordances while the inner is up
+  // (inner backdrop covers them), but a programmatic close — or a future
+  // ESC-to-close from issue #115 — should leave a clean slate, not an
+  // orphaned inner modal whose Save would target a hidden parent.
+  closeOverrideModal();
+}
+
+export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
+  panel.textContent = 'Loading\u2026';
+  try {
+    const overrides = await api.listAccountServiceOverrides(accountId);
+    panel.textContent = '';
+
+    // Issue #109: all providers can now create overrides.
+    const canCreate = true;
+
+    if (!overrides || overrides.length === 0) {
+      const msg = document.createElement('p');
+      msg.className = 'help-text';
+      msg.textContent = 'No service overrides yet for this account.';
+      panel.appendChild(msg);
+      if (canCreate) {
+        // No overrides yet \u2014 auto-open the modal so the user lands directly
+        // on the create flow instead of staring at empty-state text. The
+        // button stays in the panel as a fallback if the user cancels and
+        // wants to retry without re-expanding the row.
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'btn btn-small';
+        addBtn.textContent = 'Add override';
+        addBtn.addEventListener('click', () => {
+          openOverrideModal(accountId, provider, overrides ?? [], panel);
+        });
+        panel.appendChild(addBtn);
+        openOverrideModal(accountId, provider, [], panel);
+      }
+      return;
+    }
+
+    if (canCreate) {
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn btn-small';
+      addBtn.textContent = 'Add override';
+      addBtn.addEventListener('click', () => {
+        openOverrideModal(accountId, provider, overrides, panel);
+      });
+      panel.appendChild(addBtn);
+    }
+
+    const table = document.createElement('table');
+    table.className = 'overrides-table';
+    const thead = table.createTHead();
+    const hrow = thead.insertRow();
+    // Column order: Service | Term | Payment | Coverage | Enabled | <action>
+    // Enabled is second-to-last (immediately before the action cell) so the
+    // descriptive columns keep the layout users learned from PR #72/#23.
+    // Issue #110.
+    ['Service', 'Term', 'Payment', 'Coverage', 'Enabled', ''].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      hrow.appendChild(th);
+    });
+    const tbody = table.createTBody();
+    overrides.forEach(o => {
+      const tr = tbody.insertRow();
+      // Reflect the row's enabled state visually from the initial render so
+      // disabled overrides are obvious without waiting for a toggle event.
+      if (o.enabled === false) {
+        tr.classList.add('override-disabled');
+      }
+
+      const serviceTd = tr.insertCell();
+      serviceTd.textContent = `${o.provider}/${o.service}`;
+
+      // Term cell: editable <select> for all providers (issue #109 extends
+      // the AWS-only #110 inline editing to Azure/GCP).
+      const termTd = tr.insertCell();
+      termTd.appendChild(buildTermOverrideSelect(accountId, o, panel));
+
+      // Payment cell: editable <select> for all providers. GCP's payment
+      // dropdown only shows "Monthly"; Azure shows upfront/monthly. The
+      // underlying getValidPaymentOptions already handles per-provider
+      // filtering, so the same builder works for all three clouds.
+      const paymentTd = tr.insertCell();
+      paymentTd.appendChild(buildPaymentOverrideSelect(accountId, o, panel));
+
+      // Coverage cell: editable numeric <input> for all providers (issue #109).
+      const coverageTd = tr.insertCell();
+      coverageTd.appendChild(buildCoverageOverrideInput(accountId, o, panel));
+
+      // Enabled cell: per-row checkbox toggling account_service_overrides.enabled.
+      // Editable for all providers. Issue `#110`, extended to Azure/GCP in `#109`.
+      const enabledTd = tr.insertCell();
+      enabledTd.appendChild(buildEnabledOverrideCheckbox(accountId, o, panel, tr));
+
+      const actionTd = tr.insertCell();
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn btn-small btn-danger';
+      // Button + dialog wording aligned with the actual data semantics
+      // (DELETE on account_service_overrides) per #114. The previous
+      // "Reset … will be replaced" copy implied the row stuck around
+      // with new values; in fact the row goes away entirely and the
+      // engine reads the global default as a side effect of its absence.
+      resetBtn.textContent = 'Delete';
+      resetBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'Delete override?',
+          body: `Delete the ${o.provider}/${o.service} override? This account's recommendations will revert to the global default. The override row and any per-service values you set will be removed.`,
+          confirmLabel: 'Delete override',
+          destructive: true,
+        });
+        if (!ok) return;
+        // Snapshot all fields before deleting so the Undo action can re-PUT
+        // them if the user clicks the toast button within the 5-second window.
+        const snapshot: api.AccountServiceOverrideRequest = {
+          enabled: o.enabled,
+          term: o.term,
+          payment: o.payment,
+          coverage: o.coverage,
+          ramp_schedule: o.ramp_schedule,
+          include_engines: o.include_engines,
+          exclude_engines: o.exclude_engines,
+          include_regions: o.include_regions,
+          exclude_regions: o.exclude_regions,
+          include_types: o.include_types,
+          exclude_types: o.exclude_types,
+        };
+        try {
+          await api.deleteAccountServiceOverride(accountId, o.provider, o.service);
+          await loadOverridesPanel(accountId, panel, provider);
+          await refreshRecommendationsAfterOverrideChange();
+          // Show a 5-second undo toast. The action closure captures `snapshot`
+          // and re-PUT it if the user clicks Undo before the toast expires.
+          // Each Reset click replaces any prior toast handle so a rapid
+          // double-click cannot stack multiple Undo buttons.
+          showToast({
+            message: `Override for ${o.provider}/${o.service} deleted.`,
+            kind: 'info',
+            timeout: 5_000,
+            actions: [{
+              label: 'Undo',
+              onClick: () => {
+                void (async () => {
+                  try {
+                    await api.saveAccountServiceOverride(accountId, o.provider, o.service, snapshot);
+                    await loadOverridesPanel(accountId, panel, provider);
+                    await refreshRecommendationsAfterOverrideChange();
+                  } catch (undoErr) {
+                    showToast({ message: `Failed to restore override: ${(undoErr as Error).message}`, kind: 'error' });
+                  }
+                })();
+              },
+            }],
+          });
+        } catch (err) {
+          showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
+        }
+      });
+      actionTd.appendChild(resetBtn);
+    });
+    panel.appendChild(table);
+  } catch (err) {
+    panel.textContent = `Failed to load overrides: ${(err as Error).message}`;
+  }
+}
+
+/**
+ * Re-entrancy guard for the deleteAccount + handlePendingExecutions409
+ * flow. A double-click on the Delete button (or a click during the
+ * cancel-loop-then-retry-delete sequence) used to be able to start two
+ * concurrent deletes for the same account, racing on the backend
+ * preflight + cancel + delete sequence. Module-scoped so guards apply
+ * across both helpers; keyed on account ID so different accounts can
+ * still be deleted in parallel.
+ */
+const inflightDeletes = new Set<string>();
+
+/**
+ * Delete an account after confirmation.
+ *
+ * Issue #606 — when the backend preflight detects pending purchase
+ * executions still referencing this account, it returns a 409 with
+ * `pending_count` + `pending_execution_ids` in `error.details`. The
+ * handler offers the operator a second confirmation: "Cancel All N
+ * Pending + Delete" which cancels each pending execution sequentially
+ * and then retries the delete. On any per-execution cancel failure we
+ * surface a toast with the count of failures and stop short of the
+ * delete so the operator can investigate manually instead of partially
+ * cancelling and silently moving on.
+ */
+async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
+  if (inflightDeletes.has(accountId)) {
+    showToast({ message: 'Delete already in progress for this account.', kind: 'info' });
+    return;
+  }
+  const ok = await confirmDialog({
+    title: 'Delete account?',
+    body: 'Delete this account? This also removes its credentials and service overrides. This action cannot be undone.',
+    confirmLabel: 'Delete account',
+    destructive: true,
+  });
+  if (!ok) return;
+  inflightDeletes.add(accountId);
+  try {
+    try {
+      await api.deleteAccount(accountId);
+      await loadAccountsForProvider(provider);
+      return;
+    } catch (err) {
+      const apiErr = err as Error & { status?: number; details?: Record<string, unknown> };
+      if (apiErr.status === 409 && apiErr.details?.['reason'] === 'pending_executions') {
+        await handlePendingExecutions409(accountId, provider, apiErr);
+        return;
+      }
+      console.error('Failed to delete account:', err);
+      showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
+      void loadAccountsForProvider(provider);
+    }
+  } finally {
+    inflightDeletes.delete(accountId);
+  }
+}
+
+/**
+ * Issue #606 — 409 handler for the deleteAccount path. Surfaces a second
+ * confirmation dialog with the pending-count and, on confirm, walks the
+ * `pending_execution_ids` list cancelling each one before retrying the
+ * delete. Exported (lower-case) helper so the test file can exercise it
+ * without standing up the full settings page chrome.
+ */
+async function handlePendingExecutions409(
+  accountId: string,
+  provider: AccountProvider,
+  apiErr: Error & { status?: number; details?: Record<string, unknown> },
+): Promise<void> {
+  // Defense-in-depth re-entrancy guard. deleteAccount already adds to the
+  // set before calling us, in which case `ownsLock` stays false and the
+  // outer try/finally owns cleanup. A direct external caller (e.g. tests
+  // or a future caller invoking this helper standalone) gets a fresh
+  // lock + a finally that releases it.
+  let ownsLock = false;
+  if (!inflightDeletes.has(accountId)) {
+    inflightDeletes.add(accountId);
+    ownsLock = true;
+  }
+  try {
+    await handlePendingExecutions409Inner(accountId, provider, apiErr);
+  } finally {
+    if (ownsLock) inflightDeletes.delete(accountId);
+  }
+}
+
+async function handlePendingExecutions409Inner(
+  accountId: string,
+  provider: AccountProvider,
+  apiErr: Error & { status?: number; details?: Record<string, unknown> },
+): Promise<void> {
+  const rawCount = apiErr.details?.['pending_count'];
+  const pendingCount = typeof rawCount === 'number' ? rawCount : Number(rawCount) || 0;
+  const rawIDs = apiErr.details?.['pending_execution_ids'];
+  const pendingIDs = Array.isArray(rawIDs) ? (rawIDs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+
+  // No IDs to cancel (the server's list-call errored — see the Go-side
+  // PendingListErr_StillReturns409 path). Skip the "Cancel All N Pending"
+  // confirm entirely, since we can't enumerate cancellations, and point
+  // the operator at the History page instead.
+  if (pendingIDs.length === 0) {
+    showToast({
+      message: `Cannot auto-cancel: pending purchase IDs unavailable. Cancel them from the History page and try again.`,
+      kind: 'error',
+      timeout: null,
+    });
+    return;
+  }
+
+  const proceed = await confirmDialog({
+    title: 'Pending purchases must be cancelled',
+    body: `This account has ${pendingCount} pending purchase${pendingCount === 1 ? '' : 's'}. They must be cancelled before the account can be deleted. Cancel all pending purchases and then delete the account?`,
+    confirmLabel: `Cancel All ${pendingCount} Pending + Delete`,
+    destructive: true,
+  });
+  if (!proceed) {
+    // Operator cancelled the second dialog. Refresh to keep the list in
+    // sync; the account is unchanged.
+    void loadAccountsForProvider(provider);
+    return;
+  }
+
+  const failures: { id: string; err: Error }[] = [];
+  for (const execID of pendingIDs) {
+    try {
+      await api.cancelPurchase(execID);
+    } catch (cancelErr) {
+      failures.push({ id: execID, err: cancelErr as Error });
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error('Failed to cancel some pending executions:', failures);
+    showToast({
+      message: `Cancelled ${pendingIDs.length - failures.length} of ${pendingIDs.length} purchases; ${failures.length} failed. Account NOT deleted — review History and retry.`,
+      kind: 'error',
+      timeout: null,
+    });
+    void loadAccountsForProvider(provider);
+    return;
+  }
+
+  // All cancels succeeded — retry the delete.
+  try {
+    await api.deleteAccount(accountId);
+    showToast({
+      message: `Cancelled ${pendingIDs.length} pending purchase${pendingIDs.length === 1 ? '' : 's'} and deleted the account.`,
+      kind: 'success',
+    });
+  } catch (retryErr) {
+    console.error('Failed to delete account after cancelling pending purchases:', retryErr);
+    showToast({
+      message: `Cancelled ${pendingIDs.length} purchase${pendingIDs.length === 1 ? '' : 's'} but the account delete still failed: ${(retryErr as Error).message}`,
+      kind: 'error',
+      timeout: null,
+    });
+  } finally {
+    void loadAccountsForProvider(provider);
+  }
+}
+
+/**
+ * Test account credentials. Surfaces progress + outcome via toast so the
+ * signal isn't confined to the button label (which auto-clears in 3s and
+ * provides no detail beyond OK/Failed). The button keeps its inline status
+ * as a secondary affordance so the user's gaze point — the row they just
+ * clicked — still gets feedback.
+ */
+async function testAccount(accountId: string, accountLabel: string, btn: HTMLButtonElement): Promise<void> {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  showToast({ message: `Testing credentials for ${accountLabel}…`, kind: 'info', timeout: 3_000 });
+  try {
+    const result = await api.testAccountCredentials(accountId);
+    btn.textContent = result.ok ? 'OK' : 'Failed';
+    if (result.ok) {
+      const detail = result.message ? `: ${result.message}` : '';
+      showToast({ message: `Credentials OK for ${accountLabel}${detail}`, kind: 'success', timeout: 5_000 });
+    } else {
+      showToast({
+        message: `Credentials failed for ${accountLabel}${result.message ? `: ${result.message}` : ''}`,
+        kind: 'error',
+        timeout: null,
+      });
+    }
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 3000);
+  } catch (err: unknown) {
+    btn.textContent = 'Error';
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast({ message: `Failed to test credentials for ${accountLabel}: ${msg}`, kind: 'error', timeout: null });
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 3000);
+  }
+}
+
+// State carried from openOverrideModal → submitOverrideForm so the form
+// handler knows which account/provider/panel it belongs to without
+// inspecting the DOM. Cleared on close so it can't leak across opens.
+let overrideModalContext: {
+  accountId: string;
+  provider: string;
+  panel: HTMLElement;
+  /** Services available for bulk selection (excludes already-overridden). */
+  availableServices: ReadonlyArray<{ value: string; label: string }>;
+} | null = null;
+let overridePaymentOptionsController: AbortController | null = null;
+
+/**
+ * Open the create-override modal for a specific account.
+ *
+ * `existingOverrides` is used to filter the service dropdown so users
+ * can't pick a service that already has an override for this account
+ * (the backend would UPSERT, silently overwriting the existing values —
+ * users should use the panel's Reset + re-create flow for that, not the
+ * Add flow).
+ *
+ * Issue #104.
+ */
+export function openOverrideModal(
+  accountId: string,
+  provider: string,
+  existingOverrides: api.AccountServiceOverride[],
+  panel: HTMLElement,
+): void {
+  const modal = document.getElementById('override-modal');
+  if (!modal) return;
+
+  // Populate available-services list before writing context so bulk mode can
+  // reference it from the start.
+  const used = new Set(
+    existingOverrides
+      .filter(o => o.provider === provider)
+      .map(o => o.service),
+  );
+  const available = getOverrideServicesForProvider(provider).filter(s => !used.has(s.value));
+
+  overrideModalContext = { accountId, provider, panel, availableServices: available };
+
+  setInputValue('override-account-id', accountId);
+  setInputValue('override-provider', provider);
+
+  // Reset form fields to defaults each open so a previous cancelled
+  // session doesn't bleed values forward.
+  setInputValue('override-term', '');
+  setInputValue('override-payment', '');
+  setInputValue('override-coverage', '');
+  const errEl = document.getElementById('override-form-error');
+  if (errEl) errEl.textContent = '';
+
+  // Issue #112: update the "Inherit" option on the term select to show the
+  // current global default so the user knows what they'd be inheriting.
+  const termInheritOpt = document.querySelector<HTMLOptionElement>('#override-term option[value=""]');
+  if (termInheritOpt) {
+    termInheritOpt.textContent = inheritCurrentlyLabel(termLabel(String(cachedGlobalDefaults.term)));
+  }
+
+  // Issue #112: update the coverage placeholder to show the current global
+  // default. Uses .placeholder (plain text assignment), not innerHTML -- safe.
+  const coverageInput = document.getElementById('override-coverage') as HTMLInputElement | null;
+  if (coverageInput) {
+    coverageInput.placeholder = inheritCurrentlyLabel(`${cachedGlobalDefaults.coverage}%`);
+  }
+
+  // Reset bulk-mode toggle to off so the modal always opens in single-service
+  // mode (issue #119).
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  if (bulkToggle) bulkToggle.checked = false;
+  applyOverrideBulkMode(false, available);
+
+  // Populate the single-service dropdown with provider-specific services,
+  // excluding any that already have an override for this account. Issue #109
+  // extends this to Azure and GCP (previously AWS-only per issue #104 follow-up).
+  const select = document.getElementById('override-service') as HTMLSelectElement | null;
+  if (select) {
+    select.replaceChildren();
+    if (available.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'All services already have overrides';
+      opt.disabled = true;
+      select.appendChild(opt);
+      const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+      if (submitBtn) submitBtn.disabled = true;
+    } else {
+      for (const { value, label } of available) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+      }
+      const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  // Wire service/term changes to repopulate payment options. AWS rejects
+  // some (service, term, payment) tuples (e.g., RDS 3yr no-upfront) — the
+  // global Settings cards already hide invalid combinations; the override
+  // modal must do the same so we can't silently save an invalid combo.
+  // Per #107.
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = new AbortController();
+  syncOverridePaymentOptions(provider);
+  // After payment options update, re-evaluate bulk conflict gating (issue #119).
+  const onChange = () => {
+    syncOverridePaymentOptions(provider);
+    syncBulkServiceConflicts(provider);
+  };
+  select?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+  const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
+  termSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+  const paymentSel = document.getElementById('override-payment') as HTMLSelectElement | null;
+  paymentSel?.addEventListener('change', onChange, { signal: overridePaymentOptionsController.signal });
+
+  // Wire the bulk-mode toggle (issue #119). AbortController cleans it up on close.
+  bulkToggle?.addEventListener(
+    'change',
+    () => {
+      const ctx = overrideModalContext;
+      applyOverrideBulkMode(bulkToggle.checked, ctx?.availableServices ?? []);
+    },
+    { signal: overridePaymentOptionsController.signal },
+  );
+
+  modal.classList.remove('hidden');
+}
+
+/**
+ * Switch the override modal between single-service and bulk-service mode.
+ *
+ * In single mode the normal <select id="override-service"> is shown.
+ * In bulk mode it is hidden and a checkbox group is shown instead (issue #119).
+ * Uses DOM APIs throughout — no innerHTML — so no XSS risk from service values.
+ */
+function applyOverrideBulkMode(
+  bulk: boolean,
+  available: ReadonlyArray<{ value: string; label: string }>,
+): void {
+  const singleRow = document.getElementById('override-single-service-row');
+  const bulkDiv   = document.getElementById('override-bulk-services');
+  const listDiv   = document.getElementById('override-bulk-services-list');
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+
+  if (singleRow) singleRow.classList.toggle('hidden', bulk);
+  if (bulkDiv)   bulkDiv.classList.toggle('hidden', !bulk);
+
+  if (!bulk) {
+    // Returning to single-service mode: recompute disabled state from the
+    // single-service <select> so the button is not left stuck disabled after
+    // toggling back from bulk mode.
+    if (submitBtn) {
+      const singleSelect = singleRow?.querySelector('select') as HTMLSelectElement | null;
+      submitBtn.disabled = (singleSelect?.value ?? '') === '';
+    }
+    return;
+  }
+
+  // Rebuild the checkbox list using DOM APIs (no innerHTML).
+  if (listDiv) {
+    listDiv.replaceChildren();
+    for (const { value, label } of available) {
+      const checkLabel = document.createElement('label');
+      checkLabel.className = 'bulk-service-checkbox-label';
+
+      const cb = document.createElement('input');
+      cb.type  = 'checkbox';
+      cb.name  = 'bulk-service';
+      cb.value = value;
+      // Re-evaluate submit-button state whenever a checkbox changes.
+      cb.addEventListener('change', () => {
+        if (submitBtn) {
+          const anyChecked = listDiv.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+          submitBtn.disabled = !anyChecked;
+        }
+      });
+
+      const span = document.createElement('span');
+      span.textContent = label;
+
+      checkLabel.appendChild(cb);
+      checkLabel.appendChild(span);
+      listDiv.appendChild(checkLabel);
+    }
+  }
+
+  // In bulk mode start with submit disabled until at least one box is checked.
+  if (submitBtn) submitBtn.disabled = true;
+
+  // Apply conflict gating for the current term/payment selection immediately
+  // after the list is built, so checkboxes are already disabled if the chosen
+  // combo is invalid for a service before the user interacts (issue #119).
+  syncBulkServiceConflicts(overrideModalContext?.provider ?? '');
+}
+
+/**
+ * Disable (and annotate) bulk-service checkboxes whose service does not
+ * support the currently selected (term, payment) combo.  Re-enables them
+ * if the combo becomes valid again.  Mirrors the single-select path that
+ * uses syncOverridePaymentOptions / isValidCombination.  Issue #119.
+ *
+ * Only acts when both term and payment are explicitly set; when either is
+ * blank ("Inherit") every checkbox stays enabled because no hard restriction
+ * can be evaluated.
+ */
+function syncBulkServiceConflicts(provider: string): void {
+  const termRaw = (document.getElementById('override-term') as HTMLSelectElement | null)?.value ?? '';
+  const paymentRaw = (document.getElementById('override-payment') as HTMLSelectElement | null)?.value ?? '';
+
+  const listDiv = document.getElementById('override-bulk-services-list');
+  if (!listDiv) return;
+
+  const checkboxes = listDiv.querySelectorAll<HTMLInputElement>('input[name="bulk-service"]');
+  if (checkboxes.length === 0) return;
+
+  // When term or payment is unset ("Inherit"), no restriction can be evaluated.
+  const term = termRaw !== '' ? parseInt(termRaw, 10) : NaN;
+  const payment = paymentRaw;
+  const canEvaluate = payment !== '' && Number.isFinite(term) && term > 0;
+
+  for (const cb of checkboxes) {
+    const service = cb.value;
+    const label = cb.closest('label');
+    if (canEvaluate && !isValidCombination(provider, service, term, payment)) {
+      cb.disabled = true;
+      cb.checked  = false;
+      if (label) {
+        label.title = `${provider}/${service} does not support ${term}-year ${payment}`;
+        label.classList.add('bulk-service-checkbox-label--conflict');
+      }
+    } else {
+      cb.disabled = false;
+      if (label) {
+        label.title = '';
+        label.classList.remove('bulk-service-checkbox-label--conflict');
+      }
+    }
+  }
+
+  // Re-evaluate submit-button state after disabling/enabling checkboxes.
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) {
+    const anyChecked = listDiv.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+    submitBtn.disabled = !anyChecked;
+  }
+}
+
+// syncOverridePaymentOptions filters the override-payment <select> down to
+// the (service, term) combinations AWS supports. Called whenever the user
+// changes service or term in the modal. Per #107.
+function syncOverridePaymentOptions(provider: string): void {
+  const serviceSel = document.getElementById('override-service') as HTMLSelectElement | null;
+  const termSel = document.getElementById('override-term') as HTMLSelectElement | null;
+  const paymentSel = document.getElementById('override-payment') as HTMLSelectElement | null;
+  if (!serviceSel || !termSel || !paymentSel) return;
+
+  const service = serviceSel.value;
+  const term = parseInt(termSel.value, 10);
+
+  const previous = paymentSel.value;
+  paymentSel.replaceChildren();
+
+  // Always include the "Inherit (currently: X)" option — corresponds to
+  // leaving the field unset on the sparse PUT (issue #112).
+  const inheritOpt = document.createElement('option');
+  inheritOpt.value = '';
+  inheritOpt.textContent = inheritCurrentlyLabel(paymentLabel(cachedGlobalDefaults.payment));
+  paymentSel.appendChild(inheritOpt);
+
+  // When service or term is unset, can't run the validity check yet —
+  // show the full provider payment list so the user can choose; the
+  // submit-side guard will catch any invalid combo on Save.
+  const provPayments = getCommitmentConfig(provider).payments;
+  const candidates = (service && Number.isFinite(term) && term > 0)
+    ? getValidPaymentOptions(provider, service, term).map(p => ({ value: p.value, label: p.label }))
+    : provPayments.map(p => ({ value: p.value, label: p.label }));
+
+  for (const { value, label } of candidates) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    paymentSel.appendChild(opt);
+  }
+
+  // Preserve the previous selection if it's still valid; otherwise snap
+  // back to "Inherit". Snapping (rather than forcing a new value) avoids
+  // a confusing silent change.
+  const previousStillValid = previous === '' || candidates.some(c => c.value === previous);
+  paymentSel.value = previousStillValid ? previous : '';
+}
+
+function closeOverrideModal(): void {
+  const modal = document.getElementById('override-modal');
+  modal?.classList.add('hidden');
+  overrideModalContext = null;
+  overridePaymentOptionsController?.abort();
+  overridePaymentOptionsController = null;
+  // Reset bulk toggle so next open always starts in single-service mode.
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  if (bulkToggle) bulkToggle.checked = false;
+  applyOverrideBulkMode(false, []);
+}
+
+/**
+ * Submit the create-override form. Sends a sparse PUT — fields left blank
+ * (term/payment/coverage = "Inherit") are omitted so the backend's
+ * applyOverrideScalars treats them as "unset → inherit global default".
+ */
+async function submitOverrideForm(e: Event): Promise<void> {
+  e.preventDefault();
+  const ctx = overrideModalContext;
+  if (!ctx) return;
+
+  const termRaw = (byId<HTMLSelectElement>('override-term')?.value ?? '').trim();
+  const paymentRaw = (byId<HTMLSelectElement>('override-payment')?.value ?? '').trim();
+  const coverageRaw = (byId<HTMLInputElement>('override-coverage')?.value ?? '').trim();
+
+  const req: api.AccountServiceOverrideRequest = {};
+  if (termRaw !== '') req.term = parseInt(termRaw, 10);
+  if (paymentRaw !== '') req.payment = paymentRaw;
+  if (coverageRaw !== '') {
+    const n = Number(coverageRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) errEl.textContent = 'Coverage must be between 0 and 100.';
+      return;
+    }
+    req.coverage = n;
+  }
+
+  if (Object.keys(req).length === 0) {
+    // The backend would happily store an all-null override row, but it'd
+    // be a no-op semantically — no field overrides anything. Block at the
+    // UI to avoid silent confusion.
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
+    return;
+  }
+
+  // Determine which services to save to.
+  const bulkToggle = document.getElementById('override-bulk-toggle') as HTMLInputElement | null;
+  const isBulk = bulkToggle?.checked ?? false;
+
+  if (isBulk) {
+    await submitBulkOverrideForm(ctx, req);
+    return;
+  }
+
+  // Single-service path (original behaviour).
+  const service = (byId<HTMLSelectElement>('override-service')?.value ?? '').trim();
+  if (!service) return;
+
+  // Submit-side validation per #107: when both term and payment are
+  // explicitly set, refuse to save invalid (service, term, payment)
+  // combinations even if a stale select option somehow leaked through
+  // (e.g., browser back-button restoring a stale dropdown state).
+  // Mirror of the global Settings → Purchasing card's checkCommitmentOptionCombo.
+  if (req.term != null && req.payment) {
+    if (!isValidCombination(ctx.provider, service, req.term, req.payment)) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) {
+        errEl.textContent = `${ctx.provider}/${service} does not support ${req.term}-year ${req.payment}. Pick a different term or payment.`;
+      }
+      return;
+    }
+  }
+
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req);
+    showToast({
+      message: `Override created for ${ctx.provider}/${service}.`,
+      kind: 'success',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } catch (err) {
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = `Failed to create override: ${(err as Error).message}`;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+/**
+ * Fan out save calls for all checked services (issue #119).
+ *
+ * Uses Promise.allSettled so a failure on one service does not abort the
+ * others. Shows one aggregated toast on completion summarising how many
+ * succeeded and which failed.
+ */
+async function submitBulkOverrideForm(
+  ctx: NonNullable<typeof overrideModalContext>,
+  req: api.AccountServiceOverrideRequest,
+): Promise<void> {
+  const listDiv = document.getElementById('override-bulk-services-list');
+  const checked = Array.from(
+    listDiv?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked') ?? [],
+  ).map(cb => cb.value);
+
+  if (checked.length === 0) {
+    const errEl = document.getElementById('override-form-error');
+    if (errEl) errEl.textContent = 'Select at least one service.';
+    return;
+  }
+
+  // Validate (provider, service, term, payment) combinations before fanning out.
+  if (req.term != null && req.payment) {
+    const invalid = checked.filter(
+      service => !isValidCombination(ctx.provider, service, req.term!, req.payment!),
+    );
+    if (invalid.length > 0) {
+      const errEl = document.getElementById('override-form-error');
+      if (errEl) {
+        errEl.textContent = `${invalid.join(', ')}: does not support ${req.term}-year ${req.payment}. Pick a different term or payment.`;
+      }
+      return;
+    }
+  }
+
+  const submitBtn = document.getElementById('override-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) submitBtn.disabled = true;
+  const errEl = document.getElementById('override-form-error');
+  if (errEl) errEl.textContent = '';
+
+  const results = await Promise.allSettled(
+    checked.map(service => api.saveAccountServiceOverride(ctx.accountId, ctx.provider, service, req)),
+  );
+
+  const failed = checked.filter((_, i) => results[i]?.status === 'rejected');
+  const succeeded = checked.length - failed.length;
+
+  if (failed.length === 0) {
+    showToast({
+      message: `Created ${succeeded} override${succeeded !== 1 ? 's' : ''}.`,
+      kind: 'success',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  } else if (succeeded === 0) {
+    if (submitBtn) submitBtn.disabled = false;
+    if (errEl) {
+      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed. Check your connection and try again.`;
+    }
+  } else {
+    // Partial success: close and reload, surface the failures in a toast.
+    showToast({
+      message: `Created ${succeeded} override${succeeded !== 1 ? 's' : ''}; failed for: ${failed.join(', ')}.`,
+      kind: 'warning',
+    });
+    closeOverrideModal();
+    await loadOverridesPanel(ctx.accountId, ctx.panel, ctx.provider as AccountProvider);
+    await refreshRecommendationsAfterOverrideChange();
+  }
+}
+
+/**
+ * Open account modal for add or edit
+ */
+export function openAccountModal(provider: AccountProvider, account?: api.CloudAccount, options?: AccountModalOptions): void {
+  accountModalProvider = provider;
+  accountModalOnSave = options?.onSave;
+  const modal = document.getElementById('account-modal');
+  if (!modal) return;
+
+  const title = document.getElementById('account-modal-title');
+  if (title) title.textContent = account ? 'Edit Account' : 'Add Account';
+
+  setInputValue('account-id', account?.id ?? '');
+  setInputValue('account-provider', provider);
+  setInputValue('account-name', account?.name ?? '');
+  setInputValue('account-description', account?.description ?? '');
+  setInputValue('account-contact-email', account?.contact_email ?? '');
+  setInputValue('account-external-id', account?.external_id ?? '');
+  setInputChecked('account-enabled', account?.enabled ?? true);
+
+  // Show/hide provider-specific fields
+  const awsFields = document.getElementById('account-aws-fields');
+  const azureFields = document.getElementById('account-azure-fields');
+  const gcpFields = document.getElementById('account-gcp-fields');
+  if (awsFields) awsFields.classList.toggle('hidden', provider !== 'aws');
+  if (azureFields) azureFields.classList.toggle('hidden', provider !== 'azure');
+  if (gcpFields) gcpFields.classList.toggle('hidden', provider !== 'gcp');
+
+  if (provider === 'aws') {
+    populateAwsAccountFields(account);
+  } else if (provider === 'azure') {
+    const azureAuthMode = account?.azure_auth_mode ?? 'workload_identity_federation';
+    const azureAuthSelect = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
+    if (azureAuthSelect) azureAuthSelect.value = azureAuthMode;
+    setInputValue('account-azure-tenant-id', account?.azure_tenant_id ?? '');
+    setInputValue('account-azure-client-id', account?.azure_client_id ?? '');
+    setInputValue('account-azure-client-secret', '');
+    updateAzureAuthModeFields(azureAuthMode);
+  } else if (provider === 'gcp') {
+    const gcpMode = account?.gcp_auth_mode ?? 'workload_identity_federation';
+    const gcpAuthSelect = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
+    if (gcpAuthSelect) gcpAuthSelect.value = gcpMode;
+    const gcpEmailEl = document.getElementById('account-gcp-client-email') as HTMLInputElement | null;
+    if (gcpEmailEl) gcpEmailEl.value = account?.gcp_client_email ?? '';
+    const gcpJsonEl = document.getElementById('account-gcp-service-account-json') as HTMLTextAreaElement | null;
+    if (gcpJsonEl) gcpJsonEl.value = '';
+    const wifConfig = document.getElementById('account-gcp-wif-config') as HTMLTextAreaElement | null;
+    if (wifConfig) wifConfig.value = '';
+    updateGCPAuthModeFields(gcpMode);
+  }
+
+  openModal(modal);
+}
+
+/**
+ * Populate AWS-specific fields in the account modal
+ */
+function generateExternalID(): string {
+  // crypto.randomUUID is available in all supported browsers (Chrome
+  // 92+, Firefox 95+, Safari 15.4+). Fall back to crypto.getRandomValues
+  // (a strict superset of randomUUID's availability) for older runtimes.
+  // The External ID is a security primitive that protects against the
+  // confused-deputy problem on cross-account sts:AssumeRole, so the
+  // fallback MUST also be a CSPRNG — never Math.random() (issue #127).
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Last-resort fallback: a runtime with no Web Crypto at all (jsdom
+  // without polyfill, very old webviews). Not security-secret-quality,
+  // but "never empty" matters for the form to submit and the backend
+  // length/charset validator (issue #128) will then catch obviously-
+  // weak inputs. Math.random is intentionally NOT used here — see #127.
+  return `cudly-fallback-${Date.now().toString(36)}`;
+}
+
+/**
+ * Return the AWS External ID for the current modal session.
+ *
+ * - When editing an existing account: always use the persisted value.
+ * - When creating a new account: reuse the same draft value across modal
+ *   close/reopen cycles so an operator who copied the ID into their IAM
+ *   trust policy and then reopens the modal sees the same value (issue
+ *   #126). The draft is keyed in sessionStorage (cleared on tab close)
+ *   and is reset on a successful save.
+ *
+ * Falls back to in-memory generation if sessionStorage is unavailable
+ * (e.g., privacy-mode browsers, tests with no Storage shim) — that path
+ * preserves the legacy regenerate-on-reopen behaviour but never breaks.
+ */
+function resolveAwsExternalIdForModal(account?: api.CloudAccount): string {
+  if (account?.aws_external_id) return account.aws_external_id;
+
+  let storage: Storage | undefined;
+  try {
+    storage = typeof sessionStorage !== 'undefined' ? sessionStorage : undefined;
+  } catch {
+    storage = undefined;
+  }
+
+  if (storage) {
+    try {
+      const existing = storage.getItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+      if (existing) return existing;
+      const fresh = generateExternalID();
+      storage.setItem(AWS_DRAFT_EXTERNAL_ID_KEY, fresh);
+      return fresh;
+    } catch {
+      // Quota / permission errors — fall through to in-memory generation.
+    }
+  }
+  return generateExternalID();
+}
+
+/** Clear the in-progress AWS External ID draft. Called after successful save. */
+function clearAwsExternalIdDraft(): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(AWS_DRAFT_EXTERNAL_ID_KEY);
+    }
+  } catch {
+    // sessionStorage unavailable — nothing to clear.
+  }
+}
+
+function populateAwsAccountFields(account?: api.CloudAccount): void {
+  const authMode = (account?.aws_auth_mode ?? 'workload_identity_federation') as string;
+  const authModeSelect = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
+  if (authModeSelect) authModeSelect.value = authMode;
+
+  setInputValue('account-aws-access-key-id', '');
+  setInputValue('account-aws-secret-access-key', '');
+  // aws_role_arn is the backend column used by all three auth modes that need
+  // a role: role_arn (direct), bastion (target role assumed via bastion creds),
+  // and workload_identity_federation (role assumed via OIDC). Only one of
+  // these fields is visible at a time (see updateAwsAuthModeFields), and the
+  // save path writes whichever one is visible back to req.aws_role_arn. We
+  // pre-fill all three with the same stored value so switching modes mid-edit
+  // doesn't blank the input that just became visible.
+  setInputValue('account-aws-role-arn', account?.aws_role_arn ?? '');
+  // External ID is a CUDly-managed shared secret for cross-account role
+  // assumption (issue #18). On edit, keep whatever was stored before; on
+  // create, generate a value once and persist it in sessionStorage so a
+  // close/reopen cycle returns the same value (issue #126). The field
+  // itself is marked readonly in index.html so users can't hand-craft
+  // values that would defeat the purpose.
+  // Bastion mode shares the same draft External ID value as role_arn mode
+  // (issue #129) — both are AWS sts:ExternalId values used as a confused-
+  // deputy guard. Sharing the draft key keeps a single source of truth so
+  // toggling auth modes mid-edit doesn't surface diverging values, and the
+  // generator semantics are identical (CSPRNG + sessionStorage persistence
+  // until save). The two readonly inputs are wired to the same value.
+  const externalID = resolveAwsExternalIdForModal(account);
+  setInputValue('account-aws-external-id', externalID);
+  setInputValue('account-aws-external-id-bastion', externalID);
+  setInputValue('account-aws-bastion-role-arn', account?.aws_role_arn ?? '');
+  setInputValue('account-aws-wif-role-arn', account?.aws_role_arn ?? '');
+  setInputValue('account-aws-wif-token-file', account?.aws_web_identity_token_file ?? '');
+  setInputChecked('account-aws-is-org-root', account?.aws_is_org_root ?? false);
+
+  updateAwsAuthModeFields(authMode, account?.aws_bastion_id);
+
+  // Render the trust-policy snippet asynchronously — we need the CUDly
+  // host account ID from getConfig.source_identity (issue #19). Kept
+  // void so the modal doesn't block waiting for the network. The bastion
+  // variant (issue #129) is also rendered eagerly so it's ready when the
+  // operator switches to that mode mid-edit.
+  void renderAwsTrustPolicy();
+  void renderAwsBastionTrustPolicy();
+}
+
+/**
+ * Map an AWS partition identifier (`aws`, `aws-cn`, `aws-us-gov`) to the
+ * ARN prefix used in IAM trust policies. Defaults to `aws` for an empty
+ * or unknown value so the rendered snippet always parses (issue #130c).
+ */
+function awsPartitionForArn(partition: string | undefined): string {
+  switch (partition) {
+    case 'aws-cn':
+    case 'aws-us-gov':
+      return partition;
+    default:
+      return 'aws';
+  }
+}
+
+/**
+ * Render the IAM trust-policy JSON snippet into the AWS role-mode
+ * section. The snippet interpolates the CUDly host AWS account ID and
+ * the per-account External ID so operators can copy it straight into
+ * the role's trust relationship (issue #19).
+ *
+ * Partition awareness (issue #130c): the ARN prefix is taken from the
+ * backend-reported partition so AWS China (`aws-cn`) and GovCloud
+ * (`aws-us-gov`) deployments render a usable snippet instead of a
+ * silently-wrong `arn:aws:` ARN.
+ *
+ * Race short-circuit (issue #130a): the auth-mode select is sampled
+ * before the awaited getConfig() call and rechecked after. If the user
+ * switched away from `role_arn` while the config was loading we abort
+ * the write so we never paint into a hidden field.
+ *
+ * Config caching (issue #130d): /api/config is fetched at most once per
+ * page load via getCachedConfig(); each modal open reuses the cached
+ * promise instead of re-firing the GET.
+ */
+async function renderAwsTrustPolicy(): Promise<void> {
+  const block = document.getElementById('account-aws-trust-policy');
+  const hint = document.getElementById('account-aws-trust-policy-hint');
+  if (!block) return;
+  const externalID = (document.getElementById('account-aws-external-id') as HTMLInputElement | null)?.value ?? '';
+
+  // Snapshot the auth mode at call time — we'll recheck after the await
+  // to detect a race where the user switched to bastion / WIF / keys
+  // mid-fetch (issue #130a).
+  const authModeSnapshot = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+
+  let sourceAccountID = '';
+  let partition = 'aws';
+  try {
+    const cfg = await getCachedConfig();
+    if (cfg.source_identity?.provider === 'aws') {
+      sourceAccountID = cfg.source_identity.account_id ?? '';
+      partition = awsPartitionForArn(cfg.source_identity.partition);
+    }
+  } catch {
+    // Non-critical — fall through to the placeholder text below.
+  }
+
+  // If the user switched auth modes while we were waiting on the API,
+  // bail out: the role_arn fields are now hidden and writing into them
+  // would either be a wasted DOM mutation or (worse) flash stale data
+  // if they switch back later (issue #130a).
+  const authModeNow = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+  if (authModeSnapshot !== undefined && authModeSnapshot !== authModeNow) {
+    return;
+  }
+
+  if (!sourceAccountID) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        "CUDly can't determine its host AWS account ID from this deployment " +
+        "(either CUDly isn't running on AWS, or the Lambda/Container role " +
+        "lacks sts:GetCallerIdentity). Ask a CUDly admin for the account ID, " +
+        "then build the trust policy manually with Principal=arn:" + partition +
+        ":iam::<CUDly account ID>:root, Action=sts:AssumeRole, and a " +
+        "StringEquals sts:ExternalId condition on the value above.";
+    }
+    return;
+  }
+
+  const policy = {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: { AWS: `arn:${partition}:iam::${sourceAccountID}:root` },
+        Action: 'sts:AssumeRole',
+        Condition: {
+          StringEquals: { 'sts:ExternalId': externalID },
+        },
+      },
+    ],
+  };
+  block.textContent = JSON.stringify(policy, null, 2);
+  if (hint) {
+    // The :root principal trusts every IAM principal in the CUDly host
+    // account — the AWS-documented SaaS baseline (issue #130b). It
+    // relies on the host account being well-secured and on the
+    // sts:ExternalId condition for confused-deputy protection. A
+    // tighter "lock to CUDly's compute role only" toggle is tracked
+    // upstream; until it ships, customers who need least-privilege
+    // can replace `:root` with the specific Lambda execution role ARN
+    // out-of-band.
+    hint.textContent =
+      "Attach this policy to the IAM role's trust relationship so CUDly can " +
+      "assume it. The Principal is the CUDly host AWS account root — every " +
+      "IAM principal in that account is trusted, so the sts:ExternalId " +
+      "condition is what locks this role to your specific CUDly registration.";
+  }
+}
+
+/**
+ * Render the IAM trust-policy snippet for the bastion auth mode (issue
+ * #129). Mirrors renderAwsTrustPolicy but the Principal is the *bastion*
+ * account root (the AWS account whose credentials call sts:AssumeRole
+ * into the customer's role), not the CUDly host account.
+ *
+ * Rerun whenever the operator toggles into bastion mode or picks a
+ * different bastion in the dropdown. If no bastion is selected yet, the
+ * snippet block is cleared and the hint asks the operator to pick one.
+ *
+ * Race short-circuit (mirrors #130a): if the auth mode changed while we
+ * were waiting on listAccounts/getConfig, abort so we don't paint into
+ * a now-hidden field.
+ */
+async function renderAwsBastionTrustPolicy(): Promise<void> {
+  const block = document.getElementById('account-aws-trust-policy-bastion');
+  const hint = document.getElementById('account-aws-trust-policy-bastion-hint');
+  if (!block) return;
+  const externalID = (document.getElementById('account-aws-external-id-bastion') as HTMLInputElement | null)?.value ?? '';
+  const bastionSelectVal = (document.getElementById('account-aws-bastion-id') as HTMLSelectElement | null)?.value ?? '';
+
+  // Snapshot the auth mode at call time — recheck after the awaits to
+  // detect a race where the user switched modes mid-fetch (#130a).
+  const authModeSnapshot = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+
+  if (!bastionSelectVal) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        'Pick a bastion account above to render the trust policy snippet. ' +
+        "The Principal will be the bastion's AWS account root; the " +
+        'sts:ExternalId condition uses the value displayed above.';
+    }
+    return;
+  }
+
+  let bastionAccountID = '';
+  let partition = 'aws';
+  try {
+    const [accounts, cfg] = await Promise.all([
+      api.listAccounts({ provider: 'aws' }),
+      getCachedConfig(),
+    ]);
+    const bastion = accounts.find(a => a.id === bastionSelectVal);
+    bastionAccountID = bastion?.external_id ?? '';
+    if (cfg.source_identity?.provider === 'aws') {
+      partition = awsPartitionForArn(cfg.source_identity.partition);
+    }
+  } catch {
+    // Non-critical — fall through to the placeholder text below.
+  }
+
+  const authModeNow = (document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null)?.value;
+  if (authModeSnapshot !== undefined && authModeSnapshot !== authModeNow) {
+    return;
+  }
+
+  if (!bastionAccountID) {
+    block.textContent = '';
+    if (hint) {
+      hint.textContent =
+        "CUDly couldn't determine the bastion account ID. Build the trust " +
+        'policy manually with Principal=arn:' + partition +
+        ':iam::<bastion account ID>:root, Action=sts:AssumeRole, and a ' +
+        'StringEquals sts:ExternalId condition on the value above.';
+    }
+    return;
+  }
+
+  const policy = {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: { AWS: `arn:${partition}:iam::${bastionAccountID}:root` },
+        Action: 'sts:AssumeRole',
+        Condition: {
+          StringEquals: { 'sts:ExternalId': externalID },
+        },
+      },
+    ],
+  };
+  block.textContent = JSON.stringify(policy, null, 2);
+  if (hint) {
+    hint.textContent =
+      "Attach this policy to the target IAM role's trust relationship so " +
+      'CUDly can assume it through the bastion. The Principal is the ' +
+      'bastion account root; the sts:ExternalId condition locks the role ' +
+      'to this specific CUDly registration.';
+  }
+}
+
+/**
+ * Show/hide AWS auth mode sub-fields
+ */
+function updateAwsAuthModeFields(mode: string, bastionId?: string): void {
+  const keysFields = document.getElementById('account-aws-keys-fields');
+  const roleFields = document.getElementById('account-aws-role-fields');
+  const bastionFields = document.getElementById('account-aws-bastion-fields');
+  const wifFields = document.getElementById('account-aws-wif-fields');
+
+  keysFields?.classList.toggle('hidden', mode !== 'access_keys');
+  roleFields?.classList.toggle('hidden', mode !== 'role_arn');
+  bastionFields?.classList.toggle('hidden', mode !== 'bastion');
+  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
+
+  if (mode === 'bastion') {
+    // Refresh the dropdown then re-render the trust-policy snippet so
+    // a freshly-selected bastion is reflected in the Principal (#129).
+    void populateBastionAccountDropdown(bastionId).then(() => renderAwsBastionTrustPolicy());
+  }
+}
+
+/**
+ * Show/hide Azure auth mode sub-fields. Only client_secret mode has an
+ * input block; workload_identity_federation is credential-free (CUDly's
+ * OIDC issuer + the App Registration's federated-identity-credential
+ * handle authentication) and managed_identity is ambient, so neither
+ * needs a visible field block here.
+ */
+function updateAzureAuthModeFields(mode: string): void {
+  const secretFields = document.getElementById('account-azure-secret-fields');
+  secretFields?.classList.toggle('hidden', mode !== 'client_secret');
+}
+
+/**
+ * Show/hide GCP auth mode sub-fields
+ */
+function updateGCPAuthModeFields(mode: string): void {
+  const keyFields = document.getElementById('account-gcp-key-fields');
+  const wifFields = document.getElementById('account-gcp-wif-fields');
+  keyFields?.classList.toggle('hidden', mode !== 'service_account_key');
+  wifFields?.classList.toggle('hidden', mode !== 'workload_identity_federation');
+}
+
+/**
+ * Populate bastion account dropdown with AWS accounts, optionally pre-selecting one
+ */
+async function populateBastionAccountDropdown(selectedId?: string): Promise<void> {
+  const select = document.getElementById('account-aws-bastion-id') as HTMLSelectElement | null;
+  if (!select) return;
+  try {
+    const accounts = await api.listAccounts({ provider: 'aws' });
+    while (select.options.length > 1) select.remove(1);
+    accounts.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = `${a.name} (${a.external_id})`;
+      select.appendChild(opt);
+    });
+    if (selectedId) select.value = selectedId;
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * Close the account modal
+ */
+function closeAccountModal(): void {
+  const modal = document.getElementById('account-modal');
+  if (modal) closeModal(modal);
+  accountModalOnSave = undefined;
+}
+
+/**
+ * Build the account request from the modal form
+ */
+function buildAccountRequest(provider: AccountProvider): api.CloudAccountRequest {
+  const req: api.CloudAccountRequest = {
+    name: (byId<HTMLInputElement>('account-name')?.value ?? '').trim(),
+    description: (byId<HTMLTextAreaElement>('account-description')?.value ?? '').trim() || undefined,
+    contact_email: (byId<HTMLInputElement>('account-contact-email')?.value ?? '').trim() || undefined,
+    provider,
+    external_id: (byId<HTMLInputElement>('account-external-id')?.value ?? '').trim(),
+    enabled: byId<HTMLInputElement>('account-enabled')?.checked ?? true,
+  };
+
+  if (provider === 'aws') {
+    const authMode = byId<HTMLSelectElement>('account-aws-auth-mode')?.value ?? '';
+    req.aws_auth_mode = authMode;
+    req.aws_is_org_root = byId<HTMLInputElement>('account-aws-is-org-root')?.checked ?? false;
+    if (authMode === 'role_arn') {
+      req.aws_role_arn = (byId<HTMLInputElement>('account-aws-role-arn')?.value ?? '').trim();
+      req.aws_external_id = (byId<HTMLInputElement>('account-aws-external-id')?.value ?? '').trim() || undefined;
+    } else if (authMode === 'bastion') {
+      req.aws_bastion_id = byId<HTMLSelectElement>('account-aws-bastion-id')?.value ?? '';
+      req.aws_role_arn = (byId<HTMLInputElement>('account-aws-bastion-role-arn')?.value ?? '').trim();
+      // Collect the External ID for bastion mode too (issue #129) — the
+      // bastion's STS client calls AssumeRole into the target role just
+      // like role_arn mode, so the same sts:ExternalId guard applies.
+      req.aws_external_id = (byId<HTMLInputElement>('account-aws-external-id-bastion')?.value ?? '').trim() || undefined;
+    } else if (authMode === 'workload_identity_federation') {
+      req.aws_role_arn = byId<HTMLInputElement>('account-aws-wif-role-arn')?.value.trim();
+      req.aws_web_identity_token_file = byId<HTMLInputElement>('account-aws-wif-token-file')?.value.trim() || undefined;
+    }
+  } else if (provider === 'azure') {
+    req.azure_subscription_id = req.external_id; // external_id IS the subscription ID for Azure
+    req.azure_auth_mode = byId<HTMLSelectElement>('account-azure-auth-mode')?.value || 'client_secret';
+    req.azure_tenant_id = (byId<HTMLInputElement>('account-azure-tenant-id')?.value ?? '').trim();
+    req.azure_client_id = (byId<HTMLInputElement>('account-azure-client-id')?.value ?? '').trim();
+  } else if (provider === 'gcp') {
+    req.gcp_project_id = req.external_id; // external_id IS the project ID for GCP
+    req.gcp_auth_mode = byId<HTMLSelectElement>('account-gcp-auth-mode')?.value || 'service_account_key';
+    req.gcp_client_email = byId<HTMLInputElement>('account-gcp-client-email')?.value.trim() ?? '';
+  }
+
+  return req;
+}
+
+/**
+ * Build and save credentials from the account modal form (if filled)
+ */
+async function saveAccountCredentialsIfFilled(accountId: string, provider: AccountProvider): Promise<void> {
+  if (provider === 'aws') {
+    const authMode = byId<HTMLSelectElement>('account-aws-auth-mode')?.value ?? '';
+    if (authMode === 'access_keys') {
+      const keyId = (byId<HTMLInputElement>('account-aws-access-key-id')?.value ?? '').trim();
+      const secretKey = byId<HTMLInputElement>('account-aws-secret-access-key')?.value ?? '';
+      if (keyId && secretKey) {
+        await api.saveAccountCredentials(accountId, {
+          credential_type: 'aws_access_keys',
+          payload: { access_key_id: keyId, secret_access_key: secretKey }
+        });
+      }
+    }
+  } else if (provider === 'azure') {
+    const azureMode = byId<HTMLSelectElement>('account-azure-auth-mode')?.value ?? 'client_secret';
+    // managed_identity is ambient; workload_identity_federation is
+    // secret-free (CUDly's OIDC issuer + the Azure App Registration's
+    // federated-identity-credential handle authentication, no material
+    // stored in CUDly). Only client_secret accepts a stored credential.
+    if (azureMode === 'client_secret') {
+      const secret = byId<HTMLInputElement>('account-azure-client-secret')?.value ?? '';
+      if (secret) {
+        await api.saveAccountCredentials(accountId, {
+          credential_type: 'azure_client_secret',
+          payload: { client_secret: secret }
+        });
+      }
+    }
+  } else if (provider === 'gcp') {
+    const gcpMode = byId<HTMLSelectElement>('account-gcp-auth-mode')?.value ?? 'service_account_key';
+    if (gcpMode === 'application_default') {
+      // No credential to store
+    } else if (gcpMode === 'workload_identity_federation') {
+      const config = byId<HTMLTextAreaElement>('account-gcp-wif-config')?.value.trim();
+      if (config) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(config) as Record<string, unknown>;
+        } catch {
+          throw new Error('GCP WIF config is not valid JSON');
+        }
+        await api.saveAccountCredentials(accountId, { credential_type: 'gcp_workload_identity_config', payload: parsed });
+      }
+    } else {
+      const jsonText = byId<HTMLTextAreaElement>('account-gcp-service-account-json')?.value.trim() ?? '';
+      if (jsonText) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(jsonText) as Record<string, unknown>;
+        } catch {
+          throw new Error('Service account JSON is not valid JSON');
+        }
+        await api.saveAccountCredentials(accountId, { credential_type: 'gcp_service_account', payload: parsed });
+      }
+    }
+  }
+}
+
+/**
+ * Handle account form submission
+ */
+async function handleAccountFormSubmit(e: Event): Promise<void> {
+  e.preventDefault();
+  const provider = accountModalProvider;
+  const req = buildAccountRequest(provider);
+
+  // If a custom onSave callback was provided (e.g., registration approval),
+  // delegate to it instead of the normal create/update flow.
+  if (accountModalOnSave) {
+    try {
+      await accountModalOnSave(provider, req);
+      closeAccountModal();
+    } catch (err) {
+      console.error('Custom save failed:', err);
+      showToast({ message: `Failed to save: ${(err as Error).message}`, kind: 'error' });
+    }
+    return;
+  }
+
+  const accountId = byId<HTMLInputElement>('account-id')?.value ?? '';
+
+  try {
+    let savedId = accountId;
+    if (accountId) {
+      await api.updateAccount(accountId, req);
+    } else {
+      const created = await api.createAccount(req);
+      savedId = created.id;
+    }
+
+    // Account persisted — drop the in-progress AWS External ID draft so
+    // the next "Add AWS Account" flow generates a fresh value (issue #126).
+    if (provider === 'aws') {
+      clearAwsExternalIdDraft();
+    }
+
+    // Credential save is best-effort: if it fails we still close the modal
+    // (the account was already persisted) and show a targeted warning so the
+    // user knows to retry just the credential step.
+    try {
+      await saveAccountCredentialsIfFilled(savedId, provider);
+    } catch (credErr) {
+      console.error('Account saved but credentials could not be stored:', credErr);
+      closeAccountModal();
+      await loadAccountsForProvider(provider);
+      showToast({
+        message: `Account saved, but credentials could not be stored: ${(credErr as Error).message}. Edit the account to re-enter credentials.`,
+        kind: 'warning',
+        timeout: null,
+      });
+      return;
+    }
+
+    closeAccountModal();
+    await loadAccountsForProvider(provider);
+  } catch (err) {
+    console.error('Failed to save account:', err);
+    showToast({ message: `Failed to save account: ${(err as Error).message}`, kind: 'error' });
+  }
+}
+
+/**
+ * Trigger org account discovery from the management (org root) account
+ */
+async function handleDiscoverOrgAccounts(): Promise<void> {
+  try {
+    const result = await api.discoverOrgAccounts();
+    showToast({ message: `Org discovery started: ${result.message || result.status}`, kind: 'success' });
+    await loadAccountsForProvider('aws');
+  } catch (err) {
+    console.error('Org discovery failed:', err);
+    showToast({ message: `Org discovery failed: ${(err as Error).message}`, kind: 'error' });
+  }
+}
+
+/**
+ * Set up settings event handlers
+ */
+export function setupSettingsHandlers(signal?: AbortSignal): void {
+  // Provider checkbox handlers - toggle visibility of provider settings sections
+  const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
+  const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;
+  const gcpCheck = document.getElementById('provider-gcp') as HTMLInputElement | null;
+
+  awsCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
+  azureCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
+  gcpCheck?.addEventListener('change', () => updateProviderSettingsVisibility(), { signal });
+
+  // Auto-collect checkbox - toggle schedule visibility
+  const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
+  autoCollect?.addEventListener('change', () => updateCollectionScheduleVisibility(), { signal });
+
+  // Global defaults — propagate to all services when changed. The actual
+  // propagation is gated behind a diff-preview confirmation (see
+  // confirmAndPropagateTerm / confirmAndPropagatePayment) so the user
+  // understands which per-service rows will be rewritten.
+  const defaultTerm = document.getElementById('setting-default-term') as HTMLSelectElement | null;
+  const defaultPayment = document.getElementById('setting-default-payment') as HTMLSelectElement | null;
+  if (defaultTerm) {
+    defaultTerm.dataset['previous'] = defaultTerm.value;
+    defaultTerm.addEventListener('focus', () => { defaultTerm.dataset['previous'] = defaultTerm.value; }, { signal });
+    defaultTerm.addEventListener('change', () => {
+      void confirmAndPropagateTerm(defaultTerm);
+    }, { signal });
+  }
+  if (defaultPayment) {
+    defaultPayment.dataset['previous'] = defaultPayment.value;
+    defaultPayment.addEventListener('focus', () => { defaultPayment.dataset['previous'] = defaultPayment.value; }, { signal });
+    defaultPayment.addEventListener('change', () => {
+      void confirmAndPropagatePayment(defaultPayment);
+    }, { signal });
+  }
+
+  // Wire per-service term changes to the commitment-constraint sync so the
+  // payment dropdown narrows to supported combinations as the user picks a
+  // term. The initial sync runs after loadGlobalSettings populates the
+  // form with persisted values.
+  SERVICE_FIELDS.forEach(field => {
+    if (field.provider !== 'aws' || !field.paymentId) return;
+    const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
+    termEl?.addEventListener('change', () => syncPaymentConstraintsForService(field), { signal });
+  });
+
+  // Inline range validation on numeric settings — surfaces a single
+  // "Must be a whole number between X and Y" message under the field
+  // as the user types, instead of waiting for Save Settings (#465).
+  // All fields are integer-only at the backend, so pass requireInteger
+  // so the inline check rejects fractional input that the save-time
+  // guard would otherwise catch on a second trip.
+  //
+  // Every numeric input on the Settings page is wired through this
+  // helper — the three top-level inputs covered by #471, plus the
+  // per-provider grace inputs (originally on a separate readGraceInput
+  // save-time-only toast contract) — so the inline-error UX is uniform
+  // across Settings.
+  wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true });
+
+  // Set up dirty-field tracking
+  setupDirtyTracking(signal);
+
+  // Account management buttons
+  document.getElementById('add-aws-account-btn')?.addEventListener('click', () => openAccountModal('aws'), { signal });
+  document.getElementById('add-azure-account-btn')?.addEventListener('click', () => openAccountModal('azure'), { signal });
+  document.getElementById('add-gcp-account-btn')?.addEventListener('click', () => openAccountModal('gcp'), { signal });
+
+  // Org discovery button
+  document.getElementById('discover-org-accounts-btn')?.addEventListener('click', () => void handleDiscoverOrgAccounts(), { signal });
+
+  // Account form submit handler
+  document.getElementById('account-form')?.addEventListener('submit', (e) => void handleAccountFormSubmit(e), { signal });
+
+  // Account modal close
+  document.getElementById('close-account-modal-btn')?.addEventListener('click', closeAccountModal, { signal });
+
+  // AWS auth mode change handler
+  const awsAuthMode = document.getElementById('account-aws-auth-mode') as HTMLSelectElement | null;
+  awsAuthMode?.addEventListener('change', () => updateAwsAuthModeFields(awsAuthMode.value), { signal });
+
+  // Copy the auto-generated AWS External ID to the clipboard (issue #18).
+  document.getElementById('account-aws-external-id-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-external-id'),
+    { signal },
+  );
+
+  // Copy the rendered AWS IAM trust policy snippet (issue #19).
+  document.getElementById('account-aws-trust-policy-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-trust-policy'),
+    { signal },
+  );
+
+  // Bastion-mode counterparts of the External ID copy button + trust-
+  // policy copy button (issue #129).
+  document.getElementById('account-aws-external-id-bastion-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-external-id-bastion'),
+    { signal },
+  );
+  document.getElementById('account-aws-trust-policy-bastion-copy')?.addEventListener(
+    'click',
+    () => copyToClipboard('account-aws-trust-policy-bastion'),
+    { signal },
+  );
+
+  // Re-render the bastion trust-policy snippet whenever the bastion
+  // account dropdown changes — the snippet's Principal is the selected
+  // bastion's account root (issue #129).
+  document.getElementById('account-aws-bastion-id')?.addEventListener(
+    'change',
+    () => void renderAwsBastionTrustPolicy(),
+    { signal },
+  );
+
+  // Azure auth mode change handler
+  const azureAuthMode = document.getElementById('account-azure-auth-mode') as HTMLSelectElement | null;
+  azureAuthMode?.addEventListener('change', () => updateAzureAuthModeFields(azureAuthMode.value), { signal });
+
+  // GCP auth mode change handler
+  const gcpAuthMode = document.getElementById('account-gcp-auth-mode') as HTMLSelectElement | null;
+  gcpAuthMode?.addEventListener('change', () => updateGCPAuthModeFields(gcpAuthMode.value), { signal });
+
+  // Close account modal when clicking outside
+  const accountModal = document.getElementById('account-modal');
+  accountModal?.addEventListener('click', (e) => {
+    if (e.target === accountModal) closeAccountModal();
+  }, { signal });
+
+  // Override modal — submit, cancel, click-outside-to-dismiss (issue #104).
+  document.getElementById('override-form')?.addEventListener(
+    'submit',
+    (e) => void submitOverrideForm(e),
+    { signal },
+  );
+  document.getElementById('close-override-modal-btn')?.addEventListener(
+    'click',
+    closeOverrideModal,
+    { signal },
+  );
+  const overrideModal = document.getElementById('override-modal');
+  overrideModal?.addEventListener('click', (e) => {
+    if (e.target === overrideModal) closeOverrideModal();
+  }, { signal });
+
+  // Per-account overrides modal — close + click-outside-to-dismiss (issue #122).
+  document.getElementById('close-account-overrides-modal-btn')?.addEventListener(
+    'click',
+    closeAccountOverridesModal,
+    { signal },
+  );
+  const accountOverridesModal = document.getElementById('account-overrides-modal');
+  accountOverridesModal?.addEventListener('click', (e) => {
+    if (e.target === accountOverridesModal) closeAccountOverridesModal();
+  }, { signal });
+}
+
+/**
+ * Update visibility of provider settings sections based on checkboxes
+ */
+function updateProviderSettingsVisibility(): void {
+  const providers: Array<{ key: AccountProvider; checkId: string; settingsId: string; blockId: string }> = [
+    { key: 'aws',   checkId: 'provider-aws',   settingsId: 'aws-settings',   blockId: 'accounts-aws-block'   },
+    { key: 'azure', checkId: 'provider-azure', settingsId: 'azure-settings', blockId: 'accounts-azure-block' },
+    { key: 'gcp',   checkId: 'provider-gcp',   settingsId: 'gcp-settings',   blockId: 'accounts-gcp-block'   },
+  ];
+  for (const p of providers) {
+    const checked = (document.getElementById(p.checkId) as HTMLInputElement | null)?.checked ?? false;
+    // Per-provider settings section (credentials + service defaults): hide when disabled
+    document.getElementById(p.settingsId)?.classList.toggle('hidden', !checked);
+    // Per-provider accounts block in Accounts section: dim (not hide) when disabled
+    const block = document.getElementById(p.blockId);
+    if (block) {
+      const wasDisabled = block.classList.contains('provider-disabled');
+      block.classList.toggle('provider-disabled', !checked);
+      // Re-enabling: refresh the account list from the backend
+      if (wasDisabled && checked) {
+        void loadAccountsForProvider(p.key);
+      }
+    }
+  }
+}
+
+/**
+ * Update visibility of collection schedule row based on auto-collect checkbox
+ */
+function updateCollectionScheduleVisibility(): void {
+  const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
+  const scheduleRow = document.getElementById('collection-schedule-row');
+
+  if (scheduleRow) {
+    scheduleRow.classList.toggle('hidden', !autoCollect?.checked);
+  }
+}
+
+/**
+ * Propagate default term to all service-specific term selects
+ */
+function propagateTermToServices(term: string): void {
+  SERVICE_FIELDS.forEach(({ termId }) => {
+    const select = document.getElementById(termId) as HTMLSelectElement | null;
+    if (select) {
+      select.value = term;
+    }
+  });
+  // Propagation changes term, which may invalidate each service's current
+  // payment (e.g., RDS jumping from 1yr to 3yr while "No Upfront" was set).
+  // Re-apply per-service constraints to keep the UI honest.
+  syncAllServiceCommitmentConstraints();
+}
+
+/**
+ * Propagate default payment option to all service-specific payment selects
+ * Note: Only AWS services have payment options; Azure/GCP use full upfront only
+ */
+function propagatePaymentToServices(payment: string): void {
+  SERVICE_FIELDS
+    .filter(f => f.paymentId !== null)
+    .forEach(({ paymentId }) => {
+      const select = document.getElementById(paymentId!) as HTMLSelectElement | null;
+      if (select) {
+        select.value = payment;
+      }
+    });
+  // If the propagated payment is invalid for any service's current term
+  // (e.g., "No Upfront" against RDS 3yr), clamp to the first valid option
+  // on that service instead of silently persisting a combo the provider
+  // will reject.
+  syncAllServiceCommitmentConstraints();
+}
+
+/**
+ * Apply per-service commitment restrictions to a single service's payment
+ * dropdown. AWS services like RDS/ElastiCache/OpenSearch/Redshift don't
+ * accept 3-year No-Upfront — commitmentOptions.ts encodes which (term,
+ * payment) pairs each service rejects. We hide + disable the invalid
+ * option rows so the Settings UI can't save a combination the backend
+ * would reject. If the currently-selected payment becomes invalid after
+ * a term change, it auto-clamps to the first valid option so the form
+ * never holds an unsavable value.
+ *
+ * Azure and GCP service-default cards are out of scope here — Azure has
+ * only two payment options (neither restricted by term) and GCP has no
+ * payment selector at all.
+ */
+function syncPaymentConstraintsForService(field: typeof SERVICE_FIELDS[number]): void {
+  if (field.provider !== 'aws' || !field.paymentId) return;
+  const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
+  const paymentEl = document.getElementById(field.paymentId) as HTMLSelectElement | null;
+  if (!termEl || !paymentEl) return;
+
+  const term = parseInt(termEl.value || '3', 10);
+  let firstValidOption: HTMLOptionElement | null = null;
+  for (const opt of Array.from(paymentEl.options)) {
+    const valid = isValidCombination(field.provider, field.service, term, opt.value);
+    // Belt-and-suspenders: `hidden` removes the option from the rendered
+    // dropdown, `disabled` prevents keyboard / programmatic selection in
+    // the rare browsers where a hidden <option> can still receive focus.
+    opt.hidden = !valid;
+    opt.disabled = !valid;
+    if (valid && !firstValidOption) firstValidOption = opt;
+  }
+  const currentOpt = paymentEl.options[paymentEl.selectedIndex];
+  if (currentOpt?.disabled && firstValidOption) {
+    paymentEl.value = firstValidOption.value;
+  }
+}
+
+/**
+ * Re-apply commitment constraints across every service. Cheap (O(services
+ * × payments)), called on settings load and after any bulk write that
+ * touches term/payment values (reset, propagation).
+ */
+function syncAllServiceCommitmentConstraints(): void {
+  SERVICE_FIELDS.forEach(syncPaymentConstraintsForService);
+}
+
+function termLabel(value: string): string {
+  return value === '1' ? '1 Year' : value === '3' ? '3 Years' : `${value} Years`;
+}
+
+/**
+ * Build the "Inherit (currently: X)" label for override-modal "Inherit"
+ * options (issue #112). `currentValue` must already be human-readable (e.g.,
+ * "3 Years", "All Upfront", "80%") -- callers are responsible for formatting.
+ * The value is injected via textContent, not innerHTML, so no escaping needed.
+ */
+function inheritCurrentlyLabel(currentValue: string): string {
+  return `Inherit (currently: ${currentValue})`;
+}
+
+function paymentLabel(value: string): string {
+  switch (value) {
+    case 'no-upfront': return 'No Upfront';
+    case 'partial-upfront': return 'Partial Upfront';
+    case 'all-upfront': return 'All Upfront';
+    default: return value;
+  }
+}
+
+// Human-readable display names for each (provider, service) tuple,
+// keyed to match the SERVICE_FIELDS constant. Source of truth: the
+// <h5> titles on each Service Default card in index.html. Used by
+// buildAffectedList so the "Propagate to N services" confirmation
+// pop-up reads "AWS EC2 Reserved Instances" instead of the backend
+// identifier "aws ec2" (#467).
+//
+// Missing entries fall back to a UPPER + raw service slug, which is
+// strictly an improvement-of-niceness — anything missing here renders
+// the way the old code rendered everything. Keep this table in sync
+// when SERVICE_FIELDS grows.
+const SERVICE_DISPLAY_NAMES: Record<string, Record<string, string>> = {
+  aws: {
+    'ec2': 'EC2 Reserved Instances',
+    'rds': 'RDS Reserved Instances',
+    'elasticache': 'ElastiCache Reserved Nodes',
+    'opensearch': 'OpenSearch Reserved Instances',
+    'redshift': 'Redshift Reserved Nodes',
+    'savings-plans-compute': 'Compute Savings Plans',
+    'savings-plans-ec2instance': 'EC2 Instance Savings Plans',
+    'savings-plans-sagemaker': 'SageMaker Savings Plans',
+    'savings-plans-database': 'Database Savings Plans',
+  },
+  azure: {
+    'vm': 'Virtual Machine Reservations',
+    'sql': 'SQL Database Reservations',
+    'cosmosdb': 'CosmosDB Reservations',
+    'redis': 'Redis Cache Reservations',
+    'search': 'Cognitive Search Reservations',
+  },
+  gcp: {
+    'compute': 'Compute Engine CUDs',
+    'sql': 'Cloud SQL CUDs',
+    'memorystore': 'Memorystore CUDs',
+    // GCP Cloud Storage doesn't have a Committed Use Discount product
+    // (CUDs only apply to Compute Engine / Bigtable / NetApp / etc.),
+    // so the label is intentionally plain "Cloud Storage" — kept in
+    // sync with the matching <h5> on the Service Default card so the
+    // Global-Defaults confirmation pop-up still mirrors the card title
+    // (CodeRabbit on #472).
+    'storage': 'Cloud Storage',
+  },
+};
+
+function serviceDisplayName(provider: string, service: string): string {
+  const providerLabel = provider.toUpperCase();
+  const display = SERVICE_DISPLAY_NAMES[provider]?.[service];
+  return display ? `${providerLabel} ${display}` : `${providerLabel} ${service}`;
+}
+
+function buildAffectedList(affected: { provider: string; service: string }[]): HTMLDivElement {
+  // Build the diff list via DOM APIs (not innerHTML) so we don't need an
+  // escapeHtml import; provider + service values come from the SERVICE_FIELDS
+  // constant so they're inherently safe, but constructor-free DOM is the
+  // simpler contract.
+  const wrap = document.createElement('div');
+  const count = affected.length;
+  const intro = document.createElement('p');
+  intro.textContent = `${count} service${count === 1 ? '' : 's'} will change:`;
+  wrap.appendChild(intro);
+  const ul = document.createElement('ul');
+  affected.forEach((f) => {
+    const li = document.createElement('li');
+    li.textContent = serviceDisplayName(f.provider, f.service);
+    ul.appendChild(li);
+  });
+  wrap.appendChild(ul);
+  return wrap;
+}
+
+async function confirmAndPropagateTerm(select: HTMLSelectElement): Promise<void> {
+  const previousValue = select.dataset['previous'] ?? select.value;
+  const newValue = select.value;
+  if (newValue === previousValue) return;
+  const affected = SERVICE_FIELDS.filter(({ termId }) => {
+    const svc = document.getElementById(termId) as HTMLSelectElement | null;
+    return svc && svc.value !== newValue;
+  });
+  if (affected.length === 0) {
+    // Everything already matches — nothing to propagate, no need to prompt.
+    select.dataset['previous'] = newValue;
+    return;
+  }
+  const ok = await confirmDialog({
+    title: `Apply "${termLabel(newValue)}" to ${affected.length} service${affected.length === 1 ? '' : 's'}?`,
+    body: buildAffectedList(affected),
+    confirmLabel: 'Apply to all',
+  });
+  if (ok) {
+    propagateTermToServices(newValue);
+    select.dataset['previous'] = newValue;
+    updateDirtyMarkers();
+  } else {
+    // User cancelled — restore the default select to its prior value so
+    // the visible state matches what's persisted/saved. Re-run the
+    // dirty-marker diff (setting .value via JS doesn't fire 'input', so
+    // setupDirtyTracking's listener wouldn't catch the revert) so the
+    // field highlight and global "Unsaved changes" badge clear when the
+    // restored value matches the saved snapshot. Issue #468.
+    select.value = previousValue;
+    updateDirtyMarkers();
+  }
+}
+
+async function confirmAndPropagatePayment(select: HTMLSelectElement): Promise<void> {
+  const previousValue = select.dataset['previous'] ?? select.value;
+  const newValue = select.value;
+  if (newValue === previousValue) return;
+  const affected = SERVICE_FIELDS
+    .filter(f => f.paymentId !== null)
+    .filter(({ paymentId }) => {
+      const svc = document.getElementById(paymentId!) as HTMLSelectElement | null;
+      return svc && svc.value !== newValue;
+    });
+  if (affected.length === 0) {
+    select.dataset['previous'] = newValue;
+    return;
+  }
+  const ok = await confirmDialog({
+    title: `Apply "${paymentLabel(newValue)}" to ${affected.length} AWS service${affected.length === 1 ? '' : 's'}?`,
+    body: buildAffectedList(affected),
+    confirmLabel: 'Apply to all',
+  });
+  if (ok) {
+    propagatePaymentToServices(newValue);
+    select.dataset['previous'] = newValue;
+    updateDirtyMarkers();
+  } else {
+    // Mirror the Term branch: re-run the dirty-marker diff after the
+    // JS-driven value restore so the visible state matches the saved
+    // snapshot. Issue #468.
+    select.value = previousValue;
+    updateDirtyMarkers();
+  }
+}
+
+/**
+ * Issue #365: render the global-settings form read-only for sessions
+ * that lack `admin:*`. Disable every form control so the user can't
+ * even start editing, and hide Save / Reset / Delete-override CTAs.
+ * Backend remains authoritative; this is a UX gate.
+ *
+ * Issue #870: also covers the Purchasing Policies panel (#purchasing-panel),
+ * which is a sibling <section> outside #global-settings-form. Called from
+ * riexchange.ts after the RI Exchange Automation form is rendered so
+ * dynamically-injected inputs are covered too.
+ *
+ * The form stays VISIBLE so non-admin sessions can still inspect the
+ * configured providers, default term/payment, and grace windows.
+ */
+export function applyReadOnlySettings(formEl: HTMLElement | null): void {
+  const purchasingPanel = document.getElementById('purchasing-panel');
+  const controlSelector = 'input, select, textarea, button';
+
+  if (canAccess('admin', '*')) {
+    // Admin: ensure controls are enabled in case a prior session
+    // (e.g. role downgraded mid-session) left them disabled.
+    if (formEl) {
+      formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+        controlSelector,
+      ).forEach((el) => { el.disabled = false; });
+    }
+    if (purchasingPanel) {
+      purchasingPanel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+        controlSelector,
+      ).forEach((el) => { el.disabled = false; });
+    }
+    document.querySelectorAll<HTMLButtonElement>(
+      '#save-settings-btn, #reset-settings-btn, #save-purchasing-btn, #reset-purchasing-btn',
+    ).forEach((el) => { el.hidden = false; });
+    return;
+  }
+
+  // Non-admin: disable every form input + select so accidental edits
+  // are blocked, and hide the destructive / write-back CTAs. The
+  // dirty-tracking baseline already runs on load so no Save prompt
+  // fires even if a control sneaks past the disable.
+  if (formEl) {
+    formEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+      controlSelector,
+    ).forEach((el) => { el.disabled = true; });
+  }
+  if (purchasingPanel) {
+    purchasingPanel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+      controlSelector,
+    ).forEach((el) => { el.disabled = true; });
+  }
+  document.querySelectorAll<HTMLButtonElement>(
+    '#save-settings-btn, #reset-settings-btn, #save-purchasing-btn, #reset-purchasing-btn',
+  ).forEach((el) => { el.hidden = true; });
+}
+
+/**
+ * Load global settings
+ */
+export async function loadGlobalSettings(): Promise<void> {
+  const loadingEl = document.getElementById('settings-loading');
+  const formEl = document.getElementById('global-settings-form');
+  const errorEl = document.getElementById('settings-error');
+
+  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (formEl) formEl.classList.add('hidden');
+  if (errorEl) errorEl.classList.add('hidden');
+
+  // Overlay dynamically-probed AWS commitment rules before we render the
+  // form, so the first paint already respects server data. Failures fall
+  // back to hardcoded rules silently — we never block Settings on this.
+  await fetchAndPopulateCommitmentOptions();
+
+  try {
+    const data = await api.getConfig();
+
+    if (data.global) {
+      const providers = data.global.enabled_providers || [];
+      const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
+      const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;
+      const gcpCheck = document.getElementById('provider-gcp') as HTMLInputElement | null;
+
+      if (awsCheck) awsCheck.checked = providers.includes('aws');
+      if (azureCheck) azureCheck.checked = providers.includes('azure');
+      if (gcpCheck) gcpCheck.checked = providers.includes('gcp');
+
+      const emailInput = document.getElementById('setting-notification-email') as HTMLInputElement | null;
+      if (emailInput) emailInput.value = data.global.notification_email || '';
+
+      const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
+      if (autoCollect) autoCollect.checked = data.global.auto_collect !== false;
+
+      const collectionSchedule = document.getElementById('setting-collection-schedule') as HTMLSelectElement | null;
+      if (collectionSchedule) collectionSchedule.value = data.global.collection_schedule || 'daily';
+
+      const termSelect = document.getElementById('setting-default-term') as HTMLSelectElement | null;
+      if (termSelect) termSelect.value = String(data.global.default_term || 3);
+
+      const paymentSelect = document.getElementById('setting-default-payment') as HTMLSelectElement | null;
+      if (paymentSelect) paymentSelect.value = data.global.default_payment || 'all-upfront';
+
+      const coverageInput = document.getElementById('setting-default-coverage') as HTMLInputElement | null;
+      if (coverageInput) coverageInput.value = String(data.global.default_coverage || 80);
+
+      // Cache defaults for the override modal "Inherit (currently: X)" labels
+      // (issue #112). Must be updated here so reopening the override modal
+      // after a Settings save reflects any in-session changes.
+      cachedGlobalDefaults = {
+        term: data.global.default_term || 3,
+        payment: data.global.default_payment || 'all-upfront',
+        coverage: data.global.default_coverage || 80,
+      };
+
+      const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
+      if (notifyDaysInput) notifyDaysInput.value = String(data.global.notification_days_before || 3);
+
+      // Grace-period inputs (per provider). An absent key renders the
+      // default (7) so the UI always shows a concrete value; an
+      // explicit 0 is preserved so users can see which providers
+      // have the feature disabled.
+      const gpMap = data.global.grace_period_days || {};
+      populateGraceInput('setting-grace-aws', gpMap['aws']);
+      populateGraceInput('setting-grace-azure', gpMap['azure']);
+      populateGraceInput('setting-grace-gcp', gpMap['gcp']);
+
+      // Recommendations cycle params
+      const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
+      if (staleHoursInput) {
+        staleHoursInput.value = String(data.global.recommendations_cache_stale_hours ?? 24);
+      }
+      const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
+      if (lookbackSelect) {
+        lookbackSelect.value = String(data.global.recommendations_lookback_days ?? 7);
+      }
+
+      // Update visibility based on loaded settings
+      updateProviderSettingsVisibility();
+      updateCollectionScheduleVisibility();
+    }
+
+    const services = data.services ?? [];
+    loadedServiceConfigs = services;
+    for (const svc of services) {
+      const key = `${svc.provider}-${svc.service}`;
+      const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
+      if (termEl) termEl.value = String(svc.term);
+      const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
+      if (paymentEl) paymentEl.value = svc.payment;
+    }
+
+    // Issue #136: populate per-product SP coverage and enabled fields for every
+    // SP card the DOM exposes, not just those with a service row. A card whose
+    // service row is absent from the response must still fall back to
+    // global.default_coverage (and enabled=true); leaving it at the HTML default
+    // (80) would persist an incorrect value on the user's next save. Iterate
+    // SERVICE_FIELDS (the source of truth for card IDs) and overlay any matching
+    // service-config values keyed by `${provider}-${service}`.
+    const svcByKey = new Map(services.map(s => [`${s.provider}-${s.service}`, s] as const));
+    for (const field of SERVICE_FIELDS) {
+      const svc = svcByKey.get(`${field.provider}-${field.service}`);
+      if ('coverageId' in field && field.coverageId) {
+        const el = byId<HTMLInputElement>(field.coverageId);
+        if (el) el.value = String(svc?.coverage ?? data.global?.default_coverage ?? 80);
+      }
+      if ('enabledId' in field && field.enabledId) {
+        const el = byId<HTMLInputElement>(field.enabledId);
+        if (el) el.checked = svc?.enabled !== false;
+      }
+    }
+
+    // After loading persisted values, apply per-service commitment
+    // restrictions (e.g., hide "No Upfront" on RDS 3yr). Runs even when
+    // `data.services` is absent so fresh installs start with the invalid
+    // options already suppressed. Any legacy-persisted invalid combo
+    // (RDS 3yr + no-upfront, possible on databases loaded from before
+    // this fix) gets clamped here to the first valid payment option,
+    // which will then be re-persisted on the user's next save.
+    syncAllServiceCommitmentConstraints();
+
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (formEl) formEl.classList.remove('hidden');
+
+    // Issue #365: settings is reachable for non-admins (General +
+    // Purchasing policies sub-tabs aren't admin-gated). Render the
+    // form read-only for those sessions: disable every input/select/
+    // checkbox via a wrapping fieldset, hide the Save / Reset buttons
+    // entirely, and replace the dirty-tracking baseline with the
+    // post-load values so a non-admin who somehow flips a control
+    // (shouldn't be possible with fieldset[disabled], but defense in
+    // depth) still sees no Save prompt. Backend still 403s writes.
+    applyReadOnlySettings(formEl as HTMLElement | null);
+
+    // Establish the clean baseline for dirty tracking
+    snapshotAllFields();
+    updateDirtyMarkers();
+
+    cachedSourceCloud = data.source_cloud ?? 'aws';
+  } catch (error) {
+    // Issue #979: when the backend returns 403 with a "permission denied"
+    // message the non-admin user already has restricted visibility
+    // (Exchange Automation etc. are hidden). Silently hide the section
+    // so the page degrades gracefully instead of showing a red banner.
+    // All other failures (network errors, 5xx, or unrelated 403s) still
+    // surface the banner.
+    if (isPermissionDeniedError(error)) {
+      if (loadingEl) loadingEl.classList.add('hidden');
+      return;
+    }
+    console.error('Failed to load settings:', error);
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (errorEl) {
+      const err = error as Error;
+      errorEl.textContent = `Failed to load settings: ${err.message}`;
+      errorEl.classList.remove('hidden');
+    }
+  }
+}
+
+/**
+ * Load the Accounts sub-tab: account lists, federation IaC panel, and
+ * pending registrations. Self-contained — fetches sourceCloud from
+ * cache or the config API if not yet available.
+ */
+export async function loadAccountsTab(): Promise<void> {
+  let source = cachedSourceCloud;
+  if (!source) {
+    try {
+      const cfg = await api.getConfig();
+      source = cfg.source_cloud ?? 'aws';
+      cachedSourceCloud = source;
+    } catch {
+      source = 'aws';
+    }
+  }
+  void loadAccountsForProvider('aws');
+  void loadAccountsForProvider('azure');
+  void loadAccountsForProvider('gcp');
+  void initFederationPanel(source);
+  void import('./modules/registrations').then(m => m.initRegistrations());
+  void renderAccountsOverview();
+}
+
+/**
+ * Render the Accounts overview chip row (known_issues #29 partial).
+ * Pulls counts from /api/accounts and /api/registrations across all
+ * providers, presents `[Pending N | Active N | Disabled N | Rejected N]`
+ * chips. Each chip click scrolls to the relevant section so users get
+ * a single at-a-glance view without rebuilding into a unified table.
+ *
+ * Failures are rendered as an empty state — the per-section tables are
+ * the authoritative views and will surface their own errors.
+ */
+async function renderAccountsOverview(): Promise<void> {
+  const container = document.getElementById('accounts-overview');
+  if (!container) return;
+  container.replaceChildren();
+
+  type Bucket = { label: string; count: number; targetId: string };
+  const buckets: Bucket[] = [
+    { label: 'Pending', count: 0, targetId: 'accounts-registrations' },
+    { label: 'Active', count: 0, targetId: 'accounts-aws-block' },
+    { label: 'Disabled', count: 0, targetId: 'accounts-aws-block' },
+    { label: 'Rejected', count: 0, targetId: 'accounts-registrations' },
+  ];
+
+  try {
+    const [accounts, registrations] = await Promise.all([
+      api.listAccounts(),
+      // Registrations endpoint may 404 / 403 in some deployments; tolerate.
+      api.listRegistrations().catch(() => [] as api.AccountRegistration[]),
+    ]);
+    accounts.forEach(a => {
+      if (a.enabled) buckets[1]!.count += 1;
+      else buckets[2]!.count += 1;
+    });
+    registrations.forEach(r => {
+      if (r.status === 'pending') buckets[0]!.count += 1;
+      else if (r.status === 'rejected') buckets[3]!.count += 1;
+    });
+  } catch {
+    // Leave overview empty — per-section tables surface their own errors.
+    return;
+  }
+
+  buckets.forEach(({ label, count, targetId }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'accounts-overview-chip';
+    chip.dataset['count'] = String(count);
+    chip.setAttribute('aria-label', `${count} ${label.toLowerCase()} — jump to section`);
+    const labelEl = document.createElement('span');
+    labelEl.className = 'accounts-overview-chip-label';
+    labelEl.textContent = label;
+    const countEl = document.createElement('span');
+    countEl.className = 'accounts-overview-chip-count';
+    countEl.textContent = String(count);
+    chip.appendChild(countEl);
+    chip.appendChild(labelEl);
+    chip.addEventListener('click', () => {
+      const target = document.getElementById(targetId);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    container.appendChild(chip);
+  });
+}
+
+/**
+ * Save global settings
+ */
+export async function saveGlobalSettings(e: Event): Promise<void> {
+  e.preventDefault();
+
+  // In-flight guard: silently drop concurrent submissions so rapid Save
+  // clicks or an Enter-triggered resubmit don't produce duplicate PUTs
+  // with non-deterministic last-write-wins ordering.
+  if (saveInFlight) return;
+
+  const saveBtn = byId<HTMLButtonElement>('save-settings-btn');
+  saveInFlight = true;
+  if (saveBtn) saveBtn.disabled = true;
+
+  const enabledProviders: api.Provider[] = [];
+  if (byId<HTMLInputElement>('provider-aws')?.checked) enabledProviders.push('aws');
+  if (byId<HTMLInputElement>('provider-azure')?.checked) enabledProviders.push('azure');
+  if (byId<HTMLInputElement>('provider-gcp')?.checked) enabledProviders.push('gcp');
+
+  // Collect per-provider grace-period values before building the
+  // settings object so we can reject out-of-range input early with a
+  // targeted error instead of letting the API surface "invalid range"
+  // without saying which input.
+  //
+  // Issue #478: aggregate every out-of-range provider into a single
+  // toast instead of bailing on the first failure. Previously, a user
+  // with bad values in AWS + Azure + GCP saw three separate Save
+  // attempts before all errors surfaced — one per click. Now: one
+  // toast naming every affected provider, in input order (AWS, Azure,
+  // GCP). Both error kinds readGraceInput can emit ("enter a whole
+  // number of days", "must be between 0 and 30 days") collapse to
+  // the same actionable instruction, so the aggregated message reads
+  // cleanly as a single rule even when providers fail for different
+  // reasons.
+  const gracePeriodDays: Record<string, number> = {};
+  const graceErrors: string[] = [];
+  for (const [provider, id] of [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const) {
+    const v = readGraceInput(id);
+    if (v.err) {
+      graceErrors.push(provider.toUpperCase());
+      continue;
+    }
+    gracePeriodDays[provider] = v.value;
+  }
+  if (graceErrors.length > 0) {
+    showToast({
+      message: `Grace period must be a whole number between 0 and 30 days (${graceErrors.join(', ')}).`,
+      kind: 'error',
+    });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+
+  // Validate the three numeric inputs before building the save payload.
+  // Use Number() (not parseInt) so fractional input like "1.5" fails
+  // Number.isInteger() instead of silently truncating to 1. Each range
+  // is the same one declared on the <input>'s min/max attributes —
+  // wireInlineRangeValidation surfaces these inline as the user types
+  // (#465); this is the defensive guard for clients that bypass it.
+  const rawNotifyDays = Number(byId<HTMLInputElement>('setting-notification-days')?.value ?? '3');
+  if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
+    showToast({ message: 'Notification days before purchase must be a whole number between 1 and 30', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+  const rawCoverage = Number(byId<HTMLInputElement>('setting-default-coverage')?.value ?? '80');
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
+    showToast({ message: 'Target coverage must be a whole number between 0 and 100', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+  const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
+  if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
+    showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+
+  const settings: api.Config = {
+    enabled_providers: enabledProviders,
+    notification_email: byId<HTMLInputElement>('setting-notification-email')?.value || '',
+    auto_collect: byId<HTMLInputElement>('setting-auto-collect')?.checked ?? true,
+    collection_schedule: byId<HTMLSelectElement>('setting-collection-schedule')?.value || 'daily',
+    default_term: parseInt(byId<HTMLSelectElement>('setting-default-term')?.value || '3', 10),
+    default_payment: (byId<HTMLSelectElement>('setting-default-payment')?.value || 'all-upfront') as api.PaymentOption,
+    default_coverage: rawCoverage,
+    notification_days_before: rawNotifyDays,
+    grace_period_days: gracePeriodDays,
+    recommendations_cache_stale_hours: rawStaleHours,
+    recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
+  };
+
+  try {
+    await api.updateConfig(settings);
+
+    const serviceSaves = SERVICE_FIELDS.map((field) => {
+      const { provider, service, termId, paymentId } = field;
+      const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
+      const payment = paymentId
+        ? (byId<HTMLSelectElement>(paymentId)?.value || 'all-upfront')
+        : settings.default_payment;
+      const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
+      // Carry forward every field the UI doesn't own. coverage, ramp_schedule,
+      // include_engines, etc. can be set out-of-band (API, future UI, migration)
+      // and a full UPSERT that only honoured the four term/payment/enabled/coverage
+      // fields would silently wipe them every time the user clicked Save.
+
+      // Issue #136: per-product SP cards expose their own coverage and enabled
+      // controls. Read from the DOM when the card has the controls; fall back
+      // to the base row value (or the global default) otherwise so RI and
+      // Azure/GCP cards continue to inherit the global settings.
+      let coverage = base?.coverage ?? settings.default_coverage;
+      let enabled = base?.enabled ?? true;
+      if ('coverageId' in field && field.coverageId) {
+        const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
+        const parsed = Number(rawCov);
+        if (rawCov !== '' && Number.isFinite(parsed)) coverage = parsed;
+      }
+      if ('enabledId' in field && field.enabledId) {
+        const el = byId<HTMLInputElement>(field.enabledId);
+        if (el) enabled = el.checked;
+      }
+
+      const cfg: api.ServiceConfig = {
+        ...(base ?? {}),
+        provider,
+        service,
+        enabled,
+        term,
+        payment,
+        coverage,
+      };
+      return api.updateServiceConfig(provider, service, cfg);
+    });
+    await Promise.all(serviceSaves);
+
+    snapshotAllFields();
+    updateDirtyMarkers();
+    showToast({ message: 'Settings saved successfully', kind: 'success', timeout: 5_000 });
+  } catch (error) {
+    console.error('Failed to save settings:', error);
+    const err = error as Error;
+    showToast({ message: `Failed to save settings: ${err.message}`, kind: 'error' });
+  } finally {
+    saveInFlight = false;
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+/**
+ * Reset settings to defaults
+ */
+export async function resetSettings(): Promise<void> {
+  const ok = await confirmDialog({
+    title: 'Reset all settings?',
+    body: 'This clears your provider selection, collection schedule, and notification email back to factory defaults. Service-level defaults stay as-is.',
+    confirmLabel: 'Reset settings',
+    destructive: true,
+  });
+  if (!ok) return;
+
+  const awsCheck = document.getElementById('provider-aws') as HTMLInputElement | null;
+  const azureCheck = document.getElementById('provider-azure') as HTMLInputElement | null;
+  const gcpCheck = document.getElementById('provider-gcp') as HTMLInputElement | null;
+  if (awsCheck) awsCheck.checked = true;
+  if (azureCheck) azureCheck.checked = false;
+  if (gcpCheck) gcpCheck.checked = false;
+
+  const emailInput = document.getElementById('setting-notification-email') as HTMLInputElement | null;
+  if (emailInput) emailInput.value = '';
+
+  const autoCollect = document.getElementById('setting-auto-collect') as HTMLInputElement | null;
+  if (autoCollect) autoCollect.checked = true;
+
+  const termSelect = document.getElementById('setting-default-term') as HTMLSelectElement | null;
+  if (termSelect) termSelect.value = '3';
+
+  const paymentSelect = document.getElementById('setting-default-payment') as HTMLSelectElement | null;
+  if (paymentSelect) paymentSelect.value = 'all-upfront';
+
+  const coverageInput = document.getElementById('setting-default-coverage') as HTMLInputElement | null;
+  if (coverageInput) coverageInput.value = '80';
+
+  const notifyDaysInput = document.getElementById('setting-notification-days') as HTMLInputElement | null;
+  if (notifyDaysInput) notifyDaysInput.value = '3';
+
+  populateGraceInput('setting-grace-aws', 7);
+  populateGraceInput('setting-grace-azure', 7);
+  populateGraceInput('setting-grace-gcp', 7);
+
+  const staleHoursInput = byId<HTMLInputElement>('setting-recs-stale-hours');
+  if (staleHoursInput) staleHoursInput.value = '24';
+  const lookbackSelect = byId<HTMLSelectElement>('setting-recs-lookback-days');
+  if (lookbackSelect) lookbackSelect.value = '7';
+
+  // Issue #466: setting el.value / .checked via JS does not fire
+  // 'change'/'input', so none of the change-event-driven visibility
+  // togglers nor the dirty-tracking listeners run on their own here.
+  // Drive all of them manually so the user sees (a) the provider
+  // settings sections re-render to match the reset checkbox states,
+  // (b) the Collection Schedule controls now that Auto-collect is
+  // back ON, and (c) the same "Unsaved changes" affordance any
+  // interactive field-edit would produce. Otherwise a user who
+  // clicks Reset and navigates away loses their reset silently.
+  updateProviderSettingsVisibility();
+  updateCollectionScheduleVisibility();
+  updateDirtyMarkers();
+}
+
+/**
+ * Copy text from an element to clipboard
+ */
+export function copyToClipboard(elementId: string): void {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+
+  // Prefer .value for form controls (the AWS External ID uses an
+  // <input readonly>) and fall back to textContent for code/span
+  // elements.
+  const text = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+    ? element.value
+    : element.textContent ?? '';
+  navigator.clipboard.writeText(text).then(() => {
+    // Show feedback on the first .copy-btn following the source in DOM
+    // order — handles both the adjacent-sibling layout (code + btn) and
+    // the .input-with-copy layout (input + btn nested under a wrapper).
+    const btn = element.nextElementSibling instanceof HTMLButtonElement
+      ? element.nextElementSibling
+      : element.parentElement?.querySelector<HTMLButtonElement>('.copy-btn') ?? null;
+    if (!btn) return;
+    const previousChildren = Array.from(btn.childNodes);
+    // Swap for a single "copied" checkmark without touching innerHTML —
+    // the content is static but XSS-scanner-friendly code avoids the
+    // pattern entirely so we don't need to re-prove safety at each edit.
+    btn.replaceChildren();
+    const tick = document.createElement('span');
+    tick.className = 'copy-icon';
+    tick.textContent = '✓'; // ✓
+    btn.appendChild(tick);
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.replaceChildren(...previousChildren);
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+  });
+}

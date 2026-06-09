@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Create CUDly cross-account IAM role via aws-cli.
+# Target AWS account : {{.AccountName}} ({{.AccountExternalID}})
+# Source cloud       : AWS (cross-account role assumption)
+#
+# Usage:
+#   bash {{.AccountSlug}}-aws-cross-account-cli.sh
+#
+# Requirements: aws-cli v2, credentials for target account {{.AccountExternalID}}.
+set -euo pipefail
+
+ROLE_NAME="${ROLE_NAME:-CUDly-{{.AccountSlug}}}"
+SOURCE_ACCOUNT_ID="${SOURCE_ACCOUNT_ID:-{{.SourceAccountID}}}"
+EXTERNAL_ID="${EXTERNAL_ID:-$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')}"
+PROFILE_ARG=""
+if [[ -n "${AWS_PROFILE:-}" ]]; then PROFILE_ARG="--profile ${AWS_PROFILE}"; fi
+
+TRUST_POLICY=$(cat <<JSON
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"AWS": "arn:aws:iam::${SOURCE_ACCOUNT_ID}:root"},
+    "Action": "sts:AssumeRole",
+    "Condition": {"StringEquals": {"sts:ExternalId": "${EXTERNAL_ID}"}}
+  }]
+}
+JSON
+)
+
+PERMISSIONS_POLICY=$(cat <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Resource": "*",
+    "Action": [
+      "ec2:PurchaseReservedInstancesOffering","ec2:DescribeReservedInstancesOfferings",
+      "ec2:DescribeReservedInstances","ec2:DescribeInstanceTypeOfferings",
+      "ec2:GetReservedInstancesExchangeQuote","ec2:AcceptReservedInstancesExchangeQuote",
+      "rds:PurchaseReservedDBInstancesOffering","rds:DescribeReservedDBInstancesOfferings",
+      "rds:DescribeReservedDBInstances",
+      "elasticache:PurchaseReservedCacheNodesOffering",
+      "elasticache:DescribeReservedCacheNodesOfferings","elasticache:DescribeReservedCacheNodes",
+      "redshift:PurchaseReservedNodeOffering","redshift:DescribeReservedNodeOfferings",
+      "redshift:DescribeReservedNodes",
+      "memorydb:PurchaseReservedNodesOffering","memorydb:DescribeReservedNodesOfferings",
+      "memorydb:DescribeReservedNodes",
+      "savingsplans:CreateSavingsPlan","savingsplans:DescribeSavingsPlans",
+      "savingsplans:DescribeSavingsPlansOfferings","savingsplans:DescribeSavingsPlansOfferingRates",
+      "es:PurchaseReservedInstanceOffering","es:DescribeReservedInstanceOfferings",
+      "es:DescribeReservedInstances",
+      "ec2:DescribeRegions"
+    ]
+  }]
+}
+JSON
+)
+
+echo "Creating IAM role ${ROLE_NAME}..."
+# shellcheck disable=SC2086
+aws iam create-role $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --assume-role-policy-document "${TRUST_POLICY}" \
+  --description "Role assumed by CUDly via cross-account IAM role assumption" \
+  --output json >/dev/null
+
+# shellcheck disable=SC2086
+aws iam put-role-policy $PROFILE_ARG \
+  --role-name "${ROLE_NAME}" \
+  --policy-name "CUDlyPermissions" \
+  --policy-document "${PERMISSIONS_POLICY}"
+
+# shellcheck disable=SC2086
+ROLE_ARN=$(aws iam get-role $PROFILE_ARG --role-name "${ROLE_NAME}" --query 'Role.Arn' --output text)
+echo ""
+echo "=== Done ==="
+echo "role_arn   : ${ROLE_ARN}"
+echo "external_id: ${EXTERNAL_ID}"
+echo ""
+echo "In CUDly, set aws_auth_mode = role_arn and paste the role_arn above."
+
+{{- if .CUDlyAPIURL}}
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+# shellcheck disable=SC2086
+TARGET_ACCOUNT_ID=$(aws sts get-caller-identity $PROFILE_ARG --query Account --output text)
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-AWS ${TARGET_ACCOUNT_ID}}"
+read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "aws",
+  "external_id": "${TARGET_ACCOUNT_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CONTACT_EMAIL}",
+  "aws_auth_mode": "role_arn",
+  "aws_role_arn": "${ROLE_ARN}",
+  "aws_external_id": "${EXTERNAL_ID}"
+}
+JSON
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
+{{- end}}

@@ -1,0 +1,307 @@
+/* Layout: Header, main, grid, containers */
+
+/* ---------------------------------------------------------------------------
+ * Action-center shell (issue #340)
+ *
+ * Layout:
+ *   .app-shell                       (root grid)
+ *     .app-topbar                    (full width, sticky)
+ *     .app-body                      (flex row: sidebar + main)
+ *       .app-sidebar                 (fixed-width left rail)
+ *       .app-main                    (flex-grow content)
+ *
+ * The legacy `header` selector below still applies (we kept the <header>
+ * element with the .app-topbar class added) so the gradient + colors hold
+ * until per-section reskin tasks migrate them to tokens.
+ * ------------------------------------------------------------------------- */
+.app-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--cudly-bg);
+}
+
+.app-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    height: var(--cudly-topbar-h);
+    padding: 0 var(--cudly-sp-5);
+}
+
+.app-topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+}
+
+/* Cloud-shaped CUDly logomark in the topbar. Inline SVG inherits
+ * currentColor from the topbar text (white), so the icon reads cleanly
+ * on the blue gradient — the previous favicon-as-img was a tiny blue
+ * "C" on a blue gradient, hard to see. */
+.app-logo-mark {
+    display: inline-flex;
+    align-items: center;
+    color: var(--cudly-primary-fg);
+}
+
+.app-logo {
+    width: 24px;
+    height: 24px;
+}
+
+.app-body {
+    display: flex;
+    flex: 1;
+    min-height: calc(100vh - var(--cudly-topbar-h));
+}
+
+.app-sidebar {
+    width: var(--cudly-sidebar-w);
+    flex-shrink: 0;
+    background: var(--cudly-surface);
+    border-right: 1px solid var(--cudly-border);
+    padding: var(--cudly-sp-3) var(--cudly-sp-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-2);
+    transition: width 0.2s ease;
+}
+
+.app-sidebar.collapsed {
+    width: var(--cudly-sidebar-w-collapsed);
+}
+
+.app-sidebar.collapsed .sidebar-label {
+    display: none;
+}
+
+/* Hamburger toggle uses the same padding + icon size as the .tab-btn rows
+ * below it, so its icon sits in the exact same column as each section's
+ * icon — the sidebar reads as a single column of glyphs. */
+.app-sidebar-toggle {
+    background: transparent;
+    border: none;
+    color: var(--cudly-text-muted);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    margin-bottom: var(--cudly-sp-2);
+    cursor: pointer;
+    border-radius: var(--cudly-r-md);
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+}
+
+.app-sidebar-toggle:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+}
+
+.app-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: stretch;
+    background: transparent;
+    border-bottom: none;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+}
+
+.app-sidebar-nav .tab-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-3);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    text-align: left;
+    border-radius: var(--cudly-r-md);
+    background: transparent;
+    border: none;
+    color: var(--cudly-text-muted);
+    /* Sidebar items are <a href> for native "Open in new tab" support
+     * (issue #462). Suppress the default anchor underline + visited
+     * color so the rendered look matches the previous <button> rows. */
+    text-decoration: none;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    cursor: pointer;
+    width: 100%;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.app-sidebar-nav .tab-btn:visited {
+    color: var(--cudly-text-muted);
+}
+
+.app-sidebar-nav .tab-btn:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+}
+
+/* Visible keyboard focus indicator on sidebar nav. Chrome's default
+ * `outline: auto` doesn't render reliably across the rounded buttons,
+ * so we draw an explicit 2px ring in the primary color with a 2px
+ * offset so it sits outside the button's bg. Only fires on
+ * :focus-visible so mouse-click users don't see the ring. */
+.app-sidebar-nav .tab-btn:focus-visible,
+.app-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 2px;
+}
+
+.app-sidebar-nav .tab-btn.active {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.app-sidebar-nav .tab-btn .sidebar-icon {
+    flex-shrink: 0;
+}
+
+.app-sidebar-nav .tab-btn .sidebar-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-main {
+    flex: 1;
+    padding: var(--cudly-sp-5);
+    min-width: 0; /* allow content to shrink inside the flex row */
+    max-width: none; /* override the legacy `main` rule below */
+    margin: 0;     /* override the legacy `main` rule below */
+}
+
+/* Narrow viewports: collapse sidebar to icon-only automatically.
+ * Don't introduce new responsive behaviour — just keep the existing
+ * desktop ≥ 1024px experience intact and degrade gracefully below. */
+@media (max-width: 900px) {
+    .app-sidebar {
+        width: var(--cudly-sidebar-w-collapsed);
+    }
+    .app-sidebar .sidebar-label {
+        display: none;
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+
+header {
+    background: linear-gradient(135deg, var(--cudly-primary) 0%, var(--cudly-primary-hover) 100%);
+    color: var(--cudly-primary-fg);
+    padding: var(--cudly-sp-3) var(--cudly-sp-5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+#user-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+#user-email {
+    font-size: 0.9rem;
+    opacity: 0.9;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    transition: background-color 0.2s, opacity 0.2s;
+}
+
+#user-email:hover {
+    background: rgba(255,255,255,0.15);
+    opacity: 1;
+}
+
+#logout-btn {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
+    border: 1px solid rgba(255,255,255,0.5);
+    background: transparent;
+    color: var(--cudly-primary-fg);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+#logout-btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: white;
+}
+
+.header-link {
+    color: var(--cudly-primary-fg);
+    text-decoration: none;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
+    font-size: var(--cudly-fs-sm);
+    transition: background-color 0.2s;
+}
+
+.header-link:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+main {
+    padding: 2rem;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+#summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* Footer */
+footer {
+    margin-top: 2rem;
+    padding: 1.5rem 2rem;
+    border-top: 1px solid var(--cudly-border);
+    text-align: center;
+    background: var(--cudly-surface-muted);
+}
+
+footer a {
+    color: var(--cudly-primary);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* Section header with title and action buttons */
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.section-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+/* Global filter chips strip in the topbar (issue #344 T2). Hosts the
+ * shared Provider + Account chip-selects between the brand and the
+ * user-info block. */
+.app-topbar-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-3);
+    margin-left: auto;
+    margin-right: var(--cudly-sp-4);
+}

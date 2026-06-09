@@ -1,0 +1,77 @@
+/* Charts containers */
+.chart-section {
+    margin-bottom: 2rem;
+}
+
+.chart-section h3 {
+    margin-bottom: 1rem;
+    color: var(--cudly-text);
+}
+
+.chart-section canvas {
+    max-height: 300px;
+    min-height: 280px;
+}
+
+/* Savings-by-service chart needs more vertical space to show multiple
+ * stacked bars legibly. Scoped to this canvas only so other charts are
+ * unaffected (issue #769 follow-up). */
+#savings-by-service-chart {
+    max-height: 600px;
+    min-height: 560px;
+}
+
+/* Empty state for chart sections stays centred and occupies roughly
+ * the same vertical space as the canvas so the widget doesn't collapse
+ * when Chart.js is destroyed during provider-filter transitions
+ * (issue #13). */
+.chart-section .empty {
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Chart container */
+.chart-container {
+    position: relative;
+    width: 100%;
+    min-height: 250px;
+    margin-top: 1rem;
+}
+
+/* Stats grid for savings history */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.stat-card {
+    background: var(--cudly-surface-muted);
+    padding: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
+    text-align: center;
+}
+
+.stat-card h4 {
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+    margin-bottom: var(--cudly-sp-2);
+    /* Labels render in sentence case from the HTML — matches the
+     * Dashboard KPI cards. The ALL-CAPS treatment used to clash with
+     * "Potential Monthly Savings" / "Active Commitments" elsewhere. */
+}
+
+.stat-value {
+    font-size: var(--cudly-fs-xl);
+    font-weight: var(--cudly-fw-bold);
+    color: var(--cudly-primary);
+}
+
+.stat-unit-context {
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+    margin-top: 0.25rem;
+}

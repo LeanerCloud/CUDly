@@ -4,9 +4,14 @@ package azure
 import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
-	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
-	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/managedredis"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/search"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/synapse"
 )
 
 // NewComputeClient creates a new Azure Compute (VM) client
@@ -24,10 +29,39 @@ func NewCacheClient(cred azcore.TokenCredential, subscriptionID, region string) 
 	return cache.NewClient(cred, subscriptionID, region)
 }
 
-// NewRecommendationsClient creates a new Azure recommendations client
-func NewRecommendationsClient(cred azcore.TokenCredential, subscriptionID string) provider.RecommendationsClient {
-	return &RecommendationsClientAdapter{
-		cred:           cred,
-		subscriptionID: subscriptionID,
-	}
+// NewCosmosDBClient creates a new Azure Cosmos DB client
+func NewCosmosDBClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return cosmosdb.NewClient(cred, subscriptionID, region)
+}
+
+// NewManagedRedisClient creates a new Azure Managed Redis client (ServiceMemoryDB).
+// Azure Cache for Redis is the Azure equivalent of AWS MemoryDB for Redis.
+func NewManagedRedisClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return managedredis.NewClient(cred, subscriptionID, region)
+}
+
+// NewSavingsPlansClient creates a new Azure Savings Plans client
+func NewSavingsPlansClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return savingsplans.NewClient(cred, subscriptionID, region)
+}
+
+// NewSearchClient creates a new Azure Cognitive Search client
+func NewSearchClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return search.NewClient(cred, subscriptionID, region)
+}
+
+// NewSynapseClient creates a new Azure Synapse Analytics client
+func NewSynapseClient(cred azcore.TokenCredential, subscriptionID, region string) provider.ServiceClient {
+	return synapse.NewClient(cred, subscriptionID, region)
+}
+
+// NewRecommendationsClient creates a new Azure recommendations client.
+//
+// Returns an error when subscriptionID is empty — the adapter's downstream
+// converters use it as the Recommendation.Account field, and a silently
+// empty Account would mis-route recommendations in account-scoped caches,
+// UI filters and billing reports. Callers that want the bare struct should
+// use NewRecommendationsClientAdapter directly.
+func NewRecommendationsClient(cred azcore.TokenCredential, subscriptionID string) (provider.RecommendationsClient, error) {
+	return NewRecommendationsClientAdapter(cred, subscriptionID)
 }

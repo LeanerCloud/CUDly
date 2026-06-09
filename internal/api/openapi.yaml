@@ -1,0 +1,2719 @@
+openapi: 3.0.3
+info:
+  title: CUDly API
+  description: >
+    CUDly is a multi-cloud commitment (Reserved Instances, Savings Plans)
+    purchase automation and cost-optimization dashboard.
+  version: "1.0.0"
+  license:
+    name: Proprietary
+
+servers:
+  - url: /
+    description: Same-origin (relative)
+
+# ---------------------------------------------------------------------------
+# Security schemes
+# ---------------------------------------------------------------------------
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Dashboard
+  - name: Configuration
+  - name: Credentials
+  - name: Recommendations
+  - name: Plans
+  - name: Purchases
+  - name: PlannedPurchases
+  - name: History
+  - name: Analytics
+  - name: Auth
+  - name: APIKeys
+  - name: Users
+  - name: Groups
+  - name: Health
+  - name: Info
+  - name: Docs
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+  # ---- Dashboard ----------------------------------------------------------
+  /api/dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [Dashboard]
+      summary: Get dashboard summary
+      parameters:
+        - name: provider
+          in: query
+          description: Filter by cloud provider (aws, azure, gcp)
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/dashboard/upcoming:
+    get:
+      operationId: getUpcomingPurchases
+      tags: [Dashboard]
+      summary: Get upcoming scheduled purchases
+      responses:
+        '200':
+          description: Upcoming purchases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpcomingPurchaseResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Configuration ------------------------------------------------------
+  /api/config:
+    get:
+      operationId: getConfig
+      tags: [Configuration]
+      summary: Get full configuration
+      responses:
+        '200':
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: updateConfig
+      tags: [Configuration]
+      summary: Update global configuration
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlobalConfig'
+      responses:
+        '200':
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/config/service/{service}:
+    parameters:
+      - name: service
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [ec2, rds, elasticache, opensearch]
+    get:
+      operationId: getServiceConfig
+      tags: [Configuration]
+      summary: Get per-service configuration
+      responses:
+        '200':
+          description: Service configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateServiceConfig
+      tags: [Configuration]
+      summary: Update per-service configuration
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceConfig'
+      responses:
+        '200':
+          description: Updated service configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commitment-options:
+    get:
+      operationId: getCommitmentOptions
+      tags: [Configuration]
+      summary: Dynamically-probed AWS commitment combinations
+      description: |
+        Returns the (term, payment) combinations AWS actually sells for
+        commitment-capable services, harvested from the reserved-offerings
+        APIs at most once per server lifetime and persisted to Postgres.
+        When probe data is unavailable (no AWS account connected, probe
+        failed, transient DB error) returns `{"status":"unavailable"}` at
+        HTTP 200 so the frontend can fall back to hardcoded rules without
+        tripping its error-toast path.
+      responses:
+        '200':
+          description: Commitment options or unavailable status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitmentOptionsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Recommendations ----------------------------------------------------
+  /api/recommendations:
+    get:
+      operationId: getRecommendations
+      tags: [Recommendations]
+      summary: List commitment purchase recommendations
+      parameters:
+        - name: provider
+          in: query
+          description: Filter by cloud provider (aws, azure, gcp)
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: region
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Recommendations list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/recommendations/refresh:
+    post:
+      operationId: refreshRecommendations
+      tags: [Recommendations]
+      summary: Trigger a fresh collection of recommendations from cloud providers
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Collection result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Purchase Plans -----------------------------------------------------
+  /api/plans:
+    get:
+      operationId: listPlans
+      tags: [Plans]
+      summary: List purchase plans
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Plans list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlansResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createPlan
+      tags: [Plans]
+      summary: Create a purchase plan
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              # target_accounts is required ONLY on plan creation. The shared
+              # PlanRequest schema is reused by PUT/PATCH where omitting the
+              # field means "leave the existing account list unchanged"; only
+              # POST enforces non-empty target_accounts to prevent universal
+              # plans. Scoping the requirement here (instead of in the shared
+              # schema) keeps the update payload contract loose while still
+              # advertising the create contract correctly to client codegen.
+              allOf:
+                - $ref: '#/components/schemas/PlanRequest'
+                - type: object
+                  required: [target_accounts]
+      responses:
+        '200':
+          description: Created plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getPlan
+      tags: [Plans]
+      summary: Get a purchase plan by ID
+      responses:
+        '200':
+          description: Purchase plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updatePlan
+      tags: [Plans]
+      summary: Replace a purchase plan
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanRequest'
+      responses:
+        '200':
+          description: Updated plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: patchPlan
+      tags: [Plans]
+      summary: Partially update a purchase plan
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanRequest'
+      responses:
+        '200':
+          description: Patched plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchasePlan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deletePlan
+      tags: [Plans]
+      summary: Delete a purchase plan
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/plans/{id}/purchases:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: createPlannedPurchases
+      tags: [Plans]
+      summary: Generate planned purchase executions for a plan
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlannedPurchasesRequest'
+      responses:
+        '200':
+          description: Planned purchases created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePlannedPurchasesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Purchase Actions ---------------------------------------------------
+  /api/purchases/execute:
+    post:
+      operationId: executePurchase
+      tags: [Purchases]
+      summary: Create a purchase execution from selected recommendations
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutePurchaseRequest'
+      responses:
+        '200':
+          description: Execution created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutePurchaseResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/purchases/approve/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: approvePurchase
+      tags: [Purchases]
+      summary: Approve a pending purchase execution
+      description: >
+        Token-based approval; does not require session auth or CSRF.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/purchases/cancel/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: cancelPurchase
+      tags: [Purchases]
+      summary: Cancel a pending purchase execution
+      description: >
+        Token-based cancellation; does not require session auth or CSRF.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  # ---- Planned Purchases --------------------------------------------------
+  /api/purchases/planned:
+    get:
+      operationId: getPlannedPurchases
+      tags: [PlannedPurchases]
+      summary: List planned (scheduled) purchases
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: plan_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Planned purchases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlannedPurchasesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/purchases/planned/{id}/pause:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: pausePlannedPurchase
+      tags: [PlannedPurchases]
+      summary: Pause a planned purchase
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/purchases/planned/{id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: resumePlannedPurchase
+      tags: [PlannedPurchases]
+      summary: Resume a paused planned purchase
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/purchases/planned/{id}/run:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: runPlannedPurchase
+      tags: [PlannedPurchases]
+      summary: Immediately execute a planned purchase
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Execution initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPurchaseResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/purchases/planned/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    delete:
+      operationId: deletePlannedPurchase
+      tags: [PlannedPurchases]
+      summary: Cancel and delete a planned purchase
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Generic Purchase Details -------------------------------------------
+  /api/purchases/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getPurchaseDetails
+      tags: [Purchases]
+      summary: Get details of a specific purchase execution
+      responses:
+        '200':
+          description: Purchase execution details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseExecution'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- RI Exchange --------------------------------------------------------
+  /api/ri-exchange/instances:
+    get:
+      operationId: listConvertibleRIs
+      tags: [RIExchange]
+      summary: List convertible Reserved Instances eligible for exchange
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Convertible RI list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/azure-instances:
+    get:
+      operationId: listExchangeableAzureRIs
+      tags: [RIExchange]
+      summary: List Azure Reserved Instances eligible for exchange
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Azure exchangeable RI list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/target-offerings:
+    get:
+      operationId: listTargetOfferings
+      tags: [RIExchange]
+      summary: List available RI offerings to exchange into
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+      responses:
+        '200':
+          description: Target offering list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/utilization:
+    get:
+      operationId: getRIUtilization
+      tags: [RIExchange]
+      summary: Get utilization metrics for Reserved Instances
+      responses:
+        '200':
+          description: RI utilization data
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/reshape-recommendations:
+    get:
+      operationId: getReshapeRecommendations
+      tags: [RIExchange]
+      summary: Get reshape recommendations for convertible RIs
+      responses:
+        '200':
+          description: Reshape recommendation list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/quote:
+    post:
+      operationId: getExchangeQuote
+      tags: [RIExchange]
+      summary: Get a quote for an RI exchange before executing
+      description: >
+        Requires `view:purchases` permission. Returns the exchange valuation
+        without committing any financial transaction.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Exchange quote
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/execute:
+    post:
+      operationId: executeRIExchange
+      tags: [RIExchange]
+      summary: Execute an RI exchange (irreversible)
+      description: >
+        Requires `execute:ri-exchange` permission. This is intentionally a
+        separate, narrower permission from `execute:purchases` because RI
+        exchanges submitted to AWS cannot be rolled back. Non-admin users must
+        be explicitly granted `execute:ri-exchange` via a custom group; there
+        is no default user-role grant.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ri_ids, targets, max_payment_due_usd]
+              properties:
+                ri_ids:
+                  type: array
+                  items:
+                    type: string
+                targets:
+                  type: array
+                  items:
+                    type: object
+                max_payment_due_usd:
+                  type: string
+                  description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+      responses:
+        '200':
+          description: Exchange submitted
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/config:
+    get:
+      operationId: getRIExchangeConfig
+      tags: [RIExchange]
+      summary: Get RI exchange configuration
+      description: Requires `view:config` permission.
+      responses:
+        '200':
+          description: RI exchange configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: updateRIExchangeConfig
+      tags: [RIExchange]
+      summary: Update RI exchange configuration
+      description: Requires `update:config` permission.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/history:
+    get:
+      operationId: getRIExchangeHistory
+      tags: [RIExchange]
+      summary: Get RI exchange history
+      responses:
+        '200':
+          description: RI exchange history list
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/ri-exchange/approve/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: approveRIExchange
+      tags: [RIExchange]
+      summary: Approve a pending RI exchange (token-based, no session required)
+      security: []
+      responses:
+        '200':
+          description: Exchange approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/ri-exchange/reject/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: rejectRIExchange
+      tags: [RIExchange]
+      summary: Reject a pending RI exchange (token-based, no session required)
+      security: []
+      responses:
+        '200':
+          description: Exchange rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- History ------------------------------------------------------------
+  /api/history:
+    get:
+      operationId: getHistory
+      tags: [History]
+      summary: Get purchase history
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - name: interval
+          in: query
+          schema:
+            type: string
+            enum: [hourly, daily, weekly, monthly]
+      responses:
+        '200':
+          description: Purchase history with summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/history/analytics:
+    get:
+      operationId: getHistoryAnalytics
+      tags: [History]
+      summary: Get time-series analytics for purchase history
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+      responses:
+        '200':
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/history/breakdown:
+    get:
+      operationId: getHistoryBreakdown
+      tags: [History]
+      summary: Get savings breakdown by dimension
+      parameters:
+        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/StartDate'
+        - $ref: '#/components/parameters/EndDate'
+        - name: dimension
+          in: query
+          schema:
+            type: string
+            enum: [service, provider, region]
+            default: service
+      responses:
+        '200':
+          description: Breakdown data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BreakdownResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Analytics ----------------------------------------------------------
+  /api/analytics/collect:
+    post:
+      operationId: triggerAnalyticsCollection
+      tags: [Analytics]
+      summary: Trigger manual analytics data collection (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Collection completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusMessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Auth ---------------------------------------------------------------
+  /api/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Authenticate and obtain a session token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Invalidate current session
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Auth]
+      summary: Get the currently authenticated user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/check-admin:
+    get:
+      operationId: checkAdminExists
+      tags: [Auth]
+      summary: Check whether an admin account has been set up
+      security: []
+      responses:
+        '200':
+          description: Admin existence status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminExistsResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/setup-admin:
+    post:
+      operationId: setupAdmin
+      tags: [Auth]
+      summary: Create the initial admin account (first-run only)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupAdminRequest'
+      responses:
+        '200':
+          description: Admin created and logged in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/forgot-password:
+    post:
+      operationId: forgotPassword
+      tags: [Auth]
+      summary: Request a password reset email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: >
+            Always returns success to prevent email enumeration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/reset-password:
+    post:
+      operationId: resetPassword
+      tags: [Auth]
+      summary: Confirm a password reset with a token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+      responses:
+        '200':
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/auth/profile:
+    put:
+      operationId: updateProfile
+      tags: [Auth]
+      summary: Update the authenticated user's profile
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdateRequest'
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [Auth]
+      summary: Change the authenticated user's password
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- API Keys -----------------------------------------------------------
+  /api/api-keys:
+    get:
+      operationId: listAPIKeys
+      tags: [APIKeys]
+      summary: List API keys for the current user
+      responses:
+        '200':
+          description: API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKeyInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createAPIKey
+      tags: [APIKeys]
+      summary: Create a new API key
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAPIKeyRequest'
+      responses:
+        '200':
+          description: Newly created API key (full key shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAPIKeyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/api-keys/{id}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: revokeAPIKey
+      tags: [APIKeys]
+      summary: Revoke (deactivate) an API key
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/api-keys/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    delete:
+      operationId: deleteAPIKey
+      tags: [APIKeys]
+      summary: Permanently delete an API key
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- User Management ----------------------------------------------------
+  /api/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      summary: List all users (admin only)
+      responses:
+        '200':
+          description: Users list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createUser
+      tags: [Users]
+      summary: Create a new user (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '200':
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getUser
+      tags: [Users]
+      summary: Get a user by ID (admin only)
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateUser
+      tags: [Users]
+      summary: Update a user (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteUser
+      tags: [Users]
+      summary: Delete a user (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Group Management ---------------------------------------------------
+  /api/groups:
+    get:
+      operationId: listGroups
+      tags: [Groups]
+      summary: List all groups (admin only)
+      responses:
+        '200':
+          description: Groups list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Group'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createGroup
+      tags: [Groups]
+      summary: Create a new group (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGroupRequest'
+      responses:
+        '200':
+          description: Created group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/groups/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getGroup
+      tags: [Groups]
+      summary: Get a group by ID (admin only)
+      responses:
+        '200':
+          description: Group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateGroup
+      tags: [Groups]
+      summary: Update a group (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGroupRequest'
+      responses:
+        '200':
+          description: Updated group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteGroup
+      tags: [Groups]
+      summary: Delete a group (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---- Health -------------------------------------------------------------
+  /health:
+    get:
+      operationId: healthCheckRoot
+      tags: [Health]
+      summary: Health check (root path)
+      security: []
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/health:
+    get:
+      operationId: healthCheck
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # ---- Public Info --------------------------------------------------------
+  /api/info:
+    get:
+      operationId: getPublicInfo
+      tags: [Info]
+      summary: Public instance information (version, admin status — no auth required)
+      security: []
+      responses:
+        '200':
+          description: Public info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicInfoResponse'
+
+  /api/info/deployment:
+    get:
+      operationId: getDeploymentInfo
+      tags: [Info]
+      summary: Deployment-scoped identifiers (AuthUser required)
+      description: >
+        Returns the Secrets Manager console URL and the deployment AWS account ID.
+        Requires at least a valid user session. Not accessible to unauthenticated
+        callers (closes #633).
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      responses:
+        '200':
+          description: Deployment info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---- Docs --------------------------------------------------------------
+  /api/docs:
+    get:
+      operationId: swaggerUI
+      tags: [Docs]
+      summary: Swagger UI
+      security: []
+      responses:
+        '200':
+          description: HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /api/docs/openapi.yaml:
+    get:
+      operationId: getOpenAPISpec
+      tags: [Docs]
+      summary: Raw OpenAPI specification
+      security: []
+      responses:
+        '200':
+          description: OpenAPI YAML
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      operationId: swaggerUIAlias
+      tags: [Docs]
+      summary: Swagger UI (alias)
+      security: []
+      responses:
+        '200':
+          description: HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  # ---- Security Schemes ---------------------------------------------------
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Session token returned by POST /api/auth/login
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key created via POST /api/api-keys
+
+  # ---- Reusable Parameters ------------------------------------------------
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    AccountID:
+      name: account_id
+      in: query
+      schema:
+        type: string
+
+    StartDate:
+      name: start_date
+      in: query
+      description: RFC 3339 or YYYY-MM-DD
+      schema:
+        type: string
+        format: date
+
+    EndDate:
+      name: end_date
+      in: query
+      description: RFC 3339 or YYYY-MM-DD
+      schema:
+        type: string
+        format: date
+
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: CSRF token from the login response
+      schema:
+        type: string
+
+  # ---- Reusable Responses -------------------------------------------------
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  # ---- Schemas ------------------------------------------------------------
+  schemas:
+    # -- Generic ------------------------------------------------------------
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+
+    StatusMessageResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+
+    # -- Auth ---------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          description: Base64-encoded password
+        mfa_code:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserInfo'
+        csrf_token:
+          type: string
+
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user, readonly]
+        groups:
+          type: array
+          items:
+            type: string
+        mfa_enabled:
+          type: boolean
+
+    SetupAdminRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+
+    PasswordResetConfirm:
+      type: object
+      required: [token, new_password]
+      properties:
+        token:
+          type: string
+        new_password:
+          type: string
+
+    ProfileUpdateRequest:
+      type: object
+      required: [email, current_password]
+      properties:
+        email:
+          type: string
+          format: email
+        current_password:
+          type: string
+          description: Base64-encoded current password
+        new_password:
+          type: string
+          description: Base64-encoded new password (optional)
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          description: Base64-encoded current password
+        new_password:
+          type: string
+          description: Base64-encoded new password
+
+    CurrentUserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+        mfa_enabled:
+          type: boolean
+
+    AdminExistsResponse:
+      type: object
+      properties:
+        admin_exists:
+          type: boolean
+
+    # -- Users / Groups -----------------------------------------------------
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user, readonly]
+        groups:
+          type: array
+          items:
+            type: string
+        mfa_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          description: Base64-encoded password
+        role:
+          type: string
+          enum: [admin, user, readonly]
+        groups:
+          type: array
+          items:
+            type: string
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user, readonly]
+        groups:
+          type: array
+          items:
+            type: string
+
+    Group:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        allowed_accounts:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateGroupRequest:
+      type: object
+      required: [name, permissions]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        allowed_accounts:
+          type: array
+          items:
+            type: string
+
+    UpdateGroupRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        allowed_accounts:
+          type: array
+          items:
+            type: string
+
+    Permission:
+      type: object
+      required: [action, resource]
+      properties:
+        action:
+          type: string
+        resource:
+          type: string
+        constraints:
+          $ref: '#/components/schemas/PermissionConstraint'
+
+    PermissionConstraint:
+      type: object
+      properties:
+        accounts:
+          type: array
+          items:
+            type: string
+        providers:
+          type: array
+          items:
+            type: string
+        services:
+          type: array
+          items:
+            type: string
+        regions:
+          type: array
+          items:
+            type: string
+        max_amount:
+          type: number
+          format: double
+
+    # -- API Keys -----------------------------------------------------------
+    CreateAPIKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        expires_at:
+          type: string
+          format: date-time
+
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        api_key:
+          type: string
+          description: Full key value (shown only once)
+        key_id:
+          type: string
+        info:
+          $ref: '#/components/schemas/APIKeyInfo'
+
+    APIKeyInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        key_prefix:
+          type: string
+          description: First 8 characters for display
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+
+    # -- Configuration ------------------------------------------------------
+    ConfigResponse:
+      type: object
+      properties:
+        global:
+          $ref: '#/components/schemas/GlobalConfig'
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceConfig'
+
+    GlobalConfig:
+      type: object
+      properties:
+        enabled_providers:
+          type: array
+          items:
+            type: string
+            enum: [aws, azure, gcp]
+        notification_email:
+          type: string
+          format: email
+          nullable: true
+        approval_required:
+          type: boolean
+        default_term:
+          type: integer
+          description: Term in years (1 or 3)
+        default_payment:
+          type: string
+          enum: [no-upfront, partial-upfront, all-upfront]
+        default_coverage:
+          type: number
+          format: double
+          description: Target coverage percentage (0-100)
+        default_ramp_schedule:
+          type: string
+          enum: [immediate, weekly-25pct, monthly-10pct, custom]
+
+    ServiceConfig:
+      type: object
+      properties:
+        provider:
+          type: string
+        service:
+          type: string
+        enabled:
+          type: boolean
+        term:
+          type: integer
+        payment:
+          type: string
+        coverage:
+          type: number
+          format: double
+        ramp_schedule:
+          type: string
+        include_engines:
+          type: array
+          items:
+            type: string
+        exclude_engines:
+          type: array
+          items:
+            type: string
+        include_regions:
+          type: array
+          items:
+            type: string
+        exclude_regions:
+          type: array
+          items:
+            type: string
+        include_types:
+          type: array
+          items:
+            type: string
+        exclude_types:
+          type: array
+          items:
+            type: string
+
+    CommitmentOptionsResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+          description: |
+            `ok` means `aws` carries the probed combos. `unavailable` means
+            the probe hasn't run (no AWS account connected) or the most
+            recent attempt failed; the frontend should use hardcoded
+            defaults.
+        aws:
+          type: object
+          description: |
+            Per-service supported (term, payment) tuples. Keys are service
+            identifiers (rds, elasticache, opensearch, redshift, memorydb,
+            ec2). Omitted when status is `unavailable`.
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/CommitmentOptionCombo'
+
+    CommitmentOptionCombo:
+      type: object
+      required: [term, payment]
+      properties:
+        term:
+          type: integer
+          enum: [1, 3]
+          description: Commitment length in years.
+        payment:
+          type: string
+          enum: [all-upfront, partial-upfront, no-upfront]
+
+    # -- Dashboard ----------------------------------------------------------
+    DashboardSummary:
+      type: object
+      properties:
+        potential_monthly_savings:
+          type: number
+          format: double
+        total_recommendations:
+          type: integer
+        active_commitments:
+          type: integer
+        committed_monthly:
+          type: number
+          format: double
+        current_coverage:
+          type: number
+          format: double
+        target_coverage:
+          type: number
+          format: double
+        ytd_savings:
+          type: number
+          format: double
+        by_service:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ServiceSavings'
+
+    ServiceSavings:
+      type: object
+      properties:
+        potential_savings:
+          type: number
+          format: double
+        current_savings:
+          type: number
+          format: double
+
+    UpcomingPurchaseResponse:
+      type: object
+      properties:
+        purchases:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpcomingPurchase'
+
+    UpcomingPurchase:
+      type: object
+      properties:
+        execution_id:
+          type: string
+        plan_name:
+          type: string
+        scheduled_date:
+          type: string
+          format: date
+        provider:
+          type: string
+        service:
+          type: string
+        step_number:
+          type: integer
+        total_steps:
+          type: integer
+        estimated_savings:
+          type: number
+          format: double
+
+    # -- Recommendations ----------------------------------------------------
+    RecommendationsResponse:
+      type: object
+      properties:
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationRecord'
+        total_savings:
+          type: number
+          format: double
+        count:
+          type: integer
+
+    RecommendationRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        service:
+          type: string
+        region:
+          type: string
+        resource_type:
+          type: string
+        engine:
+          type: string
+        count:
+          type: integer
+        term:
+          type: integer
+        payment:
+          type: string
+        upfront_cost:
+          type: number
+          format: double
+        monthly_cost:
+          type: number
+          format: double
+        savings:
+          type: number
+          format: double
+        selected:
+          type: boolean
+        purchased:
+          type: boolean
+        purchase_id:
+          type: string
+        error:
+          type: string
+
+    CollectResult:
+      type: object
+      description: Result of a recommendation collection run
+      properties:
+        collected:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
+
+    # -- Plans --------------------------------------------------------------
+    PlansResponse:
+      type: object
+      properties:
+        plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchasePlan'
+
+    PlanRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        auto_purchase:
+          type: boolean
+        notification_days_before:
+          type: integer
+        provider:
+          type: string
+        service:
+          type: string
+        term:
+          type: integer
+        payment:
+          type: string
+        target_coverage:
+          type: integer
+        ramp_schedule:
+          type: string
+          enum: [immediate, weekly-25pct, monthly-10pct, custom]
+        custom_step_percent:
+          type: integer
+        custom_interval_days:
+          type: integer
+        target_accounts:
+          type: array
+          minItems: 1
+          description: >
+            UUIDs of cloud accounts the plan will purchase for. Required on
+            POST /plans — a plan must be tied to at least one account. Sending
+            an empty array returns HTTP 400.
+          items:
+            type: string
+            format: uuid
+
+    PurchasePlan:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        enabled:
+          type: boolean
+        auto_purchase:
+          type: boolean
+        notification_days_before:
+          type: integer
+        services:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ServiceConfig'
+        ramp_schedule:
+          $ref: '#/components/schemas/RampSchedule'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        next_execution_date:
+          type: string
+          format: date-time
+          nullable: true
+        last_execution_date:
+          type: string
+          format: date-time
+          nullable: true
+        last_notification_sent:
+          type: string
+          format: date-time
+          nullable: true
+
+    RampSchedule:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [immediate, weekly, monthly, custom]
+        percent_per_step:
+          type: number
+          format: double
+        step_interval_days:
+          type: integer
+        current_step:
+          type: integer
+        total_steps:
+          type: integer
+        start_date:
+          type: string
+          format: date-time
+
+    CreatePlannedPurchasesRequest:
+      type: object
+      properties:
+        count:
+          type: integer
+        start_date:
+          type: string
+          format: date
+
+    CreatePlannedPurchasesResponse:
+      type: object
+      properties:
+        created:
+          type: integer
+
+    # -- Purchases ----------------------------------------------------------
+    ExecutePurchaseRequest:
+      type: object
+      required: [recommendations]
+      properties:
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationRecord'
+          minItems: 1
+          maxItems: 1000
+
+    ExecutePurchaseResponse:
+      type: object
+      properties:
+        execution_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        recommendation_count:
+          type: integer
+        total_upfront_cost:
+          type: number
+          format: double
+        estimated_savings:
+          type: number
+          format: double
+        message:
+          type: string
+
+    PurchaseExecution:
+      type: object
+      properties:
+        execution_id:
+          type: string
+          format: uuid
+        plan_id:
+          type: string
+        plan_name:
+          type: string
+        status:
+          type: string
+          enum: [pending, notified, approved, cancelled, completed, failed, running, paused]
+        step_number:
+          type: integer
+        scheduled_date:
+          type: string
+          format: date
+        total_upfront_cost:
+          type: number
+          format: double
+        estimated_savings:
+          type: number
+          format: double
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationRecord'
+        notification_sent:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error:
+          type: string
+
+    PlannedPurchasesResponse:
+      type: object
+      properties:
+        purchases:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlannedPurchase'
+
+    PlannedPurchase:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        plan_id:
+          type: string
+        plan_name:
+          type: string
+        scheduled_date:
+          type: string
+          format: date
+        provider:
+          type: string
+        service:
+          type: string
+        resource_type:
+          type: string
+        region:
+          type: string
+        count:
+          type: integer
+        term:
+          type: integer
+        payment:
+          type: string
+        estimated_savings:
+          type: number
+          format: double
+        upfront_cost:
+          type: number
+          format: double
+        status:
+          type: string
+        step_number:
+          type: integer
+        total_steps:
+          type: integer
+
+    RunPurchaseResponse:
+      type: object
+      properties:
+        execution_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        message:
+          type: string
+
+    # -- History / Analytics ------------------------------------------------
+    HistoryResponse:
+      type: object
+      properties:
+        summary:
+          $ref: '#/components/schemas/HistorySummary'
+        purchases:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseHistoryRecord'
+
+    HistorySummary:
+      type: object
+      properties:
+        total_purchases:
+          type: integer
+        total_upfront:
+          type: number
+          format: double
+        total_monthly_savings:
+          type: number
+          format: double
+        total_annual_savings:
+          type: number
+          format: double
+
+    PurchaseHistoryRecord:
+      type: object
+      properties:
+        account_id:
+          type: string
+        purchase_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        provider:
+          type: string
+        service:
+          type: string
+        region:
+          type: string
+        resource_type:
+          type: string
+        count:
+          type: integer
+        term:
+          type: integer
+        payment:
+          type: string
+        upfront_cost:
+          type: number
+          format: double
+        monthly_cost:
+          type: number
+          format: double
+        estimated_savings:
+          type: number
+          format: double
+        plan_id:
+          type: string
+        plan_name:
+          type: string
+        ramp_step:
+          type: integer
+
+    AnalyticsResponse:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        interval:
+          type: string
+        summary:
+          $ref: '#/components/schemas/HistorySummary'
+        data_points:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryDataPoint'
+
+    HistoryDataPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        total_savings:
+          type: number
+          format: double
+        total_upfront:
+          type: number
+          format: double
+        purchase_count:
+          type: integer
+        cumulative_savings:
+          type: number
+          format: double
+        by_service:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        by_provider:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+
+    BreakdownResponse:
+      type: object
+      properties:
+        dimension:
+          type: string
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/BreakdownValue'
+
+    BreakdownValue:
+      type: object
+      properties:
+        total_savings:
+          type: number
+          format: double
+        total_upfront:
+          type: number
+          format: double
+        purchase_count:
+          type: integer
+        percentage:
+          type: number
+          format: double
+
+    # -- Health -------------------------------------------------------------
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/HealthCheck'
+
+    HealthCheck:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        message:
+          type: string
+
+    # -- Info ---------------------------------------------------------------
+    PublicInfoResponse:
+      type: object
+      description: >
+        Unauthenticated public info. Only safe-to-expose fields are included.
+        Sensitive identifiers (API key secret URL, AWS account ID) are served
+        by the authenticated /api/info/deployment endpoint (#633).
+      properties:
+        version:
+          type: string
+        admin_exists:
+          type: boolean
+
+    DeploymentInfoResponse:
+      type: object
+      description: >
+        Deployment-scoped identifiers. Requires AuthUser. Not accessible to
+        unauthenticated callers (#633).
+      properties:
+        api_key_secret_url:
+          type: string
+          description: AWS Console deep-link to the Secrets Manager secret holding the API key.
+        deployment_aws_account_id:
+          type: string
+          description: >
+            AWS account ID of the CUDly Lambda deployment (from STS GetCallerIdentity).
+            Present only on AWS-hosted deployments; omitted on Azure/GCP or when STS
+            is unreachable. Used by the frontend to distinguish legitimate ambient-credential
+            executions (cloud_account_id IS NULL because the rec targets this account)
+            from orphan rows whose account was deleted (issue #608).

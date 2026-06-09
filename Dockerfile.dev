@@ -1,0 +1,61 @@
+# Development Dockerfile with hot reload using Air
+# TODO: Pin to SHA256 digest for reproducible builds:
+#   docker buildx imagetools inspect golang:1.25.4-alpine3.21
+FROM golang:1.25.4-alpine3.21 AS development
+
+# Install development tools and Air for hot reload
+RUN apk add --no-cache \
+    git \
+    postgresql-client \
+    curl \
+    build-base && \
+    go install github.com/air-verse/air@v1.61.7
+
+# Set shell with pipefail for safer pipe operations
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
+# Install golang-migrate for database migrations (architecture-aware, checksum-verified)
+ARG TARGETARCH
+RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    if [ "$MIGRATE_ARCH" = "arm64" ]; then \
+      MIGRATE_SHA256="9c95441cc430ffdac89276d14de5e2f18bfafca00796c2895490d62e3776d104"; \
+    else \
+      MIGRATE_SHA256="26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6"; \
+    fi && \
+    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
+    echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
+    tar xvzf migrate.tar.gz && \
+    mv migrate /usr/local/bin/migrate && \
+    chmod +x /usr/local/bin/migrate && \
+    rm migrate.tar.gz
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Copy provider and pkg go.mod files (multi-module setup)
+COPY pkg/go.mod pkg/go.sum ./pkg/
+COPY providers/aws/go.mod providers/aws/go.sum providers/aws/
+COPY providers/azure/go.mod providers/azure/go.sum providers/azure/
+COPY providers/gcp/go.mod providers/gcp/go.sum providers/gcp/
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Create Air configuration if it doesn't exist
+RUN if [ ! -f .air.toml ]; then air init; fi
+
+EXPOSE 8080
+
+# Create non-root user for security; grant ownership of app dir and Go paths
+RUN addgroup -S devuser && adduser -S devuser -G devuser && \
+    chown -R devuser:devuser /app /root/go /root/.cache 2>/dev/null || true
+
+USER devuser
+
+# Start with Air for hot reload
+CMD ["air", "-c", ".air.toml"]

@@ -1,0 +1,404 @@
+/**
+ * User list rendering functionality
+ */
+
+import type { APIUser } from '../api';
+import * as api from '../api';
+import {
+  allUsers,
+  filteredUsers,
+  selectedUserIds,
+  availableGroups,
+  addSelectedUserId,
+  removeSelectedUserId,
+  clearSelectedUserIds,
+  setAllUsers,
+} from './state';
+import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError } from './utils';
+import { openEditUserModal, deleteUser } from './userActions';
+import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+
+/**
+ * Single AbortController for the document-level group-assign-checkbox
+ * change listener. Replaced on every renderUsers() call so only one
+ * listener is ever active, preventing duplicate toasts (issue #998).
+ */
+let groupAssignListenerCtrl: AbortController | null = null;
+
+/**
+ * Render user statistics
+ */
+export function renderUserStats(): void {
+  const statsContainer = document.getElementById('user-stats');
+  if (!statsContainer) return;
+
+  const totalUsers = allUsers.length;
+  // Count administrators by group membership (PR #912: role dropped).
+  const adminUsers = allUsers.filter(u =>
+    Array.isArray(u.groups) && u.groups.includes(ADMINISTRATORS_GROUP_ID)
+  ).length;
+  const mfaEnabled = allUsers.filter(u => u.mfa_enabled).length;
+  const showing = filteredUsers.length;
+
+  statsContainer.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value">${totalUsers}</div>
+        <div class="stat-label">Total Users</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${adminUsers}</div>
+        <div class="stat-label">Administrators</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${mfaEnabled}</div>
+        <div class="stat-label">MFA Enabled</div>
+      </div>
+      <div class="stat-card ${showing !== totalUsers ? 'stat-card-highlight' : ''}">
+        <div class="stat-value">${showing}</div>
+        <div class="stat-label">Showing</div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render users list with enhanced design
+ */
+export function renderUsers(users: APIUser[]): void {
+  const container = document.getElementById('users-list');
+  if (!container) return;
+
+  if (users.length === 0) {
+    container.innerHTML = '<div class="empty">No users found matching your filters</div>';
+    return;
+  }
+
+  const table = `
+    <table class="data-table users-table">
+      <thead>
+        <tr>
+          <th width="40">
+            <input type="checkbox" id="select-all-users" ${selectedUserIds.size > 0 && selectedUserIds.size === users.length ? 'checked' : ''}>
+          </th>
+          <th width="32"></th>
+          <th>Email</th>
+          <th>Groups</th>
+          <th>MFA</th>
+          <th>Created</th>
+          <th>Last Login</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${users.map(user => `
+          <tr class="user-row ${selectedUserIds.has(user.id) ? 'row-selected' : ''}" data-user-id="${escapeHtml(user.id)}">
+            <td>
+              <input type="checkbox" class="user-checkbox" data-user-id="${escapeHtml(user.id)}" ${selectedUserIds.has(user.id) ? 'checked' : ''}>
+            </td>
+            <td>
+              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">&#x25B8;</button>
+            </td>
+            <td>
+              <div class="user-email">
+                <strong>${escapeHtml(user.email)}</strong>
+                ${user.id === 'current' ? '<span class="badge badge-info">You</span>' : ''}
+              </div>
+            </td>
+            <td>
+              <div class="groups-cell">
+                ${user.groups.length > 0 ? user.groups.map(g => `<span class="badge badge-group">${escapeHtml(groupName(g))}</span>`).join(' ') : '<span class="text-muted">No groups</span>'}
+              </div>
+            </td>
+            <td>
+              ${user.mfa_enabled
+                ? '<span class="badge badge-success"><i class="icon-shield"></i> Enabled</span>'
+                : '<span class="badge badge-warning"><i class="icon-shield-off"></i> Disabled</span>'}
+            </td>
+            <td><span class="text-muted">${user.created_at ? formatDate(user.created_at) : '-'}</span></td>
+            <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
+            <td>
+              <div class="action-buttons">
+                <button class="btn-small edit-user-btn" data-user-id="${escapeHtml(user.id)}" aria-label="Edit user ${escapeHtml(user.email)}">Edit</button>
+                <button class="btn-small btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" aria-label="Delete user ${escapeHtml(user.email)}">Delete</button>
+              </div>
+            </td>
+          </tr>
+          <tr class="user-expand-row hidden" data-user-id="${escapeHtml(user.id)}">
+            <td colspan="8">
+              <div class="user-expand-panel" data-user-id="${escapeHtml(user.id)}"></div>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  container.innerHTML = table;
+
+  // Setup event listeners
+  setupUserTableListeners();
+}
+
+/**
+ * Look up a group's display name by ID. Falls back to the ID if the group
+ * isn't in the loaded availableGroups list.
+ */
+function groupName(groupId: string): string {
+  const g = availableGroups.find(g => g.id === groupId);
+  return g?.name ?? groupId;
+}
+
+/**
+ * Compute the effective permissions for a user from their group
+ * memberships. Returns permissions as {action}:{resource} strings.
+ *
+ * PR #912 removed user.role; permissions now derive purely from the
+ * union of the groups the user belongs to. availableGroups is loaded
+ * on this admin-only page so we can resolve group permissions here.
+ */
+function effectivePermissions(user: APIUser): string[] {
+  const perms = new Set<string>();
+
+  user.groups.forEach(gid => {
+    const g = availableGroups.find(gr => gr.id === gid);
+    g?.permissions?.forEach(p => {
+      if (p.action && p.resource) perms.add(`${p.action}:${p.resource}`);
+    });
+  });
+
+  return Array.from(perms).sort();
+}
+
+/**
+ * Render the expandable panel for a user row with inline group checkboxes
+ * and an effective-permissions summary.
+ */
+function renderUserExpandPanel(user: APIUser): string {
+  const userGroups = new Set(user.groups);
+  const perms = effectivePermissions(user);
+
+  return `
+    <div class="expand-panel-body">
+      <div class="expand-panel-groups">
+        <h5>Group Membership</h5>
+        <p class="text-muted">A user receives the combined (union) of all selected groups&#8217; permissions, so adding a lower-privilege group alongside a higher one has no effect.</p>
+        ${availableGroups.length === 0
+          ? '<p class="text-muted">No groups defined yet.</p>'
+          : `<div class="group-checkbox-list">
+              ${availableGroups.map(g => `
+                <label class="group-checkbox-label">
+                  <input type="checkbox" class="group-assign-checkbox"
+                    data-user-id="${escapeHtml(user.id)}"
+                    data-group-id="${escapeHtml(g.id)}"
+                    ${userGroups.has(g.id) ? 'checked' : ''}>
+                  <span>${escapeHtml(g.name)}</span>
+                </label>
+              `).join('')}
+            </div>`}
+      </div>
+      <div class="expand-panel-perms">
+        <h5>Effective Permissions</h5>
+        ${perms.length === 0
+          ? '<p class="text-muted">No permissions.</p>'
+          : `<div class="perm-badge-list">${perms.map(p => `<span class="permission-badge">${escapeHtml(p)}</span>`).join(' ')}</div>`}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Toggle a group membership for a user inline (no modal).
+ *
+ * After a successful API call, patch state in-memory and refresh only the
+ * affected expand panel rather than re-rendering the whole table. This
+ * prevents the panel from collapsing on every toggle (issue #998) and
+ * keeps the user in context for subsequent group changes.
+ */
+async function toggleUserGroup(userId: string, groupId: string, checked: boolean): Promise<void> {
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+
+  const group = availableGroups.find(g => g.id === groupId);
+  const groupLabel = group ? group.name : groupId;
+
+  const next = checked
+    ? [...new Set([...user.groups, groupId])]
+    : user.groups.filter(g => g !== groupId);
+
+  try {
+    await api.updateUser(userId, { groups: next });
+
+    // Patch the user in-memory so subsequent renders and effectivePermissions
+    // calculations reflect the change without a full round-trip re-render.
+    const updatedUser: APIUser = { ...user, groups: next };
+    setAllUsers(allUsers.map(u => (u.id === userId ? updatedUser : u)));
+
+    // Re-render the expand panel in place so the checkboxes and permissions
+    // summary stay current without collapsing the row or re-rendering the
+    // whole table (which would tear down all open panels).
+    const panel = document.querySelector<HTMLElement>(
+      `.user-expand-panel[data-user-id="${userId}"]`,
+    );
+    // eslint-disable-next-line no-unsanitized/property
+    if (panel) panel.innerHTML = renderUserExpandPanel(updatedUser);
+
+    // Refresh the group-badge cell in the main row so it reflects the new
+    // membership without a full re-render.
+    const groupsCell = document.querySelector<HTMLElement>(
+      `tr.user-row[data-user-id="${userId}"] .groups-cell`,
+    );
+    if (groupsCell) {
+      groupsCell.innerHTML = updatedUser.groups.length > 0
+        ? updatedUser.groups.map(g => `<span class="badge badge-group">${escapeHtml(groupName(g))}</span>`).join(' ')
+        : '<span class="text-muted">No groups</span>';
+    }
+
+    // Surface inline-save confirmation so users know the toggle stuck.
+    showSuccess(checked
+      ? `Added ${user.email} to "${groupLabel}"`
+      : `Removed ${user.email} from "${groupLabel}"`);
+  } catch (error) {
+    const err = error as Error;
+    console.error('Failed to update user groups:', err);
+    showError(`Failed to update group membership: ${err.message}`);
+    // Revert the checkbox
+    const cb = document.querySelector<HTMLInputElement>(
+      `.group-assign-checkbox[data-user-id="${userId}"][data-group-id="${groupId}"]`,
+    );
+    if (cb) cb.checked = !checked;
+  }
+}
+
+/**
+ * Setup event listeners for user table
+ */
+function setupUserTableListeners(): void {
+  // Select all checkbox
+  const selectAllCheckbox = document.getElementById('select-all-users') as HTMLInputElement;
+  if (selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      if (checked) {
+        filteredUsers.forEach(user => addSelectedUserId(user.id));
+      } else {
+        clearSelectedUserIds();
+      }
+      renderUsers(filteredUsers);
+      updateBulkActionsBar();
+    });
+  }
+
+  // Individual checkboxes
+  document.querySelectorAll('.user-checkbox').forEach(checkbox => {
+    checkbox.addEventListener('change', (e) => {
+      const userId = (e.target as HTMLElement).dataset.userId;
+      if (!userId) return;
+
+      if ((e.target as HTMLInputElement).checked) {
+        addSelectedUserId(userId);
+      } else {
+        removeSelectedUserId(userId);
+      }
+
+      renderUsers(filteredUsers);
+      updateBulkActionsBar();
+    });
+  });
+
+  // Edit buttons
+  document.querySelectorAll('.edit-user-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const userId = (btn as HTMLElement).dataset.userId;
+      if (userId) void openEditUserModal(userId);
+    });
+  });
+
+  // Delete buttons
+  document.querySelectorAll('.delete-user-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const userId = (btn as HTMLElement).dataset.userId;
+      if (userId) void deleteUser(userId);
+    });
+  });
+
+  // Row expand toggle: click to expand/collapse a row and populate the
+  // inline panel with group checkboxes + effective permissions.
+  document.querySelectorAll('.user-expand-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const userId = (btn as HTMLElement).dataset.userId;
+      if (!userId) return;
+      const expandRow = document.querySelector<HTMLElement>(
+        `tr.user-expand-row[data-user-id="${userId}"]`,
+      );
+      const panel = document.querySelector<HTMLElement>(
+        `.user-expand-panel[data-user-id="${userId}"]`,
+      );
+      if (!expandRow || !panel) return;
+
+      const isHidden = expandRow.classList.contains('hidden');
+      if (isHidden) {
+        const user = allUsers.find(u => u.id === userId);
+        // eslint-disable-next-line no-unsanitized/property
+        if (user) panel.innerHTML = renderUserExpandPanel(user);
+        expandRow.classList.remove('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        btn.textContent = '\u25BE'; // ▾ down-pointing triangle
+      } else {
+        expandRow.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.textContent = '\u25B8'; // ▸ right-pointing triangle
+      }
+    });
+  });
+
+  // Inline group assignment checkboxes inside the expand panel.
+  // Use AbortController so only one listener is ever registered on document,
+  // regardless of how many times renderUsers() is called. Without this,
+  // every render stacks another listener and triggers multiple toasts per
+  // toggle (issue #998).
+  groupAssignListenerCtrl?.abort();
+  groupAssignListenerCtrl = new AbortController();
+  document.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains('group-assign-checkbox')) return;
+    const userId = target.dataset.userId;
+    const groupId = target.dataset.groupId;
+    if (!userId || !groupId) return;
+    void toggleUserGroup(userId, groupId, (target as HTMLInputElement).checked);
+  }, { signal: groupAssignListenerCtrl.signal });
+}
+
+/**
+ * Update bulk actions bar visibility and selection count.
+ */
+export function updateBulkActionsBar(): void {
+  const bulkBar = document.getElementById('bulk-actions-bar');
+  if (!bulkBar) return;
+
+  const selectedCount = selectedUserIds.size;
+
+  if (selectedCount === 0) {
+    bulkBar.classList.add('hidden');
+  } else {
+    bulkBar.classList.remove('hidden');
+    const countEl = document.getElementById('selected-count');
+    if (countEl) countEl.textContent = selectedCount.toString();
+  }
+}
+
+/**
+ * Populate the #bulk-group-select dropdown with the currently loaded groups.
+ * Called by loadUsers after groups are refreshed so the options stay in sync.
+ */
+export function populateBulkGroupSelect(): void {
+  const select = document.getElementById('bulk-group-select') as HTMLSelectElement | null;
+  if (!select) return;
+  while (select.options.length > 1) select.remove(1);
+  for (const group of availableGroups) {
+    const opt = document.createElement('option');
+    opt.value = group.id;
+    opt.textContent = group.name;
+    select.add(opt);
+  }
+}

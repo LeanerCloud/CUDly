@@ -1,0 +1,177 @@
+/* Tables styling */
+table {
+    width: 100%;
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
+    overflow: visible;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--cudly-border);
+    font-size: 0.9rem;
+}
+
+th {
+    background: var(--cudly-surface-muted);
+    font-weight: 600;
+}
+
+tr:hover {
+    background: #f1f3f4;
+}
+
+/* Recommendation row highlighting */
+tr.high-savings {
+    border-left: 3px solid var(--cudly-success);
+}
+
+tr.medium-savings {
+    border-left: 3px solid var(--cudly-warn);
+}
+
+/* Deep-link target highlight: applied by applyExecutionDeepLink() in
+   history.ts when the URL hash carries ?execution=<id>. The class is
+   removed after ~4s (see history.ts) so the row fades back to normal.
+   `animation` runs once on add for a brief pulse, then `background`
+   keeps a steady highlight tint until the class is removed. */
+tr.history-row-highlight {
+    background: #fff8c4;
+    animation: history-row-flash 1.2s ease-out 1;
+}
+
+tr.history-row-highlight:hover {
+    /* Override the table-wide `tr:hover` so the deep-link highlight
+       stays visible while the user mouses over the row. */
+    background: #fff3a0;
+}
+
+@keyframes history-row-flash {
+    0%   { background: #fff080; }
+    50%  { background: #fff8c4; }
+    100% { background: #fff8c4; }
+}
+
+/* Summary sections */
+#recommendations-summary,
+#history-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+/* Planned Purchases Section */
+#planned-purchases-header {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--cudly-border);
+}
+
+#planned-purchases-header h2 {
+    margin-bottom: 0.5rem;
+}
+
+#planned-purchases-header .help-text {
+    color: var(--cudly-text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.planned-purchases-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-md);
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.planned-purchases-table th,
+.planned-purchases-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--cudly-border);
+}
+
+.planned-purchases-table th {
+    background: var(--cudly-surface-muted);
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+}
+
+.planned-purchases-table tbody tr:hover {
+    background: var(--cudly-surface-muted);
+}
+
+.planned-purchase-row .plan-name {
+    font-weight: 500;
+    display: block;
+}
+
+.planned-purchase-row .step-info {
+    font-size: 0.8rem;
+    color: var(--cudly-text-muted);
+}
+
+.planned-purchase-row .actions {
+    white-space: nowrap;
+}
+
+/* Planned purchase status badges */
+.status-pending {
+    color: #856404;
+}
+
+.status-paused {
+    color: #9e9e9e;
+}
+
+.status-running {
+    color: var(--cudly-primary);
+}
+
+.status-completed {
+    color: var(--cudly-success);
+}
+
+.status-failed {
+    color: var(--cudly-error);
+}
+
+.planned-purchases-table .status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.planned-purchases-table .status-badge.status-pending {
+    background: #fef3cd;
+    color: #856404;
+}
+
+.planned-purchases-table .status-badge.status-paused {
+    background: #e9ecef;
+    color: #495057;
+}
+
+.planned-purchases-table .status-badge.status-running {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.planned-purchases-table .status-badge.status-completed {
+    background: #d4edda;
+    color: #155724;
+}
+
+.planned-purchases-table .status-badge.status-failed {
+    background: #f8d7da;
+    color: #721c24;
+}

@@ -1,0 +1,40 @@
+# Azure Development Profile
+# Copy to dev.tfvars and customize with your values
+
+# Project identification
+project_name = "cudly"
+environment = "dev"
+
+# Azure configuration
+subscription_id = "your-subscription-id" # REQUIRED
+location        = "eastus"
+
+# Compute platform
+compute_platform = "container-apps"
+
+# Container Apps settings
+container_cpu    = 0.5
+container_memory = "1.0Gi"
+min_replicas     = 0
+max_replicas     = 10
+
+# Docker build settings
+enable_docker_build = true
+image_uri           = "placeholder" # Unused when enable_docker_build = true
+
+# Key Vault
+key_vault_name = "cudly-dev-kv" # REQUIRED: must be globally unique, 3-24 chars
+
+# Database (PostgreSQL Flexible Server)
+database_sku_name              = "B_Standard_B1ms"
+database_storage_mb            = 32768
+database_backup_retention_days = 7
+
+# Admin
+admin_email = "admin@example.com"
+
+# Networking
+vnet_cidr = "10.0.0.0/16"
+
+# Scheduled tasks
+enable_scheduled_tasks = true

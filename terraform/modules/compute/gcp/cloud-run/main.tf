@@ -1,0 +1,506 @@
+# GCP Cloud Run Module
+# Serverless container platform with automatic scaling
+#
+# ARCHITECTURE NOTE:
+# This module uses Gen2 execution environment which provides ARM64 support.
+# Gen2 offers:
+# - Better performance with custom Google silicon (similar to AWS Graviton)
+# - 10-15% cost savings compared to Gen1
+# - Improved startup times and lower cold starts
+# - Better memory and network performance
+#
+# The execution_environment variable defaults to "EXECUTION_ENVIRONMENT_GEN2" (ARM64-capable).
+# Gen2 automatically handles ARM64 binaries without explicit architecture configuration.
+
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+  }
+}
+
+# ==============================================
+# Service Account for Cloud Run
+# ==============================================
+
+resource "google_service_account" "cloud_run" {
+  account_id   = "${var.service_name}-cloudrun"
+  display_name = "Cloud Run service account for ${var.service_name}"
+  description  = "Service account used by Cloud Run service"
+  project      = var.project_id
+}
+
+# ==============================================
+# Scheduled-task auth wiring
+# ==============================================
+#
+# Both Cloud Scheduler jobs below sign OIDC tokens with `audience` set to
+# the scheduler SA email and `sub` set to the SA's unique numeric ID.
+# The Go validator (internal/server/scheduledauth) checks signature +
+# issuer + audience + subject; pinning these here keeps the allow-list
+# in the container env in sync with what Cloud Scheduler actually emits.
+#
+# `compact` drops empty strings produced when a scheduler is disabled
+# (count = 0 → google_service_account.scheduler[0] is unavailable, so
+# we use try() to short-circuit). `join(",")` produces the CSV format
+# the validator parses.
+locals {
+  # Per-schedule audiences: each Cloud Scheduler job mints an OIDC
+  # token whose `aud` claim names the receiving endpoint, NOT the
+  # scheduler SA. `sub` already pins the caller to the SA's unique_id;
+  # using the SA email for `aud` made both checks describe the caller
+  # and was replay-prone if the SA was ever reused for a different
+  # service. The new shape keeps the token recipient-bound. (CodeRabbit
+  # nitpick on PR #161.)
+  #
+  # We deliberately use ${var.service_name}/api/scheduled/<endpoint>
+  # rather than the Cloud Run URL: the URL would create a Terraform
+  # cycle (google_cloud_run_v2_service.main.uri → env vars on the
+  # service itself → the audience locals → back to the service).
+  # `service_name` is a module input, so the audience is fully
+  # resolvable before the Cloud Run resource is planned. Any string
+  # that's unique-per-(service, endpoint) satisfies the OIDC
+  # recipient-bound contract — the validator only does string-equality
+  # against this same value (built once into the env var below).
+  scheduled_task_recommendations_audience = "${var.service_name}/api/scheduled/recommendations"
+  scheduled_task_ri_exchange_audience     = "${var.service_name}/api/scheduled/ri-exchange"
+
+  scheduled_task_oidc_audiences = join(",", compact([
+    var.enable_scheduled_tasks ? local.scheduled_task_recommendations_audience : "",
+    var.enable_ri_exchange_schedule ? local.scheduled_task_ri_exchange_audience : "",
+  ]))
+  scheduled_task_oidc_subjects = join(",", compact([
+    var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].unique_id, "") : "",
+    var.enable_ri_exchange_schedule ? try(google_service_account.scheduler_ri_exchange[0].unique_id, "") : "",
+  ]))
+  # Auth mode selector. When neither scheduler is enabled there's
+  # nothing to validate; staying on "disabled" avoids fail-fast on an
+  # empty allow-list in the validator. The resulting WARN log is
+  # harmless when /api/scheduled/* is never hit.
+  scheduled_task_auth_mode = (var.enable_scheduled_tasks || var.enable_ri_exchange_schedule) ? "oidc" : "disabled"
+}
+
+# ==============================================
+# Cloud Run Service
+# ==============================================
+
+resource "google_cloud_run_v2_service" "main" {
+  name     = var.service_name
+  location = var.region
+  project  = var.project_id
+
+  template {
+    service_account = google_service_account.cloud_run.email
+
+    # Scaling configuration
+    scaling {
+      min_instance_count = var.min_instances
+      max_instance_count = var.max_instances
+    }
+
+    # VPC Access (for Cloud SQL)
+    dynamic "vpc_access" {
+      for_each = var.vpc_connector_id != null ? [var.vpc_connector_id] : []
+      content {
+        connector = vpc_access.value
+        egress    = var.vpc_egress_mode
+      }
+    }
+
+    # Container configuration
+    containers {
+      image = var.image_uri
+
+      # Resource limits
+      resources {
+        limits = {
+          cpu    = var.cpu
+          memory = var.memory
+        }
+        cpu_idle          = var.cpu_throttling
+        startup_cpu_boost = var.startup_cpu_boost
+      }
+
+      # Environment variables
+      dynamic "env" {
+        for_each = merge(
+          {
+            ENVIRONMENT           = var.environment
+            RUNTIME_MODE          = "http"
+            DB_HOST               = var.database_host
+            DB_PORT               = "5432"
+            DB_NAME               = var.database_name
+            DB_USER               = var.database_username
+            DB_PASSWORD_SECRET    = var.database_password_secret_id
+            DB_SSL_MODE           = "require"
+            DB_CONNECT_TIMEOUT    = "8s"
+            DB_AUTO_MIGRATE       = tostring(var.auto_migrate)
+            DB_MIGRATIONS_PATH    = "/app/migrations"
+            ADMIN_EMAIL           = var.admin_email
+            ADMIN_PASSWORD_SECRET = var.admin_password_secret_name
+            SECRET_PROVIDER       = "gcp"
+            GCP_PROJECT_ID        = var.project_id
+            GCP_REGION            = var.region
+            ALLOWED_ORIGINS       = join(",", var.allowed_origins)
+            # OIDC issuer signing key — see internal/oidc/gcp_signer.go.
+            CUDLY_SOURCE_CLOUD         = "gcp"
+            CUDLY_SIGNING_KEY_RESOURCE = local.signing_key_version_resource
+            # Scheduled-task OIDC validator config — see
+            # internal/server/scheduledauth and the locals block above.
+            SCHEDULED_TASK_AUTH_MODE     = local.scheduled_task_auth_mode
+            SCHEDULED_TASK_OIDC_AUDIENCE = local.scheduled_task_oidc_audiences
+            SCHEDULED_TASK_OIDC_SUBJECTS = local.scheduled_task_oidc_subjects
+          },
+          var.additional_env_vars
+        )
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # Startup probe
+      startup_probe {
+        http_get {
+          path = "/health"
+          port = 8080
+        }
+        initial_delay_seconds = 10
+        timeout_seconds       = 3
+        period_seconds        = 10
+        failure_threshold     = 3
+      }
+
+      # Liveness probe
+      liveness_probe {
+        http_get {
+          path = "/health"
+          port = 8080
+        }
+        initial_delay_seconds = 30
+        timeout_seconds       = 3
+        period_seconds        = 30
+        failure_threshold     = 3
+      }
+
+      # Port
+      ports {
+        name           = "http1"
+        container_port = 8080
+      }
+    }
+
+    # Timeout
+    timeout = "${var.request_timeout}s"
+
+    # ARCHITECTURE: Execution environment (Gen2 = ARM64-capable)
+    # Gen2 provides better performance and cost efficiency with ARM64 support
+    # Gen1 = x86_64 only (legacy)
+    # Gen2 = ARM64-capable with Google's custom silicon (default, recommended)
+    execution_environment = var.execution_environment
+  }
+
+  # Traffic configuration
+  traffic {
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+    percent = 100
+  }
+
+  # Ingress settings
+  ingress = var.ingress
+
+  labels = merge(var.labels, {
+    environment  = var.environment
+    managed_by   = "terraform"
+    architecture = var.execution_environment == "EXECUTION_ENVIRONMENT_GEN2" ? "arm64-capable" : "x86_64"
+  })
+}
+
+# ==============================================
+# IAM for Public Access (if enabled)
+# ==============================================
+
+resource "google_cloud_run_service_iam_member" "public_access" {
+  count = var.allow_unauthenticated ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  service  = google_cloud_run_v2_service.main.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# ==============================================
+# Cloud SQL Connection IAM
+# ==============================================
+
+resource "google_project_iam_member" "cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Secret Manager access — least-privilege per-secret bindings.
+#
+# Previously this granted the Cloud Run SA project-wide
+# `roles/secretmanager.secretAccessor`, which let it read every secret in
+# the project (including unrelated workloads' secrets). Now we bind only
+# the specific secrets the workload actually needs:
+#
+#   - database_password_secret_id  (always required)
+#   - admin_password_secret_name   (writer binding handled separately below)
+#   - additional_secret_accessor_ids (sendgrid, credential encryption key,
+#     anything else the env wires through)
+#
+# The admin-password reader binding rides on the same `additional_*` map
+# entry from the env, so the admin-password-writer binding below is the
+# only admin-specific resource left here.
+resource "google_secret_manager_secret_iam_member" "db_password_reader" {
+  project   = var.project_id
+  secret_id = var.database_password_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "additional_readers" {
+  for_each = var.additional_secret_accessor_ids
+
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Grant read access to admin password secret (for password verification on
+# login). Read sits on the same binding gate as write — both come from the
+# `admin_password_secret_name` input — because the app needs both to be
+# usable. Using `enable_admin_password_writer` as the gate keeps a single
+# precondition for "admin secret is wired up enough to produce known-after-
+# apply names without tripping Terraform's sensitive-value-in-count limit"
+# (see variable docs).
+resource "google_secret_manager_secret_iam_member" "admin_password_reader" {
+  count = var.enable_admin_password_writer ? 1 : 0
+
+  project   = var.project_id
+  secret_id = var.admin_password_secret_name
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Grant write access to admin password secret only (for password sync)
+resource "google_secret_manager_secret_iam_member" "admin_password_writer" {
+  count = var.enable_admin_password_writer ? 1 : 0
+
+  project   = var.project_id
+  secret_id = var.admin_password_secret_name
+  role      = "roles/secretmanager.secretVersionAdder"
+  member    = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# ==============================================
+# Cloud Scheduler for Scheduled Tasks
+# ==============================================
+
+resource "google_cloud_scheduler_job" "recommendations" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  name             = "${var.service_name}-recommendations"
+  description      = "Trigger recommendations collection"
+  schedule         = var.recommendation_schedule
+  time_zone        = "UTC"
+  attempt_deadline = "320s"
+  project          = var.project_id
+  region           = var.region
+
+  retry_config {
+    retry_count = 3
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/recommendations"
+
+    # Auth: oidc_token below is signed by the scheduler's service
+    # account at invocation time. Two complementary defences:
+    #   1. Cloud Run's IAM gate via roles/run.invoker (active when
+    #      allow_unauthenticated = false; in the GCP env layer this
+    #      is derived from enable_cdn — see #384).
+    #   2. App-level OIDC validation on /api/scheduled/* — the Go
+    #      validator (internal/server/scheduledauth) checks the JWT
+    #      signature, issuer, audience, and pins the subject to this
+    #      SA's unique_id. Audience is pinned to the receiving endpoint
+    #      URL (the OAuth/OIDC convention — keeps the token recipient-
+    #      bound). The validator's whitelist reads the same value via
+    #      local.scheduled_task_oidc_audiences so the JWT claim and
+    #      the env-var match by construction.
+    # The previous static `Authorization: Bearer
+    # ${var.scheduled_task_secret}` header leaked the shared secret into
+    # the scheduler resource definition + Terraform state — closes #159.
+    oidc_token {
+      service_account_email = google_service_account.scheduler[0].email
+      audience              = local.scheduled_task_recommendations_audience
+    }
+  }
+}
+
+# Service account for Cloud Scheduler
+resource "google_service_account" "scheduler" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  account_id   = "${var.service_name}-scheduler"
+  display_name = "Cloud Scheduler service account"
+  project      = var.project_id
+}
+
+# Grant scheduler permission to invoke Cloud Run
+resource "google_cloud_run_service_iam_member" "scheduler_invoker" {
+  count = var.enable_scheduled_tasks ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  service  = google_cloud_run_v2_service.main.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler[0].email}"
+}
+
+# ==============================================
+# Cloud Scheduler for RI Exchange Automation
+# ==============================================
+
+resource "google_cloud_scheduler_job" "ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  name             = "${var.service_name}-ri-exchange"
+  description      = "Trigger RI exchange automation"
+  schedule         = var.ri_exchange_schedule
+  time_zone        = "UTC"
+  attempt_deadline = "320s"
+  project          = var.project_id
+  region           = var.region
+
+  retry_config {
+    retry_count = 3
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
+
+    # Same OIDC-only model as the recommendations scheduler above —
+    # see #159 for the rationale. Audience pinned to the receiving
+    # endpoint URL so the token is recipient-bound and the validator's
+    # whitelist is matched by construction (the env var includes this
+    # value via local.scheduled_task_oidc_audiences).
+    oidc_token {
+      service_account_email = google_service_account.scheduler_ri_exchange[0].email
+      audience              = local.scheduled_task_ri_exchange_audience
+    }
+  }
+}
+
+# Service account for RI Exchange Cloud Scheduler
+resource "google_service_account" "scheduler_ri_exchange" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  account_id   = "${var.service_name}-ri-sched"
+  display_name = "Cloud Scheduler service account for RI exchange"
+  project      = var.project_id
+}
+
+# Grant RI exchange scheduler permission to invoke Cloud Run
+resource "google_cloud_run_service_iam_member" "scheduler_ri_exchange_invoker" {
+  count = var.enable_ri_exchange_schedule ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  service  = google_cloud_run_v2_service.main.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler_ri_exchange[0].email}"
+}
+
+# ==============================================
+# Runtime IAM: CUDly application cloud API access
+# ==============================================
+
+# Compute Viewer: grants compute.commitments.list and compute.machineTypes.list
+# needed for listing CUDs and available instance types.
+resource "google_project_iam_member" "compute_viewer" {
+  project = var.project_id
+  role    = "roles/compute.viewer"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Commitment write access: custom project role cudlyCommitmentWriter
+# granting only compute.commitments.{create,update}. Replaces the original
+# roles/compute.admin grant (pre-eaa84c259), which conferred full VM/network/
+# disk/firewall control — a Cloud Run compromise could then rewrite the
+# entire project. Read-side permissions come from the roles/compute.viewer
+# grant above.
+#
+# Requires the deployer SA to hold iam.roles.{get,create,update,delete} —
+# provisioned in terraform/environments/gcp/ci-cd-permissions via
+# roles/iam.roleAdmin. Consumers without that permission path cannot apply
+# this module; it's a deliberate choice over the earlier opt-in fallback to
+# roles/compute.admin.
+#
+# GCP commitments are non-cancellable by design (no compute.commitments.delete
+# permission exists in the API surface), so the role grants only create and
+# update. Including "delete" fails role creation with
+# "Permission compute.commitments.delete is not valid".
+resource "google_project_iam_custom_role" "cudly_commitment_writer" {
+  project     = var.project_id
+  role_id     = "cudlyCommitmentWriter"
+  title       = "CUDly Commitment Writer"
+  description = "Minimum permissions for CUDly to purchase and update committed use discounts."
+  permissions = [
+    "compute.commitments.create",
+    "compute.commitments.update",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "compute_commitment_writer" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.cudly_commitment_writer.id
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Recommender Viewer: read access to the Recommender API (commitment
+# recommendations, cost insights) for surfacing optimization suggestions.
+resource "google_project_iam_member" "recommender_viewer" {
+  project = var.project_id
+  role    = "roles/recommender.viewer"
+  member  = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# Billing Account Viewer: read access to Cloud Billing catalog (SKU prices)
+# used when calculating cost savings for GCP commitments.
+# roles/billing.viewer is a billing-account-level role and cannot be assigned
+# at the project level. A billing_account_id must be provided to grant it.
+resource "google_billing_account_iam_member" "billing_viewer" {
+  count = var.billing_account_id != "" ? 1 : 0
+
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.viewer"
+  member             = "serviceAccount:${google_service_account.cloud_run.email}"
+}
+
+# ==============================================
+# Cloud Logging
+# ==============================================
+
+# Cloud Run automatically sends logs to Cloud Logging
+# No explicit configuration needed, but we can set retention
+
+resource "google_logging_project_bucket_config" "cloud_run_logs" {
+  count = var.manage_project_log_retention && var.log_retention_days != null ? 1 : 0
+
+  project        = var.project_id
+  location       = "global"
+  retention_days = var.log_retention_days
+  bucket_id      = "_Default"
+}

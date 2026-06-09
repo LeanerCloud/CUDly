@@ -1,0 +1,105 @@
+# AWS Development Environment - GitHub Actions
+# Used by CI/CD pipelines for automated deployments
+# Sensitive values are provided via GitHub secrets
+
+# ==============================================
+# Project Settings
+# ==============================================
+
+project_name = "cudly"
+environment  = "dev"
+region       = "us-east-1"
+
+# ==============================================
+# Compute Platform
+# ==============================================
+
+compute_platform    = "lambda"
+enable_docker_build = true # Build and push image via terraform apply on the runner
+
+# Lambda Configuration
+lambda_memory_size          = 2048
+lambda_timeout              = 300
+lambda_reserved_concurrency = -1
+lambda_log_retention_days   = 7
+# Function URL auth_type is derived from enable_cdn (local in compute.tf):
+#   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
+#   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
+# Current deployed dev origin (Lambda Function URL) + local Webpack dev server.
+# Wildcard is rejected by the module (allow_credentials=true + * = any-origin CSRF).
+# Update the Lambda Function URL entry when the dev environment is redeployed.
+lambda_allowed_origins = [
+  "https://33pz7pombdqwu3bdlxp4lqxyra0bsriy.lambda-url.us-east-1.on.aws",
+  "http://localhost:3000",
+]
+
+# Fargate Configuration (when compute_platform = "fargate")
+fargate_cpu           = 256
+fargate_memory        = 512
+fargate_desired_count = 1
+fargate_min_capacity  = 1
+fargate_max_capacity  = 5
+
+# ==============================================
+# Database (RDS PostgreSQL)
+# ==============================================
+
+database_name                  = "cudly"
+database_username              = "cudly"
+database_engine_version        = "16.6"
+database_backup_retention_days = 7
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
+database_performance_insights  = false
+database_auto_migrate          = true
+
+# ==============================================
+# Networking
+# ==============================================
+
+vpc_cidr         = "10.0.0.0/16"
+az_count         = 2
+enable_flow_logs = false
+
+# ==============================================
+# Secrets
+# ==============================================
+
+secret_recovery_window_days = 7
+
+# ==============================================
+# Frontend / CDN
+# ==============================================
+
+enable_cdn            = false
+frontend_price_class  = "PriceClass_100"
+create_subdomain_zone = false
+
+# ==============================================
+# Scheduled Tasks
+# ==============================================
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(1 day)"
+
+# ==============================================
+# Variables provided by GitHub Actions:
+#   TF_VAR_admin_email    = ${{ secrets.ADMIN_EMAIL }}
+#   TF_VAR_image_uri      = (from build step)
+#   TF_VAR_subdomain_zone_name    = cudly.leanercloud.com
+#   TF_VAR_frontend_domain_names  = ["lambda-dev.cudly.leanercloud.com"]
+#   TF_VAR_dashboard_url  = "https://<lambda-function-url-host>"
+#     # Set this only when serving from a raw Lambda Function URL — i.e.
+#     # frontend_domain_names is not pointing at a Route53/ACM-fronted
+#     # custom domain. Bootstrap: run `terraform apply` once, then
+#     # `terraform output frontend_url` gives the value; copy it in here
+#     # and re-apply so DASHBOARD_URL is persisted in the Lambda env (the
+#     # auth Service refuses to send invite/password-reset emails when
+#     # DASHBOARD_URL is empty — see #355).
+#   TF_VAR_from_email     = ${{ secrets.FROM_EMAIL }}
+#     # Required when subdomain_zone_name is unset. Must be an SES-verified
+#     # identity in the target account. Without it, FROM_EMAIL reaches the
+#     # Lambda as "" and the Sender returns ErrNoFromEmail, which the UI
+#     # surfaces as "FROM_EMAIL not configured for this deployment" on the
+#     # Purchase History page.
+# ==============================================

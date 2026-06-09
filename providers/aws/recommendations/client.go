@@ -4,21 +4,30 @@ package recommendations
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
+
+// maxRecommendationPages caps the number of pages fetched per Cost Explorer
+// GetReservationPurchaseRecommendation or GetSavingsPlansPurchaseRecommendation
+// call. 20 pages x ~100 items/page = ~2000 items, enough headroom for any
+// payer org we have seen. Exceeding the cap returns a diagnostic error (issue #692).
+const maxRecommendationPages = 20
 
 // CostExplorerAPI defines the interface for Cost Explorer operations
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
 	GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error)
+	GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error)
+	GetReservationCoverage(ctx context.Context, params *costexplorer.GetReservationCoverageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationCoverageOutput, error)
 }
 
 // Client wraps the AWS Cost Explorer client for RI recommendations
@@ -26,6 +35,20 @@ type Client struct {
 	costExplorerClient CostExplorerAPI
 	region             string
 	rateLimiter        *RateLimiter
+
+	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
+	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
+	ec2API DescribeInstanceTypesAPI
+
+	// instanceTypePagerFactory creates a new InstanceTypePager on demand.
+	// Set by NewClient to wrap ec2API; overridable via SetInstanceTypePagerFactory
+	// for hermetic tests. When nil, instanceTypeLookup returns (0,0).
+	instanceTypePagerFactory func() InstanceTypePager
+
+	// skuCatalog caches the per-instance-type vCPU/memory catalogue, fetched
+	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
+	// fan-out per scheduler tick).
+	skuCatalog skuCatalog
 }
 
 // NewClient creates a new recommendations client
@@ -35,10 +58,17 @@ func NewClient(cfg aws.Config) *Client {
 	ceConfig.Region = "us-east-1"
 	ceConfig.BaseEndpoint = aws.String("https://ce.us-east-1.amazonaws.com")
 
+	ec2Client := awsec2.NewFromConfig(cfg)
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
 		rateLimiter:        NewRateLimiter(),
+		ec2API:             ec2Client,
+		// Factory wraps the EC2 client so the paginator is created lazily
+		// on the first EC2 recommendation parse (not at construction time).
+		instanceTypePagerFactory: func() InstanceTypePager {
+			return awsec2.NewDescribeInstanceTypesPaginator(ec2Client, &awsec2.DescribeInstanceTypesInput{})
+		},
 	}
 }
 
@@ -48,13 +78,39 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 		costExplorerClient: api,
 		region:             region,
 		rateLimiter:        NewRateLimiter(),
+		// ec2API left nil: instanceTypeLookup falls back to VCPU=0/MemoryGB=0
+		// unless the caller sets instanceTypePagerFactory.
 	}
+}
+
+// SetInstanceTypePagerFactory injects a pager factory for the instance-type
+// SKU catalogue. Must be called before the first GetRecommendations call.
+// Intended for tests that need to verify the one-fetch-per-lifetime invariant
+// without hitting AWS.
+func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
+	c.instanceTypePagerFactory = f
+}
+
+// instanceTypeLookup returns the cached SKU entry for instanceType.
+// On the first call the catalogue is built by calling the pager factory.
+// ok=false when no factory is configured, the catalogue fetch failed, or
+// the instance type was not in the catalogue — the caller falls back to
+// VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
+func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
+	if c.instanceTypePagerFactory == nil {
+		return instanceTypeSKUEntry{}, false
+	}
+	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
 func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	// Handle Savings Plans separately as they use a different API
-	if params.Service == common.ServiceSavingsPlans {
+	// Handle Savings Plans separately — they use a different Cost Explorer API
+	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
+	// Match any SP slug — the legacy umbrella plus the four per-plan-type slugs —
+	// via the IsSavingsPlan family predicate so the dispatch keeps working as
+	// callers migrate.
+	if common.IsSavingsPlan(params.Service) {
 		return c.getSavingsPlansRecommendations(ctx, params)
 	}
 
@@ -66,17 +122,75 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		AccountScope:         types.AccountScopeLinked,
 	}
 
-	// Implement rate limiting with exponential backoff
+	allRecs, err := c.fetchRIAllPages(ctx, input, params.Service)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.parseRecommendations(ctx, allRecs, params)
+}
+
+// fetchRIAllPages paginates over all pages of RI recommendations for a single
+// (service, term, payment) combination. ctx.Err() is checked at the top of
+// each iteration so cancellation is terminal (per feedback_ctx_cancel_terminal.md,
+// issue #692).
+func (c *Client) fetchRIAllPages(
+	ctx context.Context,
+	input *costexplorer.GetReservationPurchaseRecommendationInput,
+	service common.ServiceType,
+) ([]types.ReservationPurchaseRecommendation, error) {
+	var allRecs []types.ReservationPurchaseRecommendation
+	var nextPageToken *string
+
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if pageIdx >= maxRecommendationPages {
+			return nil, fmt.Errorf(
+				"pagination cap reached after %d pages for RI %s (issue #692)",
+				maxRecommendationPages, service,
+			)
+		}
+		input.NextPageToken = nextPageToken
+
+		result, err := c.fetchRIPageWithRetry(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		allRecs = append(allRecs, result.Recommendations...)
+
+		if result.NextPageToken == nil || aws.ToString(result.NextPageToken) == "" {
+			break
+		}
+		nextPageToken = result.NextPageToken
+	}
+
+	return allRecs, nil
+}
+
+// fetchRIPageWithRetry executes a single GetReservationPurchaseRecommendation
+// call with rate-limiter exponential back-off. Extracted so the pagination loop
+// in fetchRIAllPages stays below the gocyclo cap.
+func (c *Client) fetchRIPageWithRetry(
+	ctx context.Context,
+	input *costexplorer.GetReservationPurchaseRecommendationInput,
+) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	c.rateLimiter.Reset()
 	var result *costexplorer.GetReservationPurchaseRecommendationOutput
 	var err error
 
-	c.rateLimiter.Reset()
 	for {
 		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
+		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+			return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+		}
 		result, err = c.costExplorerClient.GetReservationPurchaseRecommendation(ctx, input)
+		concurrency.Release(ctx)
 		if !c.rateLimiter.ShouldRetry(err) {
 			break
 		}
@@ -86,613 +200,219 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 		return nil, fmt.Errorf("failed to get RI recommendations after %d retries: %w", c.rateLimiter.GetRetryCount(), err)
 	}
 
-	return c.parseRecommendations(result.Recommendations, params)
+	return result, nil
 }
 
-// GetRecommendationsForService fetches recommendations for a specific service (for discovery)
+// defaultDiscoveryTerms enumerates the term lengths the discovery flow
+// fetches per service. Cost Explorer's GetReservationPurchaseRecommendation
+// requires `TermInYears` on each request and returns recs for that single
+// term — there's no "give me both" mode. Issue #188 traced the
+// "AWS recs only ever show Term = 3 Years" symptom to this loop having
+// previously been a single hardcoded "3yr" entry, so 1yr recs never
+// reached the scheduler regardless of how unique their downstream IDs
+// were after PR #189.
+var defaultDiscoveryTerms = []string{"1yr", "3yr"}
+
+// defaultDiscoveryPaymentOptions enumerates the payment options the
+// discovery flow fetches per (service, term). Cost Explorer's
+// GetReservationPurchaseRecommendation requires a single `PaymentOption`
+// per request and returns recs only for that option; the prior single
+// hardcoded "partial-upfront" entry meant the Recommendations page
+// could never offer the user a choice between all-upfront / partial /
+// no-upfront variants. The recordID encoding (scheduler.go) and the
+// recommendations natural-key index (migration 000042) both already
+// include payment_option, so the three variants land as distinct DB
+// rows and render as distinct UI rows for free.
+var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", "no-upfront"}
+
+// GetRecommendationsForService fetches recommendations for a specific
+// service across the full Cartesian product of defaultDiscoveryTerms ×
+// defaultDiscoveryPaymentOptions (currently 2 × 3 = 6 Cost Explorer
+// calls per service). Each call returns the recs for that single
+// (term, payment) cell and the parser tags them with params.Term /
+// params.PaymentOption so the resulting slice contains every combo
+// for the user to choose from in the UI.
+//
+// A per-call Cost Explorer error is tolerated and skipped so a single
+// throttle on one (term, payment) combo doesn't suppress the others;
+// only an error where every combo fails is propagated. This mirrors
+// the "continue on per-service error" tolerance in GetAllRecommendations.
 func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
-	params := common.RecommendationParams{
-		Service:        service,
-		PaymentOption:  "partial-upfront",
-		Term:           "3yr",
-		LookbackPeriod: "7d",
-		Region:         "",
-	}
-
-	return c.GetRecommendations(ctx, params)
-}
-
-// GetAllRecommendations fetches recommendations for all supported services
-func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
-	services := []common.ServiceType{
-		common.ServiceEC2,
-		common.ServiceRDS,
-		common.ServiceElastiCache,
-		common.ServiceOpenSearch,
-		common.ServiceRedshift,
-	}
-
-	allRecommendations := make([]common.Recommendation, 0)
-
-	for _, service := range services {
-		recs, err := c.GetRecommendationsForService(ctx, service)
-		if err != nil {
-			continue
-		}
-		allRecommendations = append(allRecommendations, recs...)
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return allRecommendations, nil
-}
-
-// parseRecommendations converts AWS recommendations to common.Recommendation format
-func (c *Client) parseRecommendations(awsRecs []types.ReservationPurchaseRecommendation, params common.RecommendationParams) ([]common.Recommendation, error) {
-	var recommendations []common.Recommendation
-
-	for _, awsRec := range awsRecs {
-		for i, details := range awsRec.RecommendationDetails {
-			rec, err := c.parseRecommendationDetail(&details, params)
+	allRecs := make([]common.Recommendation, 0)
+	var lastErr error
+	successCount := 0
+	attempts := 0
+	for _, term := range defaultDiscoveryTerms {
+		for _, payment := range defaultDiscoveryPaymentOptions {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			attempts++
+			params := common.RecommendationParams{
+				Service:        service,
+				PaymentOption:  payment,
+				Term:           term,
+				LookbackPeriod: "7d",
+				Region:         "",
+			}
+			recs, err := c.GetRecommendations(ctx, params)
 			if err != nil {
-				fmt.Printf("Warning: Failed to parse recommendation detail %d: %v\n", i, err)
+				// A canceled / deadline-exceeded ctx is NOT a per-combo
+				// failure to be tolerated — every subsequent combo
+				// would just hit the same dead context and waste time
+				// while we accumulate "failures" that hide the real
+				// reason. Short-circuit so the caller sees the ctx
+				// error verbatim. Per-combo errors (throttle, 5xx)
+				// keep the existing skip-and-continue tolerance.
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				lastErr = err
 				continue
 			}
-
-			if rec != nil {
-				recommendations = append(recommendations, *rec)
-			}
+			successCount++
+			allRecs = append(allRecs, recs...)
 		}
 	}
-
-	return recommendations, nil
+	if successCount == 0 && attempts > 0 && lastErr != nil {
+		return nil, fmt.Errorf("all (term, payment) variants failed for service %s: %w", service, lastErr)
+	}
+	// Enrich each rec with 7-day daily coverage history so the frontend
+	// can render a per-row sparkline (closes #239 Part 1). SavingsPlans
+	// are skipped inside AttachDailyUsageHistory (no per-SKU CE coverage
+	// breakdown available). Errors are logged and skipped per-tuple so a
+	// single CE failure doesn't suppress the rest of the collection.
+	if len(allRecs) > 0 {
+		c.AttachDailyUsageHistory(ctx, allRecs)
+	}
+	return allRecs, nil
 }
 
-// parseRecommendationDetail converts a single AWS recommendation detail
-func (c *Client) parseRecommendationDetail(details *types.ReservationPurchaseRecommendationDetail, params common.RecommendationParams) (*common.Recommendation, error) {
-	rec := &common.Recommendation{
-		Provider:       common.ProviderAWS,
-		Service:        params.Service,
-		PaymentOption:  params.PaymentOption,
-		Term:           params.Term,
-		CommitmentType: common.CommitmentReservedInstance,
-		Timestamp:      time.Now(),
+// GetAllRecommendations fetches recommendations for all supported services.
+//
+// All five service calls run concurrently under errgroup. Each goroutine
+// captures its own error in a closure-scoped variable and returns nil to the
+// group so a single per-service failure does not cancel its siblings (matching
+// the previous loop's `continue`-on-error tolerance). Results are merged in
+// the canonical order EC2 → RDS → ElastiCache → OpenSearch → Redshift after
+// all goroutines finish so order-sensitive consumers stay stable.
+//
+// Behaviour change vs the previous sequential loop: per-service errors are
+// now logged at WARN via mergeServiceResults — the previous loop swallowed
+// them silently with a bare `continue`, leaving operators no signal when a
+// single service was misbehaving. Mirrors the Azure parallelisation in
+// providers/azure/recommendations.go (closes #258, commit b10326c5).
+func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
+	var (
+		ec2Recs, rdsRecs, cacheRecs, osRecs, redshiftRecs []common.Recommendation
+		ec2Err, rdsErr, cacheErr, osErr, redshiftErr      error
+		spRecs                                            []common.Recommendation
+		spErr                                             error
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	// Per-service goroutines launch the inner (term, payment) sweep for each
+	// AWS service. They do NOT acquire the shared semaphore at this level —
+	// each service sweep makes 6 inner Cost Explorer calls (2 terms × 3
+	// payment options) plus retries with rate-limiter backoff, so holding a
+	// permit across the whole sweep would tie up a slot during waits when
+	// no request is actually in flight. The Acquire/Release boundary lives
+	// inside GetRecommendations (around the individual CE SDK call), which
+	// frees slots during backoffs and gives the cap its full effective
+	// throughput. The SP goroutine expands further to 24 calls (2 terms × 3
+	// payment options × 4 plan types) internally via planTypesForParams.
+	// See pkg/concurrency.
+	g.Go(func() error {
+		ec2Recs, ec2Err = c.GetRecommendationsForService(gctx, common.ServiceEC2)
+		return nil
+	})
+	g.Go(func() error {
+		rdsRecs, rdsErr = c.GetRecommendationsForService(gctx, common.ServiceRDS)
+		return nil
+	})
+	g.Go(func() error {
+		cacheRecs, cacheErr = c.GetRecommendationsForService(gctx, common.ServiceElastiCache)
+		return nil
+	})
+	g.Go(func() error {
+		osRecs, osErr = c.GetRecommendationsForService(gctx, common.ServiceOpenSearch)
+		return nil
+	})
+	g.Go(func() error {
+		redshiftRecs, redshiftErr = c.GetRecommendationsForService(gctx, common.ServiceRedshift)
+		return nil
+	})
+	g.Go(func() error {
+		spRecs, spErr = c.GetRecommendationsForService(gctx, common.ServiceSavingsPlans)
+		return nil
+	})
+
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil — errors are captured per-service above. After
+	// Wait, propagate ctx cancellation so callers can distinguish "all six
+	// services completed (with possibly per-service errors)" from "the
+	// parent ctx was canceled mid-fan-out".
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	// Parse recommended quantity
-	count, err := c.parseRecommendedQuantity(details)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse recommended quantity: %w", err)
-	}
-	rec.Count = count
-
-	// Parse cost information
-	rec.EstimatedSavings, rec.SavingsPercentage, err = c.parseCostInformation(details)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse cost information: %w", err)
-	}
-
-	// Extract account ID if available
-	if details.AccountId != nil {
-		rec.Account = aws.ToString(details.AccountId)
-	}
-
-	// Parse AWS-provided cost details
-	if details.UpfrontCost != nil {
-		if upfront, err := strconv.ParseFloat(*details.UpfrontCost, 64); err == nil {
-			rec.CommitmentCost = upfront
-		}
-	}
-	if details.EstimatedMonthlyOnDemandCost != nil {
-		if onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64); err == nil {
-			rec.OnDemandCost = onDemand
-		}
-	}
-
-	// Parse service-specific details
-	switch params.Service {
-	case common.ServiceRDS, common.ServiceRelationalDB:
-		if err := c.parseRDSDetails(rec, details); err != nil {
-			return nil, err
-		}
-	case common.ServiceElastiCache, common.ServiceCache:
-		if err := c.parseElastiCacheDetails(rec, details); err != nil {
-			return nil, err
-		}
-	case common.ServiceEC2, common.ServiceCompute:
-		if err := c.parseEC2Details(rec, details); err != nil {
-			return nil, err
-		}
-	case common.ServiceOpenSearch, common.ServiceSearch:
-		if err := c.parseOpenSearchDetails(rec, details); err != nil {
-			return nil, err
-		}
-	case common.ServiceRedshift, common.ServiceDataWarehouse:
-		if err := c.parseRedshiftDetails(rec, details); err != nil {
-			return nil, err
-		}
-	case common.ServiceMemoryDB:
-		if err := c.parseMemoryDBDetails(rec, details); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unsupported service: %s", params.Service)
-	}
-
-	return rec, nil
+	return mergeServiceResults(
+		serviceResult{name: "EC2", recs: ec2Recs, err: ec2Err},
+		serviceResult{name: "RDS", recs: rdsRecs, err: rdsErr},
+		serviceResult{name: "ElastiCache", recs: cacheRecs, err: cacheErr},
+		serviceResult{name: "OpenSearch", recs: osRecs, err: osErr},
+		serviceResult{name: "Redshift", recs: redshiftRecs, err: redshiftErr},
+		serviceResult{name: "SavingsPlans", recs: spRecs, err: spErr},
+	)
 }
 
-// parseRDSDetails extracts RDS-specific details
-func (c *Client) parseRDSDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	if details.InstanceDetails == nil || details.InstanceDetails.RDSInstanceDetails == nil {
-		return fmt.Errorf("RDS instance details not found")
-	}
+// serviceResult bundles a per-service collection outcome for the deterministic
+// merge in mergeServiceResults. Extracted into a helper so GetAllRecommendations
+// stays under the gocyclo gate (.golangci.yml min-complexity: 15) after the
+// post-Wait ctx.Err() block was added.
+type serviceResult struct {
+	name string
+	recs []common.Recommendation
+	err  error
+}
 
-	rdsDetails := details.InstanceDetails.RDSInstanceDetails
-	rdsInfo := &common.DatabaseDetails{}
-
-	if rdsDetails.InstanceType != nil {
-		rec.ResourceType = *rdsDetails.InstanceType
-	}
-	if rdsDetails.DatabaseEngine != nil {
-		rdsInfo.Engine = *rdsDetails.DatabaseEngine
-	}
-	if rdsDetails.Region != nil {
-		rec.Region = normalizeRegionName(*rdsDetails.Region)
-	}
-	if rdsDetails.DeploymentOption != nil {
-		if *rdsDetails.DeploymentOption == "Multi-AZ" {
-			rdsInfo.AZConfig = "multi-az"
-		} else {
-			rdsInfo.AZConfig = "single-az"
+// mergeServiceResults logs per-service errors at WARN and appends successful
+// results in the order the slice is passed — callers must preserve the
+// canonical EC2 → RDS → ElastiCache → OpenSearch → Redshift → SavingsPlans
+// order so that order-sensitive consumers stay stable.
+//
+// Partial failure is tolerated: as long as at least one service succeeded, the
+// successful services' recommendations are returned with a nil error and the
+// failures are logged at WARN. But when EVERY service errored (e.g. a sustained
+// Cost Explorer throttle that exhausts each service's per-combo retries), the
+// merge returns a wrapped error instead of an empty-but-nil-error result
+// (08-H4). Returning (recs, nil) on a total failure makes a throttled run
+// indistinguishable from "no savings available", which an operator can misread
+// as "nothing to buy": the same hazard the per-service all-combos-failed guard
+// in GetRecommendationsForService prevents one level down.
+func mergeServiceResults(results ...serviceResult) ([]common.Recommendation, error) {
+	total := 0
+	failures := 0
+	var lastErr error
+	for _, r := range results {
+		total += len(r.recs)
+		if r.err != nil {
+			failures++
+			lastErr = r.err
 		}
-	} else {
-		rdsInfo.AZConfig = "single-az"
 	}
-
-	rec.Details = rdsInfo
-	return nil
-}
-
-// parseElastiCacheDetails extracts ElastiCache-specific details
-func (c *Client) parseElastiCacheDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	if details.InstanceDetails == nil || details.InstanceDetails.ElastiCacheInstanceDetails == nil {
-		return fmt.Errorf("ElastiCache instance details not found")
-	}
-
-	cacheDetails := details.InstanceDetails.ElastiCacheInstanceDetails
-	cacheInfo := &common.CacheDetails{}
-
-	if cacheDetails.NodeType != nil {
-		rec.ResourceType = *cacheDetails.NodeType
-		cacheInfo.NodeType = *cacheDetails.NodeType
-	}
-	if cacheDetails.ProductDescription != nil {
-		cacheInfo.Engine = *cacheDetails.ProductDescription
-	}
-	if cacheDetails.Region != nil {
-		rec.Region = normalizeRegionName(*cacheDetails.Region)
-	}
-
-	rec.Details = cacheInfo
-	return nil
-}
-
-// parseEC2Details extracts EC2-specific details
-func (c *Client) parseEC2Details(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	if details.InstanceDetails == nil || details.InstanceDetails.EC2InstanceDetails == nil {
-		return fmt.Errorf("EC2 instance details not found")
-	}
-
-	ec2Details := details.InstanceDetails.EC2InstanceDetails
-	ec2Info := &common.ComputeDetails{}
-
-	if ec2Details.InstanceType != nil {
-		rec.ResourceType = *ec2Details.InstanceType
-		ec2Info.InstanceType = *ec2Details.InstanceType
-	}
-	if ec2Details.Platform != nil {
-		ec2Info.Platform = *ec2Details.Platform
-	}
-	if ec2Details.Region != nil {
-		rec.Region = normalizeRegionName(*ec2Details.Region)
-	}
-	if ec2Details.Tenancy != nil {
-		ec2Info.Tenancy = *ec2Details.Tenancy
-	} else {
-		ec2Info.Tenancy = "shared"
-	}
-
-	if ec2Details.AvailabilityZone != nil && *ec2Details.AvailabilityZone != "" {
-		ec2Info.Scope = "availability-zone"
-	} else {
-		ec2Info.Scope = "region"
-	}
-
-	rec.Details = ec2Info
-	return nil
-}
-
-// parseOpenSearchDetails extracts OpenSearch-specific details
-func (c *Client) parseOpenSearchDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	if details.InstanceDetails == nil || details.InstanceDetails.ESInstanceDetails == nil {
-		return fmt.Errorf("OpenSearch/Elasticsearch instance details not found")
-	}
-
-	esDetails := details.InstanceDetails.ESInstanceDetails
-	osInfo := &common.SearchDetails{}
-
-	if esDetails.InstanceClass != nil && esDetails.InstanceSize != nil {
-		instanceSize := *esDetails.InstanceSize
-		// Cost Explorer may return InstanceSize as the full type (e.g. "t3.medium.search");
-		// concatenating with InstanceClass would duplicate (e.g. "t3.medium.t3.medium.search").
-		if strings.HasSuffix(instanceSize, ".search") {
-			rec.ResourceType = instanceSize
-		} else {
-			rec.ResourceType = fmt.Sprintf("%s.%s.search", *esDetails.InstanceClass, instanceSize)
-		}
-		osInfo.InstanceType = rec.ResourceType
-	}
-	if esDetails.Region != nil {
-		rec.Region = normalizeRegionName(*esDetails.Region)
-	}
-
-	rec.Details = osInfo
-	return nil
-}
-
-// parseRedshiftDetails extracts Redshift-specific details
-func (c *Client) parseRedshiftDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	if details.InstanceDetails == nil || details.InstanceDetails.RedshiftInstanceDetails == nil {
-		return fmt.Errorf("Redshift instance details not found")
-	}
-
-	rsDetails := details.InstanceDetails.RedshiftInstanceDetails
-	rsInfo := &common.DataWarehouseDetails{}
-
-	if rsDetails.NodeType != nil {
-		rec.ResourceType = *rsDetails.NodeType
-		rsInfo.NodeType = *rsDetails.NodeType
-	}
-	if rsDetails.Region != nil {
-		rec.Region = normalizeRegionName(*rsDetails.Region)
-	}
-
-	rsInfo.NumberOfNodes = rec.Count
-	if rsInfo.NumberOfNodes == 1 {
-		rsInfo.ClusterType = "single-node"
-	} else {
-		rsInfo.ClusterType = "multi-node"
-	}
-
-	rec.Details = rsInfo
-	return nil
-}
-
-// parseMemoryDBDetails extracts MemoryDB-specific details
-func (c *Client) parseMemoryDBDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
-	// MemoryDB might not have specific details in Cost Explorer yet
-	rec.ResourceType = "db.r6gd.xlarge" // Default
-	rec.Details = &common.CacheDetails{
-		Engine:   "redis",
-		NodeType: rec.ResourceType,
-	}
-	return nil
-}
-
-// parseRecommendedQuantity extracts the recommended quantity from details
-func (c *Client) parseRecommendedQuantity(details *types.ReservationPurchaseRecommendationDetail) (int, error) {
-	if details.RecommendedNumberOfInstancesToPurchase == nil {
-		return 0, fmt.Errorf("recommended quantity not found")
-	}
-
-	qty := *details.RecommendedNumberOfInstancesToPurchase
-
-	var count float64
-	_, err := fmt.Sscanf(qty, "%f", &count)
-	if err != nil {
-		if intCount, err := strconv.Atoi(qty); err == nil {
-			return intCount, nil
-		}
-		return 0, fmt.Errorf("failed to parse quantity '%s': %w", qty, err)
-	}
-
-	return int(count), nil
-}
-
-// parseCostInformation extracts cost and savings information
-func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommendationDetail) (float64, float64, error) {
-	var estimatedSavings, savingsPercent float64
-
-	if details.EstimatedMonthlySavingsAmount != nil {
-		fmt.Sscanf(*details.EstimatedMonthlySavingsAmount, "%f", &estimatedSavings)
-	}
-
-	if details.EstimatedMonthlySavingsPercentage != nil {
-		fmt.Sscanf(*details.EstimatedMonthlySavingsPercentage, "%f", &savingsPercent)
-	}
-
-	return estimatedSavings, savingsPercent, nil
-}
-
-// getSavingsPlansRecommendations fetches Savings Plans recommendations
-func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	// Build list of plan types to query based on filters
-	planTypes := c.getFilteredPlanTypes(params.IncludeSPTypes, params.ExcludeSPTypes)
-
-	if len(planTypes) == 0 {
-		return []common.Recommendation{}, nil
-	}
-
-	var allRecommendations []common.Recommendation
-
-	for _, planType := range planTypes {
-		input := &costexplorer.GetSavingsPlansPurchaseRecommendationInput{
-			SavingsPlansType:     planType,
-			PaymentOption:        convertSavingsPlansPaymentOption(params.PaymentOption),
-			TermInYears:          convertSavingsPlansTermInYears(params.Term),
-			LookbackPeriodInDays: convertSavingsPlansLookbackPeriod(params.LookbackPeriod),
-			AccountScope:         types.AccountScopeLinked,
-		}
-
-		c.rateLimiter.Reset()
-		var result *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
-		var err error
-
-		for {
-			if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
-				return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
-			}
-
-			result, err = c.costExplorerClient.GetSavingsPlansPurchaseRecommendation(ctx, input)
-			if !c.rateLimiter.ShouldRetry(err) {
-				break
-			}
-		}
-
-		if err != nil {
-			fmt.Printf("Warning: Failed to get %s recommendations: %v\n", planType, err)
+	out := make([]common.Recommendation, 0, total)
+	for _, r := range results {
+		if r.err != nil {
+			logging.Warnf("AWS %s recommendations: %v", r.name, r.err)
 			continue
 		}
-
-		if result.SavingsPlansPurchaseRecommendation != nil {
-			recs := c.parseSavingsPlansRecommendations(result.SavingsPlansPurchaseRecommendation, params, planType)
-			allRecommendations = append(allRecommendations, recs...)
-		}
+		out = append(out, r.recs...)
 	}
-
-	return allRecommendations, nil
-}
-
-// parseSavingsPlansRecommendations converts Savings Plans recommendations
-func (c *Client) parseSavingsPlansRecommendations(
-	spRec *types.SavingsPlansPurchaseRecommendation,
-	params common.RecommendationParams,
-	planType types.SupportedSavingsPlansType,
-) []common.Recommendation {
-	var recommendations []common.Recommendation
-
-	for _, detail := range spRec.SavingsPlansPurchaseRecommendationDetails {
-		rec := c.parseSavingsPlanDetail(&detail, params, planType)
-		if rec != nil {
-			recommendations = append(recommendations, *rec)
-		}
+	if failures == len(results) && failures > 0 {
+		return nil, fmt.Errorf("all %d AWS recommendation services failed: %w", failures, lastErr)
 	}
-
-	return recommendations
-}
-
-// parseSavingsPlanDetail converts a single Savings Plan recommendation detail
-func (c *Client) parseSavingsPlanDetail(
-	detail *types.SavingsPlansPurchaseRecommendationDetail,
-	params common.RecommendationParams,
-	planType types.SupportedSavingsPlansType,
-) *common.Recommendation {
-	var hourlyCommitment, monthlySavings, savingsPercent, upfrontCost float64
-
-	if detail.HourlyCommitmentToPurchase != nil {
-		hourlyCommitment, _ = strconv.ParseFloat(*detail.HourlyCommitmentToPurchase, 64)
-	}
-	if detail.EstimatedMonthlySavingsAmount != nil {
-		monthlySavings, _ = strconv.ParseFloat(*detail.EstimatedMonthlySavingsAmount, 64)
-	}
-	if detail.EstimatedSavingsPercentage != nil {
-		savingsPercent, _ = strconv.ParseFloat(*detail.EstimatedSavingsPercentage, 64)
-	}
-	if detail.UpfrontCost != nil {
-		upfrontCost, _ = strconv.ParseFloat(*detail.UpfrontCost, 64)
-	}
-
-	planTypeStr := string(planType)
-	switch planType {
-	case types.SupportedSavingsPlansTypeComputeSp:
-		planTypeStr = "Compute"
-	case types.SupportedSavingsPlansTypeEc2InstanceSp:
-		planTypeStr = "EC2Instance"
-	case types.SupportedSavingsPlansTypeSagemakerSp:
-		planTypeStr = "SageMaker"
-	case types.SupportedSavingsPlansTypeDatabaseSp:
-		planTypeStr = "Database"
-	}
-
-	accountID := ""
-	if detail.AccountId != nil {
-		accountID = aws.ToString(detail.AccountId)
-	}
-
-	return &common.Recommendation{
-		Provider:          common.ProviderAWS,
-		Service:           common.ServiceSavingsPlans,
-		PaymentOption:     params.PaymentOption,
-		Term:              params.Term,
-		CommitmentType:    common.CommitmentSavingsPlan,
-		Count:             1,
-		EstimatedSavings:  monthlySavings,
-		SavingsPercentage: savingsPercent,
-		CommitmentCost:    upfrontCost,
-		Timestamp:         time.Now(),
-		Account:           accountID,
-		Details: &common.SavingsPlanDetails{
-			PlanType:         planTypeStr,
-			HourlyCommitment: hourlyCommitment,
-			Coverage:         fmt.Sprintf("%.1f%%", savingsPercent),
-		},
-	}
-}
-
-// Helper functions
-
-func getServiceStringForCostExplorer(service common.ServiceType) string {
-	switch service {
-	case common.ServiceRDS, common.ServiceRelationalDB:
-		return "Amazon Relational Database Service"
-	case common.ServiceElastiCache, common.ServiceCache:
-		return "Amazon ElastiCache"
-	case common.ServiceEC2, common.ServiceCompute:
-		return "Amazon Elastic Compute Cloud - Compute"
-	case common.ServiceOpenSearch, common.ServiceSearch:
-		return "Amazon OpenSearch Service"
-	case common.ServiceRedshift, common.ServiceDataWarehouse:
-		return "Amazon Redshift"
-	case common.ServiceMemoryDB:
-		return "Amazon MemoryDB Service"
-	default:
-		return string(service)
-	}
-}
-
-func convertPaymentOption(option string) types.PaymentOption {
-	switch option {
-	case "all-upfront":
-		return types.PaymentOptionAllUpfront
-	case "partial-upfront":
-		return types.PaymentOptionPartialUpfront
-	case "no-upfront":
-		return types.PaymentOptionNoUpfront
-	default:
-		return types.PaymentOptionNoUpfront
-	}
-}
-
-func convertTermInYears(term string) types.TermInYears {
-	if term == "3yr" || term == "3" {
-		return types.TermInYearsThreeYears
-	}
-	return types.TermInYearsOneYear
-}
-
-func convertLookbackPeriod(period string) types.LookbackPeriodInDays {
-	switch period {
-	case "7d", "7":
-		return types.LookbackPeriodInDaysSevenDays
-	case "30d", "30":
-		return types.LookbackPeriodInDaysThirtyDays
-	case "60d", "60":
-		return types.LookbackPeriodInDaysSixtyDays
-	default:
-		return types.LookbackPeriodInDaysSevenDays
-	}
-}
-
-func convertSavingsPlansPaymentOption(option string) types.PaymentOption {
-	return convertPaymentOption(option)
-}
-
-func convertSavingsPlansTermInYears(term string) types.TermInYears {
-	return convertTermInYears(term)
-}
-
-func convertSavingsPlansLookbackPeriod(period string) types.LookbackPeriodInDays {
-	return convertLookbackPeriod(period)
-}
-
-// getFilteredPlanTypes returns the list of Savings Plan types to query based on include/exclude filters
-func (c *Client) getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
-	// All available plan types
-	allPlanTypes := map[string]types.SupportedSavingsPlansType{
-		"compute":     types.SupportedSavingsPlansTypeComputeSp,
-		"ec2instance": types.SupportedSavingsPlansTypeEc2InstanceSp,
-		"sagemaker":   types.SupportedSavingsPlansTypeSagemakerSp,
-		"database":    types.SupportedSavingsPlansTypeDatabaseSp,
-	}
-
-	// Normalize filter values to lowercase
-	normalizeFilters := func(filters []string) map[string]bool {
-		result := make(map[string]bool)
-		for _, f := range filters {
-			result[strings.ToLower(f)] = true
-		}
-		return result
-	}
-
-	includeMap := normalizeFilters(includeSPTypes)
-	excludeMap := normalizeFilters(excludeSPTypes)
-
-	var result []types.SupportedSavingsPlansType
-
-	// If include list is specified, only include those types
-	if len(includeMap) > 0 {
-		for name, planType := range allPlanTypes {
-			if includeMap[name] && !excludeMap[name] {
-				result = append(result, planType)
-			}
-		}
-	} else {
-		// Include all types except those in the exclude list
-		for name, planType := range allPlanTypes {
-			if !excludeMap[name] {
-				result = append(result, planType)
-			}
-		}
-	}
-
-	return result
-}
-
-func normalizeRegionName(region string) string {
-	// AWS Cost Explorer sometimes returns region names like "US East (N. Virginia)"
-	// Convert these to standard region codes
-	regionMap := map[string]string{
-		"US East (N. Virginia)":      "us-east-1",
-		"US East (Ohio)":             "us-east-2",
-		"US West (N. California)":    "us-west-1",
-		"US West (Oregon)":           "us-west-2",
-		"EU (Ireland)":               "eu-west-1",
-		"EU (Frankfurt)":             "eu-central-1",
-		"EU (London)":                "eu-west-2",
-		"EU (Paris)":                 "eu-west-3",
-		"EU (Stockholm)":             "eu-north-1",
-		"Asia Pacific (Singapore)":   "ap-southeast-1",
-		"Asia Pacific (Sydney)":      "ap-southeast-2",
-		"Asia Pacific (Tokyo)":       "ap-northeast-1",
-		"Asia Pacific (Seoul)":       "ap-northeast-2",
-		"Asia Pacific (Mumbai)":      "ap-south-1",
-		"South America (Sao Paulo)":  "sa-east-1",
-		"Canada (Central)":           "ca-central-1",
-		"Middle East (Bahrain)":      "me-south-1",
-		"Africa (Cape Town)":         "af-south-1",
-		"Asia Pacific (Hong Kong)":   "ap-east-1",
-		"Asia Pacific (Osaka)":       "ap-northeast-3",
-		"Asia Pacific (Jakarta)":     "ap-southeast-3",
-		"Europe (Milan)":             "eu-south-1",
-		"Middle East (UAE)":          "me-central-1",
-		"Asia Pacific (Hyderabad)":   "ap-south-2",
-		"Europe (Spain)":             "eu-south-2",
-		"Europe (Zurich)":            "eu-central-2",
-		"Asia Pacific (Melbourne)":   "ap-southeast-4",
-		"Israel (Tel Aviv)":          "il-central-1",
-	}
-
-	if normalized, ok := regionMap[region]; ok {
-		return normalized
-	}
-
-	// If already a region code, return as-is
-	if strings.HasPrefix(region, "us-") || strings.HasPrefix(region, "eu-") ||
-		strings.HasPrefix(region, "ap-") || strings.HasPrefix(region, "sa-") ||
-		strings.HasPrefix(region, "ca-") || strings.HasPrefix(region, "me-") ||
-		strings.HasPrefix(region, "af-") || strings.HasPrefix(region, "il-") {
-		return region
-	}
-
-	return region
+	return out, nil
 }

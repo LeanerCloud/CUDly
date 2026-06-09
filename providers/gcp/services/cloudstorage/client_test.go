@@ -18,10 +18,11 @@ import (
 
 // MockStorageService mocks the StorageService interface
 type MockStorageService struct {
-	buckets    []*storage.BucketAttrs
-	listErr    error
-	bucketName string
-	createErr  error
+	buckets      []*storage.BucketAttrs
+	listErr      error
+	bucketName   string
+	createErr    error
+	createCalled *bool
 }
 
 func (m *MockStorageService) Buckets(ctx context.Context, projectID string) BucketIterator {
@@ -30,7 +31,7 @@ func (m *MockStorageService) Buckets(ctx context.Context, projectID string) Buck
 
 func (m *MockStorageService) Bucket(name string) BucketHandle {
 	m.bucketName = name
-	return &MockBucketHandle{createErr: m.createErr}
+	return &MockBucketHandle{createErr: m.createErr, createCalled: m.createCalled}
 }
 
 func (m *MockStorageService) Close() error {
@@ -58,10 +59,14 @@ func (m *MockBucketIterator) Next() (*storage.BucketAttrs, error) {
 
 // MockBucketHandle mocks the BucketHandle interface
 type MockBucketHandle struct {
-	createErr error
+	createErr    error
+	createCalled *bool
 }
 
 func (m *MockBucketHandle) Create(ctx context.Context, projectID string, attrs *storage.BucketAttrs) error {
+	if m.createCalled != nil {
+		*m.createCalled = true
+	}
 	return m.createErr
 }
 
@@ -296,78 +301,28 @@ func TestCloudStorageClient_SetterMethods(t *testing.T) {
 	assert.Equal(t, mockBilling, client.billingService)
 }
 
-func TestCloudStorageClient_GetExistingCommitments_WithMock(t *testing.T) {
+// TestCloudStorageClient_GetExistingCommitments_ReturnsEmpty asserts that
+// GetExistingCommitments always returns an empty slice. GCS has no commitment
+// API; enumerating regional buckets does not represent a commitment (10-L2).
+func TestCloudStorageClient_GetExistingCommitments_ReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		buckets: []*storage.BucketAttrs{
-			{
-				Name:         "bucket-1",
-				Location:     "us-central1",
-				StorageClass: "STANDARD",
-			},
-			{
-				Name:         "bucket-2",
-				Location:     "us-central1",
-				StorageClass: "NEARLINE",
-			},
-			{
-				Name:         "bucket-other-region",
-				Location:     "europe-west1",
-				StorageClass: "COLDLINE",
-			},
-		},
-	}
-	client.SetStorageService(mockService)
 
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
-	// Only buckets in the matching region should be returned
-	assert.Len(t, commitments, 2)
-	assert.Equal(t, "bucket-1", commitments[0].CommitmentID)
-	assert.Equal(t, "STANDARD", commitments[0].ResourceType)
-	assert.Equal(t, common.ProviderGCP, commitments[0].Provider)
-	assert.Equal(t, common.ServiceStorage, commitments[0].Service)
-	assert.Equal(t, "bucket-2", commitments[1].CommitmentID)
-	assert.Equal(t, "NEARLINE", commitments[1].ResourceType)
+	assert.Empty(t, commitments, "Cloud Storage GetExistingCommitments must return empty (10-L2)")
 }
 
-func TestCloudStorageClient_GetExistingCommitments_Error(t *testing.T) {
+// TestCloudStorageClient_PurchaseCommitment_NotSupported is the regression test for
+// issue #640: Cloud Storage has no CUD or commitment purchase API, so
+// PurchaseCommitment must return ErrCommitmentPurchaseNotSupported and MUST NOT call
+// any resource-creation API (it previously created a new empty billable bucket).
+func TestCloudStorageClient_PurchaseCommitment_NotSupported(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
-	mockService := &MockStorageService{
-		listErr: errors.New("API error"),
-	}
-	client.SetStorageService(mockService)
-
-	_, err := client.GetExistingCommitments(ctx)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to list buckets")
-}
-
-func TestCloudStorageClient_GetExistingCommitments_Empty(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		buckets: []*storage.BucketAttrs{},
-	}
-	client.SetStorageService(mockService)
-
-	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
-}
-
-func TestCloudStorageClient_PurchaseCommitment_WithMock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		createErr: nil,
-	}
+	createCalled := false
+	mockService := &MockStorageService{createCalled: &createCalled}
 	client.SetStorageService(mockService)
 
 	rec := common.Recommendation{
@@ -375,30 +330,15 @@ func TestCloudStorageClient_PurchaseCommitment_WithMock(t *testing.T) {
 		CommitmentCost: 100.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
-	require.NoError(t, err)
-	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
-	assert.Equal(t, 100.0, result.Cost)
-}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
 
-func TestCloudStorageClient_PurchaseCommitment_Error(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockStorageService{
-		createErr: errors.New("bucket creation failed"),
-	}
-	client.SetStorageService(mockService)
-
-	rec := common.Recommendation{
-		ResourceType: "STANDARD",
-	}
-
-	result, err := client.PurchaseCommitment(ctx, rec)
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to create storage bucket")
+	assert.Empty(t, result.CommitmentID)
+	assert.ErrorIs(t, result.Error, common.ErrCommitmentPurchaseNotSupported)
+	// The critical guarantee: a "purchase" must never create infrastructure.
+	assert.False(t, createCalled, "PurchaseCommitment must not call bucket Create")
 }
 
 func TestCloudStorageClient_GetRecommendations_WithMock(t *testing.T) {
@@ -408,7 +348,8 @@ func TestCloudStorageClient_GetRecommendations_WithMock(t *testing.T) {
 	mockClient := &MockRecommenderClient{
 		recommendations: []*recommenderpb.Recommendation{
 			{
-				Name: "recommendation-1",
+				Name:      "recommendation-1",
+				StateInfo: &recommenderpb.RecommendationStateInfo{State: recommenderpb.RecommendationStateInfo_ACTIVE},
 				PrimaryImpact: &recommenderpb.Impact{
 					Category: recommenderpb.Impact_COST,
 					Projection: &recommenderpb.Impact_CostProjection{
@@ -467,38 +408,69 @@ func TestCloudStorageClient_GetRecommendations_IteratorError(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
+	// Iterator errors now propagate (issue #1022 H2 fix) -- they must not be
+	// silently swallowed, as that would mask auth/quota failures and cause callers
+	// to act on a partial (empty) recommendation list.
 	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
-	require.NoError(t, err) // Error during iteration is handled gracefully
-	assert.Empty(t, recommendations)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cloudstorage: iterate recommendations")
+	assert.Nil(t, recommendations)
 }
 
-func TestCloudStorageClient_GetOfferingDetails_WithMock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := NewClient(ctx, "test-project", "us-central1")
-
-	mockService := &MockBillingService{
-		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
+// storageMockSkus returns a slice with both an on-demand and a commitment SKU for
+// the given storage class and region. Required by tests that exercise GetOfferingDetails
+// after the issue #1020 fix (fabricated commitment prices are no longer allowed).
+func storageMockSkus(storageClass, region string, onDemandNanos, commitmentNanos int64) []*cloudbilling.Sku {
+	return []*cloudbilling.Sku{
+		{
+			Description:    storageClass + " Storage in " + region,
+			ServiceRegions: []string{region},
+			PricingInfo: []*cloudbilling.PricingInfo{
 				{
-					Description:    "Standard Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        26000000,
-											CurrencyCode: "USD",
-										},
-									},
+					PricingExpression: &cloudbilling.PricingExpression{
+						TieredRates: []*cloudbilling.TierRate{
+							{
+								UnitPrice: &cloudbilling.Money{
+									Units:        0,
+									Nanos:        onDemandNanos,
+									CurrencyCode: "USD",
 								},
 							},
 						},
 					},
 				},
 			},
+		},
+		{
+			Description:    storageClass + " Storage commitment in " + region,
+			ServiceRegions: []string{region},
+			PricingInfo: []*cloudbilling.PricingInfo{
+				{
+					PricingExpression: &cloudbilling.PricingExpression{
+						TieredRates: []*cloudbilling.TierRate{
+							{
+								UnitPrice: &cloudbilling.Money{
+									Units:        0,
+									Nanos:        commitmentNanos,
+									CurrencyCode: "USD",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestCloudStorageClient_GetOfferingDetails_WithMock(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 19500000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -523,29 +495,10 @@ func TestCloudStorageClient_GetOfferingDetails_3yr(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "Nearline Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        10000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			Skus: storageMockSkus("NEARLINE", "us-central1", 10000000, 7000000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -606,29 +559,10 @@ func TestCloudStorageClient_GetOfferingDetails_DefaultPaymentOption(t *testing.T
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix.
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
-			Skus: []*cloudbilling.Sku{
-				{
-					Description:    "Standard Storage in us-central1",
-					ServiceRegions: []string{"us-central1"},
-					PricingInfo: []*cloudbilling.PricingInfo{
-						{
-							PricingExpression: &cloudbilling.PricingExpression{
-								TieredRates: []*cloudbilling.TierRate{
-									{
-										UnitPrice: &cloudbilling.Money{
-											Units:        0,
-											Nanos:        26000000,
-											CurrencyCode: "USD",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 19500000),
 		},
 	}
 	client.SetBillingService(mockService)
@@ -673,7 +607,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation(t *testing.T) {
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Equal(t, common.ServiceStorage, rec.Service)
@@ -693,7 +627,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_NilContent(t *testing.T) {
 		Content: nil,
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, common.ProviderGCP, rec.Provider)
 	assert.Empty(t, rec.ResourceType)
@@ -717,7 +651,7 @@ func TestCloudStorageClient_ConvertGCPRecommendation_NilPrimaryImpact(t *testing
 		},
 	}
 
-	rec := client.convertGCPRecommendation(ctx, gcpRec)
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
 	require.NotNil(t, rec)
 	assert.Equal(t, float64(0), rec.EstimatedSavings)
 }
@@ -776,14 +710,80 @@ func TestCloudStorageClient_GetStoragePricing_WithCommitmentPrice(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "USD", pricing.Currency)
 	assert.Greater(t, pricing.OnDemandPrice, float64(0))
-	// When commitment price is found, it should be used
-	assert.Equal(t, float64(0.02), pricing.CommitmentPrice)
+	// CommitmentPrice is the term total (per-unit SKU price * hoursInTerm).
+	// onDemand unit = 0.026, commitment unit = 0.020, hoursInTerm = 8760.
+	assert.InDelta(t, 0.02*8760, pricing.CommitmentPrice, 0.01)
+	// HourlyRate is the per-unit commitment price (not divided by hoursInTerm).
+	assert.InDelta(t, 0.02, pricing.HourlyRate, 0.0001)
+	// SavingsPercentage should be positive and less than 100.
+	assert.Greater(t, pricing.SavingsPercentage, float64(0))
+	assert.Less(t, pricing.SavingsPercentage, float64(100))
 }
 
 func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
 
+	// Both on-demand and commitment SKUs required after the issue #1020 fix:
+	// without a commitment SKU, getStoragePricing returns an error.
+	mockService := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: storageMockSkus("STANDARD", "us-central1", 26000000, 18200000),
+		},
+	}
+	client.SetBillingService(mockService)
+
+	pricing, err := client.getStoragePricing(ctx, "STANDARD", "us-central1", 3)
+	require.NoError(t, err)
+	assert.Greater(t, pricing.SavingsPercentage, float64(0))
+	assert.Greater(t, pricing.OnDemandPrice, float64(0))
+	assert.Greater(t, pricing.CommitmentPrice, float64(0))
+}
+
+// TestConvertGCPRecommendation_PropagatesTermFromParams is a regression test for
+// the finding that convertGCPRecommendation hardcoded rec.Term = "1yr",
+// ignoring params.Term. A caller requesting "3yr" must get "3yr" in the output.
+//
+// This test FAILS on the pre-fix code that always set Term = "1yr".
+func TestCloudStorageConvertGCPRecommendation_PropagatesTermFromParams(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	gcpRec := &recommenderpb.Recommendation{Name: "test-rec"}
+
+	tests := []struct {
+		inputTerm string
+		wantTerm  string
+	}{
+		{"3yr", "3yr"},
+		{"1yr", "1yr"},
+		{"", "1yr"}, // empty defaults to "1yr"
+	}
+
+	for _, tt := range tests {
+		params := common.RecommendationParams{Term: tt.inputTerm}
+		rec := client.convertGCPRecommendation(ctx, gcpRec, params)
+		require.NotNil(t, rec)
+		assert.Equal(t, tt.wantTerm, rec.Term,
+			"params.Term %q must produce rec.Term %q", tt.inputTerm, tt.wantTerm)
+	}
+}
+
+// TestGetStoragePricing_CommitmentPriceIsTermTotal is a regression test for the
+// unit-mismatch bug where commitmentPrice (per-unit from SKU) was passed
+// directly to calculateStorageSavingsPercentage which expects a term total,
+// producing a ~99.99% savings percentage. After the fix, CommitmentPrice must
+// equal unitRate * hoursInTerm and SavingsPercentage must be realistic.
+//
+// This test FAILS on the pre-fix code where CommitmentPrice == 0.02 (per-unit).
+func TestGetStoragePricing_CommitmentPriceIsTermTotal(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// onDemand = $0.026/unit, commitment = $0.020/unit
+	// hoursInTerm (1yr) = 8760
+	// Expected: CommitmentPrice = 0.020*8760 = 175.2, OnDemandPrice = 0.026*8760 = 227.76
+	// Expected savings ~= (227.76-175.2)/227.76*100 ~= 23%
 	mockService := &MockBillingService{
 		skus: &cloudbilling.ListSkusResponse{
 			Skus: []*cloudbilling.Sku{
@@ -797,7 +797,26 @@ func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
 									{
 										UnitPrice: &cloudbilling.Money{
 											Units:        0,
-											Nanos:        26000000,
+											Nanos:        26000000, // $0.026/unit
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Description:    "Standard Storage Commitment in us-central1",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        20000000, // $0.020/unit
 											CurrencyCode: "USD",
 										},
 									},
@@ -811,10 +830,23 @@ func TestCloudStorageClient_GetStoragePricing_3Year(t *testing.T) {
 	}
 	client.SetBillingService(mockService)
 
-	pricing, err := client.getStoragePricing(ctx, "STANDARD", "us-central1", 3)
+	pricing, err := client.getStoragePricing(ctx, "STANDARD", "us-central1", 1)
 	require.NoError(t, err)
-	// 3-year should have 30% savings vs 25% for 1-year
-	assert.Greater(t, pricing.SavingsPercentage, float64(25))
+
+	const hoursInYear = 8760.0
+	// CommitmentPrice must be a term total, not the raw per-unit SKU rate.
+	assert.InDelta(t, 0.02*hoursInYear, pricing.CommitmentPrice, 0.01,
+		"CommitmentPrice must be commitment SKU unit rate * hoursInTerm")
+	// HourlyRate must be the per-unit commitment rate.
+	assert.InDelta(t, 0.02, pricing.HourlyRate, 0.0001,
+		"HourlyRate must be the per-unit commitment SKU rate")
+	// OnDemandPrice stays a term total.
+	assert.InDelta(t, 0.026*hoursInYear, pricing.OnDemandPrice, 0.01)
+	// SavingsPercentage must be ~23%, not ~99.99%.
+	assert.Greater(t, pricing.SavingsPercentage, float64(1),
+		"SavingsPercentage must not be ~99.99% (unit-mismatch bug)")
+	assert.Less(t, pricing.SavingsPercentage, float64(60),
+		"SavingsPercentage must be a realistic storage commitment discount")
 }
 
 func TestSkuMatchesStorageClass_CaseInsensitive(t *testing.T) {

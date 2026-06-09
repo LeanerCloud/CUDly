@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -126,7 +127,7 @@ func TestContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := contains(tt.s, tt.substr)
+			result := strings.Contains(tt.s, tt.substr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -139,13 +140,38 @@ func TestExtractRegionFromResourceID(t *testing.T) {
 		expected   string
 	}{
 		{
-			name:       "Simple resource ID returns empty",
+			name:       "Standard ARM ID without region segment returns empty",
 			resourceID: "/subscriptions/123/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
 			expected:   "",
 		},
 		{
 			name:       "Empty resource ID",
 			resourceID: "",
+			expected:   "",
+		},
+		{
+			name:       "Locations segment mid-id extracts region",
+			resourceID: "/subscriptions/123/providers/Microsoft.Capacity/locations/eastus/reservationOrders/rid1",
+			expected:   "eastus",
+		},
+		{
+			name:       "Uppercase Locations segment case-insensitive match",
+			resourceID: "/subscriptions/123/providers/Microsoft.Capacity/Locations/westus2/reservationOrders/rid1",
+			expected:   "westus2",
+		},
+		{
+			name:       "Singular location segment also recognised",
+			resourceID: "/subscriptions/123/providers/Microsoft.Resources/location/northeurope/foo/bar",
+			expected:   "northeurope",
+		},
+		{
+			name:       "Region is the last segment (no trailing slash)",
+			resourceID: "/subscriptions/123/locations/centralus",
+			expected:   "centralus",
+		},
+		{
+			name:       "Non-ARM-shaped string returns empty safely",
+			resourceID: "not-an-id",
 			expected:   "",
 		},
 	}
@@ -175,11 +201,9 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 	}
 
 	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct
-	_, err := adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
-	// Error is expected since we don't have real Azure credentials
-	// The important thing is the function is wired correctly
-	_ = err
+	// but we test the wiring is correct. Error is expected since we don't have
+	// real Azure credentials - the important thing is the function is wired correctly.
+	_, _ = adapter.GetRecommendationsForService(context.Background(), common.ServiceCompute)
 }
 
 func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
@@ -189,16 +213,77 @@ func TestRecommendationsClientAdapter_GetAllRecommendations(t *testing.T) {
 	}
 
 	// This will try to make API calls which will fail without real credentials,
-	// but we test the wiring is correct
-	_, err := adapter.GetAllRecommendations(context.Background())
-	_ = err
+	// but we test the wiring is correct. Error is expected - we just verify the function is callable.
+	_, _ = adapter.GetAllRecommendations(context.Background())
 }
 
-func TestExtractServiceType(t *testing.T) {
+// TestGetRecommendations_SavingsPlansServiceIncluded pins that shouldIncludeService
+// allows ServiceSavingsPlans through both when params.Service is empty (all-services
+// sweep) and when explicitly set to ServiceSavingsPlans, and does not include it
+// when a different service is requested. This ensures the SP goroutine added to the
+// fan-out in GetRecommendations is exercised on every scheduler collection run.
+func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
+	tests := []struct {
+		name     string
+		params   common.RecommendationParams
+		expected bool
+	}{
+		{
+			name:     "empty params includes savingsplans",
+			params:   common.RecommendationParams{},
+			expected: true,
+		},
+		{
+			name:     "explicit savingsplans service is included",
+			params:   common.RecommendationParams{Service: common.ServiceSavingsPlans},
+			expected: true,
+		},
+		{
+			name:     "different service excludes savingsplans",
+			params:   common.RecommendationParams{Service: common.ServiceCompute},
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldIncludeService(tt.params, common.ServiceSavingsPlans)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+// TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation
+// pins the contract that GetRecommendations propagates ctx.Err() to its caller
+// after the errgroup Wait() — the parent context being cancelled or its
+// deadline exceeding must surface as an error rather than being swallowed by
+// the per-service error-isolation goroutines (which all return nil to the
+// errgroup so a single per-service failure does not cancel siblings).
+//
+// Without the explicit `if err := ctx.Err(); err != nil { return nil, err }`
+// after `g.Wait()`, callers that wrap GetRecommendations with a deadline could
+// see "all services finished cleanly" even when the deadline expired
+// mid-fan-out (because every goroutine returned nil from its closure).
+func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation(t *testing.T) {
 	adapter := &RecommendationsClientAdapter{
+		cred:           &mockAzureTokenCredential{},
 		subscriptionID: "test-subscription",
 	}
 
+	// Cancel the context BEFORE the call so we don't depend on race-y timing
+	// inside the SDK clients. The Azure clients constructed inside the
+	// goroutines will observe the cancelled gctx (derived from the parent ctx
+	// via errgroup.WithContext) and either short-circuit or return cancelled
+	// errors; either way, our post-Wait ctx.Err() check returns context.Canceled.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := adapter.GetRecommendations(ctx, common.RecommendationParams{})
+	require.Error(t, err, "expected context.Canceled to propagate from GetRecommendations")
+	assert.ErrorIs(t, err, context.Canceled,
+		"GetRecommendations must propagate the parent ctx error after g.Wait()")
+}
+
+func TestExtractServiceType(t *testing.T) {
 	tests := []struct {
 		name          string
 		impactedField string
@@ -243,37 +328,29 @@ func TestExtractServiceType(t *testing.T) {
 					ImpactedField: &tt.impactedField,
 				},
 			}
-			result := adapter.extractServiceType(rec)
+			result := extractServiceType(rec)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 func TestExtractServiceType_NilProperties(t *testing.T) {
-	adapter := &RecommendationsClientAdapter{
-		subscriptionID: "test-subscription",
-	}
-
 	// Test with nil properties
 	rec := &armadvisor.ResourceRecommendationBase{
 		Properties: nil,
 	}
-	result := adapter.extractServiceType(rec)
+	result := extractServiceType(rec)
 	assert.Equal(t, "", result)
 }
 
 func TestExtractServiceType_NilImpactedField(t *testing.T) {
-	adapter := &RecommendationsClientAdapter{
-		subscriptionID: "test-subscription",
-	}
-
 	// Test with nil impacted field
 	rec := &armadvisor.ResourceRecommendationBase{
 		Properties: &armadvisor.RecommendationProperties{
 			ImpactedField: nil,
 		},
 	}
-	result := adapter.extractServiceType(rec)
+	result := extractServiceType(rec)
 	assert.Equal(t, "", result)
 }
 
@@ -337,4 +414,41 @@ func TestConvertAdvisorRecommendation_UnknownService(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// TestMergeServiceResults_OrderIsStable is a regression test for L3:
+// the merged output of mergeServiceResults must preserve the canonical
+// compute -> database -> cache -> cosmosdb -> savingsplans -> advisor order
+// regardless of the order arguments are passed in. This test pins the actual
+// argument order used in GetRecommendations so a reordering of the serviceResult
+// literals will be caught immediately.
+func TestMergeServiceResults_OrderIsStable(t *testing.T) {
+	mkRec := func(svc common.ServiceType, marker string) common.Recommendation {
+		return common.Recommendation{Service: svc, Provider: common.ProviderAzure, ResourceType: marker}
+	}
+
+	computeRec := mkRec(common.ServiceCompute, "compute")
+	dbRec := mkRec(common.ServiceRelationalDB, "database")
+	cacheRec := mkRec(common.ServiceCache, "cache")
+	cosmosRec := mkRec(common.ServiceNoSQL, "cosmosdb")
+	spRec := mkRec(common.ServiceSavingsPlans, "savingsplans")
+	advisorRec := mkRec(common.ServiceCompute, "advisor") // Advisor produces Compute recs
+
+	// Replicate the exact call order from GetRecommendations.
+	result := mergeServiceResults(
+		serviceResult{"compute", []common.Recommendation{computeRec}, nil},
+		serviceResult{"database", []common.Recommendation{dbRec}, nil},
+		serviceResult{"cache", []common.Recommendation{cacheRec}, nil},
+		serviceResult{"cosmosdb", []common.Recommendation{cosmosRec}, nil},
+		serviceResult{"savingsplans", []common.Recommendation{spRec}, nil},
+		serviceResult{"advisor", []common.Recommendation{advisorRec}, nil},
+	)
+
+	require.Len(t, result, 6, "all six services must be represented")
+	assert.Equal(t, "compute", result[0].ResourceType, "first must be compute")
+	assert.Equal(t, "database", result[1].ResourceType, "second must be database")
+	assert.Equal(t, "cache", result[2].ResourceType, "third must be cache")
+	assert.Equal(t, "cosmosdb", result[3].ResourceType, "fourth must be cosmosdb")
+	assert.Equal(t, "savingsplans", result[4].ResourceType, "fifth must be savingsplans")
+	assert.Equal(t, "advisor", result[5].ResourceType, "sixth must be advisor (compute-type)")
 }

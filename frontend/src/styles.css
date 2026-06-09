@@ -1,0 +1,9 @@
+/* CUDly - Cloud Commitment Optimizer Styles
+ *
+ * This file is a backward-compatibility wrapper.
+ * All styles have been refactored into the styles/ directory.
+ *
+ * @see ./styles/index.css for the modular implementation
+ */
+
+@import './styles/index.css';

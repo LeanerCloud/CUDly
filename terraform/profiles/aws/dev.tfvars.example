@@ -1,0 +1,57 @@
+# AWS Lambda Development Profile
+# Copy to dev.tfvars and customize with your values
+
+# Project identification
+project_name = "cudly"
+environment  = "dev"
+
+# Cloud configuration
+region = "us-east-1"
+# aws_profile = "your-aws-profile"
+
+# Compute platform
+compute_platform = "lambda"
+
+# Lambda configuration
+lambda_architecture           = "arm64"
+lambda_memory_size            = 512
+lambda_timeout                = 60
+lambda_reserved_concurrency   = -1
+lambda_log_retention_days     = 7
+# Function URL auth_type is derived from enable_cdn — see compute.tf local
+lambda_allowed_origins        = ["*"]
+
+# Docker build settings
+enable_docker_build = true
+
+# Admin
+admin_email = "admin@example.com"
+
+# Database
+database_name                  = "cudly"
+database_username              = "cudly"
+database_engine_version        = "16.6"
+database_backup_retention_days = 7
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
+database_performance_insights  = false
+database_auto_migrate          = true
+
+# Networking
+vpc_cidr         = "10.0.0.0/16"
+az_count         = 2
+enable_flow_logs = false
+
+# Secrets
+secret_recovery_window_days = 7
+
+# Frontend
+enable_cdn            = false
+frontend_price_class  = "PriceClass_100"
+# subdomain_zone_name   = "cudly.example.com"
+# create_subdomain_zone = false
+# frontend_domain_names = ["dev.cudly.example.com"]
+
+# Scheduled tasks
+enable_scheduled_tasks  = true
+recommendation_schedule = "rate(1 day)"

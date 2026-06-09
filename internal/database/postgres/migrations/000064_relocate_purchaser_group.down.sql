@@ -1,0 +1,13 @@
+-- Intentionally a no-op.
+--
+-- Reversing the UUID relocation of the Purchaser group is not safely
+-- possible: external references (user group_ids, audit logs, API tokens,
+-- and application constants) may have been written against the new UUID
+-- (00000000-0000-5000-8000-000000000007) since this migration applied.
+-- Rolling back to the old UUID (00000000-0000-5000-8000-000000000005) would
+-- silently break every one of those references.
+--
+-- To revert manually: remove Purchaser memberships from all users, delete
+-- the row at 00000000-0000-5000-8000-000000000007, and revert the constants
+-- in internal/auth/types.go and frontend/src/permissions.ts.
+SELECT 1;

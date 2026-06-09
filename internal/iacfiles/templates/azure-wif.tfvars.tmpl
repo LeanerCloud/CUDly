@@ -1,0 +1,19 @@
+# Terraform variables for iac/federation/azure-target/terraform
+# Target Azure subscription: {{.AccountName}} ({{.SubscriptionID}})
+#
+# Usage:
+#   cd iac/federation/azure-target/terraform
+#   terraform init
+#   terraform apply -var-file={{.AccountSlug}}-azure-wif.tfvars
+
+subscription_id = "{{.SubscriptionID}}"
+tenant_id       = "{{.TenantID}}"
+
+# CUDly OIDC issuer URL — Azure AD uses this to verify client assertion JWTs.
+# No certificate or secret is needed.
+cudly_issuer_url = "{{.CUDlyAPIURL}}/oidc"
+
+# --- CUDly auto-registration (optional) ---
+cudly_api_url = "{{.CUDlyAPIURL}}"
+contact_email = "{{.ContactEmail}}"
+account_name  = "{{.AccountName}}"

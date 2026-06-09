@@ -3,6 +3,7 @@ package cosmosdb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
 // MockRecommendationsPager mocks the RecommendationsPager interface
@@ -48,7 +50,7 @@ func (m *MockRecommendationsPager) NextPage(ctx context.Context) (armconsumption
 
 // MockReservationsDetailsPager mocks the ReservationsDetailsPager interface
 type MockReservationsDetailsPager struct {
-	pages []armconsumption.ReservationsDetailsClientListByReservationOrderResponse
+	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
 	err   error
 }
@@ -60,12 +62,12 @@ func (m *MockReservationsDetailsPager) More() bool {
 	return m.index < len(m.pages)
 }
 
-func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error) {
+func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error) {
 	if m.err != nil {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, m.err
+		return armconsumption.ReservationsDetailsClientListResponse{}, m.err
 	}
 	if m.index >= len(m.pages) {
-		return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{}, errors.New("no more pages")
+		return armconsumption.ReservationsDetailsClientListResponse{}, errors.New("no more pages")
 	}
 	page := m.pages[m.index]
 	m.index++
@@ -131,7 +133,19 @@ func createSampleCosmosPricingResponse() string {
 				"serviceName": "Azure Cosmos DB",
 				"skuName": "100RU",
 				"meterName": "100 RU/s",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 2400.0,
+				"unitPrice": 2400.0,
+				"armRegionName": "eastus",
+				"productName": "Azure Cosmos DB",
+				"serviceName": "Azure Cosmos DB",
+				"skuName": "100RU",
+				"meterName": "100 RU/s",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{
@@ -169,7 +183,7 @@ func TestNewClientWithHTTP(t *testing.T) {
 
 func TestCosmosDBClient_GetServiceType(t *testing.T) {
 	client := NewClient(nil, "sub", "region")
-	assert.Equal(t, common.ServiceNoSQLDB, client.GetServiceType())
+	assert.Equal(t, common.ServiceNoSQL, client.GetServiceType())
 }
 
 func TestCosmosDBClient_GetRegion(t *testing.T) {
@@ -323,11 +337,50 @@ func TestCosmosDBClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	assert.Contains(t, err.Error(), "no pricing data found")
 }
 
+// TestCosmosDBClient_GetOfferingDetails_NoReservationPricing verifies that when
+// on-demand pricing is present but no reservation line is returned, the client
+// returns an error rather than fabricating a price from a hardcoded multiplier
+// (issue #1020 H4). Pre-fix this would have silently surfaced a fabricated
+// TotalCost/SavingsPercentage as a real quote.
+func TestCosmosDBClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
+	ctx := context.Background()
+
+	onDemandOnly := `{
+		"Items": [
+			{
+				"currencyCode": "USD",
+				"retailPrice": 0.008,
+				"unitPrice": 0.008,
+				"armRegionName": "eastus",
+				"productName": "Azure Cosmos DB",
+				"serviceName": "Azure Cosmos DB",
+				"type": "Consumption"
+			}
+		],
+		"NextPageLink": ""
+	}`
+
+	mockHTTP := &MockHTTPClient{}
+	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+
+	rec := common.Recommendation{
+		ResourceType:  "100RU",
+		Term:          "1yr",
+		PaymentOption: "upfront",
+	}
+	_, err := client.GetOfferingDetails(ctx, rec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reservation pricing found")
+}
+
 func TestCosmosDBClient_GetExistingCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Will return empty without credentials
+	// Mock pager returns no pages — the empty-subscription case.
+	client.SetReservationsPager(&MockReservationsDetailsPager{})
+
 	commitments, err := client.GetExistingCommitments(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, commitments)
@@ -425,7 +478,7 @@ func TestCosmosDBClient_GetExistingCommitments_WithMockPager(t *testing.T) {
 
 	// Create mock pager with test data
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -458,7 +511,7 @@ func TestCosmosDBClient_GetExistingCommitments_CosmosCommitments(t *testing.T) {
 
 	// Create mock pager with cosmos commitment
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -480,23 +533,24 @@ func TestCosmosDBClient_GetExistingCommitments_CosmosCommitments(t *testing.T) {
 	require.Len(t, commitments, 1)
 	assert.Equal(t, reservationID, commitments[0].CommitmentID)
 	assert.Equal(t, skuName, commitments[0].ResourceType)
-	assert.Equal(t, common.ServiceNoSQLDB, commitments[0].Service)
+	assert.Equal(t, common.ServiceNoSQL, commitments[0].Service)
 }
 
 func TestCosmosDBClient_GetExistingCommitments_PagerError(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	// Create mock pager that returns an error
 	mockPager := &MockReservationsDetailsPager{
 		err: errors.New("API error"),
 	}
 	client.SetReservationsPager(mockPager)
 
-	// Should return empty (not error) due to graceful handling
+	// Pagination errors must propagate — partial lists are unsafe for the
+	// purchase flow (duplicate-purchase risk). See the compute client.
 	commitments, err := client.GetExistingCommitments(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, commitments)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cosmosdb: list reservations")
+	assert.Nil(t, commitments)
 }
 
 func TestCosmosDBClient_GetExistingCommitments_NilProperties(t *testing.T) {
@@ -505,7 +559,7 @@ func TestCosmosDBClient_GetExistingCommitments_NilProperties(t *testing.T) {
 
 	// Create mock pager with nil properties
 	mockPager := &MockReservationsDetailsPager{
-		pages: []armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+		pages: []armconsumption.ReservationsDetailsClientListResponse{
 			{
 				ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 					Value: []*armconsumption.ReservationDetail{
@@ -675,6 +729,47 @@ func TestCosmosDBClient_ValidateOffering_Invalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid Azure Cosmos DB SKU")
 }
 
+func TestCosmosDBClient_ValidateOffering_CaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+
+	capability := "EnableCassandra"
+	mockPager := func() *MockCosmosAccountsPager {
+		return &MockCosmosAccountsPager{
+			pages: []armcosmos.DatabaseAccountsClientListResponse{
+				{
+					DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+						Value: []*armcosmos.DatabaseAccountGetResults{
+							{
+								Properties: &armcosmos.DatabaseAccountGetProperties{
+									Capabilities: []*armcosmos.Capability{
+										{Name: &capability},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("case_insensitive", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCosmosAccountsPager(mockPager())
+		rec := common.Recommendation{ResourceType: "enablecassandra"}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		client := NewClient(nil, "test-subscription", "eastus")
+		client.SetCosmosAccountsPager(mockPager())
+		rec := common.Recommendation{ResourceType: "  EnableCassandra  "}
+		err := client.ValidateOffering(ctx, rec)
+		assert.NoError(t, err)
+	})
+}
+
 func TestCosmosDBClient_SetterMethods(t *testing.T) {
 	client := NewClient(nil, "test-sub", "eastus")
 
@@ -710,16 +805,23 @@ func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.Token
 	}, nil
 }
 
+// calcPriceRespJSON returns a minimal calculatePrice response JSON for tests.
+func calcPriceRespJSON(orderID string) string {
+	return `{"properties":{"reservationOrderId":"` + orderID + `"}}`
+}
+
 func TestCosmosDBClient_PurchaseCommitment_Success(t *testing.T) {
 	ctx := context.Background()
 	mockHTTP := &MockHTTPClient{}
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-001")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-001/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -728,11 +830,12 @@ func TestCosmosDBClient_PurchaseCommitment_Success(t *testing.T) {
 		CommitmentCost: 5000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.NotEmpty(t, result.CommitmentID)
+	assert.Equal(t, "cosmos-order-001", result.CommitmentID)
 	assert.Equal(t, 5000.0, result.Cost)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
@@ -741,10 +844,12 @@ func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusCreated, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-3yr")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-3yr/purchase"
+	})).Return(createMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -753,9 +858,11 @@ func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		CommitmentCost: 12000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	assert.Equal(t, "cosmos-order-3yr", result.CommitmentID)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
@@ -764,10 +871,12 @@ func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusAccepted, `{"id": "reservation-123"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-202")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-202/purchase"
+	})).Return(createMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -776,9 +885,10 @@ func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
 		CommitmentCost: 5000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
+	mockHTTP.AssertExpectations(t)
 }
 
 func TestCosmosDBClient_PurchaseCommitment_TokenError(t *testing.T) {
@@ -790,9 +900,10 @@ func TestCosmosDBClient_PurchaseCommitment_TokenError(t *testing.T) {
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to get access token")
@@ -804,17 +915,20 @@ func TestCosmosDBClient_PurchaseCommitment_HTTPError(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(nil, errors.New("network error"))
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(nil, errors.New("network error")).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
-	assert.Contains(t, err.Error(), "failed to purchase reservation")
+	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
 }
 
 func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
@@ -823,34 +937,383 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
-	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`),
-		nil,
-	)
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-bad")), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-bad/purchase"
+	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
 		Term:         "1yr",
+		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec)
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
+	mockHTTP.AssertExpectations(t)
 }
 
-func TestCosmosDBClient_ConvertAzureCosmosRecommendation(t *testing.T) {
-	ctx := context.Background()
-	client := NewClient(nil, "test-subscription", "eastus")
+// TestCosmosDBClient_PurchaseCommitment_TagInjection verifies that the
+// purchase-automation tag carrying opts.Source is present in the
+// calculatePrice request body. Without this regression test the dedupe
+// guard introduced for the Azure two-step flow could regress silently:
+// the call would succeed without the tag and re-driven purchases would
+// duplicate reservations server-side.
+func TestCosmosDBClient_PurchaseCommitment_TagInjection(t *testing.T) {
+	const orderID = "cosmos-tag-test"
+	const source = common.PurchaseSourceWeb
 
-	// Test with nil recommendation
-	rec := client.convertAzureCosmosRecommendation(ctx, nil)
-	require.NotNil(t, rec)
-	assert.Equal(t, common.ProviderAzure, rec.Provider)
-	assert.Equal(t, common.ServiceNoSQLDB, rec.Service)
-	assert.Equal(t, "test-subscription", rec.Account)
-	assert.Equal(t, "eastus", rec.Region)
-	assert.Equal(t, common.CommitmentReservedInstance, rec.CommitmentType)
-	assert.Equal(t, "1yr", rec.Term)
-	assert.Equal(t, "upfront", rec.PaymentOption)
+	ctx := context.Background()
+	mockHTTP := &MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	var capturedBody []byte
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		capturedBody, _ = io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
+		return true
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{ResourceType: "EnableCassandra", Term: "1yr", Count: 1, CommitmentCost: 4000.0}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(capturedBody, &body))
+	tags, hasTags := body["tags"].(map[string]interface{})
+	require.True(t, hasTags, "tags field must be present in calculatePrice body when Source is set")
+	assert.Equal(t, source, tags[common.PurchaseTagKey], "tag value must match opts.Source")
+	mockHTTP.AssertExpectations(t)
+}
+
+// TestCosmosDBClient_PurchaseCommitment_RequiresSource pins the dedupe guard:
+// PurchaseCommitment must reject an empty opts.Source before issuing any HTTP
+// call. Azure mints the reservation order ID server-side, so the
+// purchase-automation tag derived from Source is the only stable dedupe
+// signal CUDly controls -- proceeding without it would allow a re-driven
+// purchase to create a duplicate reservation.
+func TestCosmosDBClient_PurchaseCommitment_RequiresSource(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	rec := common.Recommendation{ResourceType: "EnableCassandra", Term: "1yr", Count: 1}
+	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "purchase source is required")
+	mockHTTP.AssertNotCalled(t, "Do", mock.Anything)
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards pins the
+// new contract: unusable SDK payloads produce a nil *Recommendation.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_NilGuards(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	assert.Nil(t, client.convertAzureCosmosRecommendation(context.Background(), nil))
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields
+// asserts the converter forwards every helper-extracted field + applies
+// the CosmosDB-service-specific constants. An empty accounts list
+// (zero-account subscription) is the "no signal" baseline — APIType
+// stays empty.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAllFields(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	// Inject empty mock pager so cachedAPIType doesn't make a real call.
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("westus2"),
+		mocks.WithTerm("P1Y"),
+		mocks.WithQuantity(3),
+		mocks.WithNormalizedSize("CosmosDB_RU_1000"),
+		mocks.WithCosts(300, 210, 90),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	assert.Equal(t, common.ProviderAzure, out.Provider)
+	assert.Equal(t, common.ServiceNoSQL, out.Service)
+	assert.Equal(t, "test-subscription", out.Account)
+	assert.Equal(t, "westus2", out.Region)
+	assert.Equal(t, "CosmosDB_RU_1000", out.ResourceType)
+	assert.Equal(t, 3, out.Count)
+	assert.InDelta(t, 300.0, out.OnDemandCost, 1e-9)
+	assert.InDelta(t, 210.0, out.CommitmentCost, 1e-9)
+	assert.InDelta(t, 90.0, out.EstimatedSavings, 1e-9)
+	assert.Equal(t, common.CommitmentReservedInstance, out.CommitmentType)
+	assert.Equal(t, "1yr", out.Term)
+	assert.Equal(t, "upfront", out.PaymentOption)
+
+	// Details carries Engine="cosmos". For this fixture the SKU doesn't
+	// start with digits, so ThroughputUnits is 0 — which correctly
+	// signals "unknown from payload" rather than being parsed wrong.
+	// APIType stays empty because no Cosmos accounts exist in the
+	// subscription (no signal).
+	require.NotNil(t, out.Details)
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok, "Details must be a common.NoSQLDetails value")
+	assert.Equal(t, "cosmos", details.Engine)
+	assert.Empty(t, details.APIType, "APIType empty when subscription has no Cosmos accounts")
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAPIType
+// asserts the new batched-account-list lookup populates
+// NoSQLDetails.APIType when the subscription has exactly one Cosmos
+// account, mapping the account.Kind + Capabilities into the canonical
+// API string.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PopulatesAPIType(t *testing.T) {
+	tests := []struct {
+		name        string
+		account     *armcosmos.DatabaseAccountGetResults
+		wantAPIType string
+	}{
+		{
+			name: "MongoDB kind",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindMongoDB),
+			},
+			wantAPIType: "mongodb",
+		},
+		{
+			name: "GlobalDocumentDB + Cassandra capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableCassandra")},
+					},
+				},
+			},
+			wantAPIType: "cassandra",
+		},
+		{
+			name: "GlobalDocumentDB + Gremlin capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableGremlin")},
+					},
+				},
+			},
+			wantAPIType: "gremlin",
+		},
+		{
+			name: "GlobalDocumentDB + Table capability",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{
+					Capabilities: []*armcosmos.Capability{
+						{Name: ptrStr("EnableTable")},
+					},
+				},
+			},
+			wantAPIType: "table",
+		},
+		{
+			name: "GlobalDocumentDB + no capability hints (SQL/Core API)",
+			account: &armcosmos.DatabaseAccountGetResults{
+				Kind:       ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB),
+				Properties: &armcosmos.DatabaseAccountGetProperties{},
+			},
+			wantAPIType: "sql",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(nil, "test-subscription", "eastus")
+			client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+				pages: []armcosmos.DatabaseAccountsClientListResponse{
+					{
+						DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+							Value: []*armcosmos.DatabaseAccountGetResults{tt.account},
+						},
+					},
+				},
+			})
+
+			rec := mocks.BuildLegacyReservationRecommendation(
+				mocks.WithRegion("eastus"),
+				mocks.WithNormalizedSize("100RU"),
+			)
+			out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+			require.NotNil(t, out)
+			details, ok := out.Details.(common.NoSQLDetails)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantAPIType, details.APIType)
+		})
+	}
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_AmbiguousAPIType
+// asserts that a multi-API-type subscription leaves APIType empty —
+// guessing would produce wrong UI rendering.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_AmbiguousAPIType(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+		pages: []armcosmos.DatabaseAccountsClientListResponse{
+			{
+				DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+					Value: []*armcosmos.DatabaseAccountGetResults{
+						{Kind: ptr(armcosmos.DatabaseAccountKindMongoDB)},
+						{Kind: ptr(armcosmos.DatabaseAccountKindGlobalDocumentDB)},
+					},
+				},
+			},
+		},
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("100RU"),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out)
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok)
+	assert.Empty(t, details.APIType, "ambiguous (multi-API) subscription leaves APIType empty")
+}
+
+// TestCosmosDBClient_ConvertAzureCosmosRecommendation_PagerErrorFallsBack
+// asserts that an account-listing failure does NOT fail the conversion
+// — APIType just stays empty and the rest of Details is populated as
+// before.
+func TestCosmosDBClient_ConvertAzureCosmosRecommendation_PagerErrorFallsBack(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	client.SetCosmosAccountsPager(&MockCosmosAccountsPager{
+		err: errors.New("transient Azure API error"),
+	})
+
+	rec := mocks.BuildLegacyReservationRecommendation(
+		mocks.WithRegion("eastus"),
+		mocks.WithNormalizedSize("100RU"),
+	)
+	out := client.convertAzureCosmosRecommendation(context.Background(), rec)
+	require.NotNil(t, out, "conversion must NOT fail on accounts-listing error")
+	details, ok := out.Details.(common.NoSQLDetails)
+	require.True(t, ok)
+	assert.Equal(t, "cosmos", details.Engine)
+	assert.Equal(t, 100, details.ThroughputUnits)
+	assert.Empty(t, details.APIType, "APIType empty when accounts listing fails")
+}
+
+// TestCosmosDBClient_CachedAPIType_FetchedOnce pins the perf invariant:
+// many converter calls share a single accounts-listing fetch.
+func TestCosmosDBClient_CachedAPIType_FetchedOnce(t *testing.T) {
+	client := NewClient(nil, "test-subscription", "eastus")
+	mockPager := &MockCosmosAccountsPager{
+		pages: []armcosmos.DatabaseAccountsClientListResponse{
+			{
+				DatabaseAccountsListResult: armcosmos.DatabaseAccountsListResult{
+					Value: []*armcosmos.DatabaseAccountGetResults{
+						{Kind: ptr(armcosmos.DatabaseAccountKindMongoDB)},
+					},
+				},
+			},
+		},
+	}
+	client.SetCosmosAccountsPager(mockPager)
+
+	for i := 0; i < 10; i++ {
+		_ = client.cachedAPIType(context.Background())
+	}
+	assert.Equal(t, 1, mockPager.index, "accounts list must be fetched ONCE regardless of lookup count")
+}
+
+// ptr / ptrStr are local pointer-builder helpers that keep the table
+// fixtures readable. The mocks package's StringPtr is too generic for
+// the typed Cosmos enums.
+func ptr[T any](v T) *T       { return &v }
+func ptrStr(s string) *string { return &s }
+
+// TestDetailsFromCosmosSKU covers the permissive SKU parser directly.
+// Real SKUs look like "100RU", "1000RUperSecond", or service-emitted
+// strings without a numeric prefix. The parser extracts leading digits
+// as ThroughputUnits and leaves the field at zero on any other shape.
+func TestDetailsFromCosmosSKU(t *testing.T) {
+	cases := []struct {
+		name       string
+		sku        string
+		wantUnits  int
+		wantEngine string
+	}{
+		{"bare digits + RU suffix", "100RU", 100, "cosmos"},
+		{"digits + RUperSecond suffix", "1000RUperSecond", 1000, "cosmos"},
+		{"digits only", "5000", 5000, "cosmos"},
+		{"prefix without leading digits", "CosmosDB_RU_1000", 0, "cosmos"},
+		{"empty", "", 0, "cosmos"},
+		{"non-digit prefix", "UnknownSKU", 0, "cosmos"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := detailsFromCosmosSKU(tc.sku)
+			assert.Equal(t, tc.wantEngine, d.Engine)
+			assert.Equal(t, tc.wantUnits, d.ThroughputUnits)
+			assert.Empty(t, d.APIType)
+		})
+	}
+}
+
+// TestCosmosDBClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist guards
+// against regression: displayName in the calculatePrice body must match
+// [A-Za-z0-9_-]{1,64} (Azure rejects DisplayNameInvalid otherwise).
+func TestCosmosDBClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	const orderID = "azure-cosmos-displayname"
+	var capturedDisplayName string
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		if r.Body == nil {
+			return true
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var body map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &body); err == nil {
+			if props, ok := body["properties"].(map[string]interface{}); ok {
+				if dn, ok := props["displayName"].(string); ok {
+					capturedDisplayName = dn
+				}
+			}
+		}
+		return true
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{
+		ResourceType:   "EnableCassandra",
+		Term:           "1yr",
+		Count:          100,
+		CommitmentCost: 5000.0,
+	}
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.NotEmpty(t, capturedDisplayName)
+	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, capturedDisplayName)
+	// Rich-format guards: service code is correct and SKU is preserved
+	// (see providers/azure/services/internal/reservations/displayname.go).
+	assert.Regexp(t, `^cosmos-`, capturedDisplayName)
+	assert.Contains(t, capturedDisplayName, "EnableCassandra")
 }

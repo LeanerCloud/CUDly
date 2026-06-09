@@ -3,7 +3,9 @@ package rds
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
+	"github.com/LeanerCloud/CUDly/providers/aws/internal/tagging"
 )
 
 // RDSAPI defines the interface for RDS operations (enables mocking)
@@ -29,10 +33,12 @@ type Client struct {
 	region string
 }
 
-// NewClient creates a new RDS client
+// NewClient creates a new RDS client with purchase-path retry/timeout settings.
+// See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
+	pcfg := purchasecfg.NewConfig(cfg)
 	return &Client{
-		client: rds.NewFromConfig(cfg),
+		client: rds.NewFromConfig(pcfg),
 		region: cfg.Region,
 	}
 }
@@ -81,10 +87,19 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 
 			duration := aws.ToInt32(instance.Duration)
 			termMonths := 12
-			if duration == 94608000 {
+			if duration == ThreeYearSeconds {
 				termMonths = 36
 			}
 
+			// Deployment carries the same vocabulary as DatabaseDetails.AZConfig
+			// on Recommendation so pool-key matching aligns deployment-wise
+			// between recs and existing commitments (used by expiry adjustment).
+			// AWS RDS SDK exposes MultiAZ as a *bool on ReservedDBInstance;
+			// nil or false → "single-az", true → "multi-az".
+			deployment := "single-az"
+			if aws.ToBool(instance.MultiAZ) {
+				deployment = "multi-az"
+			}
 			commitment := common.Commitment{
 				Provider:       common.ProviderAWS,
 				CommitmentID:   aws.ToString(instance.ReservedDBInstanceId),
@@ -93,6 +108,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 				Region:         c.region,
 				ResourceType:   aws.ToString(instance.DBInstanceClass),
 				Engine:         aws.ToString(instance.ProductDescription), // Capture engine for accurate duplicate checking
+				Deployment:     deployment,
 				Count:          int(aws.ToInt32(instance.DBInstanceCount)),
 				State:          state,
 				StartDate:      aws.ToTime(instance.StartTime),
@@ -112,7 +128,7 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 }
 
 // PurchaseCommitment purchases an RDS Reserved Instance
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
@@ -121,25 +137,42 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
 	}
 
-	// Generate reservation ID (letters, digits, hyphens only; no leading/trailing/double hyphen)
-	reservationID := common.SanitizeReservationID(fmt.Sprintf("rds-%s-%d", rec.ResourceType, time.Now().Unix()), "rds-reserved-")
+	reservationID := c.deriveReservationID(rec, opts)
+
+	// Idempotency dedupe guard (issue #641). When a token is supplied, look for a
+	// reservation already created under the derived ID before buying: if one
+	// exists this is a re-drive that already succeeded, so short-circuit. A
+	// lookup error must NOT fall through to a purchase — fail loud.
+	if existingID, shortCircuit, guardErr := c.idempotencyGuard(ctx, opts.IdempotencyToken, reservationID); guardErr != nil {
+		result.Error = guardErr
+		return result, result.Error
+	} else if shortCircuit {
+		result.Success = true
+		result.CommitmentID = existingID
+		return result, nil
+	}
 
 	// Create the purchase request
 	input := &rds.PurchaseReservedDBInstancesOfferingInput{
 		ReservedDBInstancesOfferingId: aws.String(offeringID),
 		ReservedDBInstanceId:          aws.String(reservationID),
 		DBInstanceCount:               aws.Int32(int32(rec.Count)),
-		Tags:                          c.createPurchaseTags(rec),
+		Tags:                          c.createPurchaseTags(rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedDBInstancesOffering(ctx, input)
 	if err != nil {
+		if existingID, recovered := c.recoverAlreadyExists(ctx, opts.IdempotencyToken, reservationID, err); recovered {
+			result.Success = true
+			result.CommitmentID = existingID
+			return result, nil
+		}
 		result.Error = fmt.Errorf("failed to purchase RDS RI: %w", err)
 		return result, result.Error
 	}
@@ -158,23 +191,200 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	return result, nil
 }
 
-// findOfferingID finds the appropriate RDS Reserved Instance offering ID
-func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) (string, error) {
+// deriveReservationID returns the ReservedDBInstanceId to use. When an
+// idempotency token is supplied (issue #641) the ID is derived deterministically
+// from it, so a re-drive sends the identical ID and RDS rejects the duplicate
+// server-side (ReservedDBInstanceAlreadyExistsFault). Otherwise it prefers the
+// caller-supplied descriptive ID; if absent (the no-token CLI path, issue #687)
+// it composes a rich, self-describing identifier matching the Azure DisplayName
+// format so operators can identify the reservation in the AWS console without
+// cross-referencing CUDly's purchase audit log.
+func (c *Client) deriveReservationID(rec common.Recommendation, opts common.PurchaseOptions) string {
+	if id := common.IdempotentReservationID("rds-id-", opts.IdempotencyToken); id != "" {
+		return id
+	}
+	if opts.ReservationID != "" {
+		return common.SanitizeReservationID(opts.ReservationID, "rds-reserved-")
+	}
+	return common.BuildReservationName(common.ReservationNameFields{
+		Service:      "rds",
+		Region:       rec.Region,
+		ResourceType: rec.ResourceType,
+		Count:        rec.Count,
+		Term:         rec.Term,
+		Payment:      rec.PaymentOption,
+		Now:          time.Now(),
+	}, "rds-reserved-")
+}
+
+// idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it
+// reports (existingID, true, nil) if a reservation already exists under
+// reservationID, ("", false, nil) for a first-time purchase, or a fail-loud
+// error on lookup failure. With an empty token it is a no-op.
+func (c *Client) idempotencyGuard(ctx context.Context, token, reservationID string) (string, bool, error) {
+	if token == "" {
+		return "", false, nil
+	}
+	existingID, found, lookupErr := c.findReservationByID(ctx, reservationID)
+	if lookupErr != nil {
+		return "", false, fmt.Errorf("idempotency lookup failed before RDS RI purchase (refusing to purchase to avoid a possible double-buy): %w", lookupErr)
+	}
+	if found {
+		log.Printf("RDS RI for idempotency token %s already exists (%s); skipping purchase (issue #641 re-drive)", common.MaskToken(token), existingID)
+		return existingID, true, nil
+	}
+	return "", false, nil
+}
+
+// recoverAlreadyExists handles the native server-side dedupe backstop (issue
+// #641): if the by-ID guard missed the existing reservation but AWS still
+// rejected the duplicate ID with ReservedDBInstanceAlreadyExistsFault, it
+// re-Describes by ID and returns (existingID, true) so the re-drive recovers the
+// original reservation instead of erroring.
+func (c *Client) recoverAlreadyExists(ctx context.Context, token, reservationID string, purchaseErr error) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var already *types.ReservedDBInstanceAlreadyExistsFault
+	if !errors.As(purchaseErr, &already) {
+		return "", false
+	}
+	existingID, found, lookupErr := c.findReservationByID(ctx, reservationID)
+	if lookupErr == nil && found {
+		log.Printf("RDS RI %s already existed at purchase time; treating as idempotent re-drive (issue #641)", existingID)
+		return existingID, true
+	}
+	return "", false
+}
+
+// findReservationByID looks for an active or payment-pending RDS reserved DB
+// instance with the given ReservedDBInstanceId (issue #641). It returns the
+// reservation ID and true when such a reservation exists, so a re-driven
+// purchase can short-circuit. Retired/expired reservations are excluded (same
+// state filter as GetExistingCommitments) so a returned reservation does not
+// suppress a legitimate fresh purchase.
+func (c *Client) findReservationByID(ctx context.Context, reservationID string) (string, bool, error) {
+	response, err := c.client.DescribeReservedDBInstances(ctx, &rds.DescribeReservedDBInstancesInput{
+		ReservedDBInstanceId: aws.String(reservationID),
+	})
+	if err != nil {
+		// RDS returns ReservedDBInstanceNotFound for an unknown reservation ID;
+		// treat that as "not found" (a first-time purchase), not a lookup
+		// failure, so it is not blocked. Any other error is a genuine failure.
+		var notFound *types.ReservedDBInstanceNotFoundFault
+		if errors.As(err, &notFound) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to describe reserved DB instances for idempotency check: %w", err)
+	}
+	for _, ri := range response.ReservedDBInstances {
+		state := aws.ToString(ri.State)
+		if state != "active" && state != "payment-pending" {
+			continue
+		}
+		if ri.ReservedDBInstanceId != nil {
+			return aws.ToString(ri.ReservedDBInstanceId), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// maxOfferingPages is the maximum number of DescribeReservedDBInstancesOfferings
+// pages to walk before giving up. At MaxRecords=100 per page this caps the
+// search at 500 offerings. Exceeding the cap returns a diagnostic error instead
+// of timing out the Lambda budget (issue #688).
+const maxOfferingPages = 5
+
+// findOfferingID finds the appropriate RDS Reserved Instance offering ID.
+// execID is the purchase execution UUID for log correlation; pass "" when
+// calling outside of a purchase flow (ValidateOffering, GetOfferingDetails).
+func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, execID string) (string, error) {
 	details, ok := rec.Details.(*common.DatabaseDetails)
 	if !ok || details == nil {
 		return "", fmt.Errorf("invalid service details for RDS")
 	}
-
-	multiAZ := details.AZConfig == "multi-az"
-	duration := c.getDurationString(rec.Term)
+	// AZConfig must be explicitly set: single-AZ and multi-AZ RDS RIs have
+	// different prices and do not cover each other's demand. An empty AZConfig
+	// means the CE recommendation omitted DeploymentOption; guessing single-az
+	// risks buying the wrong RI class. Fail loud so the caller can decide.
+	// Validate the full enum, not just the empty case: a non-empty typo would
+	// otherwise fall through to multiAZ==false in paginateRDSOfferings and
+	// silently drive a single-AZ lookup -- the same mis-buy class as the old
+	// default (CR #1085).
+	switch details.AZConfig {
+	case "single-az", "multi-az":
+		// valid
+	case "":
+		return "", fmt.Errorf("RDS AZConfig is empty: CE recommendation did not include DeploymentOption; " +
+			"refusing to guess single-az vs multi-az (see M4 in 19-hardcoded-fallbacks-aws.md)")
+	default:
+		return "", fmt.Errorf("invalid RDS AZConfig %q: must be single-az or multi-az", details.AZConfig)
+	}
 	offeringType, err := c.convertPaymentOption(rec.PaymentOption)
 	if err != nil {
 		return "", fmt.Errorf("invalid payment option: %w", err)
 	}
+	return c.paginateRDSOfferings(ctx, rec, details, offeringType, execID)
+}
 
-	normalizedEngine := c.normalizeEngineName(details.Engine)
+// rdsOfferingPageResult holds the outcome of a single DescribeReservedDBInstancesOfferings page.
+type rdsOfferingPageResult struct {
+	id     string  // non-empty when a match was found
+	marker *string // pagination cursor for the next page; nil when exhausted
+}
 
-	input := &rds.DescribeReservedDBInstancesOfferingsInput{
+// fetchRDSOfferingPage calls DescribeReservedDBInstancesOfferings for one page and
+// scans the results. It returns a match ID when found, a non-nil marker when more
+// pages remain, or an error on API/offering-validation failure.
+func (c *Client) fetchRDSOfferingPage(ctx context.Context, baseInput *rds.DescribeReservedDBInstancesOfferingsInput, marker *string, rec common.Recommendation, offeringType string, tag string, page int, t0 time.Time) (rdsOfferingPageResult, error) {
+	input := *baseInput
+	input.Marker = marker
+
+	pageStart := time.Now()
+	result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, &input)
+	if err != nil {
+		log.Printf("purchase[%s]: RDS findOfferingID page %d failed after %s (total %s): %v",
+			tag, page, time.Since(pageStart), time.Since(t0), err)
+		return rdsOfferingPageResult{}, fmt.Errorf("failed to describe offerings: %w", err)
+	}
+	log.Printf("purchase[%s]: RDS findOfferingID page %d: %d offerings in %s",
+		tag, page, len(result.ReservedDBInstancesOfferings), time.Since(pageStart))
+
+	id, scanErr := scanRDSOfferingPage(result.ReservedDBInstancesOfferings, rec, offeringType)
+	if scanErr != nil {
+		return rdsOfferingPageResult{}, scanErr
+	}
+	if id != "" {
+		log.Printf("purchase[%s]: RDS findOfferingID found match on page %d after %s total", tag, page, time.Since(t0))
+		return rdsOfferingPageResult{id: id}, nil
+	}
+	var nextMarker *string
+	if result.Marker != nil && aws.ToString(result.Marker) != "" {
+		nextMarker = result.Marker
+	}
+	return rdsOfferingPageResult{marker: nextMarker}, nil
+}
+
+// paginateRDSOfferings walks DescribeReservedDBInstancesOfferings pages and returns
+// the first matching offering ID. It caps at maxOfferingPages to prevent Lambda
+// timeout exhaustion (issue #688).
+func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommendation, details *common.DatabaseDetails, offeringType string, execID string) (string, error) {
+	multiAZ := details.AZConfig == "multi-az"
+	normalizedEngine, err := c.normalizeEngineName(details.Engine)
+	if err != nil {
+		return "", fmt.Errorf("cannot look up RDS offering: %w", err)
+	}
+	duration := c.getDurationString(rec.Term)
+
+	tag := execID
+	if tag == "" {
+		tag = "no-exec"
+	}
+	t0 := time.Now()
+	log.Printf("purchase[%s]: RDS findOfferingID starting (class=%s engine=%s multi-az=%v duration=%s payment=%s)",
+		tag, rec.ResourceType, normalizedEngine, multiAZ, duration, offeringType)
+
+	baseInput := &rds.DescribeReservedDBInstancesOfferingsInput{
 		DBInstanceClass:    aws.String(rec.ResourceType),
 		ProductDescription: aws.String(normalizedEngine),
 		MultiAZ:            aws.Bool(multiAZ),
@@ -183,28 +393,56 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation) 
 		MaxRecords:         aws.Int32(100),
 	}
 
-	result, err := c.client.DescribeReservedDBInstancesOfferings(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("failed to describe offerings: %w", err)
+	var marker *string
+	for page := 1; ; page++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if page > maxOfferingPages {
+			return "", fmt.Errorf("pagination cap reached after %d pages for RDS %s %s multi-az=%v %s (issue #688)",
+				maxOfferingPages, rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption)
+		}
+		pr, err := c.fetchRDSOfferingPage(ctx, baseInput, marker, rec, offeringType, tag, page, t0)
+		if err != nil {
+			return "", err
+		}
+		if pr.id != "" {
+			return pr.id, nil
+		}
+		if pr.marker == nil {
+			break
+		}
+		marker = pr.marker
 	}
+	log.Printf("purchase[%s]: RDS findOfferingID exhausted pages in %s -- no match", tag, time.Since(t0))
+	return "", fmt.Errorf("no offerings found for RDS %s %s multi-az=%v %s after %d page(s) (issue #688)",
+		rec.ResourceType, details.Engine, multiAZ, rec.PaymentOption, maxOfferingPages)
+}
 
-	if len(result.ReservedDBInstancesOfferings) == 0 {
-		return "", fmt.Errorf("no offerings found for %s %s multi-az=%v %s",
-			rec.ResourceType, details.Engine, multiAZ, duration)
+// scanRDSOfferingPage finds a matching offering in a single page of results.
+// Returns ("", nil) when no match is found on the page so the caller can continue paginating.
+func scanRDSOfferingPage(offerings []types.ReservedDBInstancesOffering, rec common.Recommendation, wantType string) (string, error) {
+	for _, o := range offerings {
+		got := aws.ToString(o.OfferingType)
+		if got != wantType {
+			return "", fmt.Errorf("RDS offering %s has payment option %q, want %q (rec: %s %s) -- API filter mismatch",
+				aws.ToString(o.ReservedDBInstancesOfferingId), got, wantType,
+				rec.ResourceType, rec.PaymentOption)
+		}
+		return aws.ToString(o.ReservedDBInstancesOfferingId), nil
 	}
-
-	return aws.ToString(result.ReservedDBInstancesOfferings[0].ReservedDBInstancesOfferingId), nil
+	return "", nil
 }
 
 // ValidateOffering checks if an offering exists without purchasing
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec)
+	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec)
+	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
 		return nil, err
 	}
@@ -284,12 +522,18 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return instanceTypes, nil
 }
 
+// Duration constants for RI term calculations
+const (
+	OneYearSeconds   = 31536000 // 365 days in seconds
+	ThreeYearSeconds = 94608000 // 3 * 365 days in seconds
+)
+
 // getDurationString converts term string to duration string for RDS API
 func (c *Client) getDurationString(term string) string {
 	if term == "3yr" || term == "3" {
-		return "94608000" // 3 years in seconds
+		return fmt.Sprintf("%d", ThreeYearSeconds)
 	}
-	return "31536000" // 1 year in seconds
+	return fmt.Sprintf("%d", OneYearSeconds)
 }
 
 // convertPaymentOption converts payment option to AWS string
@@ -306,61 +550,74 @@ func (c *Client) convertPaymentOption(option string) (string, error) {
 	}
 }
 
-// normalizeEngineName converts engine names to AWS API format
-func (c *Client) normalizeEngineName(engine string) string {
+// normalizeEngineName maps an RDS engine string to the exact product-description
+// value required by DescribeReservedDBInstancesOfferings. It returns an error
+// for engine names that are ambiguous (Oracle, SQL Server -- multiple editions
+// exist at different prices) or that contain "aurora" without specifying a
+// database engine (aurora-mysql vs aurora-postgresql), so the caller never
+// silently buys an offering for the wrong engine edition.
+//
+// Unambiguous engines (mysql, postgresql, mariadb) are returned verbatim after
+// case-normalisation. Engine strings that are already in the canonical
+// lower-case AWS form (e.g. "aurora-mysql") pass through unchanged.
+func (c *Client) normalizeEngineName(engine string) (string, error) {
 	engineLower := strings.ToLower(engine)
 
 	if strings.Contains(engineLower, "aurora") {
 		if strings.Contains(engineLower, "mysql") {
-			return "aurora-mysql"
+			return "aurora-mysql", nil
 		}
 		if strings.Contains(engineLower, "postgres") {
-			return "aurora-postgresql"
+			return "aurora-postgresql", nil
 		}
-		return "aurora-mysql"
+		return "", fmt.Errorf(
+			"ambiguous Aurora engine %q: CE must supply the specific variant "+
+				"(aurora-mysql or aurora-postgresql); refusing to guess",
+			engine,
+		)
 	}
 
 	if strings.Contains(engineLower, "mysql") {
-		return "mysql"
+		return "mysql", nil
 	}
 	if strings.Contains(engineLower, "postgres") {
-		return "postgresql"
+		return "postgresql", nil
 	}
 	if strings.Contains(engineLower, "mariadb") {
-		return "mariadb"
+		return "mariadb", nil
 	}
-	if strings.Contains(engineLower, "oracle") {
-		return "oracle-se2"
+	// Only the bare family name is ambiguous (CE returns "Oracle" / "SQL Server"
+	// with no edition). An edition-qualified token like oracle-se2 or
+	// sqlserver-web is already a valid RDS ProductDescription, so pass it through
+	// rather than rejecting it -- rejecting it contradicted the "supply the exact
+	// edition" guidance in this very error message (CR #1085).
+	if engineLower == "oracle" {
+		return "", fmt.Errorf(
+			"ambiguous Oracle engine %q: CE must supply the exact edition "+
+				"(e.g. oracle-se2, oracle-ee); refusing to guess",
+			engine,
+		)
 	}
-	if strings.Contains(engineLower, "sqlserver") || strings.Contains(engineLower, "sql-server") {
-		return "sqlserver-se"
+	if engineLower == "sqlserver" || engineLower == "sql-server" {
+		return "", fmt.Errorf(
+			"ambiguous SQL Server engine %q: CE must supply the exact edition "+
+				"(e.g. sqlserver-se, sqlserver-ee, sqlserver-web, sqlserver-ex); refusing to guess",
+			engine,
+		)
 	}
 
-	return engineLower
+	return engineLower, nil
 }
 
-// createPurchaseTags creates standard tags for the purchase
-func (c *Client) createPurchaseTags(rec common.Recommendation) []types.Tag {
-	return []types.Tag{
-		{
-			Key:   aws.String("Purpose"),
-			Value: aws.String("Reserved Instance Purchase"),
-		},
-		{
-			Key:   aws.String("ResourceType"),
-			Value: aws.String(rec.ResourceType),
-		},
-		{
-			Key:   aws.String("Region"),
-			Value: aws.String(rec.Region),
-		},
-		{
-			Key:   aws.String("PurchaseDate"),
-			Value: aws.String(time.Now().Format("2006-01-02")),
-		},
-		{
-			Key:   aws.String("Tool"),
-			Value: aws.String("CUDly"),
-		},
+// createPurchaseTags creates standard tags for the purchase. The tag shape
+// is shared across RDS/ElastiCache/MemoryDB via tagging.PurchasePairs; the
+// only per-service customizations are the Purpose string and the AWS
+// convention for the instance-type tag key.
+func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
+	pairs := tagging.PurchasePairs(rec, "Reserved Instance Purchase", "ResourceType", source)
+	out := make([]types.Tag, len(pairs))
+	for i, p := range pairs {
+		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}
 	}
+	return out
 }

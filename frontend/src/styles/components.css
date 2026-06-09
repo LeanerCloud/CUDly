@@ -1,0 +1,1633 @@
+/* Components: Cards, buttons, badges */
+
+/* Cards */
+.card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* ---------------------------------------------------------------------------
+ * KPI tile (issue #340 T6) — extends .card with sparkline slot + tightened
+ * design-token-driven typography. New .kpi-tile is additive so the existing
+ * .card styles still apply (preserves legacy behaviour where dashboard cards
+ * are referenced via `.card`).
+ * ------------------------------------------------------------------------- */
+.kpi-tile {
+    padding: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md);
+    border: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-sm);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+        "title title"
+        "value spark"
+        "detail spark";
+    gap: var(--cudly-sp-1) var(--cudly-sp-3);
+    align-items: end;
+}
+
+.card.kpi-tile h3 {
+    grid-area: title;
+    margin-bottom: 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    letter-spacing: 0.01em;
+}
+
+.kpi-tile-value {
+    grid-area: value;
+    font-size: var(--cudly-fs-2xl);
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
+    margin: 0;
+}
+
+.kpi-tile-value.savings {
+    color: var(--cudly-success);
+}
+
+.kpi-tile-detail {
+    grid-area: detail;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    margin: 0;
+}
+
+.kpi-tile-spark {
+    grid-area: spark;
+    width: 80px;
+    height: 24px;
+    color: var(--cudly-primary);
+    opacity: 0.65;
+}
+
+/* Subtle hover-lift on KPI tiles + interactive cards so the action-
+ * center pattern feels alive. Matches the mock's elevated-card hover
+ * treatment. transform-only (no layout shift) so the grid stays put. */
+.kpi-tile {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kpi-tile:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--cudly-shadow-md);
+}
+
+/* The .kpi-tile that decorates "Potential Monthly Savings" / "YTD Savings"
+ * cards picks up the savings hue for its sparkline so the visual hierarchy
+ * (green money values, blue trend lines) reads consistently. */
+.kpi-tile[data-kpi="savings"] .kpi-tile-spark,
+.kpi-tile[data-kpi="ytd"] .kpi-tile-spark {
+    color: var(--cudly-success);
+}
+
+.card h3 {
+    color: var(--cudly-text-muted);
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+}
+
+.card .value {
+    font-size: 1.75rem;
+    font-weight: bold;
+}
+
+.card .monthly {
+    font-size: 0.9rem;
+    color: var(--cudly-text-muted);
+    margin-top: 0.25rem;
+}
+
+.card .detail {
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Spacing between adjacent card sections within a tab */
+.tab-content > .card + .card {
+    margin-top: 1rem;
+}
+
+/* Buttons */
+button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    background: var(--cudly-text-muted);
+    color: white;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.2s;
+}
+
+button:hover {
+    background: var(--cudly-text-muted);
+}
+
+button.primary {
+    background: var(--cudly-primary);
+}
+
+button.primary:hover {
+    background: var(--cudly-primary-hover);
+}
+
+button.success {
+    background: var(--cudly-success);
+}
+
+button.success:hover {
+    background: #2d9048;
+}
+
+button.danger {
+    background: var(--cudly-error);
+}
+
+button.danger:hover {
+    background: #d33426;
+}
+
+/* Secondary button style */
+.btn-secondary {
+    background: var(--cudly-bg);
+    color: var(--cudly-text);
+    border: 1px solid var(--cudly-border-strong);
+}
+
+.btn-secondary:hover {
+    background: #e8e8e8;
+    border-color: #bbb;
+}
+
+/* Base btn class */
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    background: var(--cudly-text-muted);
+    color: white;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.2s;
+}
+
+.btn:hover {
+    background: var(--cudly-text-muted);
+}
+
+.btn-small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 4px;
+    background: white;
+    color: var(--cudly-text);
+    cursor: pointer;
+    margin-right: 0.25rem;
+}
+
+.btn-small:hover {
+    background: #e8e8e8;
+    border-color: #bbb;
+}
+
+.btn-small.primary {
+    background: var(--cudly-primary);
+    color: white;
+    border-color: var(--cudly-primary);
+}
+
+.btn-small.primary:hover {
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
+}
+
+.btn-small.success {
+    background: var(--cudly-success);
+    color: white;
+    border-color: var(--cudly-success);
+}
+
+.btn-small.success:hover {
+    background: #2d9048;
+    border-color: #2d9048;
+}
+
+.btn-small.warning {
+    background: var(--cudly-warn);
+    color: var(--cudly-text);
+    border-color: var(--cudly-warn);
+}
+
+.btn-small.warning:hover {
+    background: #f9a825;
+    border-color: #f9a825;
+}
+
+.btn-small.danger {
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+    border-color: var(--cudly-error);
+}
+
+.btn-small.danger:hover {
+    background: var(--cudly-error);
+    color: white;
+}
+
+/* Canonical top-level button variants. Existing .btn + .btn-small classes
+ * keep their current appearance; these new variants give callers a single
+ * semantic class (primary / destructive / tertiary) without needing to
+ * compose `.btn-small.primary` etc. .btn-secondary already existed.
+ */
+.btn-primary {
+    background: var(--cudly-primary);
+    color: white;
+    border: 1px solid var(--cudly-primary);
+}
+
+.btn-primary:hover {
+    background: var(--cudly-primary-hover);
+    border-color: var(--cudly-primary-hover);
+}
+
+.btn-destructive {
+    background: var(--cudly-error);
+    color: white;
+    border: 1px solid var(--cudly-error);
+}
+
+.btn-destructive:hover {
+    background: var(--cudly-error-fg);
+    border-color: var(--cudly-error-fg);
+}
+
+.btn-tertiary {
+    background: transparent;
+    color: var(--cudly-primary);
+    border: none;
+    text-decoration: none;
+    padding: 0.5rem 0.75rem;
+}
+
+.btn-tertiary:hover {
+    background: var(--cudly-info-bg);
+    text-decoration: underline;
+}
+
+/* Toast notifications (bottom-right stack, AutoSpotting-style).
+ * Rendered by toast.ts. Default timeout 30s. Kind classes set the
+ * left-border + icon colour.
+ */
+.toast-container {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 2100;
+    pointer-events: none;
+    max-width: 400px;
+}
+
+.toast {
+    pointer-events: auto;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: start;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: white;
+    border-radius: 6px;
+    border-left: 4px solid var(--cudly-text-muted);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    font-size: 0.9rem;
+    color: #222;
+    animation: toast-enter 0.18s ease-out;
+    transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+
+.toast--leaving {
+    opacity: 0;
+    transform: translateX(12px);
+}
+
+.toast--success { border-left-color: var(--cudly-success-fg); }
+.toast--info    { border-left-color: var(--cudly-primary); }
+.toast--warning { border-left-color: var(--cudly-warn-fg); }
+.toast--error   { border-left-color: var(--cudly-error-fg); }
+
+.toast-icon {
+    font-weight: bold;
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+
+.toast--success .toast-icon { color: var(--cudly-success-fg); }
+.toast--info    .toast-icon { color: var(--cudly-primary); }
+.toast--warning .toast-icon { color: var(--cudly-warn-fg); }
+.toast--error   .toast-icon { color: var(--cudly-error-fg); }
+
+.toast-message {
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.toast-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.toast-close {
+    background: transparent;
+    border: none;
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+    padding: 0 0.25rem;
+    font-size: 1.1rem;
+    line-height: 1;
+    align-self: start;
+}
+
+.toast-close:hover {
+    color: #222;
+}
+
+@keyframes toast-enter {
+    from { opacity: 0; transform: translateX(12px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Visually-hidden label that remains announced by screen readers. Used
+ * to pair decorative symbols (✓ / ▲ / em-dash) with a verbal meaning.
+ */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Federation download buttons. The ↓ glyph is hidden from AT (aria-hidden
+ * on the span) but signals clickability to sighted users. Pointer cursor
+ * reinforces the affordance.
+ */
+.btn-download {
+    cursor: pointer;
+}
+
+.btn-download .download-icon {
+    margin-right: 0.4rem;
+    font-weight: bold;
+    color: var(--cudly-primary);
+}
+
+/* Utilization colour pills with a paired glyph so meaning isn't carried
+ * by colour alone (WCAG 1.4.1).
+ */
+.util-green::before { content: '▲ '; }
+.util-yellow::before { content: '■ '; }
+.util-red::before { content: '▼ '; }
+
+/* Sticky save bar — the existing .settings-buttons row gets sticky
+ * positioning at the bottom of the viewport and a visible shadow when
+ * any tracked field is dirty. updateDirtyMarkers in settings.ts adds/
+ * removes .dirty based on aggregate state.
+ */
+.settings-savebar {
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding: 1rem;
+    margin-top: 1rem;
+    border-top: 1px solid transparent;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.settings-savebar.dirty {
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+    border-top-color: var(--cudly-border);
+}
+
+.settings-savebar.dirty::before {
+    content: 'Unsaved changes';
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    background: #fff3cd;
+    color: #856404;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    margin-right: 0.75rem;
+    vertical-align: middle;
+}
+
+/* Dirty-indicator dot on the Settings top-tab button when any settings
+ * form field has unsaved changes. Lives in the tab bar so the user
+ * notices even from another tab.
+ */
+.tab-btn.has-unsaved::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--cudly-error);
+    border-radius: 50%;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
+/* Dashboard savings-trend range toggle. Active pill is highlighted
+ * blue; non-active pills are the base btn-small style.
+ */
+.trend-range-toggle {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.trend-range.active {
+    background: var(--cudly-primary);
+    color: white;
+    border-color: var(--cudly-primary);
+}
+
+/* Accounts overview chips at the top of the Accounts sub-tab
+ * (known_issues #29 partial). Total counts per status across all
+ * providers + registrations, click to scroll to the relevant section. */
+.accounts-overview {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 0 0 1rem;
+}
+
+.accounts-overview-chip {
+    appearance: none;
+    border: 1px solid var(--cudly-border-strong);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    padding: 0.5rem 0.85rem;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    line-height: 1.2;
+    min-width: 100px;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.accounts-overview-chip:hover {
+    background: var(--cudly-bg);
+    border-color: #4a90e2;
+}
+
+.accounts-overview-chip-count {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--cudly-primary);
+}
+
+.accounts-overview-chip-label {
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+}
+
+/* Status-chip filter row above the accounts table (Q8 / audit P3 gap).
+ * All | Active | Disabled scoped to states the per-provider table shows.
+ */
+.status-chip-row {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.75rem 0 0.25rem;
+    flex-wrap: wrap;
+}
+
+.status-chip {
+    appearance: none;
+    border: 1px solid var(--cudly-border-strong);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.status-chip:hover {
+    background: var(--cudly-bg);
+}
+
+.status-chip.active {
+    background: var(--cudly-info-bg);
+    border-color: #4a90e2;
+    color: #1a56c4;
+    font-weight: 600;
+}
+
+/* Per-provider accounts table (P3). Replaces the prior inline-row
+ * layout with a standard table so Name/Account ID/Status/Actions
+ * separate cleanly and the destructive Delete is visually isolated.
+ */
+.accounts-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}
+
+.accounts-table th,
+.accounts-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--cudly-border);
+    vertical-align: middle;
+}
+
+.accounts-table th {
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+    font-weight: 500;
+    background: #fafafa;
+}
+
+.account-actions {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.account-actions-spacer {
+    display: inline-block;
+    width: 1.25rem;
+    border-left: 1px solid var(--cudly-border);
+    height: 1.4rem;
+    margin: 0 0.25rem;
+}
+
+.accounts-empty {
+    color: var(--cudly-text-muted);
+    font-style: italic;
+    margin: 0.5rem 0;
+}
+
+/* Recommendations-table affordances: sortable headers, per-column filter
+ * popovers, sticky bottom action box. The legacy .recommendations-bulk-
+ * toolbar / .bulk-count rules were removed in Bundle B (column-filter UX
+ * overhaul) — that surface was folded into the bottom action box.
+ */
+
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+th.sortable:hover {
+    background: var(--cudly-bg);
+}
+
+th.sortable .sort-indicator {
+    margin-left: 0.35rem;
+    color: #bbb;
+    font-size: 0.75em;
+}
+
+th.sortable .sort-indicator.active {
+    color: var(--cudly-primary);
+}
+
+/* Per-column filter trigger button inside <th>. */
+th .column-filter-btn {
+    margin-left: 0.35rem;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: #bbb;
+    cursor: pointer;
+    font-size: 0.85em;
+    line-height: 1;
+}
+th .column-filter-btn:hover {
+    color: var(--cudly-primary);
+}
+th .column-filter-btn.active {
+    color: var(--cudly-primary);
+    font-weight: 700;
+}
+
+/* Detached popover (lives in document.body, positioned absolutely). */
+.column-filter-popover {
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 0.75rem;
+    min-width: 220px;
+    max-width: 320px;
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 1000;
+}
+.column-filter-popover .column-filter-heading {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+.column-filter-popover .column-filter-all {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--cudly-border);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+.column-filter-popover .column-filter-list {
+    max-height: 240px;
+    overflow-y: auto;
+}
+.column-filter-popover .column-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+}
+.column-filter-popover .column-filter-numeric-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85em;
+    color: var(--cudly-text-muted);
+}
+.column-filter-popover .column-filter-numeric-input {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 3px;
+    font-size: 0.9rem;
+}
+.column-filter-popover .column-filter-error {
+    color: #d32f2f;
+    font-size: 0.8em;
+    min-height: 1em;
+    margin-top: 0.25rem;
+}
+.column-filter-popover .column-filter-footer {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--cudly-border);
+    display: flex;
+    justify-content: flex-end;
+}
+.column-filter-popover .column-filter-clear {
+    background: transparent;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 3px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+/* Filter-status bar (Clear-filters badge + aria-live count) above the table. */
+.recommendations-filter-status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+    font-size: 0.85em;
+    color: var(--cudly-text-muted);
+}
+/* "Show costs: <period>" selector: keep the label and select inline and
+   vertically centered so the control sits on the same line as the count,
+   Expand all and Columns, instead of the small label stacking above the
+   taller select (the base `select` style is bigger than the bar's buttons). */
+.recommendations-filter-status .cost-period-selector-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+}
+.recommendations-filter-status .cost-period-selector-label {
+    color: var(--cudly-text-muted);
+}
+.recommendations-filter-status .cost-period-select {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    line-height: 1.2;
+}
+.recommendations-filter-status .clear-filters {
+    background: var(--cudly-info-bg);
+    border: 1px solid #a9c7f5;
+    border-radius: 3px;
+    color: var(--cudly-primary);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+/* Sticky bottom action box — Payment / Capacity % / Purchase / Create Plan.
+ *
+ * The mock UI (issue #340) hosts this in a right-side drawer ("Plan
+ * builder"). Pulling the existing sticky-bottom action-box into a side
+ * drawer would require non-trivial recommendations.ts changes; the
+ * pragmatic intermediate is to keep the sticky-bottom layout but pick
+ * up the design tokens so colors + spacing + radii sit in the same
+ * visual family as the rest of the action-center reskin. Drawer is
+ * tracked as a deferred sub-task in #340. */
+:root { --action-box-height: 80px; }
+.recommendations-action-box {
+    position: sticky;
+    bottom: 0;
+    height: var(--action-box-height);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-md);
+    z-index: 10;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-4);
+    border-radius: var(--cudly-r-md) var(--cudly-r-md) 0 0;
+}
+.recommendations-action-box .recommendations-action-summary {
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    margin-right: auto;
+}
+
+/* Context drawer placeholder (issue #340 T8) — class slot reserved for
+ * a future right-side "Plan builder" drawer that will host selected-rec
+ * summary + Purchase / Create Plan affordances. Today it's a stub that
+ * doesn't apply to any element; once the drawer ships, recommendations.ts
+ * will toggle this class on the new <aside>. Keeping the stub here keeps
+ * the design-token mapping in one place for the migration. */
+.context-drawer {
+    position: fixed;
+    top: var(--cudly-topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    background: var(--cudly-surface);
+    border-left: 1px solid var(--cudly-border);
+    box-shadow: var(--cudly-shadow-lg);
+    padding: var(--cudly-sp-5);
+    overflow-y: auto;
+    z-index: 20;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+}
+.context-drawer.open {
+    transform: translateX(0);
+}
+.recommendations-action-box label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9em;
+}
+#recommendations-list { padding-bottom: var(--action-box-height); }
+
+tr.recommendation-row {
+    cursor: pointer;
+}
+
+tr.recommendation-row:hover {
+    background: #f8f9fb;
+}
+
+/* issues #225 + #226: cell-grouping UX */
+
+/* Expand-All toggle in the filter-status bar */
+.recommendations-filter-status .expand-all-toggle {
+    background: transparent;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 3px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+    color: var(--cudly-text-muted);
+}
+.recommendations-filter-status .expand-all-toggle:hover {
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
+}
+
+/* issue #318: "Columns ▾" button in the filter-status bar */
+.recommendations-filter-status .column-visibility-btn {
+    background: transparent;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 3px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.85em;
+    cursor: pointer;
+    color: var(--cudly-text-muted);
+}
+.recommendations-filter-status .column-visibility-btn:hover {
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
+}
+.recommendations-filter-status .column-visibility-btn[aria-pressed="true"] {
+    background: var(--cudly-info-bg);
+    border-color: #a9c7f5;
+    color: var(--cudly-primary);
+}
+
+/* Sort-hidden indicator */
+.recommendations-filter-status .sort-hidden-note {
+    font-size: 0.82em;
+    color: var(--cudly-text-muted);
+    font-style: italic;
+}
+
+/* Column-visibility popover */
+.column-visibility-popover {
+    position: absolute;
+    z-index: 1200;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+    padding: 0.6rem 0.75rem;
+    min-width: 180px;
+    max-height: 360px;
+    overflow-y: auto;
+}
+.column-visibility-popover .column-visibility-title {
+    margin: 0 0 0.4rem;
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.column-visibility-popover .column-visibility-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.88em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.column-visibility-popover .column-visibility-row:hover {
+    color: var(--cudly-primary);
+}
+
+/* Page-level range banner above the table */
+.rec-range-banner {
+    padding: 0.4rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--cudly-info-bg);
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: #444;
+}
+
+/* Informational notice banner used on pages where the current session can
+ * view but not execute purchases (issue #923: Purchaser group separation
+ * of duties). Reuses the accent border pattern from .self-account-banner
+ * in settings.css. */
+.info-banner {
+    border-left: 3px solid var(--accent, #4a9eff);
+    background: var(--cudly-info-bg, #eaf4ff);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.9em;
+    color: #333;
+}
+
+/* Cell summary row (collapsed state) */
+tr.rec-cell-summary-row {
+    background: #f3f6fb;
+    cursor: default;
+}
+tr.rec-cell-summary-row:hover {
+    background: #eaf0fb;
+}
+
+/* Summary row content cell: chevron + identity + range inline */
+.rec-cell-summary-content {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.rec-cell-chevron {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 1.5em;
+    color: var(--cudly-text-muted);
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+}
+.rec-cell-chevron:hover,
+.rec-cell-chevron:focus-visible {
+    color: var(--cudly-primary);
+    background: var(--cudly-info-bg, #eaf0fb);
+    outline: none;
+}
+.rec-cell-identity {
+    font-weight: 500;
+    font-size: 0.9em;
+}
+.rec-cell-range {
+    color: var(--cudly-text-muted);
+    font-size: 0.85em;
+}
+.rec-variants-count {
+    color: var(--cudly-text-muted);
+    font-size: 0.85em;
+}
+
+/* Variant rows nested under a cell summary (expanded state) */
+tr.rec-variant-row td:not(.checkbox-col) {
+    padding-left: 2rem;
+    background: #fafbfe;
+    font-size: 0.88em;
+}
+tr.rec-variant-row:hover td:not(.checkbox-col) {
+    background: #f0f4fc;
+}
+
+/* Confirm-dialog modal. Rendered via confirmDialog.ts. */
+.modal-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.modal-confirm {
+    position: relative;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    max-width: 480px;
+    min-width: 320px;
+    padding: 1.5rem;
+}
+
+.modal-confirm-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.75rem;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--cudly-text-muted);
+    padding: 0 0.25rem;
+}
+
+.modal-confirm-close:hover {
+    color: var(--cudly-primary);
+}
+
+.modal-confirm-title {
+    margin: 0 1.5rem 0.75rem 0;
+    font-size: 1.1rem;
+    color: #222;
+}
+
+.modal-confirm-body {
+    margin-bottom: 1.25rem;
+    color: #444;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.modal-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+/* Approval-details modal (issue #374): when the confirmDialog body
+ * carries an .approval-details element, widen the dialog so the 12-col
+ * per-rec table can breathe. The selector targets the parent modal via
+ * :has() so the rest of the confirmDialog callers (Cancel, etc.) keep
+ * the narrow 480px layout. */
+.modal-confirm:has(.approval-details) {
+    max-width: min(1100px, 95vw);
+    min-width: min(720px, 95vw);
+}
+
+.approval-details {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.approval-details-fallback {
+    margin: 0;
+    color: #444;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.approval-details-header {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--cudly-surface-2, #f6f8fa);
+    border: 1px solid var(--cudly-border, #e1e4e8);
+    border-radius: 6px;
+}
+
+.approval-details-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.approval-details-stat-label {
+    font-size: 0.78rem;
+    color: var(--cudly-text-muted, #6a737d);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.approval-details-stat-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #222;
+}
+
+.approval-details-table-wrap {
+    overflow-x: auto;
+    max-height: 50vh;
+    border: 1px solid var(--cudly-border, #e1e4e8);
+    border-radius: 6px;
+}
+
+.approval-details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.approval-details-table th,
+.approval-details-table td {
+    padding: 0.45rem 0.65rem;
+    text-align: left;
+    border-bottom: 1px solid var(--cudly-border, #eef0f2);
+    white-space: nowrap;
+}
+
+.approval-details-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--cudly-surface-2, #f6f8fa);
+    font-weight: 600;
+    color: var(--cudly-text-muted, #444);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.approval-details-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.approval-details-table th.num,
+.approval-details-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Provider badges */
+.provider-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    /* No text-transform: let the HTML control casing. Acronyms (AWS,
+     * GCP) render as-written; brand names (Azure) keep their native
+     * title case rather than being SHOUT-CASED by CSS. */
+}
+
+.provider-badge.aws {
+    background: #ff9900;
+    color: #232f3e;
+}
+
+.provider-badge.azure {
+    background: #0078d4;
+    color: white;
+}
+
+.provider-badge.gcp {
+    background: #4285f4;
+    color: white;
+}
+
+/* Service badges */
+.service-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+/* Status badges */
+.status-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.status-badge.active {
+    background: var(--cudly-success-bg);
+    color: #137333;
+}
+
+.status-badge.paused {
+    background: #ffe0b2;
+    color: #e65100;
+}
+
+.status-badge.disabled {
+    background: var(--cudly-bg);
+    color: var(--cudly-text-muted);
+}
+
+/* Cost chips: used in the reshape-alternatives cell and the exchange
+ * modal's per-target-row cost slot. Shares geometry with
+ * .status-badge so the visual style stays consistent. Neutral grey
+ * background since costs are advisory information, not status. */
+.cost-chip {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    margin-right: 0.25rem;
+    border-radius: 12px;
+    background: #f0f2f5;
+    color: var(--cudly-text);
+    font-size: 0.78rem;
+    font-family: var(--mono-font, ui-monospace, monospace);
+}
+
+/* Running total under the modal's target rows. Muted emphasis — this
+ * is advisory, final cost is the server-side quote. */
+.exchange-running-total {
+    color: var(--cudly-text-muted);
+    font-style: italic;
+    font-size: 0.9rem;
+}
+
+/* Info icon tooltip */
+/* Issue #909: Opportunities lookback selector toolbar. */
+.recommendations-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0.5rem 0;
+}
+
+.recommendations-toolbar:empty {
+    display: none;
+}
+
+.lookback-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--cudly-text-muted);
+}
+
+.info-icon {
+    display: inline-block;
+    cursor: help;
+    color: var(--cudly-text-muted);
+    font-size: 0.85rem;
+    position: relative;
+}
+
+.info-icon:hover {
+    color: var(--cudly-primary);
+}
+
+.info-icon .tooltip-text {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    z-index: 1000;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--cudly-text);
+    color: var(--cudly-surface);
+    padding: 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: normal;
+    width: 250px;
+    line-height: 1.4;
+    text-align: left;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    transition: opacity 0.2s, visibility 0.2s;
+    white-space: normal;
+}
+
+.info-icon .tooltip-text::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 6px;
+    border-style: solid;
+    border-color: var(--cudly-text) transparent transparent transparent;
+}
+
+.info-icon:hover .tooltip-text {
+    visibility: visible;
+    opacity: 1;
+}
+
+/* Role badge */
+.role-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    margin-left: 0.4rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.95);
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+}
+
+/* Role badges in user table */
+.badge-admin {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.badge-user {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
+}
+
+.badge-readonly {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--cudly-bg);
+    color: #999;
+}
+
+/* Generic status badges used by the Purchase History status column and the
+ * Accounts table status column. Base `.badge` sets the pill shape; the
+ * modifier classes set the colour pair. Kept alongside the existing role
+ * badges so any table can drop a `<span class="badge badge-xxx">` inline.
+ */
+.badge {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    letter-spacing: 0.01em;
+}
+
+.badge-success {
+    background: var(--cudly-success-bg);
+    color: #137333;
+}
+
+.badge-warning {
+    background: #fef7e0;
+    color: #8a6d0c;
+}
+
+.badge-danger {
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+}
+
+.badge-muted {
+    background: var(--cudly-border);
+    color: var(--cudly-text-muted);
+}
+
+.badge-info {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+/* Subline rendered under the Pending badge in the Purchase History Status
+ * column. Surfaces the approver's email address (the recipient of the
+ * approval email) so the user knows which inbox to check.
+ */
+.history-approver {
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    color: var(--cudly-text-muted);
+    line-height: 1.25;
+}
+
+.history-approver strong {
+    color: var(--cudly-text);
+    font-weight: 600;
+}
+
+/* Purchase detail status badges */
+.status-badge.completed {
+    background: var(--cudly-success-bg);
+    color: #137333;
+}
+
+.status-badge.pending {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.status-badge.failed {
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+}
+
+.status-badge.running {
+    background: #ffe0b2;
+    color: #e65100;
+}
+
+/* Copy button */
+.copy-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+.copy-btn:hover {
+    background: var(--cudly-border);
+}
+
+.copy-btn .copy-icon {
+    font-size: 1rem;
+}
+
+.copy-btn.copied {
+    color: #4caf50;
+}
+
+/* Input + inline copy button (e.g. auto-generated AWS External ID). The
+   button sits flush with the input's right edge so the pair reads as a
+   single control. */
+.input-with-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    width: 100%;
+}
+
+.input-with-copy input[type="text"] {
+    flex: 1;
+    background: var(--cudly-bg);
+    color: var(--cudly-text);
+}
+
+/* Inline JSON / code snippet (e.g. the auto-rendered AWS IAM trust
+   policy). Sits next to a copy button inside `.input-with-copy`. */
+.input-with-copy .code-block {
+    flex: 1;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    background: var(--cudly-bg);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--cudly-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 240px;
+    overflow: auto;
+}
+
+.trust-policy-section {
+    margin-top: 0.75rem;
+}
+
+/* Deep-link button to the AWS IAM console (issue #21). Sits below the
+   trust-policy snippet so the visual order matches the operator flow:
+   copy policy → open IAM → paste. */
+.trust-policy-section #account-aws-iam-console-link {
+    display: inline-block;
+    margin-top: 0.5rem;
+}
+
+/* CLI command display */
+.cli-command {
+    display: flex;
+    align-items: center;
+    background: #f8f9fa;
+    border: 1px solid var(--cudly-border);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    gap: 0.5rem;
+}
+
+.cli-command code {
+    flex: 1;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--cudly-text);
+    background: none;
+    padding: 0;
+}
+
+/* CLI alternative section */
+.cli-alternative {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--cudly-border);
+}
+
+.cli-alternative p {
+    color: var(--cudly-text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * chip-select component (issue #344 T1) — pill trigger that opens a popover
+ * listbox. Replaces native <select> for filter use-cases where we want a
+ * compact custom menu pattern. Used by topbar-filters (T2) to host the
+ * shared provider + account filters.
+ * ------------------------------------------------------------------------- */
+
+.chip-select-root {
+    position: relative;
+    display: inline-block;
+}
+
+.chip-select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-full);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.chip-select:hover {
+    border-color: var(--cudly-primary);
+}
+
+.chip-select:focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 3px var(--cudly-info-bg);
+}
+
+.chip-select[aria-expanded="true"] {
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
+}
+
+.chip-select-label {
+    color: var(--cudly-text-muted);
+}
+
+.chip-select-value {
+    font-weight: var(--cudly-fw-medium);
+}
+
+.chip-select-caret {
+    transition: transform 0.15s ease;
+}
+
+.chip-select[aria-expanded="true"] .chip-select-caret {
+    transform: rotate(180deg);
+}
+
+/* The popover menu. Positioned absolutely below (or above) the trigger.
+ * Z-index sits above the topbar's sticky position so the menu doesn't
+ * get clipped at the page-content boundary. */
+.chip-select-menu {
+    position: absolute;
+    top: calc(100% + var(--cudly-sp-1));
+    left: 0;
+    min-width: 200px;
+    max-width: 320px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-lg);
+    z-index: 60;
+    padding: var(--cudly-sp-1);
+}
+
+.chip-select-menu.chip-select-menu-up {
+    top: auto;
+    bottom: calc(100% + var(--cudly-sp-1));
+}
+
+.chip-select-search {
+    width: 100%;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-sm);
+    font-size: var(--cudly-fs-sm);
+    margin-bottom: var(--cudly-sp-1);
+    box-sizing: border-box;
+}
+
+.chip-select-search:focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 2px var(--cudly-info-bg);
+}
+
+.chip-select-options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.chip-select-option {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border-radius: var(--cudly-r-sm);
+    cursor: pointer;
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+    user-select: none;
+}
+
+.chip-select-option:hover,
+.chip-select-option.active {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.chip-select-option.current {
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.chip-select-option.current::after {
+    content: '✓';
+    float: right;
+    color: var(--cudly-primary);
+}
+
+.chip-select-empty {
+    padding: var(--cudly-sp-3);
+    text-align: center;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-style: italic;
+}

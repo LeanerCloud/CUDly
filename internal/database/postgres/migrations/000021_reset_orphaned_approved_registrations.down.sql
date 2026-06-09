@@ -1,0 +1,2 @@
+-- intentionally empty; forward-only cleanup (destroyed approval state
+-- cannot be restored deterministically).

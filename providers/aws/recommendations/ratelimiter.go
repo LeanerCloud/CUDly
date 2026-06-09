@@ -2,9 +2,28 @@ package recommendations
 
 import (
 	"context"
+	"errors"
 	"math"
+	"math/rand/v2"
+	"strings"
 	"time"
 )
+
+// throttleErrorCodes contains AWS API error codes that indicate throttling
+var throttleErrorCodes = map[string]struct{}{
+	"Throttling":                             {},
+	"ThrottlingException":                    {},
+	"ThrottledException":                     {},
+	"RequestThrottledException":              {},
+	"TooManyRequestsException":               {},
+	"ProvisionedThroughputExceededException": {},
+	"RequestLimitExceeded":                   {},
+	"BandwidthLimitExceeded":                 {},
+	"LimitExceededException":                 {},
+	"RequestThrottled":                       {},
+	"SlowDown":                               {},
+	"EC2ThrottledException":                  {},
+}
 
 // RateLimiter provides rate limiting with exponential backoff
 type RateLimiter struct {
@@ -54,12 +73,9 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 		delay = r.maxDelay
 	}
 
-	// Add jitter (up to 20% of delay)
-	jitter := time.Duration(float64(delay) * 0.2 * math.Sin(float64(time.Now().UnixNano())))
-	if jitter < 0 {
-		jitter = -jitter
-	}
-	delay += jitter
+	// Add jitter (up to 20% of delay). Math/rand is intentional: jitter only
+	// needs uniform distribution, not cryptographic randomness.
+	delay += computeJitter(delay, rand.Float64()) // #nosec G404
 
 	select {
 	case <-time.After(delay):
@@ -69,7 +85,15 @@ func (r *RateLimiter) Wait(ctx context.Context) error {
 	}
 }
 
-// ShouldRetry checks if we should retry based on error and retry count
+// computeJitter returns the jitter component to add to a backoff delay.
+// r is a uniform random value in [0, 1); jitter is up to 20% of delay.
+// Extracted as a pure function so it can be unit-tested without sleeping.
+func computeJitter(delay time.Duration, r float64) time.Duration {
+	return time.Duration(float64(delay) * 0.2 * r)
+}
+
+// ShouldRetry checks if we should retry based on error type and retry count.
+// Only throttling and transient errors are retried.
 func (r *RateLimiter) ShouldRetry(err error) bool {
 	if err == nil {
 		r.Reset()
@@ -81,10 +105,32 @@ func (r *RateLimiter) ShouldRetry(err error) bool {
 		return false
 	}
 
-	// Check for retryable errors (you can expand this based on AWS error types)
-	// For now, we'll retry on any error
-	r.retryCount++
-	return true
+	// Only retry on throttling or transient errors
+	if isThrottleError(err) {
+		r.retryCount++
+		return true
+	}
+
+	return false
+}
+
+// isThrottleError checks if an error is an AWS throttling error
+func isThrottleError(err error) bool {
+	// Check for AWS API errors that implement ErrorCode()
+	type errorCoder interface {
+		ErrorCode() string
+	}
+	var apiErr errorCoder
+	if errors.As(err, &apiErr) {
+		_, isThrottle := throttleErrorCodes[apiErr.ErrorCode()]
+		return isThrottle
+	}
+
+	// Fallback: check error message for common throttle indicators
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "Throttling") ||
+		strings.Contains(errMsg, "Rate exceeded") ||
+		strings.Contains(errMsg, "TooManyRequests")
 }
 
 // Reset resets the retry counter

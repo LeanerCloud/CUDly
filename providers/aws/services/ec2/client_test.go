@@ -51,7 +51,32 @@ func (m *MockEC2Client) DescribeInstanceTypeOfferings(ctx context.Context, param
 	return args.Get(0).(*ec2.DescribeInstanceTypeOfferingsOutput), args.Error(1)
 }
 
+func (m *MockEC2Client) GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.GetReservedInstancesExchangeQuoteOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.AcceptReservedInstancesExchangeQuoteOutput), args.Error(1)
+}
+
+func (m *MockEC2Client) CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ec2.CreateTagsOutput), args.Error(1)
+}
+
 func TestNewClient(t *testing.T) {
+	t.Parallel()
 	cfg := aws.Config{
 		Region: "us-east-1",
 	}
@@ -64,16 +89,19 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClient_GetServiceType(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "us-east-1"}
 	assert.Equal(t, common.ServiceCompute, client.GetServiceType())
 }
 
 func TestClient_GetRegion(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "eu-west-1"}
 	assert.Equal(t, "eu-west-1", client.GetRegion())
 }
 
 func TestClient_GetRecommendations(t *testing.T) {
+	t.Parallel()
 	client := &Client{region: "us-east-1"}
 	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
 	assert.NoError(t, err)
@@ -81,6 +109,7 @@ func TestClient_GetRecommendations(t *testing.T) {
 }
 
 func TestClient_GetExistingCommitments(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		setupMocks  func(*MockEC2Client)
@@ -179,6 +208,7 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		setupMocks    func(*MockEC2Client)
@@ -253,6 +283,7 @@ func TestClient_GetValidResourceTypes(t *testing.T) {
 }
 
 func TestClient_ValidateOffering(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -291,6 +322,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 }
 
 func TestClient_PurchaseCommitment(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -330,7 +362,11 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			ReservedInstancesId: aws.String("ri-12345678"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	// Post-purchase tagging call (EC2 RIs don't accept tags at purchase time).
+	mockEC2.On("CreateTags", mock.Anything, mock.Anything).
+		Return(&ec2.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -338,7 +374,58 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	mockEC2.AssertExpectations(t)
 }
 
+func TestClient_PurchaseCommitment_StampsPurchaseAutomationTag(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "t3.micro",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "us-east-1",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{{
+				ReservedInstancesOfferingId: aws.String("off-tag"),
+				InstanceType:                types.InstanceTypeT3Micro,
+				Duration:                    aws.Int64(31536000),
+				OfferingType:                types.OfferingTypeValuesAllUpfront,
+				ProductDescription:          types.RIProductDescriptionLinuxUnix,
+				InstanceTenancy:             types.TenancyDefault,
+			}},
+		}, nil)
+
+	mockEC2.On("PurchaseReservedInstancesOffering", mock.Anything, mock.Anything).
+		Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+			ReservedInstancesId: aws.String("ri-tag-test"),
+		}, nil)
+
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		if len(in.Resources) != 1 || in.Resources[0] != "ri-tag-test" {
+			return false
+		}
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.PurchaseTagKey && aws.ToString(tag.Value) == common.PurchaseSourceWeb {
+				return true
+			}
+		}
+		return false
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	mockEC2.AssertExpectations(t)
+}
+
 func TestClient_GetOfferingDetails(t *testing.T) {
+	t.Parallel()
 	mockEC2 := &MockEC2Client{}
 	client := &Client{
 		client: mockEC2,
@@ -384,29 +471,8 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 	mockEC2.AssertExpectations(t)
 }
 
-func TestClient_GetOfferingClass(t *testing.T) {
-	client := &Client{}
-
-	tests := []struct {
-		name          string
-		paymentOption string
-		expected      string
-	}{
-		{"All upfront returns convertible", "all-upfront", "convertible"},
-		{"Partial upfront returns standard", "partial-upfront", "standard"},
-		{"No upfront returns standard", "no-upfront", "standard"},
-		{"Default (unknown) returns standard", "unknown", "standard"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := client.getOfferingClass(tt.paymentOption)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestClient_GetDurationValue(t *testing.T) {
+	t.Parallel()
 	client := &Client{}
 
 	tests := []struct {
@@ -426,4 +492,331 @@ func TestClient_GetDurationValue(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestCanonicalizeEC2Tenancy verifies that legacy lowercase/hyphenated tenancy
+// values written by pre-fix/598 parser versions are mapped to the canonical EC2
+// API enum values so that already-persisted recommendations still purchase correctly.
+func TestCanonicalizeEC2Tenancy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Legacy values from the old parser (CE "shared" passed through as-is)
+		{"legacy shared -> default", "shared", "default"},
+		// Already-canonical values must pass through unchanged
+		{"canonical default -> default", "default", "default"},
+		{"canonical dedicated -> dedicated", "dedicated", "dedicated"},
+		// Mixed-case inputs should also normalise
+		{"uppercase SHARED -> default", "SHARED", "default"},
+		{"uppercase DEFAULT -> default", "DEFAULT", "default"},
+		{"uppercase DEDICATED -> dedicated", "DEDICATED", "dedicated"},
+		// Unknown values are returned unchanged (defensive)
+		{"unknown host passthrough", "host", "host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := canonicalizeEC2Tenancy(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCanonicalizeEC2Scope verifies that legacy lowercase/hyphenated scope
+// values written by pre-fix/598 parser versions are mapped to the canonical EC2
+// API enum values so that already-persisted recommendations still purchase correctly.
+func TestCanonicalizeEC2Scope(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Legacy values from the old parser
+		{"legacy region -> Region", "region", "Region"},
+		{"legacy availability-zone -> Availability Zone", "availability-zone", "Availability Zone"},
+		// Already-canonical values must pass through unchanged
+		{"canonical Region -> Region", "Region", "Region"},
+		{"canonical Availability Zone -> Availability Zone", "Availability Zone", "Availability Zone"},
+		// Space-separated variant (defensive)
+		{"lowercase availability zone -> Availability Zone", "availability zone", "Availability Zone"},
+		// Unknown values are returned unchanged (defensive)
+		{"unknown passthrough", "unknown-scope", "unknown-scope"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := canonicalizeEC2Scope(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	for i := range maxOfferingPages {
+		mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+			Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+				ReservedInstancesOfferings: []types.ReservedInstancesOffering{},
+				NextToken:                  aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockEC2.AssertNumberOfCalls(t, "DescribeReservedInstancesOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID rejects an
+// offering whose OfferingType does not match the requested payment option
+// is soft-skipped (logged, not returned). With the typed OfferingType field
+// on the request this should never fire in production; the test pins the
+// defense-in-depth behaviour for the rare API anomaly. After skipping the
+// only mismatched offering on the only page, findOfferingID returns the
+// "no offerings found" diagnostic (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("wrong-offering"),
+					InstanceType:                types.InstanceTypeT4gNano,
+					OfferingType:                types.OfferingTypeValuesAllUpfront, // mismatch
+				},
+			},
+		}, nil).Once()
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "no offerings found")
+		assert.Contains(t, err.Error(), "t4g.nano")
+	}
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID on the first page when a matching offering is present (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	t.Cleanup(func() { mockEC2.AssertExpectations(t) })
+	client := &Client{client: mockEC2, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "t4g.nano",
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			Platform: "Linux/UNIX",
+			Tenancy:  "default",
+			Scope:    "Region",
+		},
+	}
+
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{
+				{
+					ReservedInstancesOfferingId: aws.String("offering-ok"),
+					InstanceType:                types.InstanceTypeT4gNano,
+					OfferingType:                types.OfferingTypeValuesNoUpfront,
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec, "")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}
+
+// TestClient_tagReservedInstance_NameTagPresent asserts that a purchase on the
+// no-token CLI path (issue #687) stamps a self-describing Name tag on the EC2
+// RI. EC2 PurchaseReservedInstancesOfferingInput has no customer-supplied name
+// field, so the Name tag is the only way to identify the reservation in the AWS
+// console without cross-referencing CUDly's purchase audit log.
+func TestClient_tagReservedInstance_NameTagPresent(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "us-west-2"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "m5.xlarge",
+		Region:        "us-west-2",
+		Count:         3,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	var capturedTags []types.Tag
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		capturedTags = in.Tags
+		return len(in.Resources) == 1 && in.Resources[0] == "ri-name-test"
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	err := client.tagReservedInstance(context.Background(), "ri-name-test", rec, "", "")
+	assert.NoError(t, err)
+
+	tagMap := make(map[string]string, len(capturedTags))
+	for _, tag := range capturedTags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	name, ok := tagMap["Name"]
+	assert.True(t, ok, "Name tag must be present in CreateTags call")
+	assert.True(t, len(name) > 0, "Name tag must be non-empty")
+	assert.LessOrEqual(t, len(name), 60, "Name must fit the 60-char AWS reservation-name cap")
+	// Key segments that make the RI self-describing without CUDly:
+	assert.Contains(t, name, "ec2", "Name must start with the service code")
+	assert.Contains(t, name, "us-west-2", "Name must embed the region")
+	assert.Contains(t, name, "m5-xlarge", "Name must embed the SKU (dots->hyphens)")
+	assert.Contains(t, name, "3x", "Name must embed the count")
+	assert.Contains(t, name, "1yr", "Name must embed the term")
+
+	mockEC2.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_NameTagInCreateTagsRequest asserts that an
+// end-to-end purchase on the no-token CLI path (issue #687) produces a
+// CreateTags call that includes a self-describing Name tag.
+func TestClient_PurchaseCommitment_NameTagInCreateTagsRequest(t *testing.T) {
+	t.Parallel()
+	mockEC2 := &MockEC2Client{}
+	client := &Client{client: mockEC2, region: "ap-southeast-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceCompute,
+		ResourceType:  "r6g.large",
+		Region:        "ap-southeast-1",
+		Count:         2,
+		PaymentOption: "no-upfront",
+		Term:          "3yr",
+		Details:       &common.ComputeDetails{Platform: "Linux/UNIX", Tenancy: "default", Scope: "Region"},
+	}
+
+	// No idempotency token -> skip DescribeReservedInstances guard
+	mockEC2.On("DescribeReservedInstancesOfferings", mock.Anything, mock.Anything).
+		Return(&ec2.DescribeReservedInstancesOfferingsOutput{
+			ReservedInstancesOfferings: []types.ReservedInstancesOffering{{
+				ReservedInstancesOfferingId: aws.String("off-name-e2e"),
+				InstanceType:                types.InstanceTypeR6gLarge,
+				Duration:                    aws.Int64(94608000),
+				OfferingType:                types.OfferingTypeValuesNoUpfront,
+				ProductDescription:          types.RIProductDescriptionLinuxUnix,
+				InstanceTenancy:             types.TenancyDefault,
+			}},
+		}, nil)
+
+	mockEC2.On("PurchaseReservedInstancesOffering", mock.Anything, mock.Anything).
+		Return(&ec2.PurchaseReservedInstancesOfferingOutput{
+			ReservedInstancesId: aws.String("ri-name-e2e"),
+		}, nil)
+
+	var capturedName string
+	mockEC2.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *ec2.CreateTagsInput) bool {
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == "Name" {
+				capturedName = aws.ToString(tag.Value)
+				return true
+			}
+		}
+		return false
+	})).Return(&ec2.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+
+	assert.True(t, len(capturedName) > 0, "Name tag must be set on the CreateTags call")
+	assert.Contains(t, capturedName, "ec2", "service code must appear in Name: %q", capturedName)
+	assert.Contains(t, capturedName, "ap-southeast-1", "region must appear in Name: %q", capturedName)
+
+	mockEC2.AssertExpectations(t)
+}
+
+// TestBuildEC2OfferingQuery_EmptyPlatformErrors is the M2/M3 regression test:
+// buildEC2OfferingQuery must return an error when Platform is empty rather than
+// silently substituting "Linux/UNIX". On the purchase path the CE parser always
+// populates Platform from the recommendation payload; an empty value signals a
+// malformed rec, not a value to be fabricated.
+func TestBuildEC2OfferingQuery_EmptyPlatformErrors(t *testing.T) {
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			InstanceType: "m5.large",
+			Platform:     "", // intentionally empty
+			Tenancy:      "default",
+			Scope:        "Region",
+		},
+	}
+	details := rec.Details.(*common.ComputeDetails)
+
+	_, err := buildEC2OfferingQuery(rec, details, OneYearSeconds)
+	assert.Error(t, err, "buildEC2OfferingQuery must error when Platform is empty (M2/M3 fix)")
+	assert.Contains(t, err.Error(), "Platform")
+}
+
+// TestBuildEC2OfferingQuery_ValidPlatform asserts the happy path still works.
+func TestBuildEC2OfferingQuery_ValidPlatform(t *testing.T) {
+	rec := common.Recommendation{
+		ResourceType:  "m5.large",
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Details: &common.ComputeDetails{
+			InstanceType: "m5.large",
+			Platform:     "Linux/UNIX",
+			Tenancy:      "default",
+			Scope:        "Region",
+		},
+	}
+	details := rec.Details.(*common.ComputeDetails)
+
+	q, err := buildEC2OfferingQuery(rec, details, OneYearSeconds)
+	assert.NoError(t, err)
+	assert.Equal(t, types.RIProductDescription("Linux/UNIX"), q.productDesc)
+	assert.Equal(t, types.Tenancy("default"), q.tenancy)
 }

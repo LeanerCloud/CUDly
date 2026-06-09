@@ -4,6 +4,7 @@ package cloudstorage
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
+
+// maxRecsPages caps GCP Recommender API iteration to avoid looping forever on a
+// stalled or unexpectedly large result set.
+const maxRecsPages = 20
 
 // StorageService interface for storage operations (enables mocking)
 type StorageService interface {
@@ -179,16 +184,31 @@ func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params comm
 	}
 
 	it := recClient.ListRecommendations(ctx, req)
-	for {
+	for pageIdx := 0; ; pageIdx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+		}
+		if pageIdx >= maxRecsPages {
+			return nil, fmt.Errorf("cloudstorage: GetRecommendations iteration cap (%d items) reached", maxRecsPages)
+		}
 		rec, err := it.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
-			break
+			// Iterator errors must propagate so callers don't silently act on a
+			// partial recommendation list -- see the computeengine client for the
+			// full rationale (issue #1022 H2 fix).
+			return nil, fmt.Errorf("cloudstorage: iterate recommendations: %w", err)
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec)
+		// Skip non-ACTIVE recommendations (CLAIMED/SUCCEEDED/FAILED/DISMISSED).
+		// See computeengine.GetRecommendations for the full rationale.
+		if rec.GetStateInfo().GetState() != recommenderpb.RecommendationStateInfo_ACTIVE {
+			continue
+		}
+
+		converted := c.convertGCPRecommendation(ctx, rec, params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -197,97 +217,31 @@ func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params comm
 	return recommendations, nil
 }
 
-// GetExistingCommitments retrieves existing Cloud Storage commitments
-func (c *CloudStorageClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
-	commitments := make([]common.Commitment, 0)
-
-	// Use injected service if available (for testing)
-	var svc StorageService
-	if c.storageService != nil {
-		svc = c.storageService
-	} else {
-		client, err := storage.NewClient(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create storage client: %w", err)
-		}
-		svc = &realStorageService{client: client}
-	}
-	defer svc.Close()
-
-	// List all buckets in the project
-	it := svc.Buckets(ctx, c.projectID)
-	for {
-		bucket, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to list buckets: %w", err)
-		}
-
-		// Check if bucket has committed storage
-		if bucket.Location == c.region {
-			commitment := common.Commitment{
-				Provider:       common.ProviderGCP,
-				Account:        c.projectID,
-				CommitmentType: common.CommitmentReservedCapacity,
-				Service:        common.ServiceStorage,
-				Region:         c.region,
-				CommitmentID:   bucket.Name,
-				State:          "active",
-				ResourceType:   bucket.StorageClass,
-			}
-
-			commitments = append(commitments, commitment)
-		}
-	}
-
-	return commitments, nil
+// GetExistingCommitments returns an empty slice for Cloud Storage. GCP Cloud
+// Storage has no commitment API: there is no committed-use discount purchase
+// for GCS, and enumerating regional buckets does not represent a commitment --
+// it caused every bucket in a region to appear as a "commitment" in the UI
+// (10-L2). Return empty until a proper commitment-detection path is available.
+func (c *CloudStorageClient) GetExistingCommitments(_ context.Context) ([]common.Commitment, error) {
+	return nil, nil
 }
 
-// PurchaseCommitment purchases a Cloud Storage commitment
-func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation) (common.PurchaseResult, error) {
-	result := common.PurchaseResult{
+// PurchaseCommitment is intentionally a no-op for Cloud Storage: GCP has no CUD
+// or commitment purchase API for GCS at all. The previous implementation created
+// a brand-new empty bucket, which is not a commitment and incurs ongoing cost, so
+// a "purchase" silently provisioned billable infrastructure. Cloud Storage
+// recommendations are therefore advisory only; this returns a clear not-supported
+// error and never calls any resource-creation API (issue #640).
+func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+	return common.PurchaseResult{
 		Recommendation: rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
-	}
-
-	// Use injected service if available (for testing)
-	var svc StorageService
-	if c.storageService != nil {
-		svc = c.storageService
-	} else {
-		client, err := storage.NewClient(ctx, c.clientOpts...)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to create storage client: %w", err)
-			return result, result.Error
-		}
-		svc = &realStorageService{client: client}
-	}
-	defer svc.Close()
-
-	// Create a new Cloud Storage bucket with committed storage class
-	bucketName := fmt.Sprintf("storage-committed-%d", time.Now().Unix())
-
-	bucket := svc.Bucket(bucketName)
-	attrs := &storage.BucketAttrs{
-		Location:     c.region,
-		StorageClass: rec.ResourceType,
-	}
-
-	err := bucket.Create(ctx, c.projectID, attrs)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create storage bucket with commitment: %w", err)
-		return result, result.Error
-	}
-
-	result.Success = true
-	result.CommitmentID = bucketName
-	result.Cost = rec.CommitmentCost
-
-	return result, nil
+		Error: fmt.Errorf("%w: GCP Cloud Storage offers no committed-use discount or "+
+			"commitment purchase API; this recommendation is advisory only",
+			common.ErrCommitmentPurchaseNotSupported),
+	}, fmt.Errorf("%w: Cloud Storage", common.ErrCommitmentPurchaseNotSupported)
 }
 
 // ValidateOffering validates that a storage class exists
@@ -367,82 +321,110 @@ type StoragePricing struct {
 	SavingsPercentage float64
 }
 
-// getStoragePricing gets pricing from GCP Cloud Billing Catalog API
+// getStoragePricing gets pricing from GCP Cloud Billing Catalog API.
+// It returns an error when commitment pricing is absent from the catalog rather
+// than fabricating a price from a hardcoded discount factor (issue #1020).
 func (c *CloudStorageClient) getStoragePricing(ctx context.Context, storageClass, region string, termYears int) (*StoragePricing, error) {
-	// Use injected service if available (for testing)
-	var svc BillingService
-	if c.billingService != nil {
-		svc = c.billingService
-	} else {
-		service, err := cloudbilling.NewService(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create billing service: %w", err)
-		}
-		svc = &realBillingService{service: service}
+	svc, err := c.getOrCreateBillingService(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Cloud Storage service ID
-	serviceID := "services/95FF-2EF5-5EA1"
-	skus, err := svc.ListSKUs(serviceID)
+	skus, err := svc.ListSKUs("services/95FF-2EF5-5EA1")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list SKUs: %w", err)
 	}
 
-	var onDemandPrice, commitmentPrice float64
-	currency := "USD"
-
-	// Search for pricing for the specific storage class and region
-	for _, sku := range skus.Skus {
-		if !skuMatchesStorageClass(sku, storageClass, region) {
-			continue
-		}
-
-		if len(sku.PricingInfo) > 0 {
-			pricingInfo := sku.PricingInfo[0]
-			if pricingInfo.PricingExpression != nil && len(pricingInfo.PricingExpression.TieredRates) > 0 {
-				rate := pricingInfo.PricingExpression.TieredRates[0]
-				if rate.UnitPrice != nil {
-					price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
-
-					if rate.UnitPrice.CurrencyCode != "" {
-						currency = rate.UnitPrice.CurrencyCode
-					}
-
-					// Check if this is a commitment or on-demand price
-					if strings.Contains(strings.ToLower(sku.Description), "commitment") {
-						commitmentPrice = price
-					} else {
-						onDemandPrice = price
-					}
-				}
-			}
-		}
-	}
-
+	onDemandPrice, commitmentPrice, currency := extractStoragePricingFromSKUs(skus.Skus, storageClass, region)
 	if onDemandPrice == 0 {
 		return nil, fmt.Errorf("no pricing found for Cloud Storage class %s", storageClass)
 	}
-
-	hoursInTerm := 8760.0 * float64(termYears)
-	// GCP Cloud Storage commitments typically offer 20-30% savings
 	if commitmentPrice == 0 {
-		discount := 0.75 // 25% savings
-		if termYears == 3 {
-			discount = 0.70 // 30% savings
-		}
-		onDemandTotal := onDemandPrice * hoursInTerm
-		commitmentPrice = onDemandTotal * discount
+		return nil, fmt.Errorf("no commitment pricing found for Cloud Storage class %s in region %s: catalog has no CUD SKU; cannot compute savings percentage", storageClass, region)
 	}
 
-	savingsPercentage := ((onDemandPrice*hoursInTerm - commitmentPrice) / (onDemandPrice * hoursInTerm)) * 100
+	hoursInTerm := 8760.0 * float64(termYears)
+	// Scale the per-unit commitment price to a term total so it is on the
+	// same basis as onDemandPrice * hoursInTerm. Without this, the savings
+	// percentage would be nearly 100% (per-unit price vs term total).
+	commitmentPriceTerm := commitmentPrice * hoursInTerm
+	savingsPercentage := calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPriceTerm)
 
 	return &StoragePricing{
-		HourlyRate:        commitmentPrice / hoursInTerm,
-		CommitmentPrice:   commitmentPrice,
+		HourlyRate:        commitmentPrice,
+		CommitmentPrice:   commitmentPriceTerm,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
 		Currency:          currency,
 		SavingsPercentage: savingsPercentage,
 	}, nil
+}
+
+// getOrCreateBillingService returns the billing service, creating it if needed
+func (c *CloudStorageClient) getOrCreateBillingService(ctx context.Context) (BillingService, error) {
+	if c.billingService != nil {
+		return c.billingService, nil
+	}
+
+	service, err := cloudbilling.NewService(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing service: %w", err)
+	}
+
+	return &realBillingService{service: service}, nil
+}
+
+// extractStoragePricingFromSKUs extracts on-demand and commitment pricing from SKU list
+func extractStoragePricingFromSKUs(skus []*cloudbilling.Sku, storageClass, region string) (onDemand, commitment float64, currency string) {
+	currency = "USD"
+
+	for _, sku := range skus {
+		if !skuMatchesStorageClass(sku, storageClass, region) {
+			continue
+		}
+
+		price, curr := extractStoragePriceFromSKU(sku)
+		if price == 0 {
+			continue
+		}
+
+		if curr != "" {
+			currency = curr
+		}
+
+		if strings.Contains(strings.ToLower(sku.Description), "commitment") {
+			commitment = price
+		} else {
+			onDemand = price
+		}
+	}
+
+	return onDemand, commitment, currency
+}
+
+// extractStoragePriceFromSKU extracts the unit price from a SKU
+func extractStoragePriceFromSKU(sku *cloudbilling.Sku) (float64, string) {
+	if len(sku.PricingInfo) == 0 {
+		return 0, ""
+	}
+
+	pricingInfo := sku.PricingInfo[0]
+	if pricingInfo.PricingExpression == nil || len(pricingInfo.PricingExpression.TieredRates) == 0 {
+		return 0, ""
+	}
+
+	rate := pricingInfo.PricingExpression.TieredRates[0]
+	if rate.UnitPrice == nil {
+		return 0, ""
+	}
+
+	price := float64(rate.UnitPrice.Units) + float64(rate.UnitPrice.Nanos)/1e9
+	return price, rate.UnitPrice.CurrencyCode
+}
+
+// calculateStorageSavingsPercentage calculates the savings percentage
+func calculateStorageSavingsPercentage(onDemandPrice, hoursInTerm, commitmentPrice float64) float64 {
+	onDemandTotal := onDemandPrice * hoursInTerm
+	return ((onDemandTotal - commitmentPrice) / onDemandTotal) * 100
 }
 
 // skuMatchesStorageClass checks if a SKU matches the storage class and region
@@ -465,8 +447,76 @@ func skuMatchesStorageClass(sku *cloudbilling.Sku, storageClass, region string) 
 	return true
 }
 
-// convertGCPRecommendation converts a GCP Recommender recommendation to common format
-func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation) *common.Recommendation {
+// extractResourceTypeFromContent extracts the last path segment of the first
+// non-empty Operation.Resource across all operation groups. Used by all four
+// GCP service converters to set rec.ResourceType from Recommender payloads.
+func extractResourceTypeFromContent(content *recommenderpb.RecommendationContent) string {
+	if content == nil || content.OperationGroups == nil {
+		return ""
+	}
+	for _, opGroup := range content.OperationGroups {
+		for _, op := range opGroup.Operations {
+			if op.Resource == "" {
+				continue
+			}
+			parts := strings.Split(op.Resource, "/")
+			if len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// extractEstimatedSavings returns the negative of the PrimaryImpact cost
+// projection (GCP encodes savings as a negative cost delta).
+func extractEstimatedSavings(gcpRec *recommenderpb.Recommendation) float64 {
+	if gcpRec.PrimaryImpact == nil {
+		return 0
+	}
+	costProj := gcpRec.PrimaryImpact.GetCostProjection()
+	if costProj == nil || costProj.Cost == nil {
+		return 0
+	}
+	cost := costProj.Cost
+	return -(float64(cost.Units) + float64(cost.Nanos)/1e9)
+}
+
+// fillStoragePricing calls getStoragePricing and, on success, writes CommitmentCost,
+// OnDemandCost, SavingsPercentage, and BreakEvenMonths into rec. Pricing
+// failures are logged and do not discard the recommendation.
+func (c *CloudStorageClient) fillStoragePricing(ctx context.Context, rec *common.Recommendation, termYears int) {
+	pricing, err := c.getStoragePricing(ctx, rec.ResourceType, c.region, termYears)
+	if err != nil {
+		log.Printf("cloudstorage: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
+		return
+	}
+	rec.CommitmentCost = pricing.CommitmentPrice
+	rec.OnDemandCost = pricing.OnDemandPrice
+	rec.SavingsPercentage = pricing.SavingsPercentage
+	if pricing.OnDemandPrice > 0 && pricing.SavingsPercentage > 0 {
+		monthlySavings := pricing.OnDemandPrice * pricing.SavingsPercentage / 100.0 / float64(termYears*12)
+		if monthlySavings > 0 {
+			rec.BreakEvenMonths = pricing.CommitmentPrice / monthlySavings
+		}
+	}
+}
+
+// convertGCPRecommendation converts a GCP Recommender recommendation to common format.
+// It also calls getStoragePricing to fill CommitmentCost/OnDemandCost/SavingsPercentage/
+// BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
+// (issue #1022 C2). Pricing failures are logged but do not discard the recommendation.
+func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
+	paymentOption := params.PaymentOption
+	if paymentOption == "" {
+		paymentOption = "monthly"
+	}
+
+	term := params.Term
+	if term == "" {
+		term = "1yr"
+	}
+
 	rec := &common.Recommendation{
 		Provider:       common.ProviderGCP,
 		Service:        common.ServiceStorage,
@@ -474,34 +524,21 @@ func (c *CloudStorageClient) convertGCPRecommendation(ctx context.Context, gcpRe
 		Region:         c.region,
 		CommitmentType: common.CommitmentReservedCapacity,
 		Timestamp:      time.Now(),
-		Term:           "1yr",
-		PaymentOption:  "monthly",
+		Term:           term,
+		PaymentOption:  paymentOption,
 	}
 
-	// Extract resource type from recommendation content
-	if gcpRec.Content != nil {
-		if gcpRec.Content.OperationGroups != nil {
-			for _, opGroup := range gcpRec.Content.OperationGroups {
-				for _, op := range opGroup.Operations {
-					if op.Resource != "" {
-						parts := strings.Split(op.Resource, "/")
-						if len(parts) > 0 {
-							rec.ResourceType = parts[len(parts)-1]
-						}
-					}
-				}
-			}
-		}
-	}
+	rec.ResourceType = extractResourceTypeFromContent(gcpRec.Content)
+	rec.EstimatedSavings = extractEstimatedSavings(gcpRec)
 
-	// Extract cost impact
-	if gcpRec.PrimaryImpact != nil {
-		// Use GetCostProjection() method to access the cost projection
-		if costProj := gcpRec.PrimaryImpact.GetCostProjection(); costProj != nil && costProj.Cost != nil {
-			cost := costProj.Cost
-			savings := -(float64(cost.Units) + float64(cost.Nanos)/1e9)
-			rec.EstimatedSavings = savings
+	// Thread pricing into the converter so the scorer can rank/filter GCP recs
+	// correctly (issue #1022 C2).
+	if rec.ResourceType != "" {
+		termYears := 1
+		if rec.Term == "3yr" || rec.Term == "3" {
+			termYears = 3
 		}
+		c.fillStoragePricing(ctx, rec, termYears)
 	}
 
 	return rec

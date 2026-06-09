@@ -1,0 +1,40 @@
+# AWS CI/CD Permissions - example tfvars
+# Copy to terraform.tfvars and fill in your values.
+#
+# Prerequisites: AWS CLI configured with credentials that have IAM write access.
+#
+# ─── aws_region ────────────────────────────────────────────────────────────────
+# Must match the region of the Terraform state S3 bucket.
+# Fetch your current default region:
+#   aws configure get region
+#
+aws_region = "us-east-1"
+
+# ─── github_repo ───────────────────────────────────────────────────────────────
+# GitHub repository (owner/name) whose Actions workflows may assume the deploy
+# role via OIDC (keyless — no access keys needed).
+#
+# Creates an IAM OIDC identity provider for token.actions.githubusercontent.com
+# and updates the role trust policy to allow sts:AssumeRoleWithWebIdentity from
+# the specified repo.
+#
+# Set to "" to skip OIDC provider creation.
+#
+github_repo = "LeanerCloud/CUDly"
+
+# ─── trust_principal ───────────────────────────────────────────────────────────
+# (Optional) IAM principal in the same account allowed to assume the deploy
+# role via sts:AssumeRole — useful for local developer deployments.
+#
+# Format: "user/<username>" or "role/<rolename>"
+#
+# Find your IAM username:
+#   aws iam get-user --query 'User.UserName' --output text
+#
+# Find your current caller identity:
+#   aws sts get-caller-identity --query 'Arn' --output text
+#   # Extract the "user/<name>" or "assumed-role/<name>/..." suffix
+#
+# Leave empty (or omit) if GitHub Actions OIDC is the only deploy path.
+#
+# trust_principal = "user/alice"

@@ -33,11 +33,42 @@ func TestNewCacheClient(t *testing.T) {
 	assert.Equal(t, "westus2", client.GetRegion())
 }
 
+func TestNewManagedRedisClient(t *testing.T) {
+	client := NewManagedRedisClient(nil, "test-subscription", "eastus")
+
+	require.NotNil(t, client)
+	assert.Equal(t, common.ServiceMemoryDB, client.GetServiceType())
+	assert.Equal(t, "eastus", client.GetRegion())
+}
+
+func TestNewSearchClient(t *testing.T) {
+	client := NewSearchClient(nil, "test-subscription", "eastus")
+
+	require.NotNil(t, client)
+	assert.Equal(t, common.ServiceSearch, client.GetServiceType())
+	assert.Equal(t, "eastus", client.GetRegion())
+}
+
 func TestNewRecommendationsClient(t *testing.T) {
-	client := NewRecommendationsClient(nil, "test-subscription")
+	client, err := NewRecommendationsClient(nil, "test-subscription")
+	require.NoError(t, err)
 
 	require.NotNil(t, client)
 	adapter, ok := client.(*RecommendationsClientAdapter)
 	require.True(t, ok)
 	assert.Equal(t, "test-subscription", adapter.subscriptionID)
+}
+
+func TestNewRecommendationsClient_RejectsEmptySubscriptionID(t *testing.T) {
+	client, err := NewRecommendationsClient(nil, "")
+	require.Error(t, err)
+	assert.Nil(t, client, "constructor must not return a partially-initialised adapter on invariant failure")
+	assert.Contains(t, err.Error(), "subscriptionID is required")
+}
+
+func TestNewRecommendationsClientAdapter_RejectsEmptySubscriptionID(t *testing.T) {
+	adapter, err := NewRecommendationsClientAdapter(nil, "")
+	require.Error(t, err)
+	assert.Nil(t, adapter)
+	assert.Contains(t, err.Error(), "subscriptionID is required")
 }

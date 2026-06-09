@@ -1,0 +1,109 @@
+# GCP Development Environment Variables
+# Copy to dev.tfvars and customize with your values
+
+# ==============================================
+# Project Settings
+# ==============================================
+
+project_name = "cudly"
+environment  = "dev"
+
+# ==============================================
+# GCP Configuration
+# ==============================================
+
+project_id = "your-gcp-project-id"  # REQUIRED
+region     = "us-central1"
+
+# ==============================================
+# Compute Platform
+# ==============================================
+
+# Options: "cloud-run" (serverless) or "gke" (kubernetes)
+compute_platform = "cloud-run"
+
+# Cloud Run settings
+cloud_run_cpu                   = "1"
+cloud_run_memory                = "512Mi"
+cloud_run_min_instances         = 0
+cloud_run_max_instances         = 10
+cloud_run_request_timeout = 300
+# Dev runs without the external HTTPS LB (`enable_cdn = false` below), so
+# the *.run.app URL must accept direct traffic — override the secure default.
+# (allow_unauthenticated is no longer an operator-facing tfvar — it is derived
+# from enable_cdn in compute.tf; when enable_cdn = false it stays true so
+# *.run.app browser hits go through.)
+cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
+
+# GKE settings (when compute_platform = "gke")
+# gke_node_count        = 1
+# gke_node_machine_type = "e2-standard-2"
+
+# ==============================================
+# Database (Cloud SQL PostgreSQL)
+# ==============================================
+
+database_name                   = "cudly"
+database_username               = "cudly"
+database_version                = "POSTGRES_16"
+database_tier                   = "db-f1-micro"  # Smallest tier for dev
+database_disk_size              = 10
+database_disk_autoresize        = true
+database_backup_enabled         = true
+database_point_in_time_recovery = false
+database_backup_retention_count = 7
+database_query_insights         = false
+database_deletion_protection    = false
+database_high_availability      = false
+
+# ==============================================
+# Networking
+# ==============================================
+
+subnet_cidr           = "10.0.0.0/24"
+connector_subnet_cidr = "10.8.0.0/28"
+enable_nat_logging    = false
+
+# ==============================================
+# Scheduled Tasks (Cloud Scheduler)
+# ==============================================
+#
+# Cloud Scheduler signs OIDC ID tokens with `audience` and `sub` set
+# from the per-job service account. The CUDly app validates these
+# tokens via SCHEDULED_TASK_AUTH_MODE=oidc + SCHEDULED_TASK_OIDC_*
+# env vars — those are wired automatically by the cloud-run / gke
+# modules and do not need to be set here.
+
+enable_scheduled_tasks  = true
+recommendation_schedule = "0 2 * * *"  # Cron: Daily at 2 AM
+
+# ==============================================
+# Database Migration
+# ==============================================
+
+auto_migrate = true
+
+# ==============================================
+# Frontend (Load Balancer)
+# ==============================================
+
+enable_cdn         = false
+enable_cloud_armor = false
+
+# ==============================================
+# Docker Build
+# ==============================================
+
+enable_docker_build = true
+# image_uri = "us-central1-docker.pkg.dev/project-id/cudly/cudly:latest"
+
+# ==============================================
+# Admin
+# ==============================================
+
+admin_email = "admin@example.com"
+# Leave empty or omit to auto-generate a random password stored in Secret Manager.
+# To retrieve the generated password:
+#   gcloud secrets versions access latest \
+#     --secret=<service-name>-admin-password --project=<project-id>
+# admin_password = "YourSecurePassword123!"

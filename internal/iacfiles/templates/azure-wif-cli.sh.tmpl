@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Create CUDly Azure App Registration + federated identity credential via az cli.
+# Target Azure subscription: {{.AccountName}} ({{.SubscriptionID}})
+#
+# Usage:
+#   bash {{.AccountSlug}}-azure-wif-cli.sh
+#
+# Requirements: az cli logged in to the target subscription.
+#
+# This script configures true Azure Workload Identity Federation —
+# no certificate, no private key, no client secret is created or stored.
+# CUDly's OIDC issuer (served under {{.CUDlyAPIURL}}/oidc) signs a
+# short-lived JWT on each Azure API call and Azure AD verifies it
+# against the federated credential added here.
+set -euo pipefail
+
+APP_NAME="${APP_NAME:-CUDly-{{.AccountSlug}}}"
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-{{.SubscriptionID}}}"
+
+# CUDly OIDC issuer URL. Must match exactly what the CUDly deployment
+# publishes — the base URL + /oidc. Azure AD appends
+# /.well-known/openid-configuration when resolving the discovery doc,
+# so do NOT include the well-known suffix here. Trailing slashes and
+# http/https matter for Azure AD validation (AADSTS700213 if mismatched).
+CUDLY_ISSUER_URL="${CUDLY_ISSUER_URL:-{{.CUDlyAPIURL}}/oidc}"
+CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
+CUDLY_FEDERATED_AUDIENCE="${CUDLY_FEDERATED_AUDIENCE:-api://AzureADTokenExchange}"
+
+: "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the OIDC issuer URL of your CUDly deployment (base URL + /oidc)}"
+
+if [[ -n "${SUBSCRIPTION_ID}" && "${SUBSCRIPTION_ID}" != "<SUBSCRIPTION_ID>" ]]; then
+  az account set --subscription "${SUBSCRIPTION_ID}"
+fi
+SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+TENANT_ID=$(az account show --query tenantId --output tsv)
+
+echo "Creating App Registration ${APP_NAME}..."
+APP_ID=$(az ad app create --display-name "${APP_NAME}" --sign-in-audience AzureADMyOrg --query appId --output tsv)
+
+echo "Creating service principal..."
+SP_OBJECT_ID=$(az ad sp create --id "${APP_ID}" --query id --output tsv)
+
+echo "Adding federated identity credential bound to CUDly OIDC issuer..."
+# Idempotent: if the same name exists (re-run of the script), az throws a
+# conflict error — catch and continue. A subsequent run with the same
+# script is safe.
+FEDCRED_PARAMS=$(cat <<JSON
+{
+  "name": "cudly",
+  "issuer": "${CUDLY_ISSUER_URL}",
+  "subject": "${CUDLY_FEDERATED_SUBJECT}",
+  "audiences": ["${CUDLY_FEDERATED_AUDIENCE}"],
+  "description": "CUDly signs JWTs via its own OIDC issuer (KMS-backed). No secret is stored on the CUDly side."
+}
+JSON
+)
+az ad app federated-credential create \
+  --id "${APP_ID}" \
+  --parameters "${FEDCRED_PARAMS}" \
+  --output none 2>&1 || echo "  (federated credential may already exist — continuing)"
+
+echo ""
+echo "=== Done ==="
+echo "subscription_id    : ${SUBSCRIPTION_ID}"
+echo "tenant_id          : ${TENANT_ID}"
+echo "client_id          : ${APP_ID}"
+echo "sp_object_id       : ${SP_OBJECT_ID}"
+echo ""
+echo "Next: deploy the Bicep/ARM template to assign the Reservation Purchaser role at the subscription scope."
+echo "      SP_OBJECT_ID=${SP_OBJECT_ID} bash deploy-azure.sh --location <region>"
+echo ""
+echo "In CUDly, set azure_auth_mode = workload_identity_federation. No key or secret is required — CUDly mints and signs the assertion JWT itself on each call."
+
+{{- if .CUDlyAPIURL}}
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "azure",
+  "external_id": "${SUBSCRIPTION_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CONTACT_EMAIL}",
+  "azure_auth_mode": "workload_identity_federation",
+  "azure_subscription_id": "${SUBSCRIPTION_ID}",
+  "azure_tenant_id": "${TENANT_ID}",
+  "azure_client_id": "${APP_ID}"
+}
+JSON
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
+{{- end}}

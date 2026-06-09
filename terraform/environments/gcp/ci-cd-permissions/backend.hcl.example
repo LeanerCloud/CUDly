@@ -1,0 +1,23 @@
+# GCP backend configuration for ci-cd-permissions
+# Copy to backend.hcl and fill in your values.
+# Pass to terraform init: terraform init -backend-config=backend.hcl
+#
+# The GCS bucket must exist before running terraform init.
+# See README.md for bucket creation commands.
+#
+# ─── bucket ────────────────────────────────────────────────────────────────────
+# Name of the GCS bucket that holds Terraform state.
+# List buckets in your project:
+#   gcloud storage buckets list --project $(gcloud config get-value project)
+#
+# Or derive the name from your project ID:
+#   echo "cudly-terraform-state-$(gcloud config get-value project)"
+#
+bucket = "cudly-terraform-state-your-project-id"
+
+# ─── prefix ────────────────────────────────────────────────────────────────────
+# Object prefix (folder path) within the bucket. Terraform appends
+# /default.tfstate to this prefix.
+# Use a unique prefix per workspace.
+#
+prefix = "ci-cd-permissions"

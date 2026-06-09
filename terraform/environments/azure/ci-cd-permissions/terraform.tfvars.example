@@ -1,0 +1,28 @@
+# Azure CI/CD Permissions - example tfvars
+# Copy to terraform.tfvars and fill in your values.
+#
+# Prerequisites: Azure CLI logged in (az login) with an account that has
+# Owner or User Access Administrator on the target subscription.
+#
+# ─── subscription_id ───────────────────────────────────────────────────────────
+# The subscription where the custom deploy role will be created and assigned.
+#
+# List all subscriptions you have access to:
+#   az account list --query "[].{name:name, id:id}" --output table
+#
+# Show the currently active subscription:
+#   az account show --query id --output tsv
+#
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# ─── github_repo ───────────────────────────────────────────────────────────────
+# GitHub repository (owner/name) whose Actions workflows will authenticate
+# via Azure AD Federated Identity Credentials (keyless — no client secrets).
+#
+# Two federated credentials are created:
+#   - main branch deployments: repo:<owner>/<name>:ref:refs/heads/main
+#   - pull request plan checks: repo:<owner>/<name>:pull_request
+#
+# Set to "" to skip federated credential and service principal creation.
+#
+github_repo = "LeanerCloud/CUDly"

@@ -1,0 +1,13 @@
+-- Make ri_exchange_history.id default consistent with the rest of the schema.
+--
+-- Migration 000009 created the table with `id UUID DEFAULT gen_random_uuid()`.
+-- All other tables in the schema use `uuid_generate_v4()` (from the
+-- `uuid-ossp` extension created by migration 000001). The mismatch wasn't
+-- a runtime bug — both functions return v4 UUIDs — but it created an
+-- implicit Postgres ≥13 requirement on this one table while the rest of
+-- the schema only required `uuid-ossp`.
+--
+-- Migration 000009 is already applied in production, so it's not edited
+-- retroactively; this migration ALTERs the default in place. Existing
+-- rows are unaffected (their `id` values are already valid UUIDs).
+ALTER TABLE ri_exchange_history ALTER COLUMN id SET DEFAULT uuid_generate_v4();

@@ -1,0 +1,271 @@
+// Package api provides the HTTP API handlers for the CUDly dashboard.
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
+	"github.com/aws/aws-lambda-go/events"
+)
+
+// sourceCloud returns the cloud where CUDly is currently running, read from
+// the CUDLY_SOURCE_CLOUD env var (set by Terraform). Falls back to "aws".
+func sourceCloud() string {
+	if v := os.Getenv("CUDLY_SOURCE_CLOUD"); v != "" {
+		return v
+	}
+	return "aws"
+}
+
+// Configuration handlers
+func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*ConfigResponse, error) {
+	// Require view:config permission. Every other read handler in the package
+	// pairs the route-level AuthUser gate with this explicit permission check;
+	// config GET must be consistent (02-M4).
+	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
+		return nil, err
+	}
+
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	services, err := h.config.ListServiceConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &ConfigResponse{
+		Global:      globalCfg,
+		Services:    services,
+		SourceCloud: sourceCloud(),
+	}
+
+	// SourceIdentity contains the host cloud account ID (AWS account number,
+	// Azure tenant ID, etc.). Only expose it to admin sessions so that
+	// non-admin users cannot extract the cloud identity of the CUDly host
+	// account (issue #407).
+	if _, adminErr := h.requireAdmin(ctx, req); adminErr == nil {
+		resp.SourceIdentity = h.resolveSourceIdentity(ctx)
+	}
+
+	return resp, nil
+}
+
+// preserveOmittedRecommendationFields merges persisted GlobalConfig values
+// for the cycle-parameter fields when the request body omits them.
+// Without this merge, a partial PUT would silently zero out
+// RecommendationsCacheStaleHours / RecommendationsLookbackDays / PurchaseDelayHours,
+// which all have meaningful 0-vs-omitted semantics that json.Unmarshal can't
+// represent directly. Errors from GetGlobalConfig fall through: the request body's
+// zero values then flow into Validate() which rejects out-of-range values,
+// matching the pre-fix behaviour. Extracted from updateConfig to keep that
+// function under the cyclomatic-complexity gate after the merge logic was
+// added (PR #308 CodeRabbit pass-2 review).
+func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &present); err != nil {
+		return NewClientError(400, "invalid request body")
+	}
+	_, hasStale := present["recommendations_cache_stale_hours"]
+	_, hasLookback := present["recommendations_lookback_days"]
+	_, hasDelay := present["purchase_delay_hours"]
+	if hasStale && hasLookback && hasDelay {
+		return nil
+	}
+	existing, gcErr := h.config.GetGlobalConfig(ctx)
+	if gcErr != nil || existing == nil {
+		return nil
+	}
+	if !hasStale {
+		cfg.RecommendationsCacheStaleHours = existing.RecommendationsCacheStaleHours
+	}
+	if !hasLookback {
+		cfg.RecommendationsLookbackDays = existing.RecommendationsLookbackDays
+	}
+	if !hasDelay {
+		cfg.PurchaseDelayHours = existing.PurchaseDelayHours
+	}
+	return nil
+}
+
+func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
+	// Require update:config permission
+	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
+		return nil, err
+	}
+
+	var cfg config.GlobalConfig
+	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+
+	if err := h.preserveOmittedRecommendationFields(ctx, &cfg, req.Body); err != nil {
+		return nil, err
+	}
+
+	// Validate the configuration
+	if err := cfg.Validate(); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+
+	if err := h.config.SaveGlobalConfig(ctx, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Propagate global defaults to all service configurations
+	services, err := h.config.ListServiceConfigs(ctx)
+	if err != nil {
+		// Log but don't fail - global config was saved
+		logging.Warnf("Failed to list service configs for propagation: %v", err)
+	} else {
+		for _, svc := range services {
+			svc.Term = cfg.DefaultTerm
+			svc.Payment = cfg.DefaultPayment
+			svc.Coverage = cfg.DefaultCoverage
+			svc.RampSchedule = cfg.DefaultRampSchedule
+			if err := h.config.SaveServiceConfig(ctx, &svc); err != nil {
+				logging.Warnf("Failed to update service config %s/%s: %v", svc.Provider, svc.Service, err)
+			}
+		}
+	}
+
+	return &StatusResponse{Status: "updated"}, nil
+}
+
+// checkCommitmentOptionCombo rejects saves that carry a (term, payment)
+// combination we've dynamically confirmed the cloud doesn't sell. Returns
+// nil when: no probe service is wired, the service hasn't persisted data
+// yet (absent data → fall through to the frontend's hardcoded rules),
+// the save isn't AWS, or the combo is valid. Errors from Validate are
+// logged and swallowed (permissive) so a transient DB blip never blocks
+// a settings save.
+func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error {
+	if h.commitmentOpts == nil || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
+		return nil
+	}
+	ok, err := h.commitmentOpts.Validate(ctx, cfg.Provider, cfg.Service, cfg.Term, cfg.Payment)
+	if err != nil {
+		logging.Warnf("commitment-option validation error (allowing save): %v", err)
+		return nil
+	}
+	if !ok {
+		return NewClientError(400, fmt.Sprintf(
+			"%s does not support %dyr %s commitments",
+			cfg.Service, cfg.Term, cfg.Payment,
+		))
+	}
+	return nil
+}
+
+// mergeServiceConfig loads any existing service config and overlays the four
+// UI-editable fields (Enabled, Term, Payment, Coverage) from cfg onto it, so
+// that filter fields set outside the UI (RampSchedule, IncludeEngines, etc.)
+// are not zeroed on every settings save.
+//
+// A "not found" error means no existing record — cfg is returned unchanged.
+// Any other DB error is returned to prevent a partial write from clobbering
+// previously configured filter fields.
+func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig) (config.ServiceConfig, error) {
+	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return cfg, nil // new record — no existing fields to preserve
+		}
+		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
+	}
+	if existing != nil {
+		existing.Enabled = cfg.Enabled
+		existing.Term = cfg.Term
+		existing.Payment = cfg.Payment
+		existing.Coverage = cfg.Coverage
+		return *existing, nil
+	}
+	return cfg, nil
+}
+
+func (h *Handler) getServiceConfig(ctx context.Context, req *events.LambdaFunctionURLRequest, service string) (any, error) {
+	// Require view:config permission. Consistent with getConfig (02-M4).
+	if _, err := h.requirePermission(ctx, req, "view", "config"); err != nil {
+		return nil, err
+	}
+
+	// Validate for path traversal attacks
+	if err := validateServicePath(service); err != nil {
+		return nil, err
+	}
+
+	parts := strings.SplitN(service, "/", 2)
+	if len(parts) != 2 {
+		return nil, NewClientError(400, "invalid service format, expected: provider/service")
+	}
+
+	// Validate provider
+	if err := validateProvider(parts[0]); err != nil {
+		return nil, err
+	}
+
+	cfg, err := h.config.GetServiceConfig(ctx, parts[0], parts[1])
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg == nil {
+		return &EmptyServiceConfigResponse{}, nil
+	}
+
+	return cfg, nil
+}
+
+func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFunctionURLRequest, service string) (*StatusResponse, error) {
+	// Require update:config permission
+	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
+		return nil, err
+	}
+
+	// Validate for path traversal attacks
+	if err := validateServicePath(service); err != nil {
+		return nil, err
+	}
+
+	var cfg config.ServiceConfig
+	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+
+	parts := strings.SplitN(service, "/", 2)
+	if len(parts) == 2 {
+		cfg.Provider = parts[0]
+		cfg.Service = parts[1]
+	}
+
+	// Merge: preserve existing filter fields, overlay the 4 UI-editable fields.
+	// The frontend only sends enabled/term/payment/coverage; a full UPSERT would
+	// zero out ramp_schedule, include_engines, etc. that were set elsewhere.
+	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg)
+	if mergeErr != nil {
+		return nil, mergeErr
+	}
+	cfg = merged
+
+	// Validate the configuration
+	if err := cfg.Validate(); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+
+	if err := h.checkCommitmentOptionCombo(ctx, cfg); err != nil {
+		return nil, err
+	}
+
+	if err := h.config.SaveServiceConfig(ctx, &cfg); err != nil {
+		return nil, err
+	}
+
+	return &StatusResponse{Status: "updated"}, nil
+}

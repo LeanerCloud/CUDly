@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
 	"github.com/aws/aws-sdk-go-v2/service/redshift/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -41,6 +42,35 @@ func (m *MockRedshiftClient) DescribeReservedNodes(ctx context.Context, params *
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*redshift.DescribeReservedNodesOutput), args.Error(1)
+}
+
+func (m *MockRedshiftClient) CreateTags(ctx context.Context, params *redshift.CreateTagsInput, optFns ...func(*redshift.Options)) (*redshift.CreateTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*redshift.CreateTagsOutput), args.Error(1)
+}
+
+func (m *MockRedshiftClient) DescribeTags(ctx context.Context, params *redshift.DescribeTagsInput, optFns ...func(*redshift.Options)) (*redshift.DescribeTagsOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*redshift.DescribeTagsOutput), args.Error(1)
+}
+
+// MockRedshiftSTSClient implements STSAPI for testing.
+type MockRedshiftSTSClient struct {
+	mock.Mock
+}
+
+func (m *MockRedshiftSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.GetCallerIdentityOutput), args.Error(1)
 }
 
 func TestNewClient(t *testing.T) {
@@ -175,13 +205,27 @@ func TestClient_GetExistingCommitments(t *testing.T) {
 }
 
 func TestClient_GetValidResourceTypes(t *testing.T) {
-	client := &Client{region: "us-east-1"}
+	mockRS := new(MockRedshiftClient)
+	client := &Client{
+		client: mockRS,
+		region: "us-east-1",
+	}
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{NodeType: aws.String("dc2.large")},
+				{NodeType: aws.String("dc2.8xlarge")},
+				{NodeType: aws.String("ra3.xlplus")},
+				{NodeType: aws.String("ra3.4xlarge")},
+				{NodeType: aws.String("ra3.16xlarge")},
+			},
+		}, nil)
 
 	result, err := client.GetValidResourceTypes(context.Background())
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, result)
-	// Check for expected node types from the static list
 	assert.Contains(t, result, "dc2.large")
 	assert.Contains(t, result, "dc2.8xlarge")
 	assert.Contains(t, result, "ra3.xlplus")
@@ -215,6 +259,12 @@ func TestClient_ValidateOffering(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// partial-upfront price shape: upfront + recurring (08-H2).
+					FixedPrice: aws.Float64(500.0),
+					RecurringCharges: []types.RecurringCharge{{
+						RecurringChargeAmount:    aws.Float64(0.10),
+						RecurringChargeFrequency: aws.String("Hourly"),
+					}},
 				},
 			},
 		}, nil)
@@ -268,12 +318,142 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "rn-789", result.CommitmentID)
 	assert.Equal(t, 40000.0, result.Cost)
+	mockRS.AssertExpectations(t)
+}
+
+func TestClient_PurchaseCommitment_TagsWithResolvedARN(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	mockSTS := &MockRedshiftSTSClient{}
+	client := &Client{
+		client:    mockRS,
+		stsClient: mockSTS,
+		region:    "eu-west-1",
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "eu-west-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{{
+				ReservedNodeOfferingId:   aws.String("off-tag"),
+				NodeType:                 aws.String("ra3.xlplus"),
+				Duration:                 aws.Int32(31536000),
+				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				FixedPrice:               aws.Float64(100.0),
+			}},
+		}, nil)
+
+	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
+		Return(&redshift.PurchaseReservedNodeOfferingOutput{
+			ReservedNode: &types.ReservedNode{ReservedNodeId: aws.String("rn-tag"), FixedPrice: aws.Float64(100.0)},
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+
+	expectedARN := "arn:aws:redshift:eu-west-1:123456789012:reservednode:rn-tag"
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		if aws.ToString(in.ResourceName) != expectedARN {
+			return false
+		}
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.PurchaseTagKey && aws.ToString(tag.Value) == common.PurchaseSourceCLI {
+				return true
+			}
+		}
+		return false
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	mockRS.AssertExpectations(t)
+	mockSTS.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_TagsCarryRichDescriptors asserts the rich
+// self-describing tag set (issue #687): the Redshift purchase API does not
+// accept a customer-supplied node ID, so the only way to make the reserved
+// node identifiable from the AWS console alone (without cross-referencing
+// CUDly's purchase audit log) is to encode service / region / SKU / count /
+// term / payment as tags.
+func TestClient_PurchaseCommitment_TagsCarryRichDescriptors(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	mockSTS := &MockRedshiftSTSClient{}
+	client := &Client{
+		client:    mockRS,
+		stsClient: mockSTS,
+		region:    "us-east-1",
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         2,
+		PaymentOption: "partial-upfront",
+		Term:          "3yr",
+		Region:        "us-east-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 2},
+	}
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{{
+				ReservedNodeOfferingId:   aws.String("off-rich"),
+				NodeType:                 aws.String("ra3.xlplus"),
+				Duration:                 aws.Int32(94608000),
+				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// partial-upfront price shape: upfront + recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
+				RecurringCharges: []types.RecurringCharge{{
+					RecurringChargeAmount:    aws.Float64(0.10),
+					RecurringChargeFrequency: aws.String("Hourly"),
+				}},
+			}},
+		}, nil)
+
+	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
+		Return(&redshift.PurchaseReservedNodeOfferingOutput{
+			ReservedNode: &types.ReservedNode{ReservedNodeId: aws.String("rn-rich"), FixedPrice: aws.Float64(500.0)},
+		}, nil)
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		got := map[string]string{}
+		for _, tag := range in.Tags {
+			got[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+		}
+		// Required new descriptors from #687 (the existing NodeType / Region /
+		// PurchaseDate / Tool / Purpose tags are covered by the existing
+		// TagsWithResolvedARN test). Name tag carries the rich self-describing
+		// identifier so the node is findable in the AWS console without CUDly.
+		name := got["Name"]
+		return got["Count"] == "2" &&
+			got["Term"] == "3yr" &&
+			got["PaymentOption"] == "partial-upfront" &&
+			len(name) > 0 &&
+			name[:8] == "redshift"
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
 	mockRS.AssertExpectations(t)
 }
 
@@ -304,24 +484,23 @@ func TestClient_MatchesDuration(t *testing.T) {
 func TestClient_MatchesOfferingType(t *testing.T) {
 	client := &Client{}
 
-	// Redshift uses "Regular" and "Upgradable" offering types, not payment options
-	// The function returns true for valid offering types regardless of payment option
+	// Redshift uses "Regular" and "Upgradable" offering types; this is a
+	// validity check orthogonal to the payment option (matched separately by
+	// matchesPaymentOption from the offering's price shape, 08-H2).
 	tests := []struct {
-		name          string
-		offeringType  string
-		paymentOption string
-		expected      bool
+		name         string
+		offeringType string
+		expected     bool
 	}{
-		{"Regular offering type accepts any payment", "Regular", "all-upfront", true},
-		{"Regular offering type with partial", "Regular", "partial-upfront", true},
-		{"Upgradable offering type", "Upgradable", "all-upfront", true},
-		{"Unknown offering type rejected", "Unknown", "all-upfront", false},
-		{"Empty offering type rejected", "", "partial-upfront", false},
+		{"Regular offering type accepted", "Regular", true},
+		{"Upgradable offering type accepted", "Upgradable", true},
+		{"Unknown offering type rejected", "Unknown", false},
+		{"Empty offering type rejected", "", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.matchesOfferingType(tt.offeringType, tt.paymentOption)
+			result := client.matchesOfferingType(tt.offeringType)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -407,7 +586,7 @@ func TestClient_PurchaseCommitment_FindOfferingError(t *testing.T) {
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -442,6 +621,8 @@ func TestClient_PurchaseCommitment_PurchaseAPIError(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape: upfront only, no recurring (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil).Once()
@@ -449,7 +630,7 @@ func TestClient_PurchaseCommitment_PurchaseAPIError(t *testing.T) {
 	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -484,6 +665,8 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
 					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape: upfront only, no recurring (08-H2).
+					FixedPrice: aws.Float64(1000.0),
 				},
 			},
 		}, nil).Once()
@@ -493,7 +676,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedNode: nil,
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec)
+	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -529,6 +712,8 @@ func TestClient_GetOfferingDetails_Success(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -656,6 +841,8 @@ func TestClient_GetOfferingDetails_EmptyResponseAfterFind(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -701,6 +888,8 @@ func TestClient_GetOfferingDetails_EmptyOfferingsAfterFind(t *testing.T) {
 				NodeType:                 aws.String("dc2.large"),
 				Duration:                 aws.Int32(31536000),
 				ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+				// all-upfront price shape: upfront only, no recurring (08-H2).
+				FixedPrice: aws.Float64(500.0),
 			},
 		},
 	}, nil).Once()
@@ -822,7 +1011,10 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 		Term:          "1yr",
 	}
 
-	// Return offerings with unknown offering type
+	// Return an offering matching node type and duration but with an unknown
+	// ReservedNodeOfferingType. scanRedshiftOfferingPage runs the enum guard
+	// BEFORE matchesOfferingType so the explicit "unexpected type" error
+	// surfaces (issue #688 CodeRabbit feedback).
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(&redshift.DescribeReservedNodeOfferingsOutput{
 			ReservedNodeOfferings: []types.ReservedNodeOffering{
@@ -830,7 +1022,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 					ReservedNodeOfferingId:   aws.String("offering-123"),
 					NodeType:                 aws.String("dc2.large"),
 					Duration:                 aws.Int32(31536000),
-					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // Invalid type
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"), // not Regular/Upgradable -- surfaces as error
 				},
 			},
 		}, nil).Once()
@@ -838,6 +1030,405 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 	err := client.ValidateOffering(context.Background(), rec)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no offerings found")
+	assert.Contains(t, err.Error(), "unexpected type")
 	mockRS.AssertExpectations(t)
+}
+
+func rsIdemRec() common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: "all-upfront",
+		Term:          "1yr",
+		Region:        "eu-west-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+}
+
+func expectRSOffering(m *MockRedshiftClient) {
+	m.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("offering-1"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape matching rsIdemRec (08-H2).
+					FixedPrice: aws.Float64(1000.0),
+				},
+			},
+		}, nil)
+}
+
+func rsClientWithAccount(mockRS *MockRedshiftClient) *Client {
+	stsMock := &MockRedshiftSTSClient{}
+	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil)
+	return &Client{client: mockRS, stsClient: stsMock, region: "eu-west-1"}
+}
+
+// TestClient_PurchaseCommitment_Idempotent_TagGuardShortCircuits asserts the
+// EC2-style tag-guard short-circuits when a reserved node already carries the
+// idempotency token tag (issue #641).
+func TestClient_PurchaseCommitment_Idempotent_TagGuardShortCircuits(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-1", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{
+			ReservedNodes: []types.ReservedNode{{ReservedNodeId: aws.String("rn-existing"), State: aws.String("active")}},
+		}, nil)
+	mockRS.On("DescribeTags", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeTagsOutput{
+			TaggedResources: []types.TaggedResource{
+				{Tag: &types.Tag{Key: aws.String(common.IdempotencyTagKey), Value: aws.String(token)}},
+			},
+		}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "rn-existing", result.CommitmentID)
+	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
+}
+
+// TestClient_PurchaseCommitment_Idempotent_NoTagProceeds asserts a first-time
+// purchase proceeds when no node carries the token tag, and the new node is
+// tagged with the idempotency token afterwards.
+func TestClient_PurchaseCommitment_Idempotent_NoTagProceeds(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-2", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{}, nil)
+	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
+		Return(&redshift.PurchaseReservedNodeOfferingOutput{
+			ReservedNode: &types.ReservedNode{ReservedNodeId: aws.String("rn-new"), State: aws.String("payment-pending")},
+		}, nil)
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		for _, tag := range in.Tags {
+			if aws.ToString(tag.Key) == common.IdempotencyTagKey && aws.ToString(tag.Value) == token {
+				return true
+			}
+		}
+		return false
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "rn-new", result.CommitmentID)
+	mockRS.AssertExpectations(t)
+}
+
+// TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError asserts a
+// DescribeTags failure during the guard fails loud and does NOT purchase.
+func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	client := rsClientWithAccount(mockRS)
+	token := common.DeriveIdempotencyToken("exec-3", 0)
+
+	expectRSOffering(mockRS)
+	mockRS.On("DescribeReservedNodes", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodesOutput{
+			ReservedNodes: []types.ReservedNode{{ReservedNodeId: aws.String("rn-x"), State: aws.String("active")}},
+		}, nil)
+	mockRS.On("DescribeTags", mock.Anything, mock.Anything).
+		Return((*redshift.DescribeTagsOutput)(nil), fmt.Errorf("access denied"))
+
+	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	assert.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, err.Error(), "refusing to purchase")
+	mockRS.AssertNotCalled(t, "PurchaseReservedNodeOffering", mock.Anything, mock.Anything)
+}
+
+// TestFindOfferingID_PaginationCapFires asserts that findOfferingID returns a
+// "pagination cap reached" error after maxOfferingPages empty pages and does NOT
+// make a (maxOfferingPages+1)th call (issue #688).
+func TestFindOfferingID_PaginationCapFires(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	for i := range maxOfferingPages {
+		mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+			Return(&redshift.DescribeReservedNodeOfferingsOutput{
+				ReservedNodeOfferings: []types.ReservedNodeOffering{},
+				Marker:                aws.String(fmt.Sprintf("tok-%d", i+1)),
+			}, nil).Once()
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "pagination cap reached")
+	}
+	mockRS.AssertNumberOfCalls(t, "DescribeReservedNodeOfferings", maxOfferingPages)
+}
+
+// TestFindOfferingID_WrongVariantRejected asserts that findOfferingID does not
+// return a Redshift offering whose type is not Regular or Upgradable.
+// matchesOfferingType filters unknown types client-side and the loop exhausts
+// with a "no offerings found" error rather than returning the wrong variant's
+// ID (issue #688).
+func TestFindOfferingID_WrongVariantRejected(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("bad-offering"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Unknown"),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec, "")
+
+	assert.Error(t, err, "unknown offering type must not return success")
+	assert.Empty(t, id)
+}
+
+// TestFindOfferingID_HappyPath asserts that findOfferingID returns the correct
+// offering ID when a matching offering is returned on the first page (issue #688).
+func TestFindOfferingID_HappyPath(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := rsIdemRec()
+
+	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+		Return(&redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []types.ReservedNodeOffering{
+				{
+					ReservedNodeOfferingId:   aws.String("offering-ok"),
+					NodeType:                 aws.String("ra3.xlplus"),
+					Duration:                 aws.Int32(31536000),
+					ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+					// all-upfront price shape matching rsIdemRec (08-H2).
+					FixedPrice: aws.Float64(1000.0),
+				},
+			},
+		}, nil).Once()
+
+	id, err := client.findOfferingID(context.Background(), rec, "")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "offering-ok", id)
+}
+
+// TestClient_tagReservedNode_NameTagPresent asserts that tagReservedNode (issue
+// #687) stamps a self-describing Name tag on the Redshift reserved node. The
+// Redshift purchase API has no customer-supplied node ID, so the Name tag is
+// the only way to identify the node in the AWS console without CUDly.
+func TestClient_tagReservedNode_NameTagPresent(t *testing.T) {
+	t.Parallel()
+	mockRS := &MockRedshiftClient{}
+	mockSTS := &MockRedshiftSTSClient{}
+	client := &Client{
+		client:    mockRS,
+		stsClient: mockSTS,
+		region:    "eu-central-1",
+	}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.4xlarge",
+		Count:         1,
+		PaymentOption: "no-upfront",
+		Term:          "1yr",
+		Region:        "eu-central-1",
+	}
+
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).
+		Return(&sts.GetCallerIdentityOutput{Account: aws.String("111222333444")}, nil)
+
+	var capturedTags []types.Tag
+	mockRS.On("CreateTags", mock.Anything, mock.MatchedBy(func(in *redshift.CreateTagsInput) bool {
+		capturedTags = in.Tags
+		return true
+	})).Return(&redshift.CreateTagsOutput{}, nil)
+
+	err := client.tagReservedNode(context.Background(), "rn-tag-test", rec, "test-source", "")
+	assert.NoError(t, err)
+
+	tagMap := make(map[string]string, len(capturedTags))
+	for _, tag := range capturedTags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	name, ok := tagMap["Name"]
+	assert.True(t, ok, "Name tag must be present in CreateTags call")
+	assert.True(t, len(name) > 0, "Name tag must be non-empty")
+	assert.LessOrEqual(t, len(name), 60, "Name must fit the 60-char cap")
+	// Key segments that make the node self-describing without CUDly:
+	assert.Contains(t, name, "redshift", "Name must carry the service code")
+	assert.Contains(t, name, "eu-central-1", "Name must embed the region")
+	assert.Contains(t, name, "ra3-4xlarge", "Name must embed the SKU (dots->hyphens)")
+	assert.Contains(t, name, "1x", "Name must embed the count")
+	assert.Contains(t, name, "1yr", "Name must embed the term")
+
+	mockRS.AssertExpectations(t)
+	mockSTS.AssertExpectations(t)
+}
+
+// rsPaymentRec builds a Redshift recommendation with the given payment option.
+func rsPaymentRec(paymentOption string) common.Recommendation {
+	return common.Recommendation{
+		Service:       common.ServiceDataWarehouse,
+		ResourceType:  "ra3.xlplus",
+		Count:         1,
+		PaymentOption: paymentOption,
+		Term:          "1yr",
+		Region:        "us-east-1",
+		Details:       common.DataWarehouseDetails{NodeType: "ra3.xlplus", NumberOfNodes: 1},
+	}
+}
+
+// rsOffering builds a single matching-node/duration offering with an explicit
+// price shape so payment-option matching (08-H2) can be exercised.
+func rsOffering(id string, fixedPrice float64, recurringHourly float64) types.ReservedNodeOffering {
+	o := types.ReservedNodeOffering{
+		ReservedNodeOfferingId:   aws.String(id),
+		NodeType:                 aws.String("ra3.xlplus"),
+		Duration:                 aws.Int32(31536000),
+		ReservedNodeOfferingType: types.ReservedNodeOfferingType("Regular"),
+		FixedPrice:               aws.Float64(fixedPrice),
+	}
+	if recurringHourly > 0 {
+		o.RecurringCharges = []types.RecurringCharge{{
+			RecurringChargeAmount:    aws.Float64(recurringHourly),
+			RecurringChargeFrequency: aws.String("Hourly"),
+		}}
+	}
+	return o
+}
+
+// TestFindOfferingID_PaymentOptionMustMatch is the 08-H2 regression test: the
+// requested payment option must be matched against the offering's price shape,
+// not silently ignored. Before the fix, matchesOfferingType discarded the
+// payment option entirely, so a no-upfront request was filled with the first
+// node-type/duration offering regardless of its actual payment terms. This test
+// would FAIL pre-fix (it would return the all-upfront offering for a no-upfront
+// request) and passes after.
+func TestFindOfferingID_PaymentOptionMustMatch(t *testing.T) {
+	// Price shapes: all-upfront (upfront only), no-upfront (recurring only),
+	// partial-upfront (both).
+	allUpfront := rsOffering("off-all", 1000.0, 0)
+	noUpfront := rsOffering("off-no", 0, 0.10)
+	partialUpfront := rsOffering("off-partial", 500.0, 0.05)
+
+	tests := []struct {
+		name          string
+		paymentOption string
+		offerings     []types.ReservedNodeOffering
+		wantID        string
+		wantErr       bool
+	}{
+		{
+			name:          "no-upfront request picks the no-upfront offering, not all-upfront listed first",
+			paymentOption: "no-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront},
+			wantID:        "off-no",
+		},
+		{
+			name:          "all-upfront request picks the all-upfront offering, not no-upfront listed first",
+			paymentOption: "all-upfront",
+			offerings:     []types.ReservedNodeOffering{noUpfront, allUpfront},
+			wantID:        "off-all",
+		},
+		{
+			name:          "partial-upfront request picks the partial offering",
+			paymentOption: "partial-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront, partialUpfront},
+			wantID:        "off-partial",
+		},
+		{
+			name:          "no-upfront request errors when only an all-upfront offering exists",
+			paymentOption: "no-upfront",
+			offerings:     []types.ReservedNodeOffering{allUpfront},
+			wantErr:       true,
+		},
+		{
+			name:          "empty payment option matches nothing and errors",
+			paymentOption: "",
+			offerings:     []types.ReservedNodeOffering{allUpfront, noUpfront, partialUpfront},
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRS := &MockRedshiftClient{}
+			t.Cleanup(func() { mockRS.AssertExpectations(t) })
+			client := &Client{client: mockRS, region: "us-east-1"}
+
+			mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
+				Return(&redshift.DescribeReservedNodeOfferingsOutput{
+					ReservedNodeOfferings: tt.offerings,
+				}, nil).Once()
+
+			id, err := client.findOfferingID(context.Background(), rsPaymentRec(tt.paymentOption), "")
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Empty(t, id)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantID, id)
+		})
+	}
+}
+
+// TestMatchesPaymentOption directly exercises the price-shape classifier (08-H2).
+func TestMatchesPaymentOption(t *testing.T) {
+	tests := []struct {
+		name          string
+		fixedPrice    float64
+		recurring     float64
+		paymentOption string
+		want          bool
+	}{
+		{"all-upfront matches upfront-only", 1000, 0, "all-upfront", true},
+		{"all-upfront rejects offering with recurring", 1000, 0.1, "all-upfront", false},
+		{"no-upfront matches recurring-only", 0, 0.1, "no-upfront", true},
+		{"no-upfront rejects upfront offering", 1000, 0, "no-upfront", false},
+		{"partial-upfront matches both", 500, 0.05, "partial-upfront", true},
+		{"partial-upfront rejects upfront-only", 500, 0, "partial-upfront", false},
+		{"unknown payment option matches nothing", 500, 0.05, "weird", false},
+		{"empty payment option matches nothing", 1000, 0, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesPaymentOption(rsOffering("x", tt.fixedPrice, tt.recurring), tt.paymentOption)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestDerivePaymentOption exercises the payment-option derivation used by
+// GetOfferingDetails to surface the actual terms (08-H2).
+func TestDerivePaymentOption(t *testing.T) {
+	assert.Equal(t, "all-upfront", derivePaymentOption(rsOffering("x", 1000, 0)))
+	assert.Equal(t, "no-upfront", derivePaymentOption(rsOffering("x", 0, 0.1)))
+	assert.Equal(t, "partial-upfront", derivePaymentOption(rsOffering("x", 500, 0.05)))
+	assert.Equal(t, "unknown", derivePaymentOption(rsOffering("x", 0, 0)))
 }

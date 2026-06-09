@@ -1,0 +1,5 @@
+-- No rollback for the payload rewrite: the original AWS rows lacking
+-- on_demand_cost were themselves stale (pre-PR-#312 data). Reverting
+-- monthly_cost from null back to those stale values would re-introduce
+-- the very bug this migration fixes. The correct values will be written
+-- on the next scheduled collection.

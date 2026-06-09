@@ -1,0 +1,39 @@
+/* Tabs navigation */
+.tabs {
+    display: flex;
+    background: white;
+    border-bottom: 2px solid var(--cudly-border);
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+.tab-btn {
+    padding: 1rem 1.5rem;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    color: var(--cudly-text-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 0;
+}
+
+.tab-btn:hover {
+    background: var(--cudly-bg);
+    color: var(--cudly-primary);
+}
+
+.tab-btn.active {
+    color: var(--cudly-primary);
+    border-bottom-color: var(--cudly-primary);
+    font-weight: 600;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}

@@ -1,0 +1,43 @@
+# Snyk (https://snyk.io) policy file
+# Used to ignore specific vulnerabilities or set severity thresholds
+
+# Ignore specific vulnerabilities
+ignore:
+  # Example: Ignore specific CVE
+  # 'SNYK-GOLANG-GITHUBCOMAWSAWSSDKGOSERVICE-1234567':
+  #   - '*':
+  #       reason: False positive or accepted risk
+  #       expires: 2024-12-31T00:00:00.000Z
+
+# Language-specific settings
+patch: {}
+
+# Exclude paths from scanning
+exclude:
+  global:
+    - '**/*_test.go'
+    - '**/testdata/**'
+    - '**/vendor/**'
+    - '**/node_modules/**'
+    - '**/.terraform/**'
+    - '**/migrations/**'
+
+# Severity thresholds
+failOnSeverity: high
+
+# License policy
+license:
+  # Allow these licenses
+  allow:
+    - MIT
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - ISC
+    - MPL-2.0
+
+  # Deny these licenses
+  deny:
+    - GPL-2.0
+    - GPL-3.0
+    - AGPL-3.0

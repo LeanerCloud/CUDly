@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,6 +50,7 @@ func (m *MockProvider) GetRecommendationsClient(ctx context.Context) (Recommenda
 }
 
 func TestNewRegistry(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 	require.NotNil(t, r)
 	assert.NotNil(t, r.providers)
@@ -56,6 +58,7 @@ func TestNewRegistry(t *testing.T) {
 }
 
 func TestRegistry_Register(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -73,6 +76,7 @@ func TestRegistry_Register(t *testing.T) {
 }
 
 func TestRegistry_GetProvider(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -83,17 +87,22 @@ func TestRegistry_GetProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get existing provider
-	provider := r.GetProvider("test")
+	provider, err := r.GetProvider("test")
+	require.NoError(t, err)
 	require.NotNil(t, provider)
 	assert.Equal(t, "test", provider.Name())
 	assert.Equal(t, "Test Provider", provider.DisplayName())
 
-	// Get non-existing provider
-	provider = r.GetProvider("nonexistent")
+	// Get non-existing provider — must return a "not registered" error so
+	// callers can distinguish from a factory failure.
+	provider, err = r.GetProvider("nonexistent")
 	assert.Nil(t, provider)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not registered")
 }
 
 func TestRegistry_GetProvider_FactoryError(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -103,12 +112,16 @@ func TestRegistry_GetProvider_FactoryError(t *testing.T) {
 	err := r.Register("failing", factory)
 	require.NoError(t, err)
 
-	// GetProvider should return nil when factory fails
-	provider := r.GetProvider("failing")
+	// Factory error must surface to the caller, distinct from "not registered".
+	provider, err := r.GetProvider("failing")
 	assert.Nil(t, provider)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "factory failed")
+	assert.Contains(t, err.Error(), "factory error")
 }
 
 func TestRegistry_GetProviderWithConfig(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -135,6 +148,7 @@ func TestRegistry_GetProviderWithConfig(t *testing.T) {
 }
 
 func TestRegistry_GetAllProviders(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory1 := func(config *ProviderConfig) (Provider, error) {
@@ -157,6 +171,7 @@ func TestRegistry_GetAllProviders(t *testing.T) {
 }
 
 func TestRegistry_GetProviderNames(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -175,6 +190,7 @@ func TestRegistry_GetProviderNames(t *testing.T) {
 }
 
 func TestRegistry_IsRegistered(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -188,6 +204,7 @@ func TestRegistry_IsRegistered(t *testing.T) {
 }
 
 func TestRegistry_Unregister(t *testing.T) {
+	t.Parallel()
 	r := NewRegistry()
 
 	factory := func(config *ProviderConfig) (Provider, error) {
@@ -205,6 +222,7 @@ func TestRegistry_Unregister(t *testing.T) {
 }
 
 func TestProviderConfig_Struct(t *testing.T) {
+	t.Parallel()
 	config := ProviderConfig{
 		Name:           "aws",
 		Profile:        "production",
@@ -221,6 +239,7 @@ func TestProviderConfig_Struct(t *testing.T) {
 }
 
 func TestGetRegistry(t *testing.T) {
+	t.Parallel()
 	// GetRegistry should always return the same instance
 	registry1 := GetRegistry()
 	registry2 := GetRegistry()
@@ -231,6 +250,7 @@ func TestGetRegistry(t *testing.T) {
 }
 
 func TestRegisterProvider(t *testing.T) {
+	t.Parallel()
 	// Use a unique name to avoid conflicts with other tests
 	testName := "test-register-provider-unique"
 
@@ -250,4 +270,46 @@ func TestRegisterProvider(t *testing.T) {
 
 	// Clean up
 	GetRegistry().Unregister(testName)
+}
+
+// TestRegistry_FactoryRunsOutsideLock proves the 10-H4 fix: GetProvider /
+// GetProviderWithConfig / GetAllProviders must NOT hold r.mu while invoking the
+// factory. A factory that does its own registry I/O (here, it takes the write
+// lock via Unregister) would deadlock if the read lock were still held during
+// the factory call. Pre-fix this test hangs (caught by the 5s timeout);
+// post-fix it returns promptly. Done channel + timeout instead of time.Sleep.
+func TestRegistry_FactoryRunsOutsideLock(t *testing.T) {
+	t.Parallel()
+
+	run := func(name string, call func(r *Registry)) {
+		r := NewRegistry()
+		factory := func(config *ProviderConfig) (Provider, error) {
+			// Acquire the write lock from inside the factory. Only safe if the
+			// caller released the read lock before invoking us.
+			r.Unregister(config.Name)
+			return &MockProvider{name: config.Name}, nil
+		}
+		require.NoError(t, r.Register(name, factory))
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			call(r)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s held the registry lock across the factory call (deadlock)", name)
+		}
+	}
+
+	run("getprovider", func(r *Registry) {
+		_, _ = r.GetProvider("getprovider")
+	})
+	run("getproviderwithconfig", func(r *Registry) {
+		_, _ = r.GetProviderWithConfig("getproviderwithconfig", &ProviderConfig{Name: "getproviderwithconfig"})
+	})
+	run("getallproviders", func(r *Registry) {
+		_ = r.GetAllProviders()
+	})
 }

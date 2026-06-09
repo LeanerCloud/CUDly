@@ -12,12 +12,40 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// MockReservationsSummariesPager mocks the reservations summaries pager
+// returned by armconsumption.ReservationsSummariesClient.NewListPager.
+// Set Results + HasMore before use; Results are returned on the first
+// NextPage call and More() returns false on the second call.
+type MockReservationsSummariesPager struct {
+	Results   []*armconsumption.ReservationSummary
+	HasMore   bool
+	pageCount int
+}
+
+// More returns whether there are more pages.
+func (p *MockReservationsSummariesPager) More() bool {
+	if p.pageCount == 0 {
+		return p.HasMore
+	}
+	return false
+}
+
+// NextPage returns the next page of results.
+func (p *MockReservationsSummariesPager) NextPage(ctx context.Context) (armconsumption.ReservationsSummariesClientListResponse, error) {
+	p.pageCount++
+	return armconsumption.ReservationsSummariesClientListResponse{
+		ReservationSummariesListResult: armconsumption.ReservationSummariesListResult{
+			Value: p.Results,
+		},
+	}, nil
+}
+
 // MockRecommendationsPager mocks the recommendations pager
 type MockRecommendationsPager struct {
 	mock.Mock
-	Results    []armconsumption.ReservationRecommendationClassification
-	HasMore    bool
-	pageCount  int
+	Results   []armconsumption.ReservationRecommendationClassification
+	HasMore   bool
+	pageCount int
 }
 
 // More returns whether there are more pages
@@ -55,9 +83,9 @@ func (p *MockReservationsDetailsPager) More() bool {
 }
 
 // NextPage returns the next page of results
-func (p *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListByReservationOrderResponse, error) {
+func (p *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error) {
 	p.pageCount++
-	return armconsumption.ReservationsDetailsClientListByReservationOrderResponse{
+	return armconsumption.ReservationsDetailsClientListResponse{
 		ReservationDetailsListResult: armconsumption.ReservationDetailsListResult{
 			Value: p.Results,
 		},
@@ -178,7 +206,9 @@ func CreateSampleReservationDetails(subscriptionID, region string) []*armconsump
 	}
 }
 
-// CreateSampleVMPricingResponse creates a sample VM pricing response for testing
+// CreateSampleVMPricingResponse creates a sample VM pricing response for testing.
+// Includes both 1-year and 3-year reservation entries so 3YearTerm tests exercise
+// real pricing rather than a fabricated fallback.
 func CreateSampleVMPricingResponse() string {
 	return `{
 		"Items": [
@@ -190,7 +220,18 @@ func CreateSampleVMPricingResponse() string {
 				"productName": "Virtual Machines D Series",
 				"serviceName": "Virtual Machines",
 				"armSkuName": "Standard_D2s_v3",
-				"reservationTerm": "1 Years",
+				"reservationTerm": "1 Year",
+				"type": "Reservation"
+			},
+			{
+				"currencyCode": "USD",
+				"retailPrice": 1200.0,
+				"unitPrice": 0.096,
+				"armRegionName": "eastus",
+				"productName": "Virtual Machines D Series",
+				"serviceName": "Virtual Machines",
+				"armSkuName": "Standard_D2s_v3",
+				"reservationTerm": "3 Years",
 				"type": "Reservation"
 			},
 			{

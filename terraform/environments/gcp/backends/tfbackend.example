@@ -1,0 +1,12 @@
+# GCP Terraform Backend Configuration
+# Copy to <env>.tfbackend (e.g. dev.tfbackend) and customize with your values
+#
+# Usage:
+#   terraform init -backend-config=backends/dev.tfbackend
+
+bucket = "your-cudly-terraform-state-gcp-dev"
+prefix = "dev/terraform.tfstate"
+
+# Note: Create the GCS bucket before first use:
+#   gsutil mb -l us-central1 gs://your-cudly-terraform-state-gcp-dev
+#   gsutil versioning set on gs://your-cudly-terraform-state-gcp-dev

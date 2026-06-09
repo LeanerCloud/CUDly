@@ -1,0 +1,32 @@
+# Azure backend configuration for ci-cd-permissions
+# Copy to backend.hcl and fill in your values.
+# Pass to terraform init: terraform init -backend-config=backend.hcl
+#
+# The Storage Account and container must exist before running terraform init.
+# See README.md for creation commands.
+#
+# ─── resource_group_name ───────────────────────────────────────────────────────
+# Resource group that contains the Storage Account.
+# List resource groups:
+#   az group list --query "[].name" --output tsv
+#
+resource_group_name = "cudly-terraform-state-rg"
+
+# ─── storage_account_name ──────────────────────────────────────────────────────
+# Name of the Storage Account.
+# List storage accounts in a resource group:
+#   az storage account list --resource-group cudly-terraform-state-rg --query "[].name" --output tsv
+#
+storage_account_name = "cudlytfstatedev"
+
+# ─── container_name ────────────────────────────────────────────────────────────
+# Blob container that holds the state file.
+# List containers:
+#   az storage container list --account-name cudlytfstatedev --query "[].name" --output tsv
+#
+container_name = "tfstate"
+
+# ─── key ───────────────────────────────────────────────────────────────────────
+# State file blob name within the container. Use a unique key per workspace.
+#
+key = "ci-cd-permissions.terraform.tfstate"

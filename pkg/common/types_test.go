@@ -7,6 +7,7 @@ import (
 )
 
 func TestProviderType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		provider ProviderType
 		expected string
@@ -17,13 +18,16 @@ func TestProviderType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.provider), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.provider.String())
 		})
 	}
 }
 
 func TestServiceType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		service  ServiceType
 		expected string
@@ -35,7 +39,15 @@ func TestServiceType_String(t *testing.T) {
 		{ServiceSearch, "search"},
 		{ServiceDataWarehouse, "data-warehouse"},
 		{ServiceStorage, "storage"},
-		{ServiceSavingsPlans, "savings-plans"},
+		// Regression guard for issue #85: the frontend persists "savingsplans"
+		// (no hyphen) and the Go constant must match so direct comparisons of
+		// rec.Service == ServiceSavingsPlans don't silently miss rows. If you
+		// flip this back to "savings-plans" you also need a SQL migration.
+		{ServiceSavingsPlans, "savingsplans"},
+		{ServiceSavingsPlansCompute, "savings-plans-compute"},
+		{ServiceSavingsPlansEC2Instance, "savings-plans-ec2instance"},
+		{ServiceSavingsPlansSageMaker, "savings-plans-sagemaker"},
+		{ServiceSavingsPlansDatabase, "savings-plans-database"},
 		{ServiceCommitments, "commitments"},
 		{ServiceOther, "other"},
 		{ServiceEC2, "ec2"},
@@ -47,13 +59,39 @@ func TestServiceType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.service), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.service.String())
 		})
 	}
 }
 
+func TestIsSavingsPlan(t *testing.T) {
+	tests := []struct {
+		name    string
+		service ServiceType
+		want    bool
+	}{
+		{"legacy umbrella", ServiceSavingsPlans, true},
+		{"compute", ServiceSavingsPlansCompute, true},
+		{"ec2 instance", ServiceSavingsPlansEC2Instance, true},
+		{"sagemaker", ServiceSavingsPlansSageMaker, true},
+		{"database", ServiceSavingsPlansDatabase, true},
+		{"dash-free frontend spelling", ServiceType("savingsplans"), true},
+		{"unrelated service", ServiceRDS, false},
+		{"empty", ServiceType(""), false},
+		{"random string", ServiceType("savings"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsSavingsPlan(tt.service))
+		})
+	}
+}
+
 func TestCommitmentType_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		commitment CommitmentType
 		expected   string
@@ -65,13 +103,16 @@ func TestCommitmentType_String(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(string(tt.commitment), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.commitment.String())
 		})
 	}
 }
 
 func TestComputeDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := ComputeDetails{
 		InstanceType: "m5.large",
 		Platform:     "linux",
@@ -83,6 +124,7 @@ func TestComputeDetails_GetServiceType(t *testing.T) {
 }
 
 func TestComputeDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		details  ComputeDetails
@@ -104,16 +146,64 @@ func TestComputeDetails_GetDetailDescription(t *testing.T) {
 			},
 			expected: "windows/dedicated",
 		},
+		{
+			// vCPU alone is insufficient — both fields must be populated for
+			// the size suffix to appear, otherwise we'd surface "16 vCPU /
+			// 0 GB" which is misleading.
+			name: "VCPU populated but MemoryGB zero — base description only",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     16,
+			},
+			expected: "linux/default",
+		},
+		{
+			// Symmetric guard for the MemoryGB-only case.
+			name: "MemoryGB populated but VCPU zero — base description only",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				MemoryGB: 32,
+			},
+			expected: "linux/default",
+		},
+		{
+			// Whole-number GB renders without trailing zeros (16 GB,
+			// not 16.000000 GB).
+			name: "Both fields populated — integer memory",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     4,
+				MemoryGB: 16,
+			},
+			expected: "linux/default (4 vCPU / 16 GB)",
+		},
+		{
+			// Fractional GB (Azure has 0.5 GB SKUs) renders verbatim.
+			name: "Both fields populated — fractional memory",
+			details: ComputeDetails{
+				Platform: "linux",
+				Tenancy:  "default",
+				VCPU:     1,
+				MemoryGB: 0.5,
+			},
+			expected: "linux/default (1 vCPU / 0.5 GB)",
+		},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.details.GetDetailDescription())
 		})
 	}
 }
 
 func TestDatabaseDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := DatabaseDetails{
 		Engine:   "mysql",
 		AZConfig: "multi-az",
@@ -123,6 +213,7 @@ func TestDatabaseDetails_GetServiceType(t *testing.T) {
 }
 
 func TestDatabaseDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		details  DatabaseDetails
@@ -147,13 +238,16 @@ func TestDatabaseDetails_GetDetailDescription(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, tt.details.GetDetailDescription())
 		})
 	}
 }
 
 func TestCacheDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := CacheDetails{
 		Engine:   "redis",
 		NodeType: "cache.r6g.large",
@@ -163,6 +257,7 @@ func TestCacheDetails_GetServiceType(t *testing.T) {
 }
 
 func TestCacheDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := CacheDetails{
 		Engine:   "redis",
 		NodeType: "cache.r6g.large",
@@ -172,6 +267,7 @@ func TestCacheDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestSearchDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := SearchDetails{
 		InstanceType: "r5.large.search",
 	}
@@ -180,6 +276,7 @@ func TestSearchDetails_GetServiceType(t *testing.T) {
 }
 
 func TestSearchDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := SearchDetails{
 		InstanceType: "r5.large.search",
 	}
@@ -188,6 +285,7 @@ func TestSearchDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestDataWarehouseDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := DataWarehouseDetails{
 		NodeType:      "dc2.large",
 		NumberOfNodes: 3,
@@ -197,6 +295,7 @@ func TestDataWarehouseDetails_GetServiceType(t *testing.T) {
 }
 
 func TestDataWarehouseDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := DataWarehouseDetails{
 		NodeType:      "dc2.large",
 		NumberOfNodes: 3,
@@ -206,6 +305,7 @@ func TestDataWarehouseDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestSavingsPlanDetails_GetServiceType(t *testing.T) {
+	t.Parallel()
 	details := SavingsPlanDetails{
 		PlanType:         "Compute",
 		HourlyCommitment: 10.50,
@@ -215,6 +315,7 @@ func TestSavingsPlanDetails_GetServiceType(t *testing.T) {
 }
 
 func TestSavingsPlanDetails_GetDetailDescription(t *testing.T) {
+	t.Parallel()
 	details := SavingsPlanDetails{
 		PlanType: "Compute",
 	}
@@ -223,6 +324,7 @@ func TestSavingsPlanDetails_GetDetailDescription(t *testing.T) {
 }
 
 func TestRecommendation_Struct(t *testing.T) {
+	t.Parallel()
 	rec := Recommendation{
 		Provider:          ProviderAWS,
 		Account:           "123456789012",
@@ -248,6 +350,7 @@ func TestRecommendation_Struct(t *testing.T) {
 }
 
 func TestPurchaseResult_Struct(t *testing.T) {
+	t.Parallel()
 	result := PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
@@ -262,6 +365,7 @@ func TestPurchaseResult_Struct(t *testing.T) {
 }
 
 func TestCommitment_Struct(t *testing.T) {
+	t.Parallel()
 	commitment := Commitment{
 		Provider:       ProviderAWS,
 		Account:        "123456789012",
@@ -280,6 +384,7 @@ func TestCommitment_Struct(t *testing.T) {
 }
 
 func TestOfferingDetails_Struct(t *testing.T) {
+	t.Parallel()
 	offering := OfferingDetails{
 		OfferingID:          "offering-123",
 		ResourceType:        "db.t3.medium",
@@ -298,6 +403,7 @@ func TestOfferingDetails_Struct(t *testing.T) {
 }
 
 func TestRecommendationParams_Struct(t *testing.T) {
+	t.Parallel()
 	params := RecommendationParams{
 		Service:        ServiceRDS,
 		Region:         "us-east-1",
@@ -315,6 +421,7 @@ func TestRecommendationParams_Struct(t *testing.T) {
 }
 
 func TestAccount_Struct(t *testing.T) {
+	t.Parallel()
 	account := Account{
 		Provider:    ProviderAWS,
 		ID:          "123456789012",
@@ -329,6 +436,7 @@ func TestAccount_Struct(t *testing.T) {
 }
 
 func TestRegion_Struct(t *testing.T) {
+	t.Parallel()
 	region := Region{
 		Provider:    ProviderAWS,
 		ID:          "us-east-1",
@@ -339,4 +447,37 @@ func TestRegion_Struct(t *testing.T) {
 	assert.Equal(t, ProviderAWS, region.Provider)
 	assert.Equal(t, "us-east-1", region.ID)
 	assert.Equal(t, "US East (N. Virginia)", region.DisplayName)
+}
+
+func TestNormalizeSource(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"cli lowercase", "cudly-cli", "cudly-cli", false},
+		{"web lowercase", "cudly-web", "cudly-web", false},
+		{"cli mixed case", "CUDly-CLI", "cudly-cli", false},
+		{"web mixed case", "CUDly-Web", "cudly-web", false},
+		{"cli with whitespace", "  cudly-cli\n", "cudly-cli", false},
+		{"empty string", "", "", true},
+		{"whitespace only", "   ", "", true},
+		{"unknown source", "cudly-api", "", true},
+		{"injection attempt", "cudly-cli; DROP TABLE", "", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NormalizeSource(tc.in)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

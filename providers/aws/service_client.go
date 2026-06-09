@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	sptypes "github.com/aws/aws-sdk-go-v2/service/savingsplans/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
@@ -49,9 +50,12 @@ func NewMemoryDBClient(cfg aws.Config) provider.ServiceClient {
 	return memorydb.NewClient(cfg)
 }
 
-// NewSavingsPlansClient creates a new Savings Plans service client
-func NewSavingsPlansClient(cfg aws.Config) provider.ServiceClient {
-	return savingsplans.NewClient(cfg)
+// NewSavingsPlansClient creates a Savings Plans service client scoped to one
+// AWS plan type. The four per-plan-type slugs (Compute, EC2Instance,
+// SageMaker, Database) each get their own client instance via the AWS
+// provider's GetServiceClient dispatch — see provider.go.
+func NewSavingsPlansClient(cfg aws.Config, planType sptypes.SavingsPlanType) provider.ServiceClient {
+	return savingsplans.NewClient(cfg, planType)
 }
 
 // RecommendationsClientAdapter adapts the recommendations client to the provider interface
@@ -73,50 +77,76 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		return nil, err
 	}
 
-	// Apply filters
+	recs = applyRecommendationFilters(recs, params)
+	return recs, nil
+}
+
+// applyRecommendationFilters applies account and region filters to recommendations
+func applyRecommendationFilters(recs []common.Recommendation, params common.RecommendationParams) []common.Recommendation {
 	if len(params.AccountFilter) > 0 {
-		filtered := make([]common.Recommendation, 0)
-		accountMap := make(map[string]bool)
-		for _, acc := range params.AccountFilter {
-			accountMap[acc] = true
-		}
-		for _, rec := range recs {
-			if accountMap[rec.Account] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByAccounts(recs, params.AccountFilter)
 	}
 
 	if len(params.IncludeRegions) > 0 {
-		filtered := make([]common.Recommendation, 0)
-		regionMap := make(map[string]bool)
-		for _, region := range params.IncludeRegions {
-			regionMap[region] = true
-		}
-		for _, rec := range recs {
-			if regionMap[rec.Region] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByIncludedRegions(recs, params.IncludeRegions)
 	}
 
 	if len(params.ExcludeRegions) > 0 {
-		regionMap := make(map[string]bool)
-		for _, region := range params.ExcludeRegions {
-			regionMap[region] = true
-		}
-		filtered := make([]common.Recommendation, 0)
-		for _, rec := range recs {
-			if !regionMap[rec.Region] {
-				filtered = append(filtered, rec)
-			}
-		}
-		recs = filtered
+		recs = filterByExcludedRegions(recs, params.ExcludeRegions)
 	}
 
-	return recs, nil
+	return recs
+}
+
+// filterByAccounts filters recommendations by account IDs
+func filterByAccounts(recs []common.Recommendation, accounts []string) []common.Recommendation {
+	accountMap := make(map[string]bool)
+	for _, acc := range accounts {
+		accountMap[acc] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if accountMap[rec.Account] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
+}
+
+// filterByIncludedRegions filters recommendations to only included regions
+func filterByIncludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
+	regionMap := make(map[string]bool)
+	for _, region := range regions {
+		regionMap[region] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if regionMap[rec.Region] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
+}
+
+// filterByExcludedRegions filters out recommendations from excluded regions
+func filterByExcludedRegions(recs []common.Recommendation, regions []string) []common.Recommendation {
+	regionMap := make(map[string]bool)
+	for _, region := range regions {
+		regionMap[region] = true
+	}
+
+	filtered := make([]common.Recommendation, 0, len(recs))
+	for _, rec := range recs {
+		if !regionMap[rec.Region] {
+			filtered = append(filtered, rec)
+		}
+	}
+
+	return filtered
 }
 
 // GetRecommendationsForService gets recommendations for a specific service
@@ -127,4 +157,33 @@ func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.
 // GetAllRecommendations gets recommendations for all supported services
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	return r.client.GetAllRecommendations(ctx)
+}
+
+// GetRIUtilization gets per-RI utilization from Cost Explorer.
+func (r *RecommendationsClientAdapter) GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	return r.client.GetRIUtilization(ctx, lookbackDays)
+}
+
+// GetRICoverageMap returns the per-pool RI coverage % over the last
+// lookbackDays days, keyed by "region:instance_type:account" (or
+// "region:instance_type:engine:account" for RDS) so the apply helper
+// can look up per-linked-account coverage. Caller passes the regions
+// to scan; CE returns coverage filtered to that region and grouped by
+// LINKED_ACCOUNT + INSTANCE_TYPE.
+func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, lookbackDays int, regions []string) (recommendations.PoolCoverageMap, error) {
+	return r.client.GetRICoverageMap(ctx, lookbackDays, regions)
+}
+
+// NewRecommendationsClientDirect creates a new recommendations client returning the concrete type
+// (needed for GetRIUtilization which is not part of the generic provider interface).
+func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {
+	return &RecommendationsClientAdapter{
+		client: recommendations.NewClient(cfg),
+	}
+}
+
+// NewEC2ClientDirect creates a new EC2 client returning the concrete type
+// (needed for ListConvertibleReservedInstances which is not part of the generic provider interface).
+func NewEC2ClientDirect(cfg aws.Config) *ec2.Client {
+	return ec2.NewClient(cfg)
 }

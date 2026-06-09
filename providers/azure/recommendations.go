@@ -4,70 +4,204 @@ package azure
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/advisor/armadvisor"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
+	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/cache"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/compute"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/cosmosdb"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/database"
+	"github.com/LeanerCloud/CUDly/providers/azure/services/savingsplans"
 )
 
-// RecommendationsClientAdapter aggregates Azure reservation recommendations across all services
+// RecommendationsClientAdapter aggregates Azure reservation recommendations across all services.
+//
+// Invariant: subscriptionID must be non-empty. Downstream converters use it as
+// the Recommendation.Account field; an empty subscriptionID would silently
+// produce Account="" recommendations that downstream consumers (account-scoped
+// caches, UI filters, billing reports) can't route. The canonical construction
+// path is NewRecommendationsClientAdapter; direct struct literals bypass the
+// invariant check and should be confined to tests that deliberately exercise
+// the unvalidated shape.
 type RecommendationsClientAdapter struct {
 	cred           azcore.TokenCredential
 	subscriptionID string
 }
 
-// GetRecommendations retrieves all Azure reservation recommendations across all services and regions
+// NewRecommendationsClientAdapter builds a RecommendationsClientAdapter with
+// the subscriptionID-non-empty invariant enforced. Returns an error when
+// subscriptionID is the empty string so the caller sees the mis-wiring at
+// construction time rather than via confusing Account="" rows later.
+func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID string) (*RecommendationsClientAdapter, error) {
+	if subscriptionID == "" {
+		return nil, fmt.Errorf("azure recommendations: subscriptionID is required")
+	}
+	return &RecommendationsClientAdapter{
+		cred:           cred,
+		subscriptionID: subscriptionID,
+	}, nil
+}
+
+// GetRecommendations retrieves all Azure reservation recommendations across services.
+//
+// The Azure Consumption Reservation Recommendations API is subscription-scoped:
+// the response covers every region in one call. Iterating regions and calling each
+// service per region (the previous behaviour) produced ~60× duplicate results,
+// hammered the rate limit, and meant downstream consumers had to deduplicate.
+// We now call each service client exactly once. Region is intentionally left
+// blank on the client — converters must populate Region from the response data
+// (see known_issues/10_azure_provider.md CRITICAL "Recommendation converters
+// ignore the API response entirely" for the matching converter work).
+//
+// All six service calls run concurrently under errgroup. Each goroutine captures
+// its own error and returns nil to the group so that a single service failure
+// does not cancel sibling calls. Results are appended in a deterministic order
+// (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	allRecommendations := make([]common.Recommendation, 0)
+	var (
+		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
+		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
+	)
 
-	// Get list of regions to check
-	regions, err := r.getRegions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get regions: %w", err)
+	g, gctx := errgroup.WithContext(ctx)
+
+	// Each per-service goroutine is a leaf — it issues the actual ARM /
+	// pricing-API call. The shared semaphore on gctx (set by the scheduler)
+	// bounds aggregate concurrent IO across the whole recommendations-
+	// collection fan-out tree at CUDLY_MAX_PARALLELISM (default 20). If no
+	// semaphore is attached (CLI tools, unit tests), Acquire/Release are
+	// no-ops. See pkg/concurrency.
+	//
+	// goService extracts the Acquire/Release boilerplate so each per-
+	// service block stays a single g.Go call — keeps GetRecommendations
+	// under the project's gocyclo gate (the per-service `if Acquire {…}`
+	// branches counted toward this function's cyclomatic complexity
+	// before extraction).
+	goService := func(errOut *error, fn func()) {
+		g.Go(func() error {
+			if err := concurrency.Acquire(gctx); err != nil {
+				*errOut = err
+				return nil
+			}
+			defer concurrency.Release(gctx)
+			fn()
+			return nil // error isolation: never propagate to errgroup
+		})
 	}
 
-	// Collect recommendations from each service type across all regions
-	for _, region := range regions {
-		// Compute (VM) recommendations
-		if shouldIncludeService(params, common.ServiceCompute) {
-			computeClient := compute.NewClient(r.cred, r.subscriptionID, region)
-			computeRecs, err := computeClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, computeRecs...)
-			}
-		}
-
-		// Database (SQL) recommendations
-		if shouldIncludeService(params, common.ServiceRelationalDB) {
-			dbClient := database.NewClient(r.cred, r.subscriptionID, region)
-			dbRecs, err := dbClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, dbRecs...)
-			}
-		}
-
-		// Cache (Redis) recommendations
-		if shouldIncludeService(params, common.ServiceCache) {
-			cacheClient := cache.NewClient(r.cred, r.subscriptionID, region)
-			cacheRecs, err := cacheClient.GetRecommendations(ctx, params)
-			if err == nil {
-				allRecommendations = append(allRecommendations, cacheRecs...)
-			}
-		}
+	// Compute (VM) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceCompute) {
+		goService(&computeErr, func() {
+			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
+			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
+		})
 	}
 
-	// Get additional recommendations from Azure Advisor
-	advisorRecs, err := r.getAdvisorRecommendations(ctx, params)
-	if err == nil {
-		allRecommendations = append(allRecommendations, advisorRecs...)
+	// Database (SQL) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceRelationalDB) {
+		goService(&dbErr, func() {
+			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
+			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
+		})
 	}
 
-	return allRecommendations, nil
+	// Cache (Redis) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceCache) {
+		goService(&cacheErr, func() {
+			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
+			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
+		})
+	}
+
+	// CosmosDB (NoSQL) recommendations — subscription-wide.
+	if shouldIncludeService(params, common.ServiceNoSQL) {
+		goService(&cosmosErr, func() {
+			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
+			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
+		})
+	}
+
+	// Savings Plans — Azure has no stable public API for SP purchase
+	// recommendations (Benefits Recommendations API is still in preview).
+	// The call returns an empty slice so the service appears in the fan-out
+	// and will start returning data once the API stabilises without requiring
+	// a scheduler change.
+	if shouldIncludeService(params, common.ServiceSavingsPlans) {
+		goService(&spErr, func() {
+			spClient := savingsplans.NewClient(r.cred, r.subscriptionID, "")
+			spRecs, spErr = spClient.GetRecommendations(gctx, params)
+		})
+	}
+
+	// Azure Advisor adds cross-cutting cost recommendations independent of the
+	// per-service Reservation API. Failures here are non-fatal — the per-service
+	// results above are still useful on their own.
+	goService(&advisorErr, func() {
+		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, params)
+	})
+
+	// Wait for all goroutines. g.Wait() always returns nil because every
+	// goroutine returns nil — errors are captured in per-service variables
+	// above. After Wait, propagate ctx cancellation so callers can distinguish
+	// "all five services completed (with possibly per-service errors)" from
+	// "the parent ctx was canceled mid-fan-out". Without this check the
+	// CHECK could swallow a deadline exceeded that the caller expected to
+	// see.
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr},
+		serviceResult{"database", dbRecs, dbErr},
+		serviceResult{"cache", cacheRecs, cacheErr},
+		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
+		serviceResult{"savingsplans", spRecs, spErr},
+		serviceResult{"advisor", advisorRecs, advisorErr}), nil
+}
+
+// serviceResult bundles a per-service collection outcome for the deterministic
+// merge in mergeServiceResults. Extracted into a helper so GetRecommendations
+// stays under the cyclomatic-complexity gate after the post-Wait ctx.Err()
+// propagation was added.
+type serviceResult struct {
+	name string
+	recs []common.Recommendation
+	err  error
+}
+
+// mergeServiceResults logs per-service errors (matches the previous sequential
+// behaviour where each error was logged inline via logging.Warnf) and appends
+// successful results in the order the slice is passed — callers must preserve
+// the canonical compute → database → cache → cosmosdb → savingsplans → advisor
+// order so that order-sensitive consumers remain stable. The advisor entry's
+// error is logged via logging.Errorf to match the pre-parallelisation severity.
+func mergeServiceResults(results ...serviceResult) []common.Recommendation {
+	total := 0
+	for _, r := range results {
+		total += len(r.recs)
+	}
+	out := make([]common.Recommendation, 0, total)
+	for _, r := range results {
+		if r.err != nil {
+			if r.name == "advisor" {
+				logging.Errorf("Failed to get Azure Advisor recommendations: %v", r.err)
+			} else {
+				logging.Warnf("Azure %s recommendations: %v", r.name, r.err)
+			}
+			continue
+		}
+		out = append(out, r.recs...)
+	}
+	return out
 }
 
 // GetRecommendationsForService retrieves Azure reservation recommendations for a specific service
@@ -102,23 +236,67 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
+			// Advisor partial-OK is intentional: per-service reservation results
+			// (compute, database, etc.) remain useful on their own when Advisor
+			// pagination fails mid-stream. Warnf with the accumulated count so
+			// operators can assess the completeness of the Advisor slice.
+			logging.Warnf("Azure Advisor pagination error after %d recommendations (partial results returned): %v", len(recommendations), err)
 			break
 		}
-
-		for _, advisorRec := range page.Value {
-			if advisorRec.Properties == nil {
-				continue
-			}
-
-			// Convert Azure Advisor recommendation to our common format
-			rec := r.convertAdvisorRecommendation(advisorRec)
-			if rec != nil && shouldIncludeService(params, rec.Service) {
-				recommendations = append(recommendations, *rec)
-			}
-		}
+		recommendations = r.appendAdvisorPageRecs(params, page, recommendations)
 	}
 
 	return recommendations, nil
+}
+
+// appendAdvisorPageRecs converts one Advisor pager page into common recommendations
+// and appends them to the provided slice. Pulled out of getAdvisorRecommendations
+// to keep that function under the cyclomatic limit.
+func (r *RecommendationsClientAdapter) appendAdvisorPageRecs(
+	params common.RecommendationParams,
+	page armadvisor.RecommendationsClientListResponse,
+	recommendations []common.Recommendation,
+) []common.Recommendation {
+	for _, advisorRec := range page.Value {
+		if advisorRec.Properties == nil {
+			continue
+		}
+		// Convert Azure Advisor recommendation to our common format
+		rec := r.convertAdvisorRecommendation(advisorRec)
+		if rec != nil && shouldIncludeService(params, rec.Service) {
+			// Preserve Advisor-provided EstimatedSavings when both OnDemandCost
+			// and CommitmentCost are unset (zero), since ExpandPaymentVariants
+			// would otherwise overwrite it with zero (OnDemandCost - CommitmentCost).
+			advisorSavings := rec.EstimatedSavings
+			variants := azrecs.ExpandPaymentVariants(*rec)
+			if rec.OnDemandCost == 0 && rec.CommitmentCost == 0 && advisorSavings != 0 {
+				for i := range variants {
+					variants[i].EstimatedSavings = advisorSavings
+				}
+			}
+			recommendations = append(recommendations, variants...)
+		}
+	}
+	return recommendations
+}
+
+// resolveAdvisorRegion picks the region for an Advisor recommendation.
+// ExtendedProperties["region"|"location"] is authoritative when present;
+// the resource-ID parser is a fallback for the rare case where the ID
+// embeds /locations/{region}/. Pulled out of convertAdvisorRecommendation
+// to keep that function under the cyclomatic limit.
+func resolveAdvisorRegion(advisorRec *armadvisor.ResourceRecommendationBase) string {
+	if ext := advisorRec.Properties.ExtendedProperties; ext != nil {
+		for _, key := range []string{"region", "location"} {
+			if v, ok := ext[key]; ok && v != nil && *v != "" {
+				return *v
+			}
+		}
+	}
+	if advisorRec.ID != nil {
+		return extractRegionFromResourceID(*advisorRec.ID)
+	}
+	return ""
 }
 
 // convertAdvisorRecommendation converts an Azure Advisor recommendation to common format
@@ -127,10 +305,7 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		return nil
 	}
 
-	props := advisorRec.Properties
-
-	// Extract service type from the resource ID or recommendation metadata
-	service := r.extractServiceType(advisorRec)
+	service := extractServiceType(advisorRec)
 	if service == "" {
 		return nil
 	}
@@ -144,78 +319,137 @@ func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *
 		PaymentOption:  "upfront",
 	}
 
-	// Extract region from resource ID if available
-	if advisorRec.ID != nil {
-		region := extractRegionFromResourceID(*advisorRec.ID)
-		if region != "" {
-			rec.Region = region
-		}
-	}
+	rec.Region = resolveAdvisorRegion(advisorRec)
 
-	// Extract cost savings if available
-	if props.ExtendedProperties != nil {
-		// ExtendedProperties is map[string]*string in the Azure SDK
-		if annualSavingsStr, ok := props.ExtendedProperties["annualSavingsAmount"]; ok && annualSavingsStr != nil {
-			// Would need to parse the string to float64
-			// For now, just note that savings info is available
-		}
-		if savingsCurrency, ok := props.ExtendedProperties["savingsCurrency"]; ok && savingsCurrency != nil {
-			// Store currency information if needed
-		}
-	}
-
+	populateFromExtendedProperties(rec, advisorRec.Properties.ExtendedProperties)
 	return rec
 }
 
-// extractServiceType determines the service type from an Advisor recommendation
-func (r *RecommendationsClientAdapter) extractServiceType(rec *armadvisor.ResourceRecommendationBase) string {
-	if rec.Properties == nil || rec.Properties.ImpactedField == nil {
-		return ""
+// populateFromExtendedProperties fills savings, SKU, term, and count from
+// the Advisor recommendation's ExtendedProperties map.
+func populateFromExtendedProperties(rec *common.Recommendation, ext map[string]*string) {
+	if ext == nil {
+		return
 	}
-
-	impactedField := *rec.Properties.ImpactedField
-
-	// Map Azure resource types to our service types
-	switch {
-	case contains(impactedField, "Microsoft.Compute"):
-		return string(common.ServiceCompute)
-	case contains(impactedField, "Microsoft.Sql"):
-		return string(common.ServiceRelationalDB)
-	case contains(impactedField, "Microsoft.Cache"):
-		return string(common.ServiceCache)
-	case contains(impactedField, "Microsoft.DBforMySQL"), contains(impactedField, "Microsoft.DBforPostgreSQL"):
-		return string(common.ServiceRelationalDB)
-	default:
-		return ""
-	}
+	rec.EstimatedSavings = extFloat(ext, "annualSavingsAmount") / 12
+	rec.ResourceType = extString(ext, "sku", rec.ResourceType)
+	rec.Term = extString(ext, "term", rec.Term)
+	rec.Count = extInt(ext, "qty", rec.Count)
 }
 
-// extractRegionFromResourceID extracts the region from an Azure resource ID
-func extractRegionFromResourceID(resourceID string) string {
-	// Azure resource IDs don't always contain region information
-	// This would need to query the resource or use resource metadata
-	// For now, return empty string as region will be set by service clients
+func extString(m map[string]*string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != nil && *v != "" {
+		return *v
+	}
+	return fallback
+}
+
+func extFloat(m map[string]*string, key string) float64 {
+	if v, ok := m[key]; ok && v != nil {
+		if f, err := strconv.ParseFloat(*v, 64); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+func extInt(m map[string]*string, key string, fallback int) int {
+	if v, ok := m[key]; ok && v != nil {
+		if n, err := strconv.Atoi(*v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+// extractServiceType determines the service type from an Advisor recommendation.
+// First checks ImpactedField (resource-scoped), then falls back to
+// ExtendedProperties (subscription-scoped reservations/savings plans).
+func extractServiceType(rec *armadvisor.ResourceRecommendationBase) string {
+	if rec.Properties == nil {
+		return ""
+	}
+	if svc := serviceFromImpactedField(rec.Properties.ImpactedField); svc != "" {
+		return svc
+	}
+	return serviceFromExtendedProperties(rec.Properties.ExtendedProperties)
+}
+
+// serviceFromImpactedField maps Azure resource namespace to service type.
+func serviceFromImpactedField(field *string) string {
+	if field == nil {
+		return ""
+	}
+	f := *field
+	switch {
+	case strings.Contains(f, "Microsoft.Compute"):
+		return string(common.ServiceCompute)
+	case strings.Contains(f, "Microsoft.Sql"):
+		return string(common.ServiceRelationalDB)
+	case strings.Contains(f, "Microsoft.Cache"):
+		return string(common.ServiceCache)
+	case strings.Contains(f, "Microsoft.DBforMySQL"), strings.Contains(f, "Microsoft.DBforPostgreSQL"):
+		return string(common.ServiceRelationalDB)
+	}
 	return ""
 }
 
-// getRegions retrieves available Azure regions for the subscription
-func (r *RecommendationsClientAdapter) getRegions(ctx context.Context) ([]string, error) {
-	// Create a temporary provider to get regions
-	provider := &AzureProvider{
-		cred: r.cred,
+// serviceFromExtendedProperties resolves service type for subscription-scoped
+// recommendations where ImpactedField is "Microsoft.Subscriptions/subscriptions".
+func serviceFromExtendedProperties(ext map[string]*string) string {
+	if ext == nil {
+		return ""
 	}
-
-	regions, err := provider.GetRegions(ctx)
-	if err != nil {
-		return nil, err
+	if rrt, ok := ext["reservedResourceType"]; ok && rrt != nil {
+		switch strings.ToLower(*rrt) {
+		case "virtualmachines":
+			return string(common.ServiceCompute)
+		case "sqldatabases":
+			return string(common.ServiceRelationalDB)
+		case "rediscache":
+			return string(common.ServiceCache)
+		}
 	}
-
-	regionNames := make([]string, 0, len(regions))
-	for _, region := range regions {
-		regionNames = append(regionNames, region.ID)
+	if subcat, ok := ext["recommendationSubCategory"]; ok && subcat != nil {
+		if strings.EqualFold(*subcat, "SavingsPlan") {
+			return string(common.ServiceCompute)
+		}
 	}
+	return ""
+}
 
-	return regionNames, nil
+// extractRegionFromResourceID extracts the region from an Azure resource ID.
+//
+// Standard ARM resource IDs follow the shape
+//
+//	/subscriptions/{sub}/resourceGroups/{rg}/providers/{ns}/{type}/{name}
+//
+// and do NOT embed the region — so this helper is a best-effort fallback
+// only. Callers that have a better source (Advisor recommendation's
+// Properties.ExtendedProperties["region"] / "location", or a sibling
+// Location field) must use that first. This helper exists for the rare
+// Advisor recommendation whose ID happens to carry a /locations/{region}/
+// segment (some reservation-scope resource IDs do).
+//
+// Returns "" when the ID has no recognisable region segment.
+func extractRegionFromResourceID(resourceID string) string {
+	// Case-insensitive scan for /locations/{region}/ — Azure is inconsistent
+	// between `locations`, `Locations`, `location`.
+	lower := strings.ToLower(resourceID)
+	for _, marker := range []string{"/locations/", "/location/"} {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := resourceID[idx+len(marker):]
+		// The next / ends the region segment.
+		if end := strings.IndexByte(rest, '/'); end >= 0 {
+			return rest[:end]
+		}
+		// No trailing / — the region is the last segment.
+		return rest
+	}
+	return ""
 }
 
 // shouldIncludeService checks if a service should be included based on params
@@ -227,9 +461,4 @@ func shouldIncludeService(params common.RecommendationParams, service common.Ser
 
 	// Check if this is the requested service
 	return params.Service == service
-}
-
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
 }

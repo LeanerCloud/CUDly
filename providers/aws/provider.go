@@ -3,16 +3,34 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
+	"github.com/LeanerCloud/CUDly/providers/aws/services/savingsplans"
+)
+
+// AWS SDK v2 credential source identifiers.
+//
+// These are NOT part of the aws-sdk-go-v2 public API — they're the string
+// values the SDK stamps into aws.Credentials.Source for each credential
+// chain. We map them back to our provider.CredentialSource enum in
+// GetCredentials. If the SDK ever renames them on upgrade,
+// TestGetCredentials_SourceMapping will flag the mismatch at test time.
+const (
+	awsSourceSharedConfigCredentials = "SharedConfigCredentials"
+	awsSourceAssumeRoleProvider      = "AssumeRoleProvider"
 )
 
 // STSClient interface for STS operations (enables mocking)
@@ -63,25 +81,42 @@ func (r *realOrganizationsPaginator) NextPage(ctx context.Context, optFns ...fun
 
 // AWSProvider implements the Provider interface for AWS
 type AWSProvider struct {
-	cfg          aws.Config
-	profile      string
-	region       string
-	configLoader ConfigLoader
-	stsClient    STSClient
-	ec2Client    EC2Client
-	orgPaginator OrganizationsPaginator
+	cfg                 aws.Config
+	cfgOnce             sync.Once
+	cfgErr              error // non-nil if config loading failed
+	profile             string
+	region              string
+	configLoader        ConfigLoader
+	stsClient           STSClient
+	ec2Client           EC2Client
+	orgPaginator        OrganizationsPaginator
+	credentialsProvider aws.CredentialsProvider // optional override for per-account execution
 }
 
-// NewAWSProvider creates a new AWS provider instance
+// NewAWSProvider creates a new AWS provider instance.
+//
+// Profile resolution order:
+//  1. config.AWSProfile (typed field, preferred)
+//  2. config.Profile (deprecated overload — kept for backwards compatibility)
 func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
 	p := &AWSProvider{}
 
 	if config != nil {
-		p.profile = config.Profile
+		p.profile = resolveAWSProfile(config)
 		p.region = config.Region
+		p.credentialsProvider = config.AWSCredentialsProvider
 	}
 
 	return p, nil
+}
+
+// resolveAWSProfile picks the AWS profile name from the typed field,
+// falling back to the deprecated Profile field.
+func resolveAWSProfile(config *provider.ProviderConfig) string {
+	if config.AWSProfile != "" {
+		return config.AWSProfile
+	}
+	return config.Profile
 }
 
 // SetConfigLoader sets the config loader (for testing)
@@ -114,22 +149,30 @@ func (p *AWSProvider) DisplayName() string {
 	return "Amazon Web Services"
 }
 
-// IsConfigured checks if AWS credentials are available
+// IsConfigured checks if AWS credentials are available. The config is loaded at most
+// once (thread-safe via sync.Once) to avoid data races on concurrent calls.
 func (p *AWSProvider) IsConfigured() bool {
+	p.cfgOnce.Do(func() {
+		p.cfgErr = p.loadConfig()
+	})
+	return p.cfgErr == nil
+}
+
+// loadConfig loads the AWS SDK config. Called at most once via cfgOnce.
+func (p *AWSProvider) loadConfig() error {
 	ctx := context.Background()
 
-	// Try to load AWS config
 	var opts []func(*config.LoadOptions) error
-
 	if p.profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(p.profile))
 	}
-
 	if p.region != "" {
 		opts = append(opts, config.WithRegion(p.region))
 	}
+	if p.credentialsProvider != nil {
+		opts = append(opts, config.WithCredentialsProvider(p.credentialsProvider))
+	}
 
-	// Use injected config loader if available (for testing)
 	var loader ConfigLoader
 	if p.configLoader != nil {
 		loader = p.configLoader
@@ -139,11 +182,10 @@ func (p *AWSProvider) IsConfigured() bool {
 
 	cfg, err := loader.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return false
+		return err
 	}
-
 	p.cfg = cfg
-	return true
+	return nil
 }
 
 // GetCredentials returns AWS credentials
@@ -159,10 +201,15 @@ func (p *AWSProvider) GetCredentials() (provider.Credentials, error) {
 
 	credType := provider.CredentialSourceEnvironment
 	if creds.Source != "" {
+		// These string constants are AWS SDK v2 internal implementation
+		// details, not a stable public contract. If the SDK renames them
+		// on upgrade, TestGetCredentials_SourceMapping in provider_test.go
+		// starts failing — that is the guard rail. Keep this list in sync
+		// with the SDK when bumping aws-sdk-go-v2.
 		switch creds.Source {
-		case "SharedConfigCredentials":
+		case awsSourceSharedConfigCredentials:
 			credType = provider.CredentialSourceFile
-		case "AssumeRoleProvider":
+		case awsSourceAssumeRoleProvider:
 			credType = provider.CredentialSourceIAMRole
 		}
 	}
@@ -187,42 +234,46 @@ func (p *AWSProvider) ValidateCredentials(ctx context.Context) error {
 		stsClient = sts.NewFromConfig(p.cfg)
 	}
 
-	_, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	t0 := time.Now()
+	logging.Infof("purchase[STS]: GetCallerIdentity starting (profile=%s region=%s)",
+		p.profile, p.region)
+	result, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
+		logging.Errorf("purchase[STS]: GetCallerIdentity failed after %s: %v", time.Since(t0), err)
 		return fmt.Errorf("AWS credentials validation failed: %w", err)
 	}
-
+	account := ""
+	if result.Account != nil {
+		account = *result.Account
+	}
+	logging.Infof("purchase[STS]: GetCallerIdentity returned in %s (account=%s)", time.Since(t0), account)
 	return nil
 }
 
-// GetAccounts returns all accessible AWS accounts
-func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
-	accounts := make([]common.Account, 0)
+// orgListAccountsSilentErrorCodes are the AWS Organizations ListAccounts
+// error codes that represent "expected" fallback conditions: the caller is
+// not part of an organization, or lacks the Organizations permission. For
+// those codes we return the accumulated accounts (just the caller's own
+// account from the earlier STS GetCallerIdentity call) with no error.
+//
+// Any OTHER error (throttling, network, auth) is a real failure — returning
+// a silently-truncated list is unsafe for the purchase flow that consumes
+// GetAccounts, so we log and propagate so the caller can decide.
+var orgListAccountsSilentErrorCodes = map[string]struct{}{
+	"AWSOrganizationsNotInUseException": {},
+	"AccessDeniedException":             {},
+}
 
-	// Use injected STS client if available (for testing)
-	var stsClient STSClient
-	if p.stsClient != nil {
-		stsClient = p.stsClient
-	} else {
-		stsClient = sts.NewFromConfig(p.cfg)
-	}
-
-	// Get current account
-	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current account: %w", err)
-	}
-
-	// Add current account
-	accounts = append(accounts, common.Account{
-		Provider:    common.ProviderAWS,
-		ID:          *identity.Account,
-		Name:        *identity.Account,
-		DisplayName: *identity.Account,
-		IsDefault:   true,
-	})
-
-	// Use injected paginator if available (for testing), otherwise create real paginator
+// appendOrgAccounts adds organization member accounts to the slice, skipping
+// the current account (already added as the default) and suspended accounts
+// with nil fields.
+//
+// Error classification: returns the accumulated accounts with nil error only
+// for the expected fallback cases (not in an org, permission denied). Any
+// other mid-pagination error (throttling, network, SDK bug) is returned to
+// the caller so an incomplete list can't silently slip into the purchase
+// flow as if it were complete. See orgListAccountsSilentErrorCodes above.
+func (p *AWSProvider) appendOrgAccounts(ctx context.Context, accounts []common.Account, currentAccountID string) ([]common.Account, error) {
 	var paginator OrganizationsPaginator
 	if p.orgPaginator != nil {
 		paginator = p.orgPaginator
@@ -233,20 +284,22 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 		}
 	}
 
-	// Try to list organization accounts
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			// Not in an organization or no permissions, return just current account
-			return accounts, nil
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				if _, silent := orgListAccountsSilentErrorCodes[apiErr.ErrorCode()]; silent {
+					return accounts, nil
+				}
+			}
+			logging.Warnf("AWS Organizations ListAccounts pagination failed mid-run: %v", err)
+			return accounts, fmt.Errorf("organizations: list accounts: %w", err)
 		}
-
 		for _, acc := range output.Accounts {
-			// Skip the current account as we already added it
-			if *acc.Id == *identity.Account {
+			if acc.Id == nil || acc.Name == nil || *acc.Id == currentAccountID {
 				continue
 			}
-
 			accounts = append(accounts, common.Account{
 				Provider:    common.ProviderAWS,
 				ID:          *acc.Id,
@@ -256,12 +309,47 @@ func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error)
 			})
 		}
 	}
-
 	return accounts, nil
+}
+
+// GetAccounts returns all accessible AWS accounts
+func (p *AWSProvider) GetAccounts(ctx context.Context) ([]common.Account, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("AWS is not configured")
+	}
+
+	var stsClient STSClient
+	if p.stsClient != nil {
+		stsClient = p.stsClient
+	} else {
+		stsClient = sts.NewFromConfig(p.cfg)
+	}
+
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current account: %w", err)
+	}
+	if identity.Account == nil {
+		return nil, fmt.Errorf("STS GetCallerIdentity returned nil account")
+	}
+
+	accounts := []common.Account{{
+		Provider:    common.ProviderAWS,
+		ID:          *identity.Account,
+		Name:        *identity.Account,
+		DisplayName: *identity.Account,
+		IsDefault:   true,
+	}}
+
+	return p.appendOrgAccounts(ctx, accounts, *identity.Account)
 }
 
 // GetRegions returns all available AWS regions using EC2 DescribeRegions API
 func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
+	if !p.IsConfigured() {
+		return nil, fmt.Errorf("AWS is not configured")
+	}
+
 	// Use injected EC2 client if available (for testing)
 	var client EC2Client
 	if p.ec2Client != nil {
@@ -299,7 +387,25 @@ func (p *AWSProvider) GetRegions(ctx context.Context) ([]common.Region, error) {
 	return regions, nil
 }
 
-// GetDefaultRegion returns the default AWS region
+// GetDefaultRegion returns the default AWS region.
+//
+// Priority order:
+//
+//  1. p.region if explicitly set on the provider.
+//  2. p.cfg.Region if the caller pre-populated cfg (e.g. tests with a
+//     synthetic config) — checked BEFORE IsConfigured to avoid the SDK's
+//     credentials/config chain overwriting a caller-supplied region with
+//     the ambient AWS_REGION / ~/.aws/config default.
+//  3. The SDK-loaded region (via IsConfigured → loadConfig).
+//  4. "us-east-1" as a last-resort default.
+//
+// Step 2 is what fixes #96: previously this function called
+// IsConfigured() unconditionally, which triggers cfgOnce.Do(loadConfig)
+// and lets the SDK's credentials/config chain populate p.cfg.Region from
+// the developer's ambient environment, masking a region the test had set
+// explicitly. Reading the already-set p.cfg.Region first keeps test
+// fixtures honest while still falling through to the SDK chain when no
+// caller has touched cfg.
 func (p *AWSProvider) GetDefaultRegion() string {
 	if p.region != "" {
 		return p.region
@@ -307,10 +413,15 @@ func (p *AWSProvider) GetDefaultRegion() string {
 	if p.cfg.Region != "" {
 		return p.cfg.Region
 	}
+	if p.IsConfigured() && p.cfg.Region != "" {
+		return p.cfg.Region
+	}
 	return "us-east-1"
 }
 
-// GetSupportedServices returns the list of services supported by AWS provider
+// GetSupportedServices returns the list of services supported by AWS provider.
+// Savings Plans are exposed as four distinct services (one per AWS plan type)
+// so users can configure term/payment defaults per plan type via ServiceConfig.
 func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 	return []common.ServiceType{
 		common.ServiceCompute,
@@ -318,6 +429,12 @@ func (p *AWSProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceCache,
 		common.ServiceSearch,
 		common.ServiceDataWarehouse,
+		common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase,
+		// Legacy umbrella for backward compat with persisted records;
+		// see the GetServiceClient case below for rationale.
 		common.ServiceSavingsPlans,
 		// Legacy service types for backward compatibility
 		common.ServiceEC2,
@@ -352,8 +469,23 @@ func (p *AWSProvider) GetServiceClient(ctx context.Context, service common.Servi
 		return NewRedshiftClient(regionalCfg), nil
 	case common.ServiceMemoryDB:
 		return NewMemoryDBClient(regionalCfg), nil
+	case common.ServiceSavingsPlansCompute,
+		common.ServiceSavingsPlansEC2Instance,
+		common.ServiceSavingsPlansSageMaker,
+		common.ServiceSavingsPlansDatabase:
+		pt, _ := savingsplans.PlanTypeForServiceType(service)
+		return NewSavingsPlansClient(regionalCfg, pt), nil
 	case common.ServiceSavingsPlans:
-		return NewSavingsPlansClient(regionalCfg), nil
+		// Legacy umbrella path for any persisted RecommendationRecord
+		// (or scheduled purchase) still tagged with the pre-split slug.
+		// The constructor's empty plan type signals "umbrella mode" to
+		// the SP client: GetExistingCommitments returns every plan type
+		// unfiltered, and findOfferingID falls back to the
+		// recommendation's Details.PlanType (matching pre-split
+		// behaviour). New code paths use the four per-plan-type cases
+		// above; this case exists so legacy data doesn't 503 the
+		// purchase pipeline.
+		return NewSavingsPlansClient(regionalCfg, ""), nil
 	default:
 		return nil, fmt.Errorf("unsupported service: %s", service)
 	}

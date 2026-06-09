@@ -50,6 +50,7 @@ func registerGlobalTestProvider(t *testing.T, name string, configured bool, cred
 }
 
 func TestCreateProvider_WithGlobalRegistry(t *testing.T) {
+	t.Parallel()
 	testName := "factory-test-provider-1"
 	registerGlobalTestProvider(t, testName, true, nil)
 	defer GetRegistry().Unregister(testName)
@@ -72,6 +73,7 @@ func TestCreateProvider_WithGlobalRegistry(t *testing.T) {
 }
 
 func TestCreateProviders_WithGlobalRegistry(t *testing.T) {
+	t.Parallel()
 	testName1 := "factory-test-provider-2"
 	testName2 := "factory-test-provider-3"
 	registerGlobalTestProvider(t, testName1, true, nil)
@@ -90,6 +92,7 @@ func TestCreateProviders_WithGlobalRegistry(t *testing.T) {
 }
 
 func TestCreateAndValidateProvider(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Test with valid provider
@@ -121,6 +124,7 @@ func TestCreateAndValidateProvider(t *testing.T) {
 }
 
 func TestGetOrDetectProviders_WithNames(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	testName := "factory-test-provider-7"
@@ -134,6 +138,7 @@ func TestGetOrDetectProviders_WithNames(t *testing.T) {
 }
 
 func TestCreateProvider(t *testing.T) {
+	t.Parallel()
 	// Use a fresh registry for this test
 	r := setupTestRegistry(t)
 
@@ -155,6 +160,7 @@ func TestCreateProvider(t *testing.T) {
 }
 
 func TestCreateProviders(t *testing.T) {
+	t.Parallel()
 	r := setupTestRegistry(t)
 
 	// Create multiple providers
@@ -170,6 +176,7 @@ func TestCreateProviders(t *testing.T) {
 }
 
 func TestProviderConfig_DefaultValues(t *testing.T) {
+	t.Parallel()
 	config := &ProviderConfig{}
 
 	// Test zero values
@@ -181,6 +188,7 @@ func TestProviderConfig_DefaultValues(t *testing.T) {
 }
 
 func TestProviderConfig_WithAllFields(t *testing.T) {
+	t.Parallel()
 	config := &ProviderConfig{
 		Name:           "aws",
 		Profile:        "prod",

@@ -1,0 +1,9 @@
+# Hadolint configuration
+# https://github.com/hadolint/hadolint
+
+# Ignore rules that are impractical for alpine-based images
+ignored:
+  # DL3018: Pin versions in apk add
+  # Alpine package versions change with each release and vary by architecture.
+  # Using --no-cache ensures fresh packages; pinning creates maintenance burden.
+  - DL3018

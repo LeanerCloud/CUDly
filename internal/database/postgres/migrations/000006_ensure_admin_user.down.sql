@@ -1,0 +1,16 @@
+-- Down migration for 000006_ensure_admin_user — DELIBERATE NO-OP.
+--
+-- Migration 005 already creates the admin user; rolling back through 005
+-- deletes it. Migration 006's only purpose is to ensure the user exists
+-- on environments where 005 ran before the bcrypt-hash bug was fixed.
+-- A symmetric rollback here would either:
+--   - Re-delete the admin user (already handled by 005's down)
+--   - Wipe operator-changed admin credentials in production
+--
+-- Both are worse than the asymmetry. We accept the asymmetry deliberately:
+-- if you need to remove the admin user, do it manually so you have to
+-- think about whether someone else has rotated the password since.
+--
+-- Tracked in known_issues/20_database_migrations.md (LOW: rollback
+-- asymmetry).
+SELECT 1;

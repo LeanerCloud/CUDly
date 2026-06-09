@@ -1,0 +1,329 @@
+// Package api provides the HTTP API handlers for the CUDly dashboard.
+package api
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// analyticsDBConn is the minimal interface used by PostgresAnalyticsClient.
+// Both *database.Connection and pgxmock.PgxPoolIface satisfy it so tests
+// can drop in a mock without needing a real Postgres.
+type analyticsDBConn interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// PostgresAnalyticsClient implements AnalyticsClientInterface by aggregating
+// the purchase_history table. It replaces the legacy S3/Athena-backed
+// client — all purchase history is now written to Postgres and we want
+// the analytics endpoints to serve the same shape without a second
+// storage layer.
+type PostgresAnalyticsClient struct {
+	db analyticsDBConn
+}
+
+// NewPostgresAnalyticsClient creates a new Postgres-backed analytics client.
+func NewPostgresAnalyticsClient(db *database.Connection) *PostgresAnalyticsClient {
+	return &PostgresAnalyticsClient{db: db}
+}
+
+// Verify PostgresAnalyticsClient implements AnalyticsClientInterface.
+var _ AnalyticsClientInterface = (*PostgresAnalyticsClient)(nil)
+
+// intervalToTruncUnit maps the caller-facing interval names to the
+// corresponding Postgres date_trunc() unit. We allowlist the values to
+// defend against SQL injection since the unit is interpolated directly
+// (date_trunc's first argument doesn't accept parameter binding on
+// most drivers).
+func intervalToTruncUnit(interval string) (string, error) {
+	switch interval {
+	case "hourly":
+		return "hour", nil
+	case "daily", "":
+		return "day", nil
+	case "weekly":
+		return "week", nil
+	case "monthly":
+		return "month", nil
+	default:
+		return "", fmt.Errorf("unsupported interval %q", interval)
+	}
+}
+
+// dimensionToColumn maps the caller-facing dimension to the underlying
+// purchase_history column. Allowlisted for the same reason as
+// intervalToTruncUnit.
+func dimensionToColumn(dimension string) (string, error) {
+	switch dimension {
+	case "service", "":
+		return "service", nil
+	case "provider":
+		return "provider", nil
+	case "region":
+		return "region", nil
+	case "account":
+		return "account_id", nil
+	default:
+		return "", fmt.Errorf("unsupported dimension %q", dimension)
+	}
+}
+
+// accountFilterClause builds the dual-column account WHERE fragment and the
+// full positional arg list for the analytics aggregate queries. baseArgs holds
+// the fixed leading binds ($1=start, $2=end); the account array binds (if any)
+// are appended after them and the returned clause references them by the right
+// positions.
+//
+// purchase_history carries two account identifiers, either of which may be the
+// only one populated on a row: account_id (the cloud-provider external number,
+// always populated) and cloud_account_id (the cloud_accounts UUID FK, NULL on
+// every direct-execute/ambient/pre-000011 row). The top-bar chip emits the
+// UUID, so matching only cloud_account_id silently dropped every NULL row
+// (issue #701/#498) and matching only account_id dropped UUID-only rows (#866).
+//
+// The external-id half is grouped per provider so each external number only
+// matches rows of its own provider:
+//
+//	(cloud_account_id = ANY($u)
+//	   OR (provider = $p AND account_id = ANY($extsForP)) OR ...)
+//
+// preserving the (provider, external_id) pairing so a filter for aws/123 never
+// pulls azure/123 rows. The "" provider key (legacy raw external number, unknown
+// provider) matches account_id with no provider gate. cloud_account_id is
+// compared directly (no ::text cast) so the plain cloud_account_id UUID index
+// (migration 000011) can back it. Providers are sorted for deterministic SQL.
+// Both empty -> "TRUE" (no account filter).
+func accountFilterClause(accountUUIDs []string, accountExternalIDsByProvider map[string][]string, baseArgs []any) (clause string, args []any) {
+	args = baseArgs
+	var ors []string
+	if len(accountUUIDs) > 0 {
+		args = append(args, accountUUIDs)
+		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
+	}
+	for _, provider := range sortedProviderKeys(accountExternalIDsByProvider) {
+		exts := accountExternalIDsByProvider[provider]
+		if len(exts) == 0 {
+			continue
+		}
+		if provider == "" {
+			args = append(args, exts)
+			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
+			continue
+		}
+		args = append(args, provider)
+		providerArg := len(args)
+		args = append(args, exts)
+		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
+	}
+	if len(ors) == 0 {
+		return "TRUE", args
+	}
+	return "(" + strings.Join(ors, " OR ") + ")", args
+}
+
+// sortedProviderKeys returns the map keys in ascending order so the generated
+// SQL (and its bind-arg ordering) is deterministic across calls and testable.
+func sortedProviderKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// QueryHistory aggregates purchase_history rows bucketed by interval.
+// Empty accountUUIDs AND accountExternalIDsByProvider means "all accounts
+// accessible to the caller"; scoping is enforced upstream in the handler.
+// A non-empty provider ("aws"/"azure"/"gcp") restricts to rows of that
+// provider; "" means all providers (the global-filter "all" sentinel is
+// normalised to "" in the handler). Returns data points in ascending order
+// and a summary covering the full window.
+func (c *PostgresAnalyticsClient) QueryHistory(
+	ctx context.Context,
+	accountUUIDs []string,
+	accountExternalIDsByProvider map[string][]string,
+	provider string,
+	start, end time.Time,
+	interval string,
+) ([]HistoryDataPoint, *HistorySummary, error) {
+	unit, err := intervalToTruncUnit(interval)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Single query grouped by (bucket, service, provider) so we can assemble
+	// both the top-line bucket totals and the by_service / by_provider
+	// breakdowns without a second trip to the DB. The account predicate is the
+	// shared dual-column clause (see accountFilterClause); the optional provider
+	// predicate mirrors QueryByService (parameter-bound, "" = no filter).
+	//
+	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above and the
+	// account / provider clauses are parameter-bound (no user input interpolated).
+	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
+	providerClause := ""
+	if provider != "" {
+		args = append(args, provider)
+		providerClause = fmt.Sprintf(" AND provider = $%d", len(args))
+	}
+	query := fmt.Sprintf(`
+		SELECT date_trunc('%s', timestamp) AS bucket,
+		       service,
+		       provider,
+		       SUM(estimated_savings)::float8 AS savings,
+		       SUM(upfront_cost)::float8 AS upfront,
+		       COUNT(*) AS purchases
+		FROM purchase_history
+		WHERE timestamp >= $1
+		  AND timestamp <= $2
+		  AND %s%s
+		GROUP BY bucket, service, provider
+		ORDER BY bucket ASC
+	`, unit, accountClause, providerClause)
+
+	rows, err := c.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query purchase_history: %w", err)
+	}
+	defer rows.Close()
+
+	// Fold rows into bucket → HistoryDataPoint with per-service/provider maps.
+	bucketIndex := make(map[time.Time]*HistoryDataPoint)
+	var bucketOrder []time.Time
+	summary := &HistorySummary{}
+
+	for rows.Next() {
+		var bucket time.Time
+		var service, provider string
+		var savings, upfront float64
+		var purchases int
+		if err := rows.Scan(&bucket, &service, &provider, &savings, &upfront, &purchases); err != nil {
+			return nil, nil, fmt.Errorf("scan purchase_history row: %w", err)
+		}
+
+		dp, ok := bucketIndex[bucket]
+		if !ok {
+			dp = &HistoryDataPoint{
+				Timestamp:  bucket,
+				ByService:  make(map[string]float64),
+				ByProvider: make(map[string]float64),
+			}
+			bucketIndex[bucket] = dp
+			bucketOrder = append(bucketOrder, bucket)
+		}
+		dp.TotalSavings += savings
+		dp.TotalUpfront += upfront
+		dp.PurchaseCount += purchases
+		dp.ByService[service] += savings
+		dp.ByProvider[provider] += savings
+
+		summary.TotalUpfront += upfront
+		summary.TotalMonthlySavings += savings
+		summary.TotalPurchases += purchases
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate purchase_history rows: %w", err)
+	}
+
+	// Build ordered slice and compute the running cumulative savings.
+	dataPoints := make([]HistoryDataPoint, 0, len(bucketOrder))
+	var cumulative float64
+	for _, b := range bucketOrder {
+		dp := bucketIndex[b]
+		cumulative += dp.TotalSavings
+		dp.CumulativeSavings = cumulative
+		dataPoints = append(dataPoints, *dp)
+	}
+
+	// Rows in purchase_history are all considered completed (the table is
+	// written only after a successful purchase), so TotalCompleted mirrors
+	// TotalPurchases and the other state counters stay zero.
+	summary.TotalCompleted = summary.TotalPurchases
+	summary.TotalAnnualSavings = summary.TotalMonthlySavings * 12
+
+	return dataPoints, summary, nil
+}
+
+// QueryBreakdown groups purchase_history by dimension (service, provider,
+// region, account) and returns totals + percentage-of-total-savings per
+// bucket.
+func (c *PostgresAnalyticsClient) QueryBreakdown(
+	ctx context.Context,
+	accountUUIDs []string,
+	accountExternalIDsByProvider map[string][]string,
+	start, end time.Time,
+	dimension string,
+) (map[string]BreakdownValue, error) {
+	column, err := dimensionToColumn(dimension)
+	if err != nil {
+		return nil, err
+	}
+
+	// Dual-column account predicate: see accountFilterClause / QueryHistory for
+	// rationale (issue #701/#498/#866).
+	//
+	// #nosec G201 — `column` is allowlisted by dimensionToColumn above and the
+	// account clause is parameter-bound (no user input interpolated).
+	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
+	query := fmt.Sprintf(`
+		SELECT %s AS bucket,
+		       SUM(estimated_savings)::float8 AS savings,
+		       SUM(upfront_cost)::float8 AS upfront,
+		       COUNT(*) AS purchases
+		FROM purchase_history
+		WHERE timestamp >= $1
+		  AND timestamp <= $2
+		  AND %s
+		GROUP BY bucket
+		ORDER BY savings DESC
+	`, column, accountClause)
+
+	rows, err := c.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	type rawRow struct {
+		bucket    string
+		savings   float64
+		upfront   float64
+		purchases int
+	}
+	var raws []rawRow
+	var totalSavings float64
+	for rows.Next() {
+		var r rawRow
+		if err := rows.Scan(&r.bucket, &r.savings, &r.upfront, &r.purchases); err != nil {
+			return nil, fmt.Errorf("scan breakdown row: %w", err)
+		}
+		raws = append(raws, r)
+		totalSavings += r.savings
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate breakdown rows: %w", err)
+	}
+
+	result := make(map[string]BreakdownValue, len(raws))
+	for _, r := range raws {
+		pct := 0.0
+		if totalSavings > 0 {
+			pct = (r.savings / totalSavings) * 100.0
+		}
+		result[r.bucket] = BreakdownValue{
+			TotalSavings:  r.savings,
+			TotalUpfront:  r.upfront,
+			PurchaseCount: r.purchases,
+			Percentage:    pct,
+		}
+	}
+	return result, nil
+}

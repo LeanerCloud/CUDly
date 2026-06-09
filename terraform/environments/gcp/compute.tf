@@ -1,0 +1,195 @@
+# ==============================================
+# Compute Platform: Cloud Run (Serverless)
+# ==============================================
+
+# Cloud Run allow_unauthenticated is fully derived from enable_cdn. There is no
+# operator-facing variable for it: the two valid combinations are
+#
+#   enable_cdn = false -> allow_unauthenticated = true
+#     The SPA / clients hit the *.run.app URL directly. Browsers cannot present
+#     a Google-signed identity token, so the IAM gate must accept allUsers; auth
+#     is enforced at the application layer (login session, CSRF, OIDC for
+#     scheduled tasks).
+#
+#   enable_cdn = true  -> allow_unauthenticated = false
+#     The external HTTPS LB (with Cloud Armor) fronts the service. The LB
+#     attaches a Google-signed identity to upstream calls, so Cloud Run can
+#     enforce roles/run.invoker on the LB's service account only and lock
+#     allUsers out at the IAM layer (closes #384).
+#
+# Tying the two flags together prevents two specific mis-configurations:
+#   (a) enable_cdn = true with allow_unauthenticated = true -> public *.run.app
+#       URL behind a pointless LB (security goal of #384 defeated; bypassing
+#       Cloud Armor's WAF is a single curl away).
+#   (b) enable_cdn = false with allow_unauthenticated = false -> direct browser
+#       hits to *.run.app return 403 (no way to present a signed identity), the
+#       service is unreachable.
+#
+# This mirrors the AWS-side pattern in #574 (Lambda Function URL auth_type
+# derived from enable_cdn). The AWS analog is the CloudFront OAC's SigV4 signing
+# of upstream calls; the GCP analog is the LB SA's identity token.
+locals {
+  cloud_run_allow_unauthenticated = !var.enable_cdn
+}
+
+module "compute_cloud_run" {
+  source = "../../modules/compute/gcp/cloud-run"
+  count  = var.compute_platform == "cloud-run" ? 1 : 0
+
+  project_id   = var.project_id
+  service_name = local.service_name
+  environment  = var.environment
+  region       = var.region
+
+  # Container image (from build module or var.image_uri)
+  image_uri = var.enable_docker_build ? module.build[0].image_uri : var.image_uri
+
+  # Resources
+  cpu    = var.cloud_run_cpu
+  memory = var.cloud_run_memory
+
+  # Scaling
+  min_instances   = var.cloud_run_min_instances
+  max_instances   = var.cloud_run_max_instances
+  request_timeout = var.cloud_run_request_timeout
+
+  # Access
+  allow_unauthenticated = local.cloud_run_allow_unauthenticated
+  ingress               = var.cloud_run_ingress
+
+  # Database connection
+  database_host               = module.database.private_ip_address
+  database_name               = module.database.database_name
+  database_username           = var.database_username
+  database_password_secret_id = module.secrets.database_password_secret_id
+
+  # Admin email
+  admin_email                  = var.admin_email
+  admin_password_secret_name   = coalesce(module.secrets.admin_password_secret_name, "")
+  enable_admin_password_writer = true # secret name comes from secrets module output, not a literal
+
+  # Per-secret IAM bindings (replaces the previous project-wide
+  # `roles/secretmanager.secretAccessor` grant). Each entry produces one
+  # least-privilege binding scoped to that secret only.
+  additional_secret_accessor_ids = {
+    sendgrid_api_key          = module.secrets.sendgrid_api_key_id
+    credential_encryption_key = module.secrets.credential_encryption_key_secret_id
+  }
+
+  # VPC Access (for Cloud SQL)
+  vpc_connector_id = module.networking.vpc_connector_id
+
+  # Scheduled tasks. Per #159 the cloud-run module no longer takes a
+  # plaintext scheduled_task_secret — Cloud Scheduler signs an OIDC
+  # ID token with the scheduler SA, and the CUDly app validates that
+  # token at /api/scheduled/* via internal/server/scheduledauth
+  # (signature, issuer, audience, sub-pin). Cloud Run's IAM gate
+  # (roles/run.invoker, derived from enable_cdn via the local above
+  # — see #384) acts as defence in depth on top.
+  # Azure stays on bearer + Key Vault because Logic Apps' HTTP
+  # Connector does not emit Entra OIDC tokens.
+  enable_scheduled_tasks  = var.enable_scheduled_tasks
+  recommendation_schedule = var.recommendation_schedule
+
+  # RI exchange automation
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
+
+  # Database migration
+  auto_migrate = var.auto_migrate
+
+  # Billing account (for billing.viewer IAM binding at account level)
+  billing_account_id = var.billing_account_id
+
+  # Additional environment variables
+  additional_env_vars = merge(
+    {
+      STATIC_DIR                          = "/app/static"
+      SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.credential_encryption_key_secret_id
+      FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL                       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
+      CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD                  = "gcp"
+    },
+    var.additional_env_vars
+  )
+
+  labels = local.common_labels
+
+  depends_on = [module.networking, module.database, module.secrets, module.build]
+}
+
+# ==============================================
+# Compute Platform: GKE (Kubernetes)
+# ==============================================
+
+module "compute_gke" {
+  source = "../../modules/compute/gcp/gke"
+  count  = var.compute_platform == "gke" ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  project_id   = var.project_id
+  region       = var.region
+
+  # Container image (from build module or var.image_uri)
+  image_name = local.image_name
+  image_tag  = local.image_tag
+
+  # Networking
+  network_name    = module.networking.network_name
+  subnetwork_name = module.networking.subnet_name
+  zones           = var.gke_zones
+
+  # Kubernetes configuration
+  kubernetes_version       = var.gke_kubernetes_version
+  node_count               = var.gke_node_count
+  node_machine_type        = var.gke_node_machine_type
+  node_disk_size_gb        = var.gke_node_disk_size_gb
+  min_node_count           = var.gke_min_node_count
+  max_node_count           = var.gke_max_node_count
+  enable_auto_scaling      = var.gke_enable_auto_scaling
+  enable_auto_repair       = var.gke_enable_auto_repair
+  enable_auto_upgrade      = var.gke_enable_auto_upgrade
+  enable_workload_identity = var.gke_enable_workload_identity
+
+  # Database connection
+  database_host                 = module.database.instance_connection_name
+  database_name                 = module.database.database_name
+  database_username             = var.database_username
+  database_password_secret_name = module.secrets.database_password_secret_name
+
+  # Application configuration
+  admin_email                = var.admin_email
+  admin_password_secret_name = coalesce(module.secrets.admin_password_secret_name, "")
+  auto_migrate               = var.auto_migrate
+
+  # Per-secret IAM bindings for the GKE workload SA. Without these the pod
+  # could only read `database_password_secret_name`, so any code path
+  # touching the credential encryption key or the SendGrid key would 403
+  # silently. Map keys are arbitrary stable labels.
+  additional_secret_accessor_ids = {
+    sendgrid_api_key          = module.secrets.sendgrid_api_key_id
+    credential_encryption_key = module.secrets.credential_encryption_key_secret_id
+  }
+
+  additional_env_vars = merge(
+    {
+      STATIC_DIR                          = "/app/static"
+      SENDGRID_API_KEY_SECRET             = module.secrets.sendgrid_api_key_id
+      CREDENTIAL_ENCRYPTION_KEY_SECRET_ID = module.secrets.credential_encryption_key_secret_id
+      FROM_EMAIL                          = var.subdomain_zone_name != "" ? "noreply@${var.subdomain_zone_name}" : "noreply@${var.project_name}.example.com"
+      DASHBOARD_URL                       = local.dashboard_url
+      CORS_ALLOWED_ORIGIN                 = local.dashboard_url != "" ? local.dashboard_url : "http://localhost:3000"
+      CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
+      CUDLY_SOURCE_CLOUD                  = "gcp"
+    },
+    var.additional_env_vars
+  )
+
+  labels = local.common_labels
+
+  depends_on = [module.networking, module.database, module.secrets]
+}

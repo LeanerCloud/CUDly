@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Deploy the CUDly Azure role assignment template.
+#
+# Prerequisites:
+#   1. Run the azure-wif-cli.sh script first to create the CUDly App Registration,
+#      service principal, and upload the certificate. Note the printed
+#      servicePrincipalObjectId.
+#   2. Authenticate the Azure CLI with `az login` and select the target subscription
+#      with `az account set --subscription <id>`.
+#
+# Usage:
+#   SP_OBJECT_ID=<object-id-from-step-1> bash deploy-azure.sh [--location <region>] [--template bicep|arm]
+#
+set -euo pipefail
+
+: "${SP_OBJECT_ID:?set SP_OBJECT_ID to the service principal object ID from azure-wif-cli.sh}"
+
+LOCATION="${AZURE_LOCATION:-eastus}"
+TEMPLATE="bicep"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --location) LOCATION="$2"; shift 2 ;;
+    --template) TEMPLATE="$2"; shift 2 ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "$TEMPLATE" in
+  bicep) TEMPLATE_FILE="$DIR/azure-wif.bicep" ;;
+  arm)   TEMPLATE_FILE="$DIR/azure-wif.arm.json" ;;
+  *) echo "--template must be bicep or arm" >&2; exit 1 ;;
+esac
+
+PARAMS_FILE="$DIR/azure-wif-bicep-params.json"
+if [[ ! -f "$PARAMS_FILE" ]]; then
+  echo "Missing parameters file: $PARAMS_FILE" >&2
+  exit 1
+fi
+
+DEPLOYMENT_NAME="cudly-$(date +%Y%m%d-%H%M%S)"
+
+echo "Deploying ${TEMPLATE} template to subscription at ${LOCATION}..."
+az deployment sub create \
+  --name "$DEPLOYMENT_NAME" \
+  --location "$LOCATION" \
+  --template-file "$TEMPLATE_FILE" \
+  --parameters "@$PARAMS_FILE" \
+  --parameters "servicePrincipalObjectId=$SP_OBJECT_ID" \
+  --output table
+
+echo ""
+echo "=== Done ==="
+echo "Set azure_auth_mode=workload_identity_federation in CUDly."
+{{- if .CUDlyAPIURL}}
+
+# ---------------------------------------------------------------------------
+# Register with CUDly
+# ---------------------------------------------------------------------------
+echo ""
+echo "Registering account with CUDly..."
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-$(az account show --query id -o tsv)}"
+TENANT_ID=$(az account show --query tenantId -o tsv)
+ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+# AZURE_CLIENT_ID is written by the preceding azure-wif-cli.sh step.
+CLIENT_ID="${AZURE_CLIENT_ID:-}"
+read -r -d '' PAYLOAD <<JSON || true
+{
+  "provider": "azure",
+  "external_id": "${SUBSCRIPTION_ID}",
+  "account_name": "${ACCOUNT_NAME}",
+  "contact_email": "${CONTACT_EMAIL}",
+  "azure_auth_mode": "workload_identity_federation",
+  "azure_subscription_id": "${SUBSCRIPTION_ID}",
+  "azure_tenant_id": "${TENANT_ID}",
+  "azure_client_id": "${CLIENT_ID}"
+}
+JSON
+HTTP_CODE=$(curl -sS -o /tmp/cudly-register.out -w "%{http_code}" \
+  -X POST "{{.CUDlyAPIURL}}/api/register" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}")
+case "$HTTP_CODE" in
+  200|201) echo "Registration submitted. Reference token: $(jq -r .reference_token /tmp/cudly-register.out 2>/dev/null || cat /tmp/cudly-register.out)" ;;
+  409)     echo "Registration already pending for this account — continuing." ;;
+  *)       echo "ERROR: CUDly registration returned HTTP $HTTP_CODE:"; cat /tmp/cudly-register.out; exit 1 ;;
+esac
+{{- end}}
