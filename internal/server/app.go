@@ -687,6 +687,25 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return fmt.Errorf("failed to create PostgreSQL auth store")
 	}
 
+	// Load the credential encryption key (deploy-provided, stable across
+	// instances and cold-starts) up front: it seeds the CSRF key below and is
+	// reused for the credential store further down. loadAndGuardEncryptionKey
+	// memoizes via sync.Once, so the later credential-store call is free.
+	encKey, encKeySource, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
+	if err != nil {
+		return err
+	}
+
+	// Derive a STABLE CSRF key from the encryption key so every instance and
+	// every Lambda cold-start uses the same key (closes the cross-instance CSRF
+	// failure: a token minted on one instance must validate on another). Without
+	// an explicit CSRFKey, auth.NewService would mint a random per-process key,
+	// invalidating tokens across the fleet and on every cold-start.
+	csrfKey, err := auth.DeriveCSRFKey(encKey)
+	if err != nil {
+		return fmt.Errorf("failed to derive CSRF key: %w", err)
+	}
+
 	// Update auth service with PostgreSQL auth store
 	app.Auth = auth.NewService(auth.ServiceConfig{
 		Store:            authStore,
@@ -694,6 +713,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		SessionDuration:  24 * time.Hour,
 		DashboardURL:     app.appConfig.DashboardURL,
 		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
+		CSRFKey:          csrfKey,
 	})
 	if app.Auth == nil {
 		return fmt.Errorf("failed to create auth service")
@@ -721,10 +741,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	log.Println("Initialized PostgreSQL analytics store and snapshot collector")
 
 	// Initialize credential store (AES-256-GCM encrypted credential blobs).
-	encKey, encKeySource, err := loadAndGuardEncryptionKey(ctx, app.secretResolver)
-	if err != nil {
-		return err
-	}
+	// encKey/encKeySource were loaded above (memoized) to seed the CSRF key.
 	credStore := credentials.NewCredentialStore(dbConn.Pool(), encKey)
 	app.encKeySource = encKeySource
 	log.Println("Initialized encrypted credential store")

@@ -7,8 +7,43 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 )
+
+// csrfKeyHKDFInfo is the HKDF "info" (domain-separation) label used when
+// deriving the CSRF key from a master secret. It binds the derived key to this
+// specific purpose so the CSRF key can never collide with a key derived from
+// the same master secret for any other use.
+const csrfKeyHKDFInfo = "CUDly:csrf-key:v1"
+
+// DeriveCSRFKey derives a stable 32-byte CSRF key from a master secret using
+// HKDF-SHA256 with a fixed domain-separation label.
+//
+// Production wiring passes the (already stable, deploy-provided) credential
+// encryption key as the master secret, so every process and every Lambda
+// cold-start derives the SAME CSRF key. This is what makes a CSRF token minted
+// by one instance validate on another instance: ValidateCSRFToken recomputes
+// HMAC-SHA256(csrfKey, rawSessionToken), and the csrfKey is now identical
+// across the fleet instead of a per-process random value.
+//
+// HKDF domain separation (csrfKeyHKDFInfo) ensures the derived CSRF key is
+// cryptographically independent of the master secret, so leaking one does not
+// reveal the other. The master secret must be non-empty.
+func DeriveCSRFKey(masterSecret []byte) ([]byte, error) {
+	if len(masterSecret) == 0 {
+		return nil, fmt.Errorf("auth: DeriveCSRFKey requires a non-empty master secret")
+	}
+	r := hkdf.New(sha256.New, masterSecret, nil /* salt */, []byte(csrfKeyHKDFInfo))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return nil, fmt.Errorf("auth: derive CSRF key: %w", err)
+	}
+	return key, nil
+}
 
 // hashSessionToken creates a SHA-256 hash of a session token for secure storage.
 // This prevents session hijacking if the database is compromised, as attackers
