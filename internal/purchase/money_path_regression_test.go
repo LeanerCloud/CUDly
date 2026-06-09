@@ -67,7 +67,8 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 
 	// provCfg is nil: the mock factory matches mock.Anything for it and the
 	// real factory is never reached.
-	_, _, errs := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil)
+	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil)
+	require.NoError(t, procErr, "processPurchaseRecommendations must not fail in the happy path")
 	require.Empty(t, errs, "all recs must commit so the captured token reflects a real purchase")
 	return tokens
 }

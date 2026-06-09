@@ -101,7 +101,10 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		}
 	}
 
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
+	if procErr != nil {
+		return procErr
+	}
 
 	if len(purchaseErrors) > 0 && !anyRecPurchased(exec.Recommendations) {
 		// Nothing committed — a clean total failure.
@@ -241,7 +244,13 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	}
 
 	accountID := account.ExternalID
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
+	if procErr != nil {
+		acctExec.Status = "failed"
+		acctExec.Error = procErr.Error()
+		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
+		return false, procErr
+	}
 
 	// #642: a per-account run can be a partial success — some recs committed
 	// to purchase_history (Purchased=true) while others failed. Marking the
@@ -502,7 +511,7 @@ type recPurchaseOutcome struct {
 	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -514,14 +523,17 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	}
 
 	// Load GlobalConfig to pick up the OfferingClass setting for EC2 RI
-	// purchases. A config-load failure is non-fatal: we fall back to the
-	// empty string which the EC2 client maps to "convertible" (pre-694
-	// behaviour). The error is logged so operators can diagnose a DB
-	// issue without the entire purchase batch failing.
-	if globalCfg, err := m.config.GetGlobalConfig(ctx); err != nil {
-		logging.Errorf("purchase[%s]: failed to load GlobalConfig for offering class (defaulting to convertible): %v",
+	// purchases. A load error is fatal: proceeding with an empty OfferingClass
+	// silently defaults to "convertible" even when the operator configured
+	// "standard", which is an irreversible, more-expensive purchase. Fail the
+	// run so the operator can diagnose the DB issue and retry with correct
+	// settings (no-silent-fallbacks-on-money-paths rule).
+	globalCfg, err := m.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("purchase[%s]: failed to load GlobalConfig for offering class: %w",
 			exec.ExecutionID, err)
-	} else if globalCfg != nil {
+	}
+	if globalCfg != nil {
 		opts.OfferingClass = globalCfg.OfferingClass
 	}
 
@@ -531,7 +543,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	if len(selected) == 0 {
 		logging.Infof("purchase[%s]: no selected recommendations, nothing to execute (account=%s plan=%q)",
 			exec.ExecutionID, accountID, plan.Name)
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 	logging.Infof("purchase[%s]: dispatching %d recommendation(s) for account=%s plan=%q",
 		exec.ExecutionID, len(selected), accountID, plan.Name)
@@ -582,7 +594,8 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	// there are no concurrent writes to totals, exec.Recommendations, or
 	// purchaseErrors (05-N2). Do NOT move the aggregation inside the FanOut
 	// closure or run it concurrently with the fan-out.
-	return m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+	totalSavings, totalUpfront, purchaseErrors := m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+	return totalSavings, totalUpfront, purchaseErrors, nil
 }
 
 // aggregatePurchaseOutcomes walks the fan-out results serially and writes
