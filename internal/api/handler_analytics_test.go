@@ -19,8 +19,8 @@ type MockAnalyticsClient struct {
 	mock.Mock
 }
 
-func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
-	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, interval)
+func (m *MockAnalyticsClient) QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error) {
+	args := m.Called(ctx, accountUUIDs, accountExternalIDsByProvider, provider, start, end, interval)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}
@@ -49,7 +49,7 @@ func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
 	accountExternal := "999988887777"
 
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly").
+	mockClient.On("QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, "", mock.Anything, mock.Anything, "hourly").
 		Return([]HistoryDataPoint{{TotalSavings: 50.0, PurchaseCount: 1}}, &HistorySummary{TotalPurchases: 1}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -63,7 +63,7 @@ func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
 	result, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"account_id": accountUUID})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, mock.Anything, mock.Anything, "hourly")
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, "", mock.Anything, mock.Anything, "hourly")
 }
 
 // MockAnalyticsCollector is a mock implementation of AnalyticsCollectorInterface
@@ -104,7 +104,7 @@ func TestHandler_getHistoryAnalytics_Success(t *testing.T) {
 	// "account-123" is not a known UUID, so resolveSingleAccountFilterIDs
 	// treats it as an external account number: QueryHistory is called with no
 	// UUIDs and account-123 as the external id.
-	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string{"": {"account-123"}}, mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string{"": {"account-123"}}, "", mock.Anything, mock.Anything, "hourly").Return(dataPoints, summary, nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -140,7 +140,7 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 
 	dataPoints := []HistoryDataPoint{}
 	// Empty account_id: resolver returns no UUIDs and no external ids.
-	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "hourly").Return(dataPoints, (*HistorySummary)(nil), nil)
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
@@ -150,7 +150,58 @@ func TestHandler_getHistoryAnalytics_DefaultInterval(t *testing.T) {
 	_, err := handler.getHistoryAnalytics(ctx, req, params)
 	require.NoError(t, err)
 
-	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "hourly")
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "hourly")
+}
+
+// TestHandler_getHistoryAnalytics_ProviderFilter is the handler-level
+// regression for the Savings History provider-filter bug (issue #498, QA 2.3):
+// the provider chip value must reach QueryHistory so the chart is scoped to the
+// selected provider. Pre-fix the handler never read params["provider"] and
+// always passed "" — this asserts the exact provider arg.
+func TestHandler_getHistoryAnalytics_ProviderFilter(t *testing.T) {
+	ctx := context.Background()
+	mockClient := new(MockAnalyticsClient)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), "aws", mock.Anything, mock.Anything, "hourly").
+		Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
+
+	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"provider": "aws"})
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), "aws", mock.Anything, mock.Anything, "hourly")
+}
+
+// TestHandler_getHistoryAnalytics_ProviderAllIsNoFilter verifies the "all"
+// sentinel is normalised to "" (no provider filter), matching parseHistoryFilters
+// and the other charts (issue #498).
+func TestHandler_getHistoryAnalytics_ProviderAllIsNoFilter(t *testing.T) {
+	ctx := context.Background()
+	mockClient := new(MockAnalyticsClient)
+	mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "hourly").
+		Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
+
+	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"provider": "all"})
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "hourly")
+}
+
+// TestHandler_getHistoryAnalytics_InvalidProvider rejects an unknown provider at
+// the boundary with a 400 rather than silently ignoring it (issue #498).
+func TestHandler_getHistoryAnalytics_InvalidProvider(t *testing.T) {
+	ctx := context.Background()
+	mockClient := new(MockAnalyticsClient)
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
+
+	_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"provider": "oracle"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid provider")
+	mockClient.AssertNotCalled(t, "QueryHistory")
 }
 
 func TestHandler_getHistoryAnalytics_InvalidDateRange(t *testing.T) {
@@ -173,7 +224,7 @@ func TestHandler_getHistoryAnalytics_QueryError(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(MockAnalyticsClient)
 
-	mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("query failed"))
+	mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, errors.New("query failed"))
 
 	mockAuth, req := adminAnalyticsReq(ctx)
 	handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}

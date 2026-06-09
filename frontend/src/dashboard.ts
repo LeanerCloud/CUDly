@@ -1033,13 +1033,15 @@ export async function loadSavingsTrendChart(): Promise<void> {
   const interval: 'hourly' | 'daily' | 'weekly' = intervalDays <= 7 ? 'hourly' : intervalDays <= 90 ? 'daily' : 'weekly';
 
   try {
-    // Always forward account_ids to the chart so its data scope matches the
-    // KPI tiles above it. The backend /history/analytics handler accepts a
-    // single `account_id`; api.getSavingsAnalytics also sets the singular
-    // param for single-account requests (see api/history.ts).
-    // provider is not forwarded: the analytics backend does not yet support
-    // provider-scoped queries (handler_analytics.go has no provider param).
+    // Always forward account_ids AND provider to the chart so its data scope
+    // matches the KPI tiles above it. The backend /history/analytics handler
+    // accepts a single `account_id`; api.getSavingsAnalytics also sets the
+    // singular param for single-account requests (see api/history.ts). The
+    // backend now applies the provider chip as a provider WHERE filter on the
+    // savings-history query, so forward it to scope the chart (issue #498,
+    // QA 2.3).
     const accountIDs = state.getCurrentAccountIDs();
+    const provider = state.getCurrentProvider();
     const data = await api.getSavingsAnalytics({
       // For 'all': send the epoch sentinel so the backend returns unbounded
       // history. Omitting start would cause parseDateRange to default to
@@ -1047,6 +1049,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
       start: isAllRange ? epochStart : new Date(windowStartMs).toISOString(),
       end: now.toISOString(),
       interval,
+      ...(provider ? { provider } : {}),
       ...(accountIDs.length > 0 ? { account_ids: accountIDs } : {}),
     });
 
@@ -1087,18 +1090,13 @@ export async function loadSavingsTrendChart(): Promise<void> {
     if (points.length === 0) {
       canvas.classList.add('hidden');
       if (empty) {
-        if (accountIDs.length > 0) {
-          // Account IDs are forwarded to the backend (see call above), so
-          // mentioning them in the empty-state is accurate.
-          empty.textContent = `No savings history for ${accountIDs.join(', ')}.`;
-        } else {
-          // Provider is intentionally NOT mentioned here: the analytics
-          // endpoint does not accept a provider param yet (tracked in #764),
-          // so the query always returns all-provider data regardless of the
-          // topbar provider filter. Claiming provider scope would be
-          // misleading — drop it until #764 lands.
-          empty.textContent = 'No purchase history yet.';
-        }
+        // Both provider and account are forwarded to the backend (see call
+        // above), so naming the active filter in the empty-state is accurate
+        // (issue #498). buildFilterDesc returns '' when no filter is active.
+        const filterDesc = buildFilterDesc(provider, accountIDs);
+        empty.textContent = filterDesc
+          ? `No savings history for ${filterDesc}.`
+          : 'No purchase history yet.';
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }

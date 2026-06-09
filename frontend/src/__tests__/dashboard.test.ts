@@ -840,6 +840,13 @@ describe('Dashboard Module', () => {
       b30.textContent = '30d';
       document.body.replaceChildren(canvas, empty, b90, b30);
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+      // Reset the topbar filter mocks to the documented default (no filter)
+      // so each test starts isolated. clearAllMocks() resets call history but
+      // not mockReturnValue implementations, so a provider/account value set by
+      // an earlier test would otherwise leak in (now that the chart reads the
+      // provider chip, issue #498).
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
     });
 
     test('uses daily interval for the default 90-day range', async () => {
@@ -1135,10 +1142,10 @@ describe('Dashboard Module', () => {
       expect(empty?.textContent).toContain('No purchase history yet');
     });
 
-    test('empty-state does NOT mention provider even when a provider filter is active (#764)', async () => {
-      // The analytics endpoint ignores the provider param until #764 lands.
-      // Showing "No savings history for aws." would imply the query was
-      // scoped to that provider, which is false. Generic copy is used instead.
+    test('empty-state names the provider when a provider filter is active (issue #498, QA 2.3)', async () => {
+      // The analytics endpoint now applies the provider param as a WHERE
+      // filter, so the query IS scoped to the selected provider — naming it
+      // in the empty-state is accurate. Mirrors the account-filter empty-state.
       (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
       (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
@@ -1147,9 +1154,35 @@ describe('Dashboard Module', () => {
 
       const empty = document.getElementById('savings-trend-empty');
       expect(empty?.classList.contains('hidden')).toBe(false);
-      // Provider name must not appear in the message.
-      expect(empty?.textContent).not.toContain('aws');
-      expect(empty?.textContent).toContain('No purchase history yet');
+      // Provider name (uppercased by buildFilterDesc) appears in the message.
+      expect(empty?.textContent).toContain('AWS');
+      expect(empty?.textContent).toContain('No savings history for');
+    });
+
+    test('loadSavingsTrendChart forwards the provider chip to the analytics API (issue #498, QA 2.3)', async () => {
+      // Regression: previously the chart dropped the provider param, so the
+      // savings-history series showed the same all-provider data regardless of
+      // the selected provider. The fix forwards provider to scope the query.
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'aws' })
+      );
+    });
+
+    test('loadSavingsTrendChart omits provider when no provider filter is active', async () => {
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+      (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await loadSavingsTrendChart();
+
+      const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
+      expect(call).not.toHaveProperty('provider');
     });
   });
 

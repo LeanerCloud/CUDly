@@ -134,6 +134,18 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 		interval = "hourly"
 	}
 
+	// Normalise + validate the global-filter provider chip, mirroring
+	// parseHistoryFilters: "all" (and "") mean no provider filter, anything
+	// else must be a known provider. Without this the chart ignored the
+	// provider chip entirely (issue #498, QA 2.3).
+	provider := params["provider"]
+	if provider == "all" {
+		provider = "" // explicit "no filter" sentinel
+	}
+	if err := validateProvider(provider); err != nil {
+		return nil, err
+	}
+
 	// For scoped users we require account_id and validate it's in their scope.
 	// We don't (yet) support analytics across a subset — the underlying
 	// aggregate takes a single account_id. An unrestricted/admin session
@@ -154,7 +166,7 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	// Aggregate history from the analytics client (Postgres-backed).
-	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, interval)
+	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountUUIDs, accountExternalIDsByProvider, provider, start, end, interval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query analytics: %w", err)
 	}

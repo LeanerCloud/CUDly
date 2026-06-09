@@ -72,7 +72,7 @@ func TestQueryHistory_Success(t *testing.T) {
 
 	start := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
-	points, summary, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"acct-1"}}, start, end, "daily")
+	points, summary, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"acct-1"}}, "", start, end, "daily")
 	require.NoError(t, err)
 	require.Len(t, points, 2)
 
@@ -103,7 +103,7 @@ func TestQueryHistory_Success(t *testing.T) {
 
 func TestQueryHistory_BadInterval(t *testing.T) {
 	client, _ := newMockAnalyticsClient(t)
-	_, _, err := client.QueryHistory(context.Background(), nil, nil, time.Now(), time.Now(), "yearly")
+	_, _, err := client.QueryHistory(context.Background(), nil, nil, "", time.Now(), time.Now(), "yearly")
 	assert.Error(t, err)
 }
 
@@ -113,7 +113,7 @@ func TestQueryHistory_QueryError(t *testing.T) {
 	mock.ExpectQuery(`SELECT date_trunc`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(errors.New("db down"))
-	_, _, err := client.QueryHistory(context.Background(), nil, nil, time.Now(), time.Now(), "daily")
+	_, _, err := client.QueryHistory(context.Background(), nil, nil, "", time.Now(), time.Now(), "daily")
 	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -191,7 +191,7 @@ func TestQueryHistory_DualColumnFilter(t *testing.T) {
 
 	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
-	points, summary, err := client.QueryHistory(ctx, []string{uuid}, map[string][]string{"aws": {external}}, start, end, "daily")
+	points, summary, err := client.QueryHistory(ctx, []string{uuid}, map[string][]string{"aws": {external}}, "", start, end, "daily")
 	require.NoError(t, err)
 	require.Len(t, points, 1)
 	assert.InDelta(t, 50.0, points[0].TotalSavings, 1e-9)
@@ -244,7 +244,64 @@ func TestQueryHistory_CrossProviderScoped(t *testing.T) {
 
 	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
-	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"aws": {"123"}, "azure": {"123"}}, start, end, "daily")
+	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"aws": {"123"}, "azure": {"123"}}, "", start, end, "daily")
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestQueryHistory_ProviderFilter is the regression for the Savings History
+// chart provider-filter bug (issue #498, QA 2.3): selecting a provider in the
+// global filter must scope the savings-over-time series to that provider. The
+// handler forwards the chip value, so QueryHistory must append
+// `AND provider = $N` bound to the provider so Azure/GCP rows are excluded.
+// Pre-fix QueryHistory ignored the provider entirely and this test fails
+// because no provider bind is emitted.
+func TestQueryHistory_ProviderFilter(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+
+	bucket := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// Only the aws row comes back from the DB; the provider predicate is what
+	// keeps azure/gcp rows out, so the mock returns just the aws bucket.
+	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
+		AddRow(bucket, "ec2", "aws", 10.0, 5.0, 1)
+
+	// No account filter (all-accessible), so the account clause degrades to TRUE
+	// and start/end are $1/$2; the provider bind is therefore $3.
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND TRUE AND provider = \$3`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), "aws").
+		WillReturnRows(rows)
+
+	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	points, _, err := client.QueryHistory(ctx, nil, nil, "aws", start, end, "daily")
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.InDelta(t, 10.0, points[0].TotalSavings, 1e-9)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestQueryHistory_ProviderFilterWithAccount verifies the provider bind is
+// positioned after the dual-column account binds (provider becomes $6 when a
+// UUID + provider-grouped external id precede it), so account + provider
+// filtering compose correctly (issue #498).
+func TestQueryHistory_ProviderFilterWithAccount(t *testing.T) {
+	client, mock := newMockAnalyticsClient(t)
+	ctx := context.Background()
+	uuid := "aabbccdd-1234-5678-abcd-aabbccddee00"
+	external := "123456789012"
+
+	bucket := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	rows := mock.NewRows([]string{"bucket", "service", "provider", "savings", "upfront", "purchases"}).
+		AddRow(bucket, "ec2", "aws", 50.0, 20.0, 1)
+
+	mock.ExpectQuery(`(?s)SELECT date_trunc\('day', timestamp\).*AND \(cloud_account_id = ANY\(\$3\) OR \(provider = \$4 AND account_id = ANY\(\$5\)\)\) AND provider = \$6`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, "aws", []string{external}, "aws").
+		WillReturnRows(rows)
+
+	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	_, _, err := client.QueryHistory(ctx, []string{uuid}, map[string][]string{"aws": {external}}, "aws", start, end, "daily")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -267,7 +324,7 @@ func TestQueryHistory_ExternalIDFilter(t *testing.T) {
 
 	start := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
-	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"123456789012"}}, start, end, "daily")
+	_, _, err := client.QueryHistory(ctx, nil, map[string][]string{"": {"123456789012"}}, "", start, end, "daily")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
