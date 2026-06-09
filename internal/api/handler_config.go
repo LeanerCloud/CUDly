@@ -164,15 +164,32 @@ func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.Ser
 	return nil
 }
 
-// mergeServiceConfig loads any existing service config and overlays the four
-// UI-editable fields (Enabled, Term, Payment, Coverage) from cfg onto it, so
-// that filter fields set outside the UI (RampSchedule, IncludeEngines, etc.)
-// are not zeroed on every settings save.
+// serviceConfigFilterKeys are the recommendation-filter JSON fields the
+// Settings UI now edits. They are overlaid onto the existing row only when the
+// request body actually contains the key, so a partial PUT from a non-UI
+// client (or an older UI build) never zeroes a filter the operator set
+// elsewhere. RampSchedule is intentionally absent: it is still set out-of-band
+// and the UI does not own it.
+var serviceConfigFilterKeys = []string{
+	"include_engines", "exclude_engines",
+	"include_regions", "exclude_regions",
+	"include_types", "exclude_types",
+	"min_count",
+}
+
+// mergeServiceConfig loads any existing service config and overlays the
+// UI-editable fields from cfg onto it. The four always-present scalar fields
+// (Enabled, Term, Payment, Coverage) are overlaid unconditionally; the
+// recommendation-filter fields (include/exclude engines/regions/types,
+// min_count) are overlaid only when the request body actually carried the
+// corresponding key (per presentKeys), so a partial PUT cannot silently wipe a
+// filter set out-of-band. body is the raw request JSON used to detect which
+// filter keys are present.
 //
 // A "not found" error means no existing record — cfg is returned unchanged.
 // Any other DB error is returned to prevent a partial write from clobbering
 // previously configured filter fields.
-func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig) (config.ServiceConfig, error) {
+func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
 	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -180,14 +197,66 @@ func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg co
 		}
 		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
 	}
-	if existing != nil {
-		existing.Enabled = cfg.Enabled
-		existing.Term = cfg.Term
-		existing.Payment = cfg.Payment
-		existing.Coverage = cfg.Coverage
-		return *existing, nil
+	if existing == nil {
+		return cfg, nil
 	}
-	return cfg, nil
+
+	existing.Enabled = cfg.Enabled
+	existing.Term = cfg.Term
+	existing.Payment = cfg.Payment
+	existing.Coverage = cfg.Coverage
+
+	present, perr := presentKeys(body, serviceConfigFilterKeys)
+	if perr != nil {
+		return cfg, perr
+	}
+	overlayPresentFilterFields(existing, &cfg, present)
+	return *existing, nil
+}
+
+// presentKeys returns the subset of keys that appear as top-level fields in the
+// JSON body. A malformed body is reported as a client error so the caller
+// returns 400 rather than silently overlaying nothing.
+func presentKeys(body string, keys []string) (map[string]bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	present := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		if _, ok := raw[k]; ok {
+			present[k] = true
+		}
+	}
+	return present, nil
+}
+
+// overlayPresentFilterFields copies each filter field from src onto dst only
+// when its JSON key was present in the request body. Split out of
+// mergeServiceConfig to keep that function under the cyclomatic-complexity
+// gate.
+func overlayPresentFilterFields(dst, src *config.ServiceConfig, present map[string]bool) {
+	if present["include_engines"] {
+		dst.IncludeEngines = src.IncludeEngines
+	}
+	if present["exclude_engines"] {
+		dst.ExcludeEngines = src.ExcludeEngines
+	}
+	if present["include_regions"] {
+		dst.IncludeRegions = src.IncludeRegions
+	}
+	if present["exclude_regions"] {
+		dst.ExcludeRegions = src.ExcludeRegions
+	}
+	if present["include_types"] {
+		dst.IncludeTypes = src.IncludeTypes
+	}
+	if present["exclude_types"] {
+		dst.ExcludeTypes = src.ExcludeTypes
+	}
+	if present["min_count"] {
+		dst.MinCount = src.MinCount
+	}
 }
 
 func (h *Handler) getServiceConfig(ctx context.Context, req *events.LambdaFunctionURLRequest, service string) (any, error) {
@@ -245,10 +314,11 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
-	// Merge: preserve existing filter fields, overlay the 4 UI-editable fields.
-	// The frontend only sends enabled/term/payment/coverage; a full UPSERT would
-	// zero out ramp_schedule, include_engines, etc. that were set elsewhere.
-	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg)
+	// Merge: overlay the scalar UI fields unconditionally and the
+	// recommendation-filter fields only when the body carried them, so a
+	// partial PUT never zeroes a filter (ramp_schedule, or a filter set
+	// out-of-band) the request didn't mean to touch.
+	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg, req.Body)
 	if mergeErr != nil {
 		return nil, mergeErr
 	}

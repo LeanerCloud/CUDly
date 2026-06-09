@@ -40,6 +40,13 @@ const (
 
 	// MaxTotalSteps is the maximum number of ramp steps
 	MaxTotalSteps = 100
+
+	// MaxServiceMinCount caps the per-service min-count recommendation
+	// filter. Mirrors the CLI's MaxReasonableInstances ceiling so a typo
+	// (e.g. a stray trailing zero) can't silently suppress every
+	// recommendation. 0 disables the filter; values above this are rejected
+	// at validation time.
+	MaxServiceMinCount = 10000
 )
 
 // Default values for new configurations

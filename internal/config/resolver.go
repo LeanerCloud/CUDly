@@ -44,6 +44,7 @@ func ResolveServiceConfig(provider, service string, global *ServiceConfig, overr
 		ExcludeRegions: copyStrSlice(baseline.ExcludeRegions),
 		IncludeTypes:   copyStrSlice(baseline.IncludeTypes),
 		ExcludeTypes:   copyStrSlice(baseline.ExcludeTypes),
+		MinCount:       baseline.MinCount,
 	}
 
 	applyScalarOverrides(resolved, override)

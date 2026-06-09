@@ -320,6 +320,10 @@ export interface ServiceConfig {
   exclude_regions?: string[];
   include_types?: string[];
   exclude_types?: string[];
+  /** Minimum instance/node count a recommendation must carry to be surfaced
+   *  (GUI equivalent of the CLI --min-count flag). 0 / undefined disables the
+   *  filter. */
+  min_count?: number;
 }
 
 /** Response from GET /api/info (unauthenticated). Only safe-to-expose fields. */

@@ -336,7 +336,20 @@ func (c *ServiceConfig) Validate() error {
 	if err := c.validatePayment(); err != nil {
 		return err
 	}
+	if err := c.validateMinCount(); err != nil {
+		return err
+	}
 	return c.validateConfigCoverage()
+}
+
+func (c *ServiceConfig) validateMinCount() error {
+	if c.MinCount < 0 {
+		return fmt.Errorf("min_count must be 0 (no filter) or a positive number, got: %d", c.MinCount)
+	}
+	if c.MinCount > MaxServiceMinCount {
+		return fmt.Errorf("min_count (%d) exceeds reasonable limit of %d", c.MinCount, MaxServiceMinCount)
+	}
+	return nil
 }
 
 func (c *ServiceConfig) validateProvider() error {

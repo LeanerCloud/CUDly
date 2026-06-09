@@ -233,7 +233,7 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 	query := `
 		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
 		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types
+		       include_types, exclude_types, min_count
 		FROM service_configs
 		WHERE provider = $1 AND service = $2
 	`
@@ -255,6 +255,7 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 		&excludeRegions,
 		&includeTypes,
 		&excludeTypes,
+		&config.MinCount,
 	)
 
 	if err != nil {
@@ -281,8 +282,8 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 		INSERT INTO service_configs (
 			provider, service, enabled, term, payment, coverage, ramp_schedule,
 			include_engines, exclude_engines, include_regions, exclude_regions,
-			include_types, exclude_types
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			include_types, exclude_types, min_count
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (provider, service) DO UPDATE SET
 			enabled = $3,
 			term = $4,
@@ -295,6 +296,7 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 			exclude_regions = $11,
 			include_types = $12,
 			exclude_types = $13,
+			min_count = $14,
 			updated_at = NOW()
 	`
 
@@ -312,6 +314,7 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 		config.ExcludeRegions,
 		config.IncludeTypes,
 		config.ExcludeTypes,
+		config.MinCount,
 	)
 
 	if err != nil {
@@ -333,7 +336,7 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 	query := `
 		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
 		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types
+		       include_types, exclude_types, min_count
 		FROM service_configs
 		ORDER BY provider, service
 		LIMIT 1000
@@ -364,6 +367,7 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 			&excludeRegions,
 			&includeTypes,
 			&excludeTypes,
+			&config.MinCount,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan service config: %w", err)

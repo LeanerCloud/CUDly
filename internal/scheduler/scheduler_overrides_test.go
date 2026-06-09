@@ -241,6 +241,57 @@ func TestApplyAccountOverrides_RegionAndTypeFilters(t *testing.T) {
 	assert.Equal(t, "db.t3.large", recs[0].ResourceType)
 }
 
+func TestApplyAccountOverrides_MinCount_DropsRecsBelowFloor(t *testing.T) {
+	// The per-service MinCount filter (GUI/CLI --min-count) drops recs whose
+	// persisted Count is below the configured floor. MinCount=0 disables it.
+	ctx := context.Background()
+	mkRec := func(account string, count int) config.RecommendationRecord {
+		a := account
+		return config.RecommendationRecord{
+			ID: account + "/" + string(rune('a'+count)), Provider: "aws", Service: "rds",
+			Region: "us-east-1", ResourceType: "db.t3.medium", Engine: "mysql",
+			Count: count, CloudAccountID: &a,
+		}
+	}
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{
+			mkRec("acct-A", 1),
+			mkRec("acct-A", 2),
+			mkRec("acct-A", 5),
+		},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true, MinCount: 2},
+		},
+	}
+	s := &Scheduler{config: store}
+
+	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	require.Len(t, recs, 2, "count=1 must be dropped; count>=2 kept")
+	counts := []int{recs[0].Count, recs[1].Count}
+	assert.ElementsMatch(t, []int{2, 5}, counts)
+}
+
+func TestApplyAccountOverrides_MinCountZero_KeepsAll(t *testing.T) {
+	ctx := context.Background()
+	a := "acct-A"
+	rec := config.RecommendationRecord{
+		ID: "acct-A/1", Provider: "aws", Service: "rds", Region: "us-east-1",
+		ResourceType: "db.t3.medium", Engine: "mysql", Count: 1, CloudAccountID: &a,
+	}
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{rec},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true, MinCount: 0},
+		},
+	}
+	s := &Scheduler{config: store}
+
+	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "MinCount=0 disables the floor")
+}
+
 func TestApplyAccountOverrides_EmptyEngine_NotFilteredByIncludeEngines(t *testing.T) {
 	// Savings Plans / Compute recs carry no engine; an IncludeEngines list
 	// added on another service for the same account must NOT silently drop
