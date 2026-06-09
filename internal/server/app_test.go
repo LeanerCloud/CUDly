@@ -687,6 +687,47 @@ func TestEnsureDB_UsesInstanceMigrationsTimeout(t *testing.T) {
 	<-slow
 }
 
+// TestResolveMigrationsTimeout pins the default migration timeout and the
+// CUDLY_MIGRATION_TIMEOUT override contract. The default was raised from 20s
+// to 120s so a normal index build can't be killed mid-run (which left
+// schema_migrations dirty and fail-opened every later boot). Not parallel:
+// resolveMigrationsTimeout reads a process-global env var.
+func TestResolveMigrationsTimeout(t *testing.T) {
+	// defaultMigrationsTimeout is the compile-time constant; assert its value
+	// directly so a future accidental change to it trips this test.
+	if defaultMigrationsTimeout != 120*time.Second {
+		t.Fatalf("defaultMigrationsTimeout = %s, want 120s", defaultMigrationsTimeout)
+	}
+
+	t.Run("unset returns the 120s default", func(t *testing.T) {
+		t.Setenv("CUDLY_MIGRATION_TIMEOUT", "")
+		if got := resolveMigrationsTimeout(); got != 120*time.Second {
+			t.Fatalf("resolveMigrationsTimeout() = %s, want 120s", got)
+		}
+	})
+
+	t.Run("valid override is honored", func(t *testing.T) {
+		t.Setenv("CUDLY_MIGRATION_TIMEOUT", "180s")
+		if got := resolveMigrationsTimeout(); got != 180*time.Second {
+			t.Fatalf("resolveMigrationsTimeout() = %s, want 180s", got)
+		}
+	})
+
+	t.Run("invalid override falls back to the default", func(t *testing.T) {
+		t.Setenv("CUDLY_MIGRATION_TIMEOUT", "not-a-duration")
+		if got := resolveMigrationsTimeout(); got != 120*time.Second {
+			t.Fatalf("resolveMigrationsTimeout() = %s, want 120s default on invalid input", got)
+		}
+	})
+
+	t.Run("non-positive override falls back to the default", func(t *testing.T) {
+		t.Setenv("CUDLY_MIGRATION_TIMEOUT", "0s")
+		if got := resolveMigrationsTimeout(); got != 120*time.Second {
+			t.Fatalf("resolveMigrationsTimeout() = %s, want 120s default on non-positive input", got)
+		}
+	})
+}
+
 // ---------- runMigrationsBoundedWith tests ----------
 //
 // These tests exercise the goroutine+timeout+recover logic in isolation by

@@ -243,6 +243,12 @@ variable "email_from_domain" {
   default     = ""
 }
 
+variable "alarm_sns_topic_arn" {
+  description = "Optional list of SNS topic ARNs to notify on the migration-failure alarm (alarm_actions / ok_actions). Leave empty ([]) to create the alarm without a notification target -- it still transitions to ALARM state and is visible/queryable in CloudWatch. Pass the monitoring module's SNS topic ARN here to wire notifications; this module intentionally does not create its own SNS topic."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

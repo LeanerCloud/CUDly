@@ -53,6 +53,19 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 		return err
 	}
 
+	// Default-on dirty auto-heal: when the schema_migrations row is dirty,
+	// clear the dirty flag at the CURRENT recorded version so the subsequent
+	// Up() re-applies any pending migrations, letting a cold start self-recover
+	// instead of staying broken until a manual force. Runs AFTER
+	// maybeForceMigrationVersion so an explicit CUDLY_FORCE_MIGRATION_VERSION
+	// always takes precedence (it pins+cleans first, leaving nothing dirty for
+	// auto-heal to act on). Disable with CUDLY_MIGRATION_AUTOHEAL=false. Its
+	// error propagates so a heal failure is recorded (and the app fail-opens in
+	// ensureDB) rather than being masked by the later dirty check.
+	if err := maybeAutoHealDirty(m); err != nil {
+		return err
+	}
+
 	// Run migrations
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -290,6 +303,93 @@ func maybeForceMigrationVersion(m *migrate.Migrate) error {
 	}
 	log.Printf("Forced migration state to version %d", n)
 	return nil
+}
+
+// maybeAutoHealDirty self-recovers a dirty schema_migrations row: when the DB
+// is dirty it calls m.Force(currentRecordedVersion) to clear the dirty flag at
+// the version golang-migrate last recorded, and the caller's subsequent m.Up()
+// re-applies only the still-pending migrations. This runs ONCE per boot, so a
+// cold start that finds a dirty DB self-heals instead of staying broken until
+// an operator manually forces a version (the multi-hour outage this addresses).
+//
+// DEFAULT-ON (not opt-in). The whole outage was "the app started but stayed
+// broken for hours needing a manual force", and TestMigrations_FullStackIdempotent
+// proves re-running migrations is safe, so auto-heal runs by default. Set the
+// escape hatch CUDLY_MIGRATION_AUTOHEAL=false (any strconv.ParseBool falsey
+// value) to disable it in an environment whose migrations are not idempotent.
+// When disabled, a dirty DB is left untouched here and surfaces as the usual
+// "database is in dirty state" error after Up(); the caller (app.go ensureDB)
+// still FAIL-OPENS on that error so the app always starts -- a broken schema
+// surfaces via /health + the CloudWatch alarm, never via a crash-loop.
+//
+// CRITICAL -- Force to the CURRENT recorded version, NEVER a lower one. Up()
+// then applies only the pending tail. Forcing BELOW already-applied migrations
+// would re-run seed/data migrations, and some RAISE on a second run (e.g.
+// 000059 errors with "a group named Purchaser already exists with a different
+// id" because 000064 already relocated it). Force(current)+Up() is the only
+// safe shape; Force(lower) would turn a recoverable dirty state into a hard
+// failure. (Proven live during the incident.)
+//
+// IDEMPOTENCY INVARIANT: Force(version) clears the dirty marker WITHOUT rolling
+// back the partial effects of the interrupted migration, so when Up() re-runs
+// the pending tail those migrations must tolerate already-applied state
+// (CREATE ... IF NOT EXISTS, DROP ... IF EXISTS, DO-blocks that no-op when the
+// target already exists). The full-stack idempotency test guards this for the
+// whole directory as migrations are added.
+//
+// CUDLY_FORCE_MIGRATION_VERSION still takes precedence: it runs earlier and
+// leaves the row clean, so this is a no-op when both are set. If auto-heal
+// itself fails (e.g. Force errors, or the re-applied Up() still fails), the
+// error propagates to ensureDB, which fail-opens AND records the failure so
+// the migration-failed alarm fires -- the app still starts.
+//
+// The ParseBool gate is duplicated from internal/server.getEnvBool rather than
+// imported because the migrations package must not depend on internal/server,
+// which would invert the dependency direction.
+func maybeAutoHealDirty(m *migrate.Migrate) error {
+	if !autoHealEnabled() {
+		return nil
+	}
+
+	version, dirty, err := m.Version()
+	if err == migrate.ErrNilVersion {
+		// No migrations recorded yet -> nothing to heal.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("auto-heal: failed to read migration version: %w", err)
+	}
+	if !dirty {
+		return nil
+	}
+
+	// Force the CURRENT recorded version (never lower -- see the doc comment),
+	// then let the caller's Up() re-apply only the pending tail.
+	log.Printf("Database is DIRTY at version %d: auto-heal forcing the current version %d to clear the dirty flag, then re-applying pending migrations (set CUDLY_MIGRATION_AUTOHEAL=false to disable)", version, version)
+	if err := m.Force(int(version)); err != nil {
+		return fmt.Errorf("auto-heal: failed to force version %d to clear dirty flag: %w", version, err)
+	}
+	log.Printf("Auto-heal cleared dirty flag at version %d; proceeding to re-apply pending migrations", version)
+	return nil
+}
+
+// autoHealEnabled reports whether dirty auto-heal should run. DEFAULT-ON: it
+// returns true unless CUDLY_MIGRATION_AUTOHEAL is explicitly set to a
+// strconv.ParseBool falsey value (0/f/false/...). Unset, empty, or unparseable
+// values keep auto-heal enabled. Kept local to the migrations package to avoid
+// an inverted dependency on internal/server (see maybeAutoHealDirty).
+func autoHealEnabled() bool {
+	v := os.Getenv("CUDLY_MIGRATION_AUTOHEAL")
+	if v == "" {
+		return true
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		// Unparseable value -> keep the safe default (enabled) rather than
+		// silently disabling self-recovery on a typo.
+		return true
+	}
+	return b
 }
 
 // RollbackMigrations rolls back N migrations
