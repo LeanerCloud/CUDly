@@ -270,3 +270,100 @@ func TestValidateUserAPIKey_LastUsedSingleflight(t *testing.T) {
 		t.Fatal("background UpdateAPIKeyLastUsed did not complete within 5s")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Cross-instance CSRF: a token minted on one instance must validate on another
+// ---------------------------------------------------------------------------
+
+// TestCSRFKey_CrossInstanceStable reproduces the production bug behind QA's
+// "CSRF validation failed" reports on plan-save and user-save: production built
+// the auth service with no CSRFKey, so NewService minted a RANDOM per-process
+// key. A CSRF token issued at login by Lambda instance A was then rejected by
+// instance B (and by A itself after a cold-start), because each instance had a
+// different key.
+//
+// The fix derives a STABLE CSRFKey from the deploy-provided encryption key via
+// DeriveCSRFKey, so every instance derives the same key. This test simulates
+// two instances that share the same master secret and asserts a token minted by
+// instance A validates on instance B. It also asserts that an instance built
+// from a DIFFERENT master secret (the pre-fix per-process-random situation)
+// rejects the token — i.e. the bug is real and the derivation is what fixes it.
+func TestCSRFKey_CrossInstanceStable(t *testing.T) {
+	ctx := context.Background()
+
+	// One stable master secret shared across the fleet (the deploy-provided
+	// credential encryption key in production).
+	masterSecret := []byte("shared-stable-master-secret-32by")
+	csrfKey, err := DeriveCSRFKey(masterSecret)
+	require.NoError(t, err)
+	require.Len(t, csrfKey, 32, "derived CSRF key must be 32 bytes")
+
+	// Derivation is deterministic: two instances seeded with the same secret
+	// produce byte-identical keys.
+	csrfKey2, err := DeriveCSRFKey(masterSecret)
+	require.NoError(t, err)
+	assert.Equal(t, csrfKey, csrfKey2, "DeriveCSRFKey must be deterministic for a given secret")
+
+	user := &User{ID: "user-x", Email: "x@example.com"}
+
+	// Instance A mints a session + CSRF token (the login path).
+	storeA := new(MockStore)
+	t.Cleanup(func() { storeA.AssertExpectations(t) })
+	instanceA := NewService(ServiceConfig{Store: storeA, CSRFKey: csrfKey})
+	storeA.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil).Once()
+
+	clientSession, err := instanceA.createSession(ctx, user, "ua", "1.2.3.4")
+	require.NoError(t, err)
+	require.NotEmpty(t, clientSession.CSRFToken)
+
+	// Instance B is a separate service (separate Lambda instance) seeded with
+	// the SAME master secret via DeriveCSRFKey.
+	storeB := new(MockStore)
+	t.Cleanup(func() { storeB.AssertExpectations(t) })
+	csrfKeyB, err := DeriveCSRFKey(masterSecret)
+	require.NoError(t, err)
+	instanceB := NewService(ServiceConfig{Store: storeB, CSRFKey: csrfKeyB})
+
+	// B looks up the session by its hashed token (the validation path).
+	hashedToken := hashSessionToken(clientSession.Token)
+	storeB.On("GetSession", ctx, hashedToken).Return(&Session{
+		Token:     hashedToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+		CreatedAt: time.Now(),
+	}, nil).Once()
+
+	// THE INVARIANT: a token minted on instance A must validate on instance B.
+	// On the pre-fix code (random per-process key) this fails — exactly the QA
+	// symptom.
+	err = instanceB.ValidateCSRFToken(ctx, clientSession.Token, clientSession.CSRFToken)
+	require.NoError(t, err, "CSRF token minted on instance A must validate on instance B sharing the same master secret")
+
+	// Conversely, an instance built from a DIFFERENT master secret (the broken
+	// per-process-random case) must reject A's token.
+	storeC := new(MockStore)
+	t.Cleanup(func() { storeC.AssertExpectations(t) })
+	csrfKeyC, err := DeriveCSRFKey([]byte("a-totally-different-master-secret"))
+	require.NoError(t, err)
+	assert.NotEqual(t, csrfKey, csrfKeyC, "different master secrets must yield different CSRF keys")
+	instanceC := NewService(ServiceConfig{Store: storeC, CSRFKey: csrfKeyC})
+	storeC.On("GetSession", ctx, hashedToken).Return(&Session{
+		Token:     hashedToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+		CreatedAt: time.Now(),
+	}, nil).Once()
+
+	err = instanceC.ValidateCSRFToken(ctx, clientSession.Token, clientSession.CSRFToken)
+	require.Error(t, err, "a CSRF token must NOT validate under a different master secret")
+	assert.Contains(t, err.Error(), "invalid CSRF token")
+}
+
+// TestDeriveCSRFKey_RejectsEmptySecret verifies DeriveCSRFKey fails closed on an
+// empty master secret rather than silently deriving a key from nothing.
+func TestDeriveCSRFKey_RejectsEmptySecret(t *testing.T) {
+	_, err := DeriveCSRFKey(nil)
+	require.Error(t, err)
+	_, err = DeriveCSRFKey([]byte{})
+	require.Error(t, err)
+}
