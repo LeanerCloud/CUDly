@@ -245,34 +245,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return false, procErr
 	}
 
-	// #642: a per-account run can be a partial success — some recs committed
-	// to purchase_history (Purchased=true) while others failed. Marking the
-	// row "failed" in that case is wrong (it hides the real commitments and
-	// invites a re-approve that double-buys). Record "partially_completed"
-	// instead so the row reflects reality, and still send the confirmation
-	// for the recs that did purchase.
-	partial := len(purchaseErrors) > 0 && anyRecPurchased(acctExec.Recommendations)
-	switch {
-	case partial:
-		now := time.Now()
-		acctExec.Status = "partially_completed"
-		// Append so any audit-gap note already stamped by
-		// aggregatePurchaseOutcomes (issue #621) survives alongside the
-		// per-rec failure list.
-		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
-		acctExec.CompletedAt = &now
-	case len(purchaseErrors) > 0:
-		acctExec.Status = "failed"
-		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
-	default:
-		now := time.Now()
-		acctExec.Status = "completed"
-		acctExec.CompletedAt = &now
-	}
-
-	// committed is the gate executeMultiAccount uses to distinguish a partial
-	// run from a flat failure (issue #1014): true when any rec purchased.
-	committed = anyRecPurchased(acctExec.Recommendations)
+	// Resolve the final status/error/completion stamp from the per-rec outcome
+	// (#642), and learn whether any rec committed (#1014).
+	partial, committed := applyAccountOutcome(&acctExec, purchaseErrors)
 
 	if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
 		return committed, fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr)
@@ -295,6 +270,41 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return committed, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 	return committed, nil
+}
+
+// applyAccountOutcome stamps the final Status / Error / CompletedAt on acctExec
+// from the per-rec purchase outcome and reports whether the run was a partial
+// success and whether any rec committed.
+//
+// A per-account run can be a partial success (#642): some recs committed to
+// purchase_history (Purchased=true) while others failed. Marking the row
+// "failed" in that case is wrong (it hides the real commitments and invites a
+// re-approve that double-buys), so record "partially_completed" instead and let
+// the caller still send the confirmation for the recs that did purchase.
+//
+// committed is the gate executeMultiAccount uses to distinguish a partial run
+// from a flat failure (#1014): true when any rec purchased.
+func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []string) (partial, committed bool) {
+	committed = anyRecPurchased(acctExec.Recommendations)
+	partial = len(purchaseErrors) > 0 && committed
+	switch {
+	case partial:
+		now := time.Now()
+		acctExec.Status = "partially_completed"
+		// Append so any audit-gap note already stamped by
+		// aggregatePurchaseOutcomes (issue #621) survives alongside the
+		// per-rec failure list.
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+		acctExec.CompletedAt = &now
+	case len(purchaseErrors) > 0:
+		acctExec.Status = "failed"
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+	default:
+		now := time.Now()
+		acctExec.Status = "completed"
+		acctExec.CompletedAt = &now
+	}
+	return partial, committed
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
