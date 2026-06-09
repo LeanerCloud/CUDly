@@ -194,7 +194,8 @@ SELECT
     COUNT(*) as snapshot_count,
     MAX(timestamp) as last_updated
 FROM savings_snapshots
-GROUP BY DATE_TRUNC('month', timestamp), account_id, cloud_account_id, provider, service;
+GROUP BY DATE_TRUNC('month', timestamp), account_id, cloud_account_id, provider, service
+WITH NO DATA;
 
 CREATE UNIQUE INDEX idx_monthly_savings_summary_unique
     ON monthly_savings_summary(
@@ -224,7 +225,8 @@ FROM (
     FROM savings_snapshots
     GROUP BY DATE_TRUNC('day', timestamp), timestamp, account_id, cloud_account_id, provider
 ) per_ts
-GROUP BY day, account_id, cloud_account_id, provider;
+GROUP BY day, account_id, cloud_account_id, provider
+WITH NO DATA;
 
 CREATE UNIQUE INDEX idx_daily_savings_trend_unique
     ON daily_savings_trend(
@@ -256,16 +258,17 @@ FROM (
     WHERE timestamp > NOW() - INTERVAL '90 days'
     GROUP BY provider, account_id, cloud_account_id, timestamp
 ) per_ts
-GROUP BY provider, account_id, cloud_account_id;
+GROUP BY provider, account_id, cloud_account_id
+WITH NO DATA;
 
 CREATE UNIQUE INDEX idx_provider_savings_summary_unique
     ON provider_savings_summary(
         provider, account_id,
         COALESCE(cloud_account_id, '00000000-0000-0000-0000-000000000000'::uuid));
 
--- Repopulate the freshly-created views non-concurrently (CONCURRENTLY cannot
--- run against a never-populated view and cannot run inside a transaction).
--- The runtime refresh function keeps using CONCURRENTLY.
+-- Populate the views (created WITH NO DATA above) exactly once, non-concurrently
+-- (CONCURRENTLY cannot run against a never-populated view and cannot run inside a
+-- transaction). The runtime refresh function keeps using CONCURRENTLY.
 REFRESH MATERIALIZED VIEW monthly_savings_summary;
 REFRESH MATERIALIZED VIEW daily_savings_trend;
 REFRESH MATERIALIZED VIEW provider_savings_summary;
@@ -280,11 +283,19 @@ DECLARE
 BEGIN
     cutoff_date := DATE_TRUNC('month', CURRENT_DATE) - (retention_months || ' months')::INTERVAL;
 
+    -- Enumerate actual child partitions of savings_snapshots from the catalog
+    -- (pg_inherits) rather than name-matching pg_tables, where the LIKE
+    -- wildcard '_' would also match unrelated tables such as
+    -- savings_snapshots_backup_2024_01 and risk dropping non-partition data.
     FOR partition_record IN
-        SELECT tablename FROM pg_tables
-        WHERE schemaname = 'public'
-        AND tablename LIKE 'savings_snapshots_%'
-        AND tablename != 'savings_snapshots_default'
+        SELECT child.relname AS tablename
+        FROM pg_inherits i
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        JOIN pg_class child ON child.oid = i.inhrelid
+        JOIN pg_namespace ns ON ns.oid = child.relnamespace
+        WHERE parent.relname = 'savings_snapshots'
+          AND ns.nspname = 'public'
+          AND child.relname <> 'savings_snapshots_default'
     LOOP
         BEGIN
             partition_date := TO_DATE(
