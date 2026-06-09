@@ -178,31 +178,7 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, fmt.Errorf("revoke: GetExecutionByID %s: %w", purchaseID, execErr)
 	}
 	if execution != nil {
-		switch execution.Status {
-		case "completed", "partially_completed":
-			// Post-execution revoke (#291): token-OR-session. The email
-			// one-click link carries a token; the dashboard Revoke button
-			// carries a session. revokeCompletedExecution does its own auth.
-			return h.revokeCompletedExecution(ctx, req, execution, token)
-		case "pending", "notified":
-			// Not yet scheduled or executed: there is nothing to revoke — the
-			// caller wants Cancel, not Revoke. Return the friendly 409 (#291)
-			// rather than letting the scheduled-CAS path produce a confusing
-			// 410. No mutation, so no session is required to surface this.
-			return nil, NewClientError(409, fmt.Sprintf(
-				"execution %s is still pending — use the Cancel link instead of Revoke", execution.ExecutionID))
-		default:
-			// Scheduled (free pre-fire cancel, #290) and any other state:
-			// session-only. revokeScheduledExecution's CAS (WHERE
-			// status='scheduled') is the sole arbiter — it returns 410 when the
-			// scheduler already fired, and a non-scheduled row simply fails the
-			// CAS, so we do not pre-reject on status here (avoids a TOCTOU race).
-			session, err := h.requireSession(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			return h.revokeScheduledExecution(ctx, session, execution)
-		}
+		return h.revokeExistingExecution(ctx, req, execution, token)
 	}
 
 	// No execution row. A token means this came from an email one-click link
@@ -221,6 +197,38 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 		return nil, err
 	}
 	return h.loadAndRevokePurchaseHistory(ctx, req, session, purchaseID)
+}
+
+// revokeExistingExecution dispatches a revoke for an execution row that exists,
+// branching on its status. Extracted from revokePurchase to keep that function
+// under the cyclomatic limit; the auth/security matrix is unchanged (each branch
+// enforces the same token-or-session rules it did inline).
+func (h *Handler) revokeExistingExecution(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, token string) (any, error) {
+	switch execution.Status {
+	case "completed", "partially_completed":
+		// Post-execution revoke (#291): token-OR-session. The email
+		// one-click link carries a token; the dashboard Revoke button
+		// carries a session. revokeCompletedExecution does its own auth.
+		return h.revokeCompletedExecution(ctx, req, execution, token)
+	case "pending", "notified":
+		// Not yet scheduled or executed: there is nothing to revoke — the
+		// caller wants Cancel, not Revoke. Return the friendly 409 (#291)
+		// rather than letting the scheduled-CAS path produce a confusing
+		// 410. No mutation, so no session is required to surface this.
+		return nil, NewClientError(409, fmt.Sprintf(
+			"execution %s is still pending — use the Cancel link instead of Revoke", execution.ExecutionID))
+	default:
+		// Scheduled (free pre-fire cancel, #290) and any other state:
+		// session-only. revokeScheduledExecution's CAS (WHERE
+		// status='scheduled') is the sole arbiter — it returns 410 when the
+		// scheduler already fired, and a non-scheduled row simply fails the
+		// CAS, so we do not pre-reject on status here (avoids a TOCTOU race).
+		session, err := h.requireSession(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return h.revokeScheduledExecution(ctx, session, execution)
+	}
 }
 
 // loadAndRevokePurchaseHistory pulls the auth + idempotency-check + provider-dispatch
