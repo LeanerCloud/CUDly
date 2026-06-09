@@ -583,3 +583,108 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 	// belt-and-braces with the per-account read path on the covered side.
 	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
 }
+
+// TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency is the
+// regression guard for the live bug: the Home dashboard showed a non-zero
+// "current / committed" figure for Azure (it counts active commitments via
+// EstimatedSavings, which is always populated) while the Coverage tab showed
+// $0 / "No usage detected" for the same Azure subscription.
+//
+// Root cause: an Azure all-upfront RI carries MonthlyCost == nil (no recurring
+// charge — see config.PurchaseHistoryRecord.MonthlyCost), and the old Coverage
+// path summed only non-nil MonthlyCost, silently dropping the row. The covered
+// monthly of such a commitment is its amortised upfront (UpfrontCost / term
+// months), so the two surfaces disagreed: the dashboard found the commitment,
+// Coverage acted as if Azure had none.
+//
+// This test seeds exactly that shape — an active Azure compute commitment with
+// MonthlyCost nil but a real UpfrontCost over a 1-year term — and asserts:
+//   - the dashboard's active-commitment aggregation sees it (non-zero
+//     EstimatedSavings for azure:compute), proving the commitment is "current";
+//   - the Coverage tab now reports a non-zero covered monthly for Azure equal
+//     to the amortised upfront, instead of nil / zero coverage.
+//
+// Pre-fix the Coverage assertion fails (azure section has nil Services and nil
+// OverallCoveragePct). Post-fix both surfaces agree that Azure has an active,
+// covered commitment.
+func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockScheduler.AssertExpectations(t)
+	})
+
+	now := time.Now()
+	// Azure all-upfront RI: no recurring monthly charge (MonthlyCost nil),
+	// $1200 upfront over a 1-year term => $100/mo amortised covered spend.
+	// EstimatedSavings is populated, which is what the dashboard's
+	// "current / committed" figure renders.
+	azureCommitment := config.PurchaseHistoryRecord{
+		AccountID:        "acc-az",
+		PurchaseID:       "p-azure-allupfront",
+		Provider:         "azure",
+		Service:          "compute",
+		Timestamp:        now.AddDate(0, -2, 0), // active: 1y term started 2mo ago
+		Term:             1,
+		UpfrontCost:      1200.0,
+		MonthlyCost:      nil, // all-upfront: no recurring charge at the commitment layer
+		EstimatedSavings: 166.0,
+	}
+	purchases := []config.PurchaseHistoryRecord{azureCommitment}
+
+	// --- Consistency leg 1: the dashboard counts this commitment as active ---
+	// aggregateActiveCommitmentsPerService is the exact primitive the dashboard
+	// "current / committed" figure is built from (handler_dashboard.go). It must
+	// see the Azure commitment, otherwise there would be nothing to reconcile.
+	dashByService := aggregateActiveCommitmentsPerService(purchases, now)
+	require.Equal(t, 166.0, dashByService["compute"],
+		"dashboard must count the active Azure commitment (EstimatedSavings)")
+
+	// --- Consistency leg 2: the Coverage tab must reflect the same commitment ---
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(purchases, nil)
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{}, nil
+	}
+	// No Azure on-demand recommendations: the only signal for Azure is the
+	// covered commitment. Pre-fix this yields nil/zero coverage; post-fix the
+	// amortised upfront makes Azure 100% covered for compute.
+	mockScheduler.On("ListRecommendations", ctx, config.RecommendationFilter{}).Return([]config.RecommendationRecord{}, nil)
+
+	mockAuth, req := adminInventoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
+
+	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	resp, ok := result.(CoverageBreakdownResponse)
+	require.True(t, ok)
+
+	var azure *ProviderCoverageSection
+	for i := range resp.Providers {
+		if resp.Providers[i].Provider == "azure" {
+			azure = &resp.Providers[i]
+			break
+		}
+	}
+	require.NotNil(t, azure)
+	// The crux: pre-fix this is nil (row dropped → "No usage detected"); the
+	// commitment must surface as covered.
+	require.NotNil(t, azure.Services,
+		"Azure must show its all-upfront commitment as covered, not 'No usage detected'")
+	require.Len(t, azure.Services, 1)
+
+	compute := azure.Services[0]
+	assert.Equal(t, "compute", compute.Service)
+	// $1200 upfront / (1yr * 12mo) = $100/mo amortised covered spend.
+	assert.InDelta(t, 100.0, compute.CoveredMonthly, 0.001,
+		"covered monthly = amortised upfront for an all-upfront commitment")
+	assert.Equal(t, 0.0, compute.OnDemandMonthly)
+	require.NotNil(t, compute.CoveragePct)
+	// 100 covered / (100 covered + 0 on-demand) = 100% — never nil/zero.
+	assert.InDelta(t, 100.0, *compute.CoveragePct, 0.001)
+
+	require.NotNil(t, azure.OverallCoveragePct)
+	assert.InDelta(t, 100.0, *azure.OverallCoveragePct, 0.001)
+}
