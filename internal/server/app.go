@@ -670,6 +670,34 @@ func loadAndGuardEncryptionKey(ctx context.Context, resolver secrets.Resolver) (
 	return encKey, source, nil
 }
 
+// initAuthService derives a stable CSRF key from encKey via HKDF and
+// constructs the auth.Service. Extracted from reinitializeAfterConnect to keep
+// cyclomatic complexity within the project limit. Returns an error if CSRF key
+// derivation fails or if NewService returns nil (fail-closed).
+func (app *Application) initAuthService(authStore *auth.PostgresStore, encKey []byte) (*auth.Service, error) {
+	// Derive a STABLE CSRF key from the encryption key so every instance and
+	// every Lambda cold-start uses the same key (closes the cross-instance CSRF
+	// failure: a token minted on one instance must validate on another). Without
+	// an explicit CSRFKey, auth.NewService would mint a random per-process key,
+	// invalidating tokens across the fleet and on every cold-start.
+	csrfKey, err := auth.DeriveCSRFKey(encKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive CSRF key: %w", err)
+	}
+	svc := auth.NewService(auth.ServiceConfig{
+		Store:            authStore,
+		EmailSender:      app.Email,
+		SessionDuration:  24 * time.Hour,
+		DashboardURL:     app.appConfig.DashboardURL,
+		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
+		CSRFKey:          csrfKey,
+	})
+	if svc == nil {
+		return nil, fmt.Errorf("failed to create auth service")
+	}
+	return svc, nil
+}
+
 // reinitializeAfterConnect re-creates all stores and services that depend on the
 // database connection. This is called after the lazy DB connect succeeds.
 // Returns an error if any store or service initialization fails.
@@ -696,28 +724,13 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return err
 	}
 
-	// Derive a STABLE CSRF key from the encryption key so every instance and
-	// every Lambda cold-start uses the same key (closes the cross-instance CSRF
-	// failure: a token minted on one instance must validate on another). Without
-	// an explicit CSRFKey, auth.NewService would mint a random per-process key,
-	// invalidating tokens across the fleet and on every cold-start.
-	csrfKey, err := auth.DeriveCSRFKey(encKey)
+	// Update auth service with PostgreSQL auth store. The CSRF key is derived
+	// from the encryption key so every instance uses the same stable key.
+	authSvc, err := app.initAuthService(authStore, encKey)
 	if err != nil {
-		return fmt.Errorf("failed to derive CSRF key: %w", err)
+		return err
 	}
-
-	// Update auth service with PostgreSQL auth store
-	app.Auth = auth.NewService(auth.ServiceConfig{
-		Store:            authStore,
-		EmailSender:      app.Email,
-		SessionDuration:  24 * time.Hour,
-		DashboardURL:     app.appConfig.DashboardURL,
-		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
-		CSRFKey:          csrfKey,
-	})
-	if app.Auth == nil {
-		return fmt.Errorf("failed to create auth service")
-	}
+	app.Auth = authSvc
 
 	// Initialize distributed rate limiter for Lambda (multi-instance)
 	// For Fargate/containers, we already have in-memory rate limiter from startup
