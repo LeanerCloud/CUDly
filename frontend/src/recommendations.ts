@@ -85,6 +85,22 @@ let lastRecommendationsSummary: RecommendationsSummary | null = null;
 // skips kicking off a second request (and duplicate toasts).
 let autoRefreshInFlight: Promise<void> | null = null;
 
+// Runaway-loop guard: latch so the stale-on-open auto-refresh fires AT MOST
+// once per page session. Without it, triggerAutoRefreshIfStale -> (stale)
+// -> startRecommendationsRefresh -> onReload() (loadRecommendations /
+// loadDashboard) re-enters triggerAutoRefreshIfStale, and when the backend
+// collection never advances last_collected_at (e.g. it fails at a DB error,
+// so freshness stays stale forever) the success path re-fires the collect
+// endlessly — observed at ~4-10 POST /recommendations/refresh per second in
+// production, each a paid Cost Explorer / pricing call once the collector
+// reaches AWS. autoRefreshInFlight only dedups *concurrent* refreshes; it is
+// cleared per cycle, so it cannot stop this sequential re-trigger. The latch
+// is intentionally NOT reset on success/failure: the auto-refresh is a
+// once-per-load convenience, and a hard page reload resets module state.
+// Explicit user actions (lookback change, manual refresh) call
+// startRecommendationsRefresh() directly and so are never gated by this latch.
+let autoRefreshAttempted = false;
+
 /**
  * Freshness budget for auto-refresh (#284). If the last successful collection
  * is older than this threshold (or there has never been one), loadRecommendations
@@ -159,6 +175,7 @@ export function resetExpandedCells(): void {
  */
 export function resetAutoRefreshInFlight(): void {
   autoRefreshInFlight = null;
+  autoRefreshAttempted = false;
 }
 
 /**
@@ -280,6 +297,16 @@ export function setupRecommendationsHandlers(): void {
 export async function triggerAutoRefreshIfStale(
   onReload: () => Promise<void> = loadRecommendations,
 ): Promise<void> {
+  // Runaway-loop guard: the stale-on-open auto-refresh runs at most once per
+  // page session. startRecommendationsRefresh's success path calls onReload()
+  // (loadRecommendations / loadDashboard), which re-enters this function; when
+  // the collector never advances last_collected_at the freshness stays stale
+  // and we would re-fire the (paid) collect endlessly. Latch before the
+  // freshness fetch so neither the GET nor the collect repeats. Explicit user
+  // refreshes bypass this by calling startRecommendationsRefresh() directly.
+  if (autoRefreshAttempted) return;
+  autoRefreshAttempted = true;
+
   let freshness;
   try {
     freshness = await getRecommendationsFreshness();

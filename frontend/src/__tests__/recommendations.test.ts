@@ -143,6 +143,12 @@ describe('Recommendations Module', () => {
     });
     (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({});
     mockShowToast.mockReturnValue({ dismiss: jest.fn() });
+
+    // Reset the auto-refresh in-flight guard AND the once-per-session
+    // latch so each test starts with a clean auto-refresh state. Without
+    // this, the first stale-load test latches autoRefreshAttempted and
+    // every later test in this block would silently skip the auto-refresh.
+    resetAutoRefreshInFlight();
   });
 
   afterEach(() => {
@@ -1455,6 +1461,48 @@ describe('Recommendations Module', () => {
       expect(inFlightCall).toBeDefined();
       const inFlightOpts = inFlightCall![0] as { timeout?: number | null };
       expect(inFlightOpts.timeout).toBeNull();
+    });
+
+    // Runaway-loop regression. Reproduces the production cost incident: the
+    // backend collect SUCCEEDS (POST /recommendations/refresh resolves) but the
+    // collector never advances last_collected_at (it fails at a DB error), so
+    // freshness stays stale forever. The success path calls onReload()
+    // (loadRecommendations by default), which re-enters triggerAutoRefreshIfStale.
+    // Pre-fix this recurses and re-fires the paid collect endpoint on every
+    // reload — observed at ~4-10 calls/sec in production. Post-fix the
+    // once-per-session latch caps it at exactly one collect across repeated
+    // loads / the post-refresh reload.
+    test('runaway loop — stale-that-never-clears fires the collect exactly once across reloads (#cost-risk)', async () => {
+      mockGetRecs();
+      // Freshness is ALWAYS stale (collector never advances it).
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      // The refresh POST SUCCEEDS (real scenario: backend returns 202), which
+      // is what drives the success-path onReload() re-entry.
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({});
+
+      // First page open: should auto-refresh once. The default onReload is
+      // loadRecommendations, so the success path re-enters this whole chain.
+      await loadRecommendations();
+      // Drain the .then(onReload) -> loadRecommendations -> triggerAutoRefreshIfStale
+      // microtask/promise chain several times; pre-fix each drain re-fires the
+      // collect, so a multi-iteration drain makes the runaway unmistakable.
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+
+      // Even simulated subsequent reloads (filter change, tab re-entry) must
+      // NOT re-arm the auto-collect within the same session.
+      await loadRecommendations();
+      await loadRecommendations();
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+
+      // Exactly one paid collect, regardless of how many reloads occurred.
+      expect(recsApi.refreshRecommendations).toHaveBeenCalledTimes(1);
     });
   });
 
