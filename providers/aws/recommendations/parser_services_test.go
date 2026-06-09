@@ -345,6 +345,88 @@ func TestParseEC2Details(t *testing.T) {
 			},
 		},
 		{
+			// Regression for "AWS opportunities missing": Cost Explorer
+			// returns Tenancy title-cased as "Shared" (not lowercase
+			// "shared"). The pre-fix case-sensitive compare rejected it,
+			// parseRecommendations swallowed the error and continue'd, and
+			// every EC2 RI recommendation was dropped -> no AWS recs on the
+			// dashboard. This is the exact casing observed in production logs.
+			name: "EC2 CE title-cased Shared tenancy maps to default",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("m5.large"),
+						Platform:     aws.String("Linux/UNIX"),
+						Region:       aws.String("US East (N. Virginia)"),
+						Tenancy:      aws.String("Shared"),
+					},
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, rec *common.Recommendation) {
+				ec2Details, ok := rec.Details.(*common.ComputeDetails)
+				require.True(t, ok)
+				assert.Equal(t, "default", ec2Details.Tenancy)
+			},
+		},
+		{
+			// Same fix for the dedicated case: CE title-cases "Dedicated".
+			name: "EC2 CE title-cased Dedicated tenancy maps to dedicated",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("r5.xlarge"),
+						Platform:     aws.String("Windows"),
+						Region:       aws.String("eu-central-1"),
+						Tenancy:      aws.String("Dedicated"),
+					},
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, rec *common.Recommendation) {
+				ec2Details, ok := rec.Details.(*common.ComputeDetails)
+				require.True(t, ok)
+				assert.Equal(t, "dedicated", ec2Details.Tenancy)
+			},
+		},
+		{
+			// Leading/trailing whitespace must not defeat the mapping either.
+			name: "EC2 tenancy with surrounding whitespace maps to default",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("m5.large"),
+						Platform:     aws.String("Linux/UNIX"),
+						Region:       aws.String("us-east-1"),
+						Tenancy:      aws.String("  Shared  "),
+					},
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, rec *common.Recommendation) {
+				ec2Details, ok := rec.Details.(*common.ComputeDetails)
+				require.True(t, ok)
+				assert.Equal(t, "default", ec2Details.Tenancy)
+			},
+		},
+		{
+			// M5 must still hold under the case-insensitive compare: title-cased
+			// "Host" (Dedicated Hosts, no RI product) must still error rather
+			// than collapse to default.
+			name: "EC2 title-cased Host tenancy still errors",
+			details: &types.ReservationPurchaseRecommendationDetail{
+				InstanceDetails: &types.InstanceDetails{
+					EC2InstanceDetails: &types.EC2InstanceDetails{
+						InstanceType: aws.String("m5.large"),
+						Platform:     aws.String("Linux/UNIX"),
+						Region:       aws.String("us-east-1"),
+						Tenancy:      aws.String("Host"),
+					},
+				},
+			},
+			expectError: true,
+		},
+		{
 			name: "Missing EC2 instance details",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{

@@ -82,15 +82,24 @@ func (c *Client) parseElastiCacheDetails(_ context.Context, rec *common.Recommen
 // directly. A nil pointer (CE omitted the field) also maps to default, because
 // CE only populates the field when it is non-default.
 //
+// Matching is case- and whitespace-insensitive: Cost Explorer returns the
+// value title-cased ("Shared", "Dedicated", "Host") even though older docs
+// imply lowercase, so a case-sensitive compare silently rejected every real
+// EC2 RI recommendation and the caller dropped it (no AWS opportunities on the
+// dashboard). Normalising the input keeps the parser robust to AWS varying the
+// casing without re-introducing a silent fallback.
+//
 // Unknown tenancy values (e.g. "host" for Dedicated Hosts, which have no
 // corresponding RI product) return an error so the caller fails loud rather
 // than silently querying for and buying a default-tenancy RI on behalf of a
 // workload that requires a different tenancy class (M5 fix).
 func resolveEC2Tenancy(tenancy *string) (string, error) {
-	if tenancy == nil || *tenancy == "shared" {
+	if tenancy == nil {
 		return string(ec2types.TenancyDefault), nil
 	}
-	switch *tenancy {
+	switch strings.ToLower(strings.TrimSpace(*tenancy)) {
+	case "shared":
+		return string(ec2types.TenancyDefault), nil
 	case "dedicated":
 		return string(ec2types.TenancyDedicated), nil
 	default:
