@@ -88,8 +88,8 @@ export async function loadSavingsHistory(): Promise<void> {
     // is single-select, and the backend's /history/analytics takes a single
     // account_id (see handler_analytics.go), so we forward the only selected
     // ID, mirroring dashboard.ts loadSavingsTrendChart. The provider chip is
-    // forwarded too; the backend honours it once #502 lands (until then it is
-    // a harmless no-op param and account_ids does the filtering).
+    // forwarded too and the backend now applies it as a provider WHERE filter
+    // on the savings-history query (issue #498, QA 2.3).
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
 

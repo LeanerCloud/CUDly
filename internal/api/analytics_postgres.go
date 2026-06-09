@@ -143,11 +143,15 @@ func sortedProviderKeys(m map[string][]string) []string {
 // QueryHistory aggregates purchase_history rows bucketed by interval.
 // Empty accountUUIDs AND accountExternalIDsByProvider means "all accounts
 // accessible to the caller"; scoping is enforced upstream in the handler.
-// Returns data points in ascending order and a summary covering the full window.
+// A non-empty provider ("aws"/"azure"/"gcp") restricts to rows of that
+// provider; "" means all providers (the global-filter "all" sentinel is
+// normalised to "" in the handler). Returns data points in ascending order
+// and a summary covering the full window.
 func (c *PostgresAnalyticsClient) QueryHistory(
 	ctx context.Context,
 	accountUUIDs []string,
 	accountExternalIDsByProvider map[string][]string,
+	provider string,
 	start, end time.Time,
 	interval string,
 ) ([]HistoryDataPoint, *HistorySummary, error) {
@@ -159,11 +163,17 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 	// Single query grouped by (bucket, service, provider) so we can assemble
 	// both the top-line bucket totals and the by_service / by_provider
 	// breakdowns without a second trip to the DB. The account predicate is the
-	// shared dual-column clause (see accountFilterClause).
+	// shared dual-column clause (see accountFilterClause); the optional provider
+	// predicate mirrors QueryByService (parameter-bound, "" = no filter).
 	//
 	// #nosec G201 — `unit` is allowlisted by intervalToTruncUnit above and the
-	// account clause is parameter-bound (no user input interpolated).
+	// account / provider clauses are parameter-bound (no user input interpolated).
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
+	providerClause := ""
+	if provider != "" {
+		args = append(args, provider)
+		providerClause = fmt.Sprintf(" AND provider = $%d", len(args))
+	}
 	query := fmt.Sprintf(`
 		SELECT date_trunc('%s', timestamp) AS bucket,
 		       service,
@@ -174,10 +184,10 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND %s
+		  AND %s%s
 		GROUP BY bucket, service, provider
 		ORDER BY bucket ASC
-	`, unit, accountClause)
+	`, unit, accountClause, providerClause)
 
 	rows, err := c.db.Query(ctx, query, args...)
 	if err != nil {
