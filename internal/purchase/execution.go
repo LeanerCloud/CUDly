@@ -738,10 +738,11 @@ func singleCloudAccountIDFromRecs(recs []config.RecommendationRecord) *string {
 // used to leave the execution silently "completed" with no purchase_history
 // row, making the purchase invisible in the History view (issue #621).
 func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) error {
+	purchasedAt := time.Now()
 	historyRecord := &config.PurchaseHistoryRecord{
 		AccountID:        accountID,
 		PurchaseID:       result.CommitmentID,
-		Timestamp:        time.Now(),
+		Timestamp:        purchasedAt,
 		Provider:         rec.Provider,
 		Service:          rec.Service,
 		Region:           rec.Region,
@@ -757,6 +758,9 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 		RampStep:         exec.StepNumber,
 		CloudAccountID:   exec.CloudAccountID,
 		Source:           exec.Source,
+		// Stamp the in-app free-cancel window so the History UI can offer the
+		// Revoke button (issue #290). Azure-only in Phase 1; nil for AWS/GCP.
+		RevocationWindowClosesAt: config.RevocationWindowClosesAtFor(rec.Provider, purchasedAt),
 	}
 	if err := m.config.SavePurchaseHistory(ctx, historyRecord); err != nil {
 		logging.Errorf("Failed to save history: %v", err)

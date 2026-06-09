@@ -310,6 +310,9 @@ func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data emai
 func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	return nil
 }
+func (n *noopEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
 func (n *noopEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }

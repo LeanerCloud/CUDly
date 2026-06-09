@@ -856,6 +856,9 @@ func (m *mockEmailSender) SendPurchaseFailedNotification(context.Context, email.
 func (m *mockEmailSender) SendPurchaseApprovalRequest(context.Context, email.NotificationData) error {
 	return nil
 }
+func (m *mockEmailSender) SendPurchaseScheduledNotification(context.Context, email.NotificationData) error {
+	return nil
+}
 func (m *mockEmailSender) SendPasswordResetEmail(context.Context, string, string) error {
 	return nil
 }
@@ -928,4 +931,24 @@ func (m *mockConfigStoreForExchange) SavePurchaseExecutionTx(ctx context.Context
 }
 func (m *mockConfigStoreForExchange) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
+}
+
+func (m *mockConfigStoreForExchange) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForExchange) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string, _ *float64, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForExchange) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForExchange) ClearRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForExchange) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
 }

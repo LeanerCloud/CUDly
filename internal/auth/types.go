@@ -455,6 +455,31 @@ const (
 	// gate History rows. The creator match is enforced in the handler
 	// (authorizeExecutionManagement), not in HasPermission.
 	ActionUpdateAny = "update-any"
+	// ActionRevokeOwn / ActionRevokeAny gate the in-app Revoke button on
+	// completed purchase_history rows while still within the provider's
+	// free-cancel window (issue #290).
+	//
+	// Default grants:
+	//   * RoleAdmin   -- implicit via {ActionAdmin, ResourceAll}.
+	//   * RoleUser    -- DefaultUserPermissions() adds revoke-own:purchases.
+	//     "Own" is currently enforced at ACCOUNT scope, not creator scope:
+	//     a user may revoke a completed purchase in any cloud account they
+	//     are allowed to access (the check in
+	//     api.checkRevokeOwnAccountAccess via GetAllowedAccountsAPI), because
+	//     purchase_history rows pre-date created_by_user_id and have no
+	//     reliable per-creator attribution. Rows with no account association
+	//     (CloudAccountID NULL) are out of reach for non-admins (fail-closed);
+	//     admins still revoke them via revoke-any.
+	//     NOTE: whether revoke-own should instead be creator-scoped is a
+	//     product decision tracked in issue #950; do not tighten this to
+	//     created_by_user_id without resolving that issue first.
+	//   * RoleReadOnly -- neither verb.
+	//
+	// revoke-any has no default non-admin grant; the constant exists so
+	// future operator roles can be granted broad revoke rights without
+	// escalating to admin.
+	ActionRevokeOwn = "revoke-own"
+	ActionRevokeAny = "revoke-any"
 )
 
 // Predefined resources
@@ -528,6 +553,13 @@ func DefaultUserPermissions() []Permission {
 		// token approve path stays as an escape hatch for non-session
 		// approvers.
 		{Action: ActionApproveOwn, Resource: ResourcePurchases},
+		// revoke-own:purchases — every authenticated user can revoke completed
+		// purchases they created themselves while still within the provider's
+		// free-cancel window (issue #290). The handler verifies the window has
+		// not closed, the provider supports a direct revocation API, and the
+		// creator UUID matches. Legacy rows with NULL creator are out of reach
+		// for non-admins (email-token paths have no revocation escape hatch).
+		{Action: ActionRevokeOwn, Resource: ResourcePurchases},
 	}
 }
 

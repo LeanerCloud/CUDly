@@ -113,6 +113,46 @@ func TestHandleScheduledTask(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:     "fire_scheduled_purchases success",
+			taskType: TaskFireScheduledPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FireScheduledDelayedPurchasesFunc = func(ctx context.Context) (*purchase.FireResult, error) {
+					return &purchase.FireResult{Found: 1, Fired: 1}, nil
+				}
+			},
+			expectError: false,
+		},
+		{
+			name:     "fire_scheduled_purchases propagates error",
+			taskType: TaskFireScheduledPurchases,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FireScheduledDelayedPurchasesFunc = func(ctx context.Context) (*purchase.FireResult, error) {
+					return nil, errors.New("db down")
+				}
+			},
+			expectError: true,
+		},
+		{
+			name:     "finalize_revocations success",
+			taskType: TaskFinalizeRevocations,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FinalizeInFlightRevocationsFunc = func(ctx context.Context) (*purchase.FinalizeResult, error) {
+					return &purchase.FinalizeResult{Found: 1, Finalized: 1}, nil
+				}
+			},
+			expectError: false,
+		},
+		{
+			name:     "finalize_revocations propagates error",
+			taskType: TaskFinalizeRevocations,
+			setupMocks: func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {
+				p.FinalizeInFlightRevocationsFunc = func(ctx context.Context) (*purchase.FinalizeResult, error) {
+					return nil, errors.New("db down")
+				}
+			},
+			expectError: true,
+		},
+		{
 			name:        "unknown task type",
 			taskType:    ScheduledTaskType("unknown"),
 			setupMocks:  func(s *testutil.MockScheduler, p *testutil.MockPurchaseManager) {},
@@ -350,6 +390,16 @@ func TestParseScheduledEvent(t *testing.T) {
 			name:         "reap_stuck_purchases event",
 			rawEvent:     `{"action": "reap_stuck_purchases"}`,
 			expectedTask: TaskReapStuckPurchases,
+		},
+		{
+			name:         "fire_scheduled_purchases event",
+			rawEvent:     `{"action": "fire_scheduled_purchases"}`,
+			expectedTask: TaskFireScheduledPurchases,
+		},
+		{
+			name:         "finalize_revocations event",
+			rawEvent:     `{"action": "finalize_revocations"}`,
+			expectedTask: TaskFinalizeRevocations,
 		},
 		{
 			name:        "unknown action returns error",

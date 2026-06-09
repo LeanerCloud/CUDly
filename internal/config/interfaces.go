@@ -78,13 +78,25 @@ type StoreInterface interface {
 	ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error)
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error)
-	// CancelExecutionAtomic atomically flips status from pending/notified to
-	// cancelled, setting cancelled_by. Returns (true, "cancelled", nil) on
-	// success and (false, currentStatus, nil) when zero rows were affected
-	// (the execution had already been approved or otherwise transitioned).
-	// Must be called inside a WithTx block so the suppression cleanup and
-	// the status flip commit atomically.
+	// CancelExecutionAtomic atomically flips status from pending / notified /
+	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
+	// supports the Gmail-style pre-fire delay revoke path (issue #290).
+	// Returns (true, "cancelled", nil) on success and (false, currentStatus,
+	// nil) when zero rows were affected (the execution had already been
+	// approved or otherwise transitioned). Must be called inside a WithTx
+	// block so the suppression cleanup and the status flip commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
+	// 'cancelled', setting cancelled_by. Used by the Gmail-style pre-fire delay
+	// revoke path (issue #291 wave-2) to cancel a scheduled execution at $0 before
+	// the scheduler fires the SDK call. The 'pending'/'notified' set accepted by
+	// CancelExecutionAtomic is intentionally not extended here so the two revoke
+	// flows surface distinct CAS race outcomes -- a scheduled row that the
+	// scheduler has already transitioned to 'approved' / 'running' must surface as
+	// a 410 ("window closed") rather than a 409 ("not pending"). Returns
+	// (true, "cancelled", nil) on success and (false, currentStatus, nil) when
+	// zero rows were affected. Must be called inside a WithTx block.
+	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
 	// ListStuckExecutions returns executions in any of the given statuses
 	// whose updated_at is older than the given duration. Used by the
 	// reaper sweep (issue #678) to find rows stuck in approved/running
@@ -92,6 +104,14 @@ type StoreInterface interface {
 	// them to a terminal state. Oldest-stuck-first (ORDER BY updated_at
 	// ASC), capped at MaxListLimit per sweep.
 	ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]PurchaseExecution, error)
+
+	// GetScheduledExecutionsDue returns purchase_executions with
+	// status='scheduled' whose scheduled_execution_at is in the past
+	// (scheduled_execution_at <= NOW()). Used by the Gmail-style pre-fire
+	// delay scheduler tick (issue #291 wave-2) to find rows ready to fire.
+	// Oldest-due-first (ORDER BY scheduled_execution_at ASC), capped at
+	// MaxListLimit per sweep.
+	GetScheduledExecutionsDue(ctx context.Context) ([]PurchaseExecution, error)
 
 	// Purchase history
 	SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error
@@ -121,6 +141,43 @@ type StoreInterface interface {
 	// also matched, while the per-provider grouping keeps a reused external number
 	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
+	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
+	// whose purchase_id matches. Returns (nil, nil) when no row is found.
+	// Used by the revoke endpoint to load the record before calling the
+	// provider cancel API (issue #290).
+	GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error)
+	// MarkPurchaseRevoked stamps revoked_at, revoked_via, and optionally
+	// support_case_id on a purchase_history row identified by purchase_id.
+	// calcRefundAmount and calcRefundCurrency capture the Azure CalculateRefund
+	// quote for audit (migration 000071, Finding #4); both nil/empty for
+	// non-Azure paths or legacy rows written before the migration.
+	// Returns a not-found error when no row matches. Idempotent: a second
+	// call for the same row is a no-op (revoked_at is not overwritten when
+	// it is already non-null). Used by the revoke endpoint (issue #290).
+	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error
+
+	// FlipPurchaseRevocationInFlight atomically sets revocation_in_flight=true
+	// on a purchase_history row. Called immediately before the Azure Return API
+	// call so that the row can be identified by the finalize sweep if the
+	// subsequent MarkPurchaseRevoked DB write fails (partial-success reconciliation,
+	// issue #290 Finding #6, migration 000072). No-op when the flag is already
+	// true (idempotent). Returns a not-found error when no row matches.
+	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
+
+	// ClearRevocationInFlight resets revocation_in_flight=false on a
+	// purchase_history row. Called when the Azure Return call fails with a
+	// transient or client error (not "already returned"), so the row is not
+	// left in a permanently-sticky in-flight state that would prevent future
+	// retries or mislead the finalize_revocations sweep (issue #290, second-wave
+	// CR Finding D). No-op when the row is already false. Best-effort: callers
+	// should log on error but not surface it to the user.
+	ClearRevocationInFlight(ctx context.Context, purchaseID string) error
+
+	// GetPurchaseHistoryInFlight returns all purchase_history rows with
+	// revocation_in_flight=true and revoked_at IS NULL.  These are rows where
+	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
+	// finalize_revocations scheduled sweep calls this to retry the DB write.
+	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

@@ -87,6 +87,10 @@ type CollectResult struct {
 type ManagerInterface interface {
 	ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
+	// FireScheduledDelayedPurchases fires purchase_executions in status=scheduled
+	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
+	// issue #291 wave-2). Called on the "fire_scheduled_purchases" scheduler tick.
+	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
 }
 
 // Scheduler handles scheduled tasks

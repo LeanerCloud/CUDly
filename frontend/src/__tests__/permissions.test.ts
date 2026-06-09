@@ -69,6 +69,9 @@ describe('permissions', () => {
         'cancel-own:purchases',
         'retry-own:purchases',
         'approve-own:purchases',
+        // Added by PR #804: revoke-own gates the History inline Revoke button
+        // for completed Azure purchases within the free-cancel window.
+        'revoke-own:purchases',
       ];
       expected.forEach((p) => expect(perms.has(p)).toBe(true));
       expect(perms.size).toBe(expected.length);

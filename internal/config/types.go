@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,14 @@ type GlobalConfig struct {
 	// internally); this setting applies to AWS only.
 	// Default: 7.
 	RecommendationsLookbackDays int `json:"recommendations_lookback_days" db:"recommendations_lookback_days"`
+
+	// PurchaseDelayHours is the Gmail-style pre-fire delay (issue #291 wave-2).
+	// When > 0, approving a purchase defers the actual cloud SDK call by this
+	// many hours. The user receives a "scheduled, revoke before X" email
+	// immediately after approval and may cancel at $0 until the window closes.
+	// 0 means immediate-execute (backward compat). Valid range: [0, 168].
+	// Default: 48.
+	PurchaseDelayHours int `json:"purchase_delay_hours" db:"purchase_delay_hours"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider
@@ -80,6 +89,33 @@ const DefaultRecommendationsLookbackDays = 7
 // ValidRecommendationsLookbackDays lists the AWS Cost Explorer
 // LookbackPeriodInDays enum values. Other values are rejected.
 var ValidRecommendationsLookbackDays = []int{7, 30, 60}
+
+// DefaultPurchaseDelayHours is the default Gmail-style pre-fire delay.
+// 48 hours gives most users a working-day window to spot and cancel
+// an approval they didn't intend.
+const DefaultPurchaseDelayHours = 48
+
+// MaxPurchaseDelayHours is the ceiling for PurchaseDelayHours. One week
+// is long enough for any reasonable review cycle; longer delays make the
+// UX confusing and the scheduler overhead non-trivial.
+const MaxPurchaseDelayHours = 168
+
+// GetPurchaseDelay returns the pre-fire delay as a time.Duration. Nil
+// receiver returns the default. Values outside [0, MaxPurchaseDelayHours]
+// are clamped so a rogue DB write cannot break the scheduler.
+func (g *GlobalConfig) GetPurchaseDelay() time.Duration {
+	if g == nil {
+		return time.Duration(DefaultPurchaseDelayHours) * time.Hour
+	}
+	h := g.PurchaseDelayHours
+	if h < 0 {
+		h = 0
+	}
+	if h > MaxPurchaseDelayHours {
+		h = MaxPurchaseDelayHours
+	}
+	return time.Duration(h) * time.Hour
+}
 
 // GracePeriodFor returns the effective grace-period window (in days)
 // for the given provider slug ("aws", "azure", "gcp"). Returns the
@@ -297,18 +333,25 @@ type PurchaseExecution struct {
 	// migration 000066 — the derivation falls back to ExecutionID for those
 	// (identical to the pre-fix behaviour for a single un-retried execution).
 	IdempotencyKey string `json:"idempotency_key,omitempty" dynamodbav:"idempotency_key,omitempty"`
+	// ScheduledExecutionAt is set by the Gmail-style pre-fire delay path
+	// (issue #291 wave-2) when an approve defers the cloud SDK call. The
+	// scheduler fires the actual SDK call when this timestamp is in the past.
+	// NULL on every immediate-execute row. Migration 000065.
+	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
 // IsCancelable reports whether an execution may still be cancelled. Only the
-// pre-purchase states ("pending"/"notified") qualify: once a row reaches
-// "approved" or "running" the AWS commitment is being or has been created, so
-// cancelling would leave the DB and the cloud out of sync; "cancelled",
-// "completed", "failed", "expired", and "paused" are likewise non-cancelable.
+// pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
+// reaches "approved" or "running" the AWS commitment is being or has been
+// created, so cancelling would leave the DB and the cloud out of sync;
+// "cancelled", "completed", "failed", "expired", and "paused" are likewise
+// non-cancelable. The "scheduled" state is cancellable because the cloud SDK
+// has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
 // and the session-authed cancelPurchaseViaSession) call this single predicate
 // so the policy can never drift between them (issue #645).
 func (e *PurchaseExecution) IsCancelable() bool {
-	return e.Status == "pending" || e.Status == "notified"
+	return e.Status == "pending" || e.Status == "notified" || e.Status == "scheduled"
 }
 
 // RecommendationRecord stores a recommendation with purchase status
@@ -564,6 +607,30 @@ type PurchaseHistoryFilter struct {
 	Limit int
 }
 
+// AzureRevocationWindowDays is the length of the Azure reservation free-cancel
+// window: a reservation can be returned for a full refund within this many days
+// of purchase (issue #290). It is the single source of truth for the window,
+// referenced both at purchase-write time (to stamp
+// PurchaseHistoryRecord.RevocationWindowClosesAt) and by the revoke endpoint's
+// window check, so the two never drift.
+const AzureRevocationWindowDays = 7
+
+// RevocationWindowClosesAtFor returns the timestamp at which the in-app revoke
+// button should stop being offered for a purchase of the given provider made at
+// purchaseTime, or nil when the provider has no in-app free-cancel window.
+//
+// Only Azure has a direct-API free-cancel window in Phase 1. AWS EC2 RIs have a
+// 24h window but no direct cancel API (revocation goes through an AWS Support
+// case, out of Phase-1 scope), and GCP commitments have no free-cancel window
+// at all, so both return nil and the History UI hides the button.
+func RevocationWindowClosesAtFor(provider string, purchaseTime time.Time) *time.Time {
+	if strings.EqualFold(provider, "azure") {
+		closesAt := purchaseTime.AddDate(0, 0, AzureRevocationWindowDays)
+		return &closesAt
+	}
+	return nil
+}
+
 // PurchaseHistoryRecord is the response-layer representation for rows on the
 // /api/history page. DB-backed rows always describe *completed* purchases; the
 // handler additionally synthesises rows for pending executions so users can
@@ -659,6 +726,43 @@ type PurchaseHistoryRecord struct {
 	// persistence (resolved at read time). The UI renders this in the
 	// Approval Queue "Created by" column instead of the raw UUID.
 	CreatedByUserEmail string `json:"created_by_user_email,omitempty" dynamodbav:"-"`
+
+	// --- Revocation window fields (issue #290) ---
+	//
+	// RevocationWindowClosesAt is set when the purchase_history row is
+	// written: Timestamp + the provider-specific free-cancel window
+	// (Azure: 7 days). NULL for AWS EC2 (no direct cancel API) and GCP
+	// (no free-cancel window). Persisted in purchase_history.
+	RevocationWindowClosesAt *time.Time `json:"revocation_window_closes_at,omitempty" dynamodbav:"revocation_window_closes_at,omitempty"`
+	// RevokedAt is set by the revoke endpoint when the provider API
+	// confirmed the cancellation / refund. Persisted.
+	RevokedAt *time.Time `json:"revoked_at,omitempty" dynamodbav:"revoked_at,omitempty"`
+	// RevokedVia identifies how the revocation was completed: "direct-api"
+	// (provider returned 2xx) or "support-case" (AWS Support case filed).
+	// Persisted.
+	RevokedVia string `json:"revoked_via,omitempty" dynamodbav:"revoked_via,omitempty"`
+	// SupportCaseID is non-empty when RevokedVia == "support-case".
+	// Persisted.
+	SupportCaseID string `json:"support_case_id,omitempty" dynamodbav:"support_case_id,omitempty"`
+
+	// --- Refund-quote audit fields (issue #290 Finding #4, migration 000071) ---
+	//
+	// CalcRefundAmount is the amount Azure quoted at CalculateRefund time, captured
+	// for audit and TOCTOU-divergence detection in the two-step revoke confirm flow.
+	// NULL for revocations that predate this feature or where Azure returned no amount.
+	CalcRefundAmount *float64 `json:"calc_refund_amount,omitempty" dynamodbav:"calc_refund_amount,omitempty"`
+	// CalcRefundCurrency is the ISO-4217 currency code from the CalculateRefund quote
+	// (e.g. "USD"). NULL when CalcRefundAmount is NULL.
+	CalcRefundCurrency string `json:"calc_refund_currency,omitempty" dynamodbav:"calc_refund_currency,omitempty"`
+
+	// --- Partial-success reconciliation (issue #290 Finding #6, migration 000072) ---
+	//
+	// RevocationInFlight is set to true immediately before the Azure Return API call
+	// and cleared (set to false) by a successful MarkPurchaseRevoked. When all DB
+	// retries fail, the flag stays true so the finalize_revocations scheduled sweep
+	// can detect and retry the MarkPurchaseRevoked write without re-calling Azure
+	// (preventing a duplicate-refund error).
+	RevocationInFlight bool `json:"revocation_in_flight,omitempty" dynamodbav:"revocation_in_flight,omitempty"`
 }
 
 // RIExchangeRecord represents a record in the ri_exchange_history table

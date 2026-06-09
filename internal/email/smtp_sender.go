@@ -444,6 +444,24 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	return sendPurchaseApprovalRequestVia(ctx, s, recipient, subject, data)
 }
 
+// SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
+// notification email via SMTP. Mirrors the Sender implementation's behaviour.
+func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
+	body, err := RenderPurchaseScheduledDelayEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase scheduled delay email: %w", err)
+	}
+	subject := fmt.Sprintf("CUDly - Purchase Scheduled for %s", data.RevocationWindowClosesAt)
+	recipient := data.RecipientEmail
+	if recipient == "" {
+		recipient = s.notifyEmail
+	}
+	if recipient == "" {
+		return ErrNoRecipient
+	}
+	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
+}
+
 // SendRegistrationReceivedNotification sends an email to CUDly administrators
 // for a new registration via SMTP. Prefers the caller-resolved
 // data.RecipientEmail + CCEmails (admin emails + global notify) so the To /

@@ -56,6 +56,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
+		"purchase_delay_hours",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -65,6 +66,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		true, "daily", 3,
 		"{}",
 		24, 7,
+		0,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -104,6 +106,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"auto_collect", "collection_schedule", "notification_days_before",
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
+		"purchase_delay_hours",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -114,6 +117,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			true, "daily", 3,
 			graceJSON,
 			24, 7,
+			0,
 		}
 	}
 
@@ -437,6 +441,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -446,7 +451,8 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -485,6 +491,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -499,6 +506,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
+		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -549,7 +557,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
-		"idempotency_key",
+		"idempotency_key", "scheduled_execution_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -560,6 +568,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
 	// Regexp matcher: only matches if the issued SELECT projects idempotency_key.
 	mock.ExpectQuery("idempotency_key").
@@ -585,16 +594,20 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 		"account_id", "purchase_id", "timestamp", "provider", "service", "region",
 		"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
 		"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
+		// revocation columns (issue #290)
+		"revocation_window_closes_at", "revoked_at", "revoked_via", "support_case_id",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("acc-1", "pur-1", now, "aws", "ec2", "us-east-1",
 			"m5.large", 2, 1, "no-upfront", 100.0, 50.0, 200.0,
 			sql.NullString{Valid: true, String: "plan-1"},
 			sql.NullString{Valid: true, String: "My Plan"},
-			1, sql.NullString{Valid: true, String: "cloud-acct-1"}).
+			1, sql.NullString{Valid: true, String: "cloud-acct-1"},
+			nil, nil, sql.NullString{}, sql.NullString{}).
 		AddRow("acc-1", "pur-2", now, "aws", "rds", "us-west-2",
 			"db.t3.medium", 1, 3, "all-upfront", 200.0, 0.0, 100.0,
-			sql.NullString{}, sql.NullString{}, 0, sql.NullString{})
+			sql.NullString{}, sql.NullString{}, 0, sql.NullString{},
+			nil, nil, sql.NullString{}, sql.NullString{})
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistory(ctx, "acc-1", 10)
@@ -608,11 +621,14 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 // ─── GetPurchaseHistoryFiltered (issue #701) ─────────────────────────────────
 
 // purchaseHistoryCols lists the SELECT columns for purchase_history rows in
-// the order GetPurchaseHistoryFiltered scans them.
+// the order GetPurchaseHistoryFiltered scans them. Keep in sync with
+// queryPurchaseHistory in store_postgres.go (issue #290 added the 4 revocation
+// columns at positions 18-21).
 var purchaseHistoryCols = []string{
 	"account_id", "purchase_id", "timestamp", "provider", "service", "region",
 	"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
 	"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
+	"revocation_window_closes_at", "revoked_at", "revoked_via", "support_case_id",
 }
 
 // purchaseHistoryRow builds a single AddRow tuple matching purchaseHistoryCols.
@@ -621,6 +637,8 @@ func purchaseHistoryRow(now time.Time, provider, acct string) []interface{} {
 		acct, "pur-1", now, provider, "ec2", "us-east-1",
 		"m5.large", 1, 1, "no-upfront", 100.0, 50.0, 200.0,
 		sql.NullString{}, sql.NullString{}, 0, sql.NullString{},
+		// revocation columns (issue #290): all null for non-revoked rows
+		nil, nil, sql.NullString{}, sql.NullString{},
 	}
 }
 
@@ -1679,7 +1697,8 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(18)...).
+	// 19 columns: original 18 + revocation_window_closes_at (issue #290).
+	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(19)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{
@@ -1863,7 +1882,8 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil, // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	}
 }
 
@@ -1877,6 +1897,7 @@ func stuckExecCols() []string {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
+		"scheduled_execution_at",
 	}
 }
 

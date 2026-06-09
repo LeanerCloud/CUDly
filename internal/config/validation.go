@@ -204,7 +204,20 @@ func (c *GlobalConfig) validateRecommendationsFields() error {
 	if err := c.validateRecommendationsCacheStaleHours(); err != nil {
 		return err
 	}
-	return c.validateRecommendationsLookbackDays()
+	if err := c.validateRecommendationsLookbackDays(); err != nil {
+		return err
+	}
+	return c.validatePurchaseDelayHours()
+}
+
+// validatePurchaseDelayHours validates the Gmail-style pre-fire delay
+// (issue #291 wave-2). Valid range: [0, MaxPurchaseDelayHours]. 0 means
+// immediate-execute (backward compat).
+func (c *GlobalConfig) validatePurchaseDelayHours() error {
+	if c.PurchaseDelayHours < 0 || c.PurchaseDelayHours > MaxPurchaseDelayHours {
+		return fmt.Errorf("purchase_delay_hours must be between 0 and %d, got: %d (0 = immediate execute)", MaxPurchaseDelayHours, c.PurchaseDelayHours)
+	}
+	return nil
 }
 
 // validateRecommendationsCacheStaleHours validates the stale-while-revalidate

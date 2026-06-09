@@ -265,11 +265,23 @@ export interface HistoryPurchase {
   // OpsHint: short operator-actionable message rendered inline in
   // place of the Retry button when the failure reason on the row
   // matches a known-persistent-misconfiguration pattern (e.g.
-  // "FROM_EMAIL not configured" → "Set FROM_EMAIL tfvar then retry").
+  // "FROM_EMAIL not configured" -> "Set FROM_EMAIL tfvar then retry").
   // Set only on `failed` rows whose Error matches the persistent map;
-  // absent otherwise. Replaces the Retry button entirely — there is
+  // absent otherwise. Replaces the Retry button entirely -- there is
   // no actionable retry from a persistent misconfig.
   ops_hint?: string;
+
+  // Revocation window fields (issue #290).
+  //
+  // revocation_window_closes_at: ISO-8601 timestamp after which in-app
+  // revocation is no longer available. Set only for providers that support
+  // a direct cancel API (Azure: 7 days). Absent for AWS and GCP.
+  revocation_window_closes_at?: string;
+  // revoked_at: ISO-8601 timestamp when the purchase was revoked via the
+  // in-app flow. Set only on rows that have been successfully revoked.
+  revoked_at?: string;
+  // revoked_via: "direct-api" or "support-case". Absent unless revoked.
+  revoked_via?: string;
 }
 
 // Savings Analytics types

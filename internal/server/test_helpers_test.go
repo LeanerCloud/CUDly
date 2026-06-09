@@ -131,6 +131,10 @@ func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx
 	return false, "", nil
 }
 
+func (m *mockConfigStoreForHealth) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStoreForHealth) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -290,4 +294,28 @@ func (m *mockConfigStoreForHealth) GetPendingExecutionsTx(ctx context.Context, _
 }
 func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
+}
+
+func (m *mockConfigStoreForHealth) GetPurchaseHistoryByPurchaseID(_ context.Context, _ string) (*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) MarkPurchaseRevoked(_ context.Context, _ string, _ time.Time, _ string, _ string, _ *float64, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) ClearRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
+	return nil, nil
 }

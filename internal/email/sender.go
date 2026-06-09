@@ -475,6 +475,15 @@ type NotificationData struct {
 	// with the 7-day enrollment window. Empty silently omits the block so
 	// existing callers that haven't been updated yet are unaffected.
 	ArcheraEducationURL string
+	// RevocationWindowClosesAt is the human-readable UTC timestamp when the
+	// Gmail-style pre-fire revocation window closes (issue #291 wave-2). Used
+	// by SendPurchaseScheduledNotification to tell the user until when they
+	// can revoke at zero cost. Empty means "not applicable" (immediate execute).
+	RevocationWindowClosesAt string
+	// RevokeURL is the deep-link URL to revoke the scheduled purchase from the
+	// dashboard (issue #291 wave-2). Embedded in the scheduled-notification
+	// email so the user can revoke with one click.
+	RevokeURL string
 }
 
 // RecommendationSummary is a simplified recommendation for email display

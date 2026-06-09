@@ -22,6 +22,11 @@ type SenderInterface interface {
 	SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error
 	SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error
 	SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error
+	// SendPurchaseScheduledNotification sends the "approved with delay" email
+	// immediately after an approval when Gmail-style pre-fire delay is configured
+	// (issue #291 wave-2). Notifies the user that the purchase will execute at
+	// RevocationWindowClosesAt and includes a one-click revoke link.
+	SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error
 	SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error
 	SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error
 }

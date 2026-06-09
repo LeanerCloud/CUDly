@@ -279,11 +279,12 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
+		// 12 = 6 read/plan-author + delete:plans (PR-A #660)
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
-		// + retry-own:purchases (issue #47) + approve-own:purchases (issue #286).
-		assert.Len(t, permissions, 11)
+		// + retry-own:purchases (issue #47) + approve-own:purchases (issue #286)
+		// + revoke-own:purchases (issue #290).
+		assert.Len(t, permissions, 12)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -352,10 +353,11 @@ func TestService_GetUserPermissions(t *testing.T) {
 
 		permissions, err := service.GetUserPermissions(ctx, "user-123")
 		require.NoError(t, err)
-		// 11 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
-		// + cancel-own (#46) + retry-own (#47) + approve-own (#286):purchases)
-		// + 1 group1 + 1 group2 = 13
-		assert.Len(t, permissions, 13)
+		// 12 standard-group (incl. delete:plans (PR-A #660) + update:purchases (PR-A #660)
+		// + cancel-own (#46) + retry-own (#47) + approve-own (#286)
+		// + revoke-own (#290):purchases)
+		// + 1 group1 + 1 group2 = 14
+		assert.Len(t, permissions, 14)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -398,11 +400,12 @@ func TestService_GetUserPermissions(t *testing.T) {
 		require.NoError(t, err)
 		// Should have only the resolvable group's permissions; the missing
 		// group is skipped.
-		// 11 = 6 read/plan-author + delete:plans (PR-A #660)
+		// 12 = 6 read/plan-author + delete:plans (PR-A #660)
 		// + update:purchases (PR-A #660)
 		// + cancel-own:purchases (issue #46)
-		// + retry-own:purchases (issue #47) + approve-own:purchases (issue #286).
-		assert.Len(t, permissions, 11)
+		// + retry-own:purchases (issue #47) + approve-own:purchases (issue #286)
+		// + revoke-own:purchases (issue #290).
+		assert.Len(t, permissions, 12)
 
 		mockStore.AssertExpectations(t)
 	})

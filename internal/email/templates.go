@@ -740,6 +740,65 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 }
 
 // ---------------------------------------------------------------------------
+// Gmail-style pre-fire delay email (issue #291 wave-2)
+// ---------------------------------------------------------------------------
+
+// purchaseScheduledDelayTemplate is the plain-text body for the
+// "your purchase is scheduled — revoke before X" email sent immediately after
+// an approval when PurchaseDelayHours > 0.
+var purchaseScheduledDelayTemplate = `
+Your CUDly purchase has been approved and is scheduled to execute.
+
+Scheduled execution time: {{.RevocationWindowClosesAt}} (UTC)
+
+You can revoke this purchase at zero cost until it executes:
+{{.RevokeURL}}
+
+After that time the cloud SDK call will have been made and revocation
+requires a provider support case (for supported providers).
+
+Purchase summary:
+- Total upfront cost: ${{printf "%.2f" .TotalUpfrontCost}}
+- Estimated monthly savings: ${{printf "%.2f" .TotalSavings}}
+- Commitment count: {{len .Recommendations}}
+
+To view or manage this purchase:
+{{.DashboardURL}}/purchases#history?execution={{.ExecutionID}}
+
+-- CUDly
+`
+
+// RenderPurchaseScheduledDelayEmail renders the plain-text scheduled-delay
+// notification email.
+func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
+	return renderTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
+}
+
+// SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
+// notification email immediately after an approval with delay > 0.
+// The email tells the user when the purchase will execute and includes a
+// one-click revoke link. Route: direct To/CC (same as approval request)
+// because the revoke link is scoped to the execution ID.
+//
+// Returns ErrNoRecipient when data.RecipientEmail is empty. The body carries a
+// live, execution-scoped revoke link, so it must never fall back to the
+// broadcast SendNotification path (which would leak the action link to every
+// alert subscriber and break the ownership/RBAC model around revocation).
+// Mirrors SendScheduledPurchaseNotification and the SMTP sender, which both
+// require a resolved recipient for this email.
+func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
+	body, err := RenderPurchaseScheduledDelayEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase scheduled delay email: %w", err)
+	}
+	subject := fmt.Sprintf("CUDly - Purchase Scheduled for %s", data.RevocationWindowClosesAt)
+	return s.SendToEmailWithCCMultipart(ctx, data.RecipientEmail, data.CCEmails, subject, body, "")
+}
+
+// ---------------------------------------------------------------------------
 // Account registration email templates
 // ---------------------------------------------------------------------------
 

@@ -51,7 +51,8 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		       ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
 		       auto_collect, collection_schedule, notification_days_before,
 		       grace_period_days,
-		       recommendations_cache_stale_hours, recommendations_lookback_days
+		       recommendations_cache_stale_hours, recommendations_lookback_days,
+		       COALESCE(purchase_delay_hours, 0)
 		FROM global_config
 		WHERE id = 1
 	`
@@ -80,6 +81,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 		&gracePeriodJSON,
 		&config.RecommendationsCacheStaleHours,
 		&config.RecommendationsLookbackDays,
+		&config.PurchaseDelayHours,
 	)
 
 	if err != nil {
@@ -101,6 +103,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 				NotificationDaysBefore:         3,
 				RecommendationsCacheStaleHours: DefaultRecommendationsCacheStaleHours,
 				RecommendationsLookbackDays:    DefaultRecommendationsLookbackDays,
+				PurchaseDelayHours:             DefaultPurchaseDelayHours,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get global config: %w", err)
@@ -132,8 +135,9 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			ri_exchange_max_per_exchange_usd, ri_exchange_max_daily_usd, ri_exchange_lookback_days,
 			auto_collect, collection_schedule, notification_days_before,
 			grace_period_days,
-			recommendations_cache_stale_hours, recommendations_lookback_days
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			recommendations_cache_stale_hours, recommendations_lookback_days,
+			purchase_delay_hours
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -154,6 +158,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 			grace_period_days = $17,
 			recommendations_cache_stale_hours = $18,
 			recommendations_lookback_days = $19,
+			purchase_delay_hours = $20,
 			updated_at = NOW()
 	`
 
@@ -209,6 +214,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		gracePeriodJSON,
 		config.RecommendationsCacheStaleHours,
 		recommendationsLookbackDays,
+		config.PurchaseDelayHours,
 	)
 
 	if err != nil {
@@ -799,8 +805,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
-			idempotency_key
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+			idempotency_key, scheduled_execution_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -821,6 +827,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			executed_by_user_id = $23,
 			executed_at = $24,
 			pre_approval_skip_reason = $25,
+			scheduled_execution_at = $27,
 			updated_at = NOW()
 	`
 
@@ -871,6 +878,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.ExecutedAt,
 		execution.PreApprovalSkipReason,
 		execution.IdempotencyKey,
+		execution.ScheduledExecutionAt,
 	)
 
 	if err != nil {
@@ -895,7 +903,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
-		          idempotency_key
+		          idempotency_key, scheduled_execution_at
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
@@ -928,6 +936,12 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // affected and the method returns (false, currentStatus, nil) with the
 // live status fetched via a follow-up SELECT. Returns (true, "cancelled",
 // nil) on success and (false, "", err) on a real DB error.
+//
+// The 'scheduled' status is intentionally NOT accepted here -- the
+// Gmail-style pre-fire delay revoke flow has its own
+// CancelScheduledExecutionAtomic so the two paths surface distinct CAS
+// race outcomes (cancel returns 409 on already-approved; scheduled-revoke
+// returns 410 "window closed" on already-fired).
 //
 // Callers must run the suppression cleanup in the same transaction; use
 // the WithTx + DeleteSuppressionsByExecutionTx pairing at the call site
@@ -977,6 +991,66 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 	return false, existing.Status, nil
 }
 
+// CancelScheduledExecutionAtomic atomically transitions an execution from
+// 'scheduled' to 'cancelled', setting cancelled_by to the supplied actor
+// (NULL when actor is nil). Used by the Gmail-style pre-fire delay revoke
+// path (issue #290 / #291 wave-2): an approved-but-not-yet-fired execution
+// can be revoked at $0 by flipping it to cancelled before the scheduler
+// fires the cloud SDK call.
+//
+// The 'scheduled' status is the only accepted source. A concurrent
+// scheduler tick that already transitioned the row to 'approved' or
+// 'running' causes zero rows to be affected and the method returns
+// (false, currentStatus, nil) -- the caller maps that to a 410
+// ("revocation window has closed") so the frontend can fall through to
+// the post-execution Azure direct-cancel API path.
+//
+// Returns (true, "cancelled", nil) on success and (false, "", err) on a
+// real DB error. Must be called inside a WithTx block so the suppression
+// cleanup commits atomically with the status flip.
+func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error) {
+	q := `
+		UPDATE purchase_executions
+		   SET status       = 'cancelled',
+		       cancelled_by = $2,
+		       updated_at   = NOW()
+		 WHERE execution_id = $1
+		   AND status = 'scheduled'
+		RETURNING status
+	`
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to cancel scheduled execution: %w", err)
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var st string
+		if scanErr := rows.Scan(&st); scanErr != nil {
+			return false, "", fmt.Errorf("failed to scan cancel-scheduled result: %w", scanErr)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return false, "", fmt.Errorf("failed to iterate cancel-scheduled result: %w", rowsErr)
+		}
+		return true, st, nil
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, "", fmt.Errorf("failed to iterate cancel-scheduled result: %w", rowsErr)
+	}
+
+	// Zero rows affected: execution either does not exist or the scheduler
+	// has already transitioned it out of 'scheduled'. Surface the current
+	// status so the caller can return a meaningful 410 body.
+	existing, existErr := s.GetExecutionByID(ctx, executionID)
+	if existErr != nil {
+		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
+	}
+	if existing == nil {
+		return false, "", fmt.Errorf("execution not found: %s", executionID)
+	}
+	return false, existing.Status, nil
+}
+
 // GetExecutionsByStatuses returns executions whose Status is any of the
 // supplied values, newest-first, capped at `limit`. Used by the History
 // handler to merge pending/failed/expired rows alongside completed purchases
@@ -1000,7 +1074,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date DESC
@@ -1066,7 +1140,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
@@ -1108,7 +1182,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND updated_at < NOW() - $2::interval
@@ -1129,7 +1203,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1153,7 +1227,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1183,7 +1257,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -1210,7 +1284,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -1286,6 +1360,30 @@ func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args 
 	return scanExecutionRows(rows)
 }
 
+// applyNullTimesToExecution sets the nullable timestamp fields on exec from the
+// sql.NullTime wrappers, pulled out of scanExecutionRows to keep that function
+// under the cyclomatic limit.
+func applyNullTimesToExecution(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt sql.NullTime) {
+	if notifSent.Valid {
+		exec.NotificationSent = &notifSent.Time
+	}
+	if completedAt.Valid {
+		exec.CompletedAt = &completedAt.Time
+	}
+	if expiresAt.Valid {
+		exec.TTL = ttlFromTime(expiresAt.Time)
+	}
+	if tokenExpiresAt.Valid {
+		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
+	}
+	if executedAt.Valid {
+		exec.ExecutedAt = &executedAt.Time
+	}
+	if scheduledExecutionAt.Valid {
+		exec.ScheduledExecutionAt = &scheduledExecutionAt.Time
+	}
+}
+
 // scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
 // It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
 // query) so the scan logic lives in one place.
@@ -1294,7 +1392,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	for rows.Next() {
 		var exec PurchaseExecution
 		var recommendationsJSON []byte
-		var notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt sql.NullTime
+		var notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt sql.NullTime
 		// plan_id is nullable since migration 000033 (direct-execute
 		// rows from the Recommendations page have no originating plan).
 		var planID sql.NullString
@@ -1330,6 +1428,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&executedAt,
 			&exec.PreApprovalSkipReason,
 			&idempotencyKey,
+			&scheduledExecutionAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -1347,7 +1446,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			return nil, fmt.Errorf("failed to unmarshal recommendations: %w", err)
 		}
 
-		applyExecutionNullableTimes(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt)
+		applyNullTimesToExecution(&exec, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt, scheduledExecutionAt)
 
 		executions = append(executions, exec)
 	}
@@ -1355,25 +1454,34 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	return executions, rows.Err()
 }
 
-// applyExecutionNullableTimes maps the nullable timestamp columns onto exec.
-// It pulls the per-field NULL handling out of scanExecutionRows to keep that
-// function under the cyclomatic limit.
-func applyExecutionNullableTimes(exec *PurchaseExecution, notifSent, completedAt, expiresAt, tokenExpiresAt, executedAt sql.NullTime) {
-	if notifSent.Valid {
-		exec.NotificationSent = &notifSent.Time
+// GetScheduledExecutionsDue returns purchase_executions with status='scheduled'
+// whose scheduled_execution_at has elapsed (scheduled_execution_at <= NOW()).
+// Used by the Gmail-style pre-fire delay scheduler tick (issue #291 wave-2).
+// Results are ordered oldest-due-first so the scheduler fires them in FIFO order.
+// Capped at MaxListLimit per sweep to bound the per-tick blast radius.
+func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]PurchaseExecution, error) {
+	query := `
+		SELECT plan_id, execution_id, status, step_number, scheduled_date,
+		       notification_sent, approval_token, recommendations,
+		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
+		       cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+		       created_by_user_id, retry_execution_id, retry_attempt_n,
+		       approval_token_expires_at,
+		       executed_by_user_id, executed_at, pre_approval_skip_reason,
+		       idempotency_key, scheduled_execution_at
+		FROM purchase_executions
+		WHERE status = 'scheduled'
+		  AND scheduled_execution_at IS NOT NULL
+		  AND scheduled_execution_at <= NOW()
+		ORDER BY scheduled_execution_at ASC
+		LIMIT $1
+	`
+	rows, err := s.db.Query(ctx, query, MaxListLimit)
+	if err != nil {
+		return nil, fmt.Errorf("GetScheduledExecutionsDue: query failed: %w", err)
 	}
-	if completedAt.Valid {
-		exec.CompletedAt = &completedAt.Time
-	}
-	if expiresAt.Valid {
-		exec.TTL = ttlFromTime(expiresAt.Time)
-	}
-	if tokenExpiresAt.Valid {
-		exec.ApprovalTokenExpiresAt = &tokenExpiresAt.Time
-	}
-	if executedAt.Valid {
-		exec.ExecutedAt = &executedAt.Time
-	}
+	defer rows.Close()
+	return scanExecutionRows(rows)
 }
 
 // CleanupOldExecutions deletes purchase executions older than retentionDays.
@@ -1434,8 +1542,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
 			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			source, revocation_window_closes_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -1457,6 +1565,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		record.RampStep,
 		record.CloudAccountID,
 		record.Source,
+		record.RevocationWindowClosesAt,
 	)
 
 	if err != nil {
@@ -1471,7 +1580,8 @@ func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history
 		WHERE account_id = $1
 		ORDER BY timestamp DESC
@@ -1486,7 +1596,8 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history
 		ORDER BY timestamp DESC
 		LIMIT $1
@@ -1643,7 +1754,8 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	query := fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history%s
 		ORDER BY timestamp DESC
 		LIMIT $%d
@@ -1652,7 +1764,16 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	return s.queryPurchaseHistory(ctx, query, args...)
 }
 
-// queryPurchaseHistory is a helper to query and scan purchase history
+// queryPurchaseHistory is a helper to query and scan purchase history.
+// The query must SELECT the following columns in order:
+//
+//	account_id, purchase_id, timestamp, provider, service, region,
+//	resource_type, count, term, payment, upfront_cost, monthly_cost,
+//	estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+//
+// The revocation columns were added in migration 000057. Queries must
+// include them explicitly so the Scan targets stay in sync.
 func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1665,6 +1786,8 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		var record PurchaseHistoryRecord
 		var planID, planName, cloudAccountID sql.NullString
 		var monthlyCost sql.NullFloat64
+		var revocationWindowClosesAt, revokedAt *time.Time
+		var revokedVia, supportCaseID sql.NullString
 
 		err := rows.Scan(
 			&record.AccountID,
@@ -1684,6 +1807,10 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 			&planName,
 			&record.RampStep,
 			&cloudAccountID,
+			&revocationWindowClosesAt,
+			&revokedAt,
+			&revokedVia,
+			&supportCaseID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
@@ -1706,11 +1833,257 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 		if cloudAccountID.Valid {
 			record.CloudAccountID = &cloudAccountID.String
 		}
+		record.RevocationWindowClosesAt = revocationWindowClosesAt
+		record.RevokedAt = revokedAt
+		if revokedVia.Valid {
+			record.RevokedVia = revokedVia.String
+		}
+		if supportCaseID.Valid {
+			record.SupportCaseID = supportCaseID.String
+		}
 
 		records = append(records, record)
 	}
 
 	return records, rows.Err()
+}
+
+// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
+// whose purchase_id matches purchaseID. Returns (nil, nil) when the row
+// does not exist. The revocation-window columns (revocation_window_closes_at,
+// revoked_at, revoked_via, support_case_id) are read alongside the base
+// columns so the revoke endpoint can check idempotency without a second round
+// trip (issue #290).
+func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
+	query := `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       revocation_in_flight
+		FROM purchase_history
+		WHERE purchase_id = $1
+		LIMIT 1
+	`
+	rows, err := s.db.Query(ctx, query, purchaseID)
+	if err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+
+	var r PurchaseHistoryRecord
+	var planID, planName, cloudAccountID sql.NullString
+	var revocationWindowClosesAt, revokedAt *time.Time
+	var revokedVia, supportCaseID sql.NullString
+
+	if err := rows.Scan(
+		&r.AccountID,
+		&r.PurchaseID,
+		&r.Timestamp,
+		&r.Provider,
+		&r.Service,
+		&r.Region,
+		&r.ResourceType,
+		&r.Count,
+		&r.Term,
+		&r.Payment,
+		&r.UpfrontCost,
+		&r.MonthlyCost,
+		&r.EstimatedSavings,
+		&planID,
+		&planName,
+		&r.RampStep,
+		&cloudAccountID,
+		&revocationWindowClosesAt,
+		&revokedAt,
+		&revokedVia,
+		&supportCaseID,
+		&r.RevocationInFlight,
+	); err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
+	}
+
+	if planID.Valid {
+		r.PlanID = planID.String
+	}
+	if planName.Valid {
+		r.PlanName = planName.String
+	}
+	if cloudAccountID.Valid {
+		r.CloudAccountID = &cloudAccountID.String
+	}
+	r.RevocationWindowClosesAt = revocationWindowClosesAt
+	r.RevokedAt = revokedAt
+	if revokedVia.Valid {
+		r.RevokedVia = revokedVia.String
+	}
+	if supportCaseID.Valid {
+		r.SupportCaseID = supportCaseID.String
+	}
+
+	return &r, rows.Err()
+}
+
+// MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id and
+// the refund-quote audit columns (calc_refund_amount, calc_refund_currency) on
+// the purchase_history row identified by purchaseID. The UPDATE is a no-op
+// when revoked_at is already non-null (idempotency guard). Returns a not-found
+// error when zero rows are affected and revoked_at was previously NULL.
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+	var supportCaseIDPtr *string
+	if supportCaseID != "" {
+		supportCaseIDPtr = &supportCaseID
+	}
+	var calcCurrencyPtr *string
+	if calcRefundCurrency != "" {
+		calcCurrencyPtr = &calcRefundCurrency
+	}
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revoked_at            = $2,
+		       revoked_via           = $3,
+		       support_case_id       = $4,
+		       calc_refund_amount    = $5,
+		       calc_refund_currency  = $6
+		 WHERE purchase_id = $1
+		   AND revoked_at IS NULL
+	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr, calcRefundAmount, calcCurrencyPtr)
+	if err != nil {
+		return fmt.Errorf("MarkPurchaseRevoked: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Either no row found or already revoked — check which.
+		var exists bool
+		err2 := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM purchase_history WHERE purchase_id=$1)`, purchaseID).Scan(&exists)
+		if err2 != nil {
+			return fmt.Errorf("MarkPurchaseRevoked existence check: %w", err2)
+		}
+		if !exists {
+			return fmt.Errorf("MarkPurchaseRevoked: purchase_id %q not found", purchaseID)
+		}
+		// Already revoked — idempotent, treat as success.
+	}
+	return nil
+}
+
+// FlipPurchaseRevocationInFlight sets revocation_in_flight=true on the
+// purchase_history row for purchaseID. Called immediately before the Azure
+// Return API call to enable partial-success reconciliation (issue #290
+// Finding #6). Idempotent: already-true rows are not modified. Returns a
+// not-found error when no row matches.
+func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revocation_in_flight = true
+		 WHERE purchase_id = $1
+	`, purchaseID)
+	if err != nil {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q not found", purchaseID)
+	}
+	return nil
+}
+
+// ClearRevocationInFlight sets revocation_in_flight=false on a purchase_history
+// row. Called when the Azure Return call fails transiently (before Azure actually
+// issued a refund) so the row is not left stuck in the in-flight state, which
+// would mislead the finalize_revocations sweep into thinking Azure succeeded
+// (issue #290, second-wave CR Finding D). No-op when already false.
+func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_history
+		   SET revocation_in_flight = false
+		 WHERE purchase_id = $1
+	`, purchaseID)
+	if err != nil {
+		return fmt.Errorf("ClearRevocationInFlight: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("ClearRevocationInFlight: purchase_id %q not found", purchaseID)
+	}
+	return nil
+}
+
+// GetPurchaseHistoryInFlight returns all purchase_history rows with
+// revocation_in_flight=true and revoked_at IS NULL. Used by the
+// finalize_revocations scheduled sweep to retry MarkPurchaseRevoked for rows
+// where the Azure Return succeeded but the subsequent DB write failed
+// (issue #290 Finding #6).
+func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		FROM purchase_history
+		WHERE revocation_in_flight = true
+		  AND revoked_at IS NULL
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("GetPurchaseHistoryInFlight: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*PurchaseHistoryRecord
+	for rows.Next() {
+		var r PurchaseHistoryRecord
+		var planID, planName, cloudAccountID sql.NullString
+		var revocationWindowClosesAt, revokedAt *time.Time
+		var revokedVia, supportCaseID sql.NullString
+
+		if err := rows.Scan(
+			&r.AccountID,
+			&r.PurchaseID,
+			&r.Timestamp,
+			&r.Provider,
+			&r.Service,
+			&r.Region,
+			&r.ResourceType,
+			&r.Count,
+			&r.Term,
+			&r.Payment,
+			&r.UpfrontCost,
+			&r.MonthlyCost,
+			&r.EstimatedSavings,
+			&planID,
+			&planName,
+			&r.RampStep,
+			&cloudAccountID,
+			&revocationWindowClosesAt,
+			&revokedAt,
+			&revokedVia,
+			&supportCaseID,
+		); err != nil {
+			return nil, fmt.Errorf("GetPurchaseHistoryInFlight scan: %w", err)
+		}
+
+		if planID.Valid {
+			r.PlanID = planID.String
+		}
+		if planName.Valid {
+			r.PlanName = planName.String
+		}
+		if cloudAccountID.Valid {
+			r.CloudAccountID = &cloudAccountID.String
+		}
+		r.RevocationWindowClosesAt = revocationWindowClosesAt
+		r.RevokedAt = revokedAt
+		if revokedVia.Valid {
+			r.RevokedVia = revokedVia.String
+		}
+		if supportCaseID.Valid {
+			r.SupportCaseID = supportCaseID.String
+		}
+		r.RevocationInFlight = true
+		result = append(result, &r)
+	}
+	return result, rows.Err()
 }
 
 // ==========================================

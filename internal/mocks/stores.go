@@ -10,13 +10,55 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockConfigStore is a mock implementation of config.Store
+// MockConfigStore is a shared testify-based mock for config.StoreInterface.
+//
+// Most methods dispatch through m.Called only when an expectation has been
+// registered via .On(). Methods that pre-existing tests call implicitly
+// (without expectations) default to sensible zero-values so those tests
+// keep working without changes. The "default or dispatch" behaviour is
+// controlled by the isExpected helper at the bottom of this file.
+//
+// Fn-override fields allow tests to inject behaviour without registering
+// testify expectations. The precedence order for every overridable method is:
+//  1. FnField (non-nil closure wins first)
+//  2. Registered .On() expectation (dispatches through m.Called)
+//  3. Hardcoded default (zero-value / sensible stub)
 type MockConfigStore struct {
 	mock.Mock
+
+	// GetCloudAccountFn overrides GetCloudAccount when non-nil.
+	GetCloudAccountFn func(ctx context.Context, id string) (*config.CloudAccount, error)
+	// GetCloudAccountByExternalIDFn overrides GetCloudAccountByExternalID when non-nil.
+	GetCloudAccountByExternalIDFn func(ctx context.Context, provider, externalID string) (*config.CloudAccount, error)
+	// DeleteCloudAccountFn overrides DeleteCloudAccount when non-nil.
+	DeleteCloudAccountFn func(ctx context.Context, id string) error
+	// ListCloudAccountsFn overrides ListCloudAccounts when non-nil.
+	ListCloudAccountsFn func(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error)
+	// CreateCloudAccountFn overrides CreateCloudAccount when non-nil.
+	CreateCloudAccountFn func(ctx context.Context, account *config.CloudAccount) error
+	// GetPurchasePlanFn overrides GetPurchasePlan when non-nil.
+	GetPurchasePlanFn func(ctx context.Context, planID string) (*config.PurchasePlan, error)
+	// SetPlanAccountsFn overrides SetPlanAccounts when non-nil.
+	SetPlanAccountsFn func(ctx context.Context, planID string, accountIDs []string) error
+	// GetPlanAccountsFn overrides GetPlanAccounts when non-nil.
+	GetPlanAccountsFn func(ctx context.Context, planID string) ([]config.CloudAccount, error)
+	// SaveAccountServiceOverrideFn overrides SaveAccountServiceOverride when non-nil.
+	SaveAccountServiceOverrideFn func(ctx context.Context, override *config.AccountServiceOverride) error
+	// CountPendingExecutionsForAccountFn overrides CountPendingExecutionsForAccount when non-nil.
+	CountPendingExecutionsForAccountFn func(ctx context.Context, accountID string) (int, error)
+	// ListPendingExecutionIDsForAccountFn overrides ListPendingExecutionIDsForAccount when non-nil.
+	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
+	// SavePurchaseExecutionFn overrides SavePurchaseExecution when non-nil.
+	SavePurchaseExecutionFn func(ctx context.Context, exec *config.PurchaseExecution) error
 }
 
-// GetGlobalConfig mocks the GetGlobalConfig operation
+// GetGlobalConfig mocks the GetGlobalConfig operation. Returns an empty
+// GlobalConfig when no expectation is registered so callers that only
+// need default field values don't require explicit mock setup.
 func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
+	if !isExpected(&m.Mock, "GetGlobalConfig") {
+		return &config.GlobalConfig{}, nil
+	}
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -60,8 +102,17 @@ func (m *MockConfigStore) CreatePurchasePlan(ctx context.Context, plan *config.P
 	return args.Error(0)
 }
 
-// GetPurchasePlan mocks the GetPurchasePlan operation
+// GetPurchasePlan mocks the GetPurchasePlan operation. When GetPurchasePlanFn is
+// non-nil it takes priority. When no expectation is registered a minimal plan
+// stub {ID: planID} is returned so tests that don't care about the plan fields
+// keep working without explicit setup.
 func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*config.PurchasePlan, error) {
+	if m.GetPurchasePlanFn != nil {
+		return m.GetPurchasePlanFn(ctx, planID)
+	}
+	if !isExpected(&m.Mock, "GetPurchasePlan") {
+		return &config.PurchasePlan{ID: planID}, nil
+	}
 	args := m.Called(ctx, planID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -108,8 +159,12 @@ func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.P
 	return args.Get(0).([]config.PurchasePlan), args.Error(1)
 }
 
-// SavePurchaseExecution mocks the SavePurchaseExecution operation
+// SavePurchaseExecution mocks the SavePurchaseExecution operation.
+// SavePurchaseExecutionFn takes priority when non-nil.
 func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *config.PurchaseExecution) error {
+	if m.SavePurchaseExecutionFn != nil {
+		return m.SavePurchaseExecutionFn(ctx, exec)
+	}
 	args := m.Called(ctx, exec)
 	return args.Error(0)
 }
@@ -124,7 +179,29 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 }
 
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
+// Defaults to (true, "cancelled", nil) when no expectation is registered
+// so tests that only need the happy path don't require explicit mock setup.
+// Tests exercising the CAS-race path (zero rows affected) register an
+// expectation that returns (false, <racing_status>, nil).
 func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	if !isExpected(&m.Mock, "CancelExecutionAtomic") {
+		return true, "cancelled", nil
+	}
+	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+// CancelScheduledExecutionAtomic mocks the CancelScheduledExecutionAtomic
+// operation (Gmail-style pre-fire delay revoke, issue #290 wave-2). Default
+// is the happy path (true, "cancelled", nil) so the scheduled-revoke tests
+// inherit the same low-ceremony pattern as CancelExecutionAtomic above.
+// Tests exercising the CAS-race path (scheduler tick already fired) register
+// an expectation that returns (false, <racing_status>, nil), typically
+// (false, "approved", nil) to simulate the scheduler winning the race.
+func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	if !isExpected(&m.Mock, "CancelScheduledExecutionAtomic") {
+		return true, "cancelled", nil
+	}
 	args := m.Called(ctx, tx, executionID, cancelledBy)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
@@ -156,14 +233,28 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
-// CountPendingExecutionsForAccount mocks the CountPendingExecutionsForAccount operation
+// CountPendingExecutionsForAccount mocks the CountPendingExecutionsForAccount operation.
+// Defaults to (0, nil) when no Fn is set and no expectation is registered.
 func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	if m.CountPendingExecutionsForAccountFn != nil {
+		return m.CountPendingExecutionsForAccountFn(ctx, accountID)
+	}
+	if !isExpected(&m.Mock, "CountPendingExecutionsForAccount") {
+		return 0, nil
+	}
 	args := m.Called(ctx, accountID)
 	return args.Int(0), args.Error(1)
 }
 
-// ListPendingExecutionIDsForAccount mocks the ListPendingExecutionIDsForAccount operation
+// ListPendingExecutionIDsForAccount mocks the ListPendingExecutionIDsForAccount operation.
+// Defaults to (nil, nil) when no Fn is set and no expectation is registered.
 func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	if m.ListPendingExecutionIDsForAccountFn != nil {
+		return m.ListPendingExecutionIDsForAccountFn(ctx, accountID)
+	}
+	if !isExpected(&m.Mock, "ListPendingExecutionIDsForAccount") {
+		return nil, nil
+	}
 	args := m.Called(ctx, accountID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -211,6 +302,52 @@ func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+}
+
+// GetPurchaseHistoryByPurchaseID mocks the GetPurchaseHistoryByPurchaseID operation (issue #290).
+func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx, purchaseID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.PurchaseHistoryRecord), args.Error(1)
+}
+
+// MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
+func (m *MockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+	args := m.Called(ctx, purchaseID, revokedAt, revokedVia, supportCaseID, calcRefundAmount, calcRefundCurrency)
+	return args.Error(0)
+}
+
+// FlipPurchaseRevocationInFlight mocks FlipPurchaseRevocationInFlight (issue #290 Finding #6).
+// Uses the isExpected default-or-dispatch pattern: tests that only verify
+// MarkPurchaseRevoked do not need to set an expectation for this best-effort call.
+func (m *MockConfigStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	if !isExpected(&m.Mock, "FlipPurchaseRevocationInFlight") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
+// ClearRevocationInFlight mocks ClearRevocationInFlight (issue #290 second-wave CR Finding D).
+// Uses the isExpected default-or-dispatch pattern: tests that only test error paths
+// where Azure never actually returned do not need to register an expectation.
+func (m *MockConfigStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
+	if !isExpected(&m.Mock, "ClearRevocationInFlight") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
+// GetPurchaseHistoryInFlight mocks GetPurchaseHistoryInFlight (issue #290 Finding #6).
+func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*config.PurchaseHistoryRecord), args.Error(1)
 }
 
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
@@ -486,11 +623,26 @@ func (m *MockAuthStore) Ping(ctx context.Context) error {
 // Cloud accounts
 
 func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	if m.CreateCloudAccountFn != nil {
+		return m.CreateCloudAccountFn(ctx, account)
+	}
+	if !isExpected(&m.Mock, "CreateCloudAccount") {
+		return nil
+	}
 	args := m.Called(ctx, account)
 	return args.Error(0)
 }
 
+// GetCloudAccount defaults to returning a minimal stub {ID: id} when no Fn is
+// set and no expectation is registered, so tests that don't care about account
+// fields keep working without explicit setup.
 func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
+	if m.GetCloudAccountFn != nil {
+		return m.GetCloudAccountFn(ctx, id)
+	}
+	if !isExpected(&m.Mock, "GetCloudAccount") {
+		return &config.CloudAccount{ID: id, Provider: "aws", AWSAuthMode: "access_keys"}, nil
+	}
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -499,6 +651,12 @@ func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*conf
 }
 
 func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
+	if m.GetCloudAccountByExternalIDFn != nil {
+		return m.GetCloudAccountByExternalIDFn(ctx, provider, externalID)
+	}
+	if !isExpected(&m.Mock, "GetCloudAccountByExternalID") {
+		return nil, nil
+	}
 	args := m.Called(ctx, provider, externalID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -507,16 +665,31 @@ func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provi
 }
 
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
+	if !isExpected(&m.Mock, "UpdateCloudAccount") {
+		return nil
+	}
 	args := m.Called(ctx, account)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) DeleteCloudAccount(ctx context.Context, id string) error {
+	if m.DeleteCloudAccountFn != nil {
+		return m.DeleteCloudAccountFn(ctx, id)
+	}
+	if !isExpected(&m.Mock, "DeleteCloudAccount") {
+		return nil
+	}
 	args := m.Called(ctx, id)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	if m.ListCloudAccountsFn != nil {
+		return m.ListCloudAccountsFn(ctx, filter)
+	}
+	if !isExpected(&m.Mock, "ListCloudAccounts") {
+		return nil, nil
+	}
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -527,21 +700,33 @@ func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.C
 // Account credentials
 
 func (m *MockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
+	if !isExpected(&m.Mock, "SaveAccountCredential") {
+		return nil
+	}
 	args := m.Called(ctx, accountID, credentialType, encryptedBlob)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
+	if !isExpected(&m.Mock, "GetAccountCredential") {
+		return "", nil
+	}
 	args := m.Called(ctx, accountID, credentialType)
 	return args.String(0), args.Error(1)
 }
 
 func (m *MockConfigStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
+	if !isExpected(&m.Mock, "DeleteAccountCredentials") {
+		return nil
+	}
 	args := m.Called(ctx, accountID)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
+	if !isExpected(&m.Mock, "HasAccountCredentials") {
+		return false, nil
+	}
 	args := m.Called(ctx, accountID)
 	return args.Bool(0), args.Error(1)
 }
@@ -549,6 +734,9 @@ func (m *MockConfigStore) HasAccountCredentials(ctx context.Context, accountID s
 // Account service overrides
 
 func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
+	if !isExpected(&m.Mock, "GetAccountServiceOverride") {
+		return nil, nil
+	}
 	args := m.Called(ctx, accountID, provider, service)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -557,16 +745,28 @@ func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, account
 }
 
 func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
+	if m.SaveAccountServiceOverrideFn != nil {
+		return m.SaveAccountServiceOverrideFn(ctx, override)
+	}
+	if !isExpected(&m.Mock, "SaveAccountServiceOverride") {
+		return nil
+	}
 	args := m.Called(ctx, override)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
+	if !isExpected(&m.Mock, "DeleteAccountServiceOverride") {
+		return nil
+	}
 	args := m.Called(ctx, accountID, provider, service)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
+	if !isExpected(&m.Mock, "ListAccountServiceOverrides") {
+		return nil, nil
+	}
 	args := m.Called(ctx, accountID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -577,11 +777,23 @@ func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accou
 // Plan ↔ account association
 
 func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	if m.SetPlanAccountsFn != nil {
+		return m.SetPlanAccountsFn(ctx, planID, accountIDs)
+	}
+	if !isExpected(&m.Mock, "SetPlanAccounts") {
+		return nil
+	}
 	args := m.Called(ctx, planID, accountIDs)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
+	if m.GetPlanAccountsFn != nil {
+		return m.GetPlanAccountsFn(ctx, planID)
+	}
+	if !isExpected(&m.Mock, "GetPlanAccounts") {
+		return nil, nil
+	}
 	args := m.Called(ctx, planID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -596,18 +808,31 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 }
 
 // Recommendations cache
+// These methods default to zero-value returns when no .On() expectation is
+// registered — they were opt-in in the per-package mocks and many callers
+// don't set expectations for them. Tests that want to assert on these paths
+// register an explicit expectation via .On(...).Return(...).
 
 func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
+	if !isExpected(&m.Mock, "ReplaceRecommendations") {
+		return nil
+	}
 	args := m.Called(ctx, collectedAt, recs)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
+	if !isExpected(&m.Mock, "UpsertRecommendations") {
+		return nil
+	}
 	args := m.Called(ctx, collectedAt, recs, successfulCollects)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	if !isExpected(&m.Mock, "ListStoredRecommendations") {
+		return nil, nil
+	}
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -616,6 +841,9 @@ func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter 
 }
 
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	if !isExpected(&m.Mock, "GetRecommendationsFreshness") {
+		return &config.RecommendationsFreshness{}, nil
+	}
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -624,11 +852,17 @@ func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*con
 }
 
 func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
+	if !isExpected(&m.Mock, "SetRecommendationsCollectionError") {
+		return nil
+	}
 	args := m.Called(ctx, errMsg)
 	return args.Error(0)
 }
 
 func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
+	if !isExpected(&m.Mock, "GetRIUtilizationCache") {
+		return nil, nil
+	}
 	args := m.Called(ctx, region, lookbackDays)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -637,6 +871,9 @@ func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region stri
 }
 
 func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
+	if !isExpected(&m.Mock, "UpsertRIUtilizationCache") {
+		return nil
+	}
 	args := m.Called(ctx, region, lookbackDays, payload, fetchedAt)
 	return args.Error(0)
 }
@@ -766,6 +1003,81 @@ func (m *MockConfigStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) 
 	return fn(nil)
 }
 
+// GetExecutionsByStatuses mocks the GetExecutionsByStatuses operation.
+func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+// GetPlannedExecutions mocks the GetPlannedExecutions operation.
+func (m *MockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+// GetStaleApprovedExecutions mocks the GetStaleApprovedExecutions operation.
+func (m *MockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+// ListStuckExecutions mocks the ListStuckExecutions operation.
+func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
+	args := m.Called(ctx, statuses, olderThan)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+// GetScheduledExecutionsDue mocks the GetScheduledExecutionsDue operation.
+// Defaults to (nil, nil) when no expectation is registered so existing scheduler
+// tests that don't exercise the pre-fire delay path keep working without changes.
+func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]config.PurchaseExecution, error) {
+	if !isExpected(&m.Mock, "GetScheduledExecutionsDue") {
+		return nil, nil
+	}
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+}
+
+// MarkCollectionStarted mocks the MarkCollectionStarted operation.
+// Defaults to (true, nil) when no expectation is registered.
+func (m *MockConfigStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
+	if !isExpected(&m.Mock, "MarkCollectionStarted") {
+		return true, nil
+	}
+	args := m.Called(ctx)
+	return args.Bool(0), args.Error(1)
+}
+
+// ClearCollectionStarted mocks the ClearCollectionStarted operation.
+// Defaults to nil when no expectation is registered.
+func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
+	if !isExpected(&m.Mock, "ClearCollectionStarted") {
+		return nil
+	}
+	return m.Called(ctx).Error(0)
+}
+
+// StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.
+func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+	args := m.Called(ctx, id, approverEmail)
+	return args.Error(0)
+}
+
 // isExpected reports whether mock has any .On() expectation for method.
 func isExpected(mock *mock.Mock, method string) bool {
 	for _, call := range mock.ExpectedCalls {
@@ -776,5 +1088,6 @@ func isExpected(mock *mock.Mock, method string) bool {
 	return false
 }
 
-// Compile-time interface compliance check
+// Compile-time interface compliance checks
+var _ config.StoreInterface = (*MockConfigStore)(nil)
 var _ auth.StoreInterface = (*MockAuthStore)(nil)

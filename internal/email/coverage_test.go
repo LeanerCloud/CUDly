@@ -1319,6 +1319,20 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 		require.ErrorIs(t, err, ErrNoRecipient)
 	})
 
+	t.Run("PurchaseScheduledDelay_no_recipient", func(t *testing.T) {
+		// The pre-fire delay email embeds a live, execution-scoped revoke link.
+		// With an empty RecipientEmail it must return ErrNoRecipient, NOT fall
+		// back to the broadcast SendNotification path (which would leak the
+		// revoke link to every alert subscriber -- issue #290 CR).
+		err := sender.SendPurchaseScheduledNotification(ctx, NotificationData{
+			DashboardURL: "https://test.com",
+			ExecutionID:  "exec-1",
+			RevokeURL:    "https://test.com/purchases#history?execution=exec-1",
+			// RecipientEmail intentionally empty
+		})
+		require.ErrorIs(t, err, ErrNoRecipient)
+	})
+
 	t.Run("PurchaseConfirmation_propagates_error", func(t *testing.T) {
 		err := sender.SendPurchaseConfirmation(ctx, NotificationData{
 			DashboardURL: "https://test.com",

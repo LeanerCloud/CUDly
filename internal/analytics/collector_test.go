@@ -119,9 +119,11 @@ func (m *mockAnalyticsStore) Close() error {
 
 // mockConfigStore implements config.StoreInterface for testing
 type mockConfigStore struct {
-	getPurchaseHistoryFunc       func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
-	getAllPurchaseHistoryFunc    func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
-	getActivePurchaseHistoryFunc func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
+	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
+	getAllPurchaseHistoryFunc          func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
+	getActivePurchaseHistoryFunc       func(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error)
+	getPurchaseHistoryByPurchaseIDFunc func(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error)
+	markPurchaseRevokedFunc            func(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string) error
 }
 
 func (m *mockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -229,6 +231,36 @@ func (m *mockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	return nil, nil
 }
 
+func (m *mockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*config.PurchaseHistoryRecord, error) {
+	if m.getPurchaseHistoryByPurchaseIDFunc != nil {
+		return m.getPurchaseHistoryByPurchaseIDFunc(ctx, purchaseID)
+	}
+	return nil, nil
+}
+
+func (m *mockConfigStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, _ *float64, _ string) error {
+	if m.markPurchaseRevokedFunc != nil {
+		return m.markPurchaseRevokedFunc(ctx, purchaseID, revokedAt, revokedVia, supportCaseID)
+	}
+	return nil
+}
+
+func (m *mockConfigStore) FlipPurchaseRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStore) ClearRevocationInFlight(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockConfigStore) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	return 0, nil
 }
@@ -246,6 +278,10 @@ func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 }
 
 func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
+func (m *mockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }
 

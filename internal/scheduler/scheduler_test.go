@@ -10,12 +10,12 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/email"
+	"github.com/LeanerCloud/CUDly/internal/mocks"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -34,455 +34,9 @@ func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, nam
 	return args.Get(0).(provider.Provider), args.Error(1)
 }
 
-// MockConfigStore is a mock implementation of config.Store
-type MockConfigStore struct {
-	mock.Mock
-}
-
-func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.GlobalConfig), args.Error(1)
-}
-
-func (m *MockConfigStore) SaveGlobalConfig(ctx context.Context, cfg *config.GlobalConfig) error {
-	args := m.Called(ctx, cfg)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, service string) (*config.ServiceConfig, error) {
-	args := m.Called(ctx, provider, service)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.ServiceConfig), args.Error(1)
-}
-
-func (m *MockConfigStore) SaveServiceConfig(ctx context.Context, cfg *config.ServiceConfig) error {
-	args := m.Called(ctx, cfg)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.ServiceConfig, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.ServiceConfig), args.Error(1)
-}
-
-func (m *MockConfigStore) CreatePurchasePlan(ctx context.Context, plan *config.PurchasePlan) error {
-	args := m.Called(ctx, plan)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*config.PurchasePlan, error) {
-	args := m.Called(ctx, planID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.PurchasePlan), args.Error(1)
-}
-
-func (m *MockConfigStore) UpdatePurchasePlan(ctx context.Context, plan *config.PurchasePlan) error {
-	args := m.Called(ctx, plan)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
-	args := m.Called(ctx, planID)
-	return args.Error(0)
-}
-
-// UpdatePurchasePlanTx falls back to UpdatePurchasePlan when no
-// expectation is registered. When an expectation is registered, the
-// transaction is forwarded to m.Called so test expectations can match
-// on the (ctx, tx, plan) tuple — mirroring the canonical mock in
-// internal/mocks/stores.go.
-func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) error {
-	for _, call := range m.ExpectedCalls {
-		if call.Method == "UpdatePurchasePlanTx" {
-			args := m.Called(ctx, tx, plan)
-			return args.Error(0)
-		}
-	}
-	return m.UpdatePurchasePlan(ctx, plan)
-}
-
-func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
-	args := m.Called(ctx, planID)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.PurchasePlanFilter) ([]config.PurchasePlan, error) {
-	args := m.Called(ctx, filter)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchasePlan), args.Error(1)
-}
-
-func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *config.PurchaseExecution) error {
-	args := m.Called(ctx, exec)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.PurchaseExecution, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
-	args := m.Called(ctx, statuses, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
-	args := m.Called(ctx, statuses, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
-	args := m.Called(ctx, olderThan)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) SavePurchaseHistory(ctx context.Context, record *config.PurchaseHistoryRecord) error {
-	args := m.Called(ctx, record)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error) {
-	args := m.Called(ctx, accountID, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error) {
-	args := m.Called(ctx, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
-	args := m.Called(ctx, asOf)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter config.PurchaseHistoryFilter) ([]config.PurchaseHistoryRecord, error) {
-	args := m.Called(ctx, filter)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
-	args := m.Called(ctx, executionID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*config.PurchaseExecution, error) {
-	args := m.Called(ctx, planID, scheduledDate)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
-	args := m.Called(ctx, retentionDays)
-	return args.Get(0).(int64), args.Error(1)
-}
-
-func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
-	args := m.Called(ctx, accountID)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
-	args := m.Called(ctx, accountID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]string), args.Error(1)
-}
-
-func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*config.PurchaseExecution, error) {
-	args := m.Called(ctx, executionID, fromStatuses, toStatus)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
-	args := m.Called(ctx, tx, executionID, cancelledBy)
-	return args.Bool(0), args.String(1), args.Error(2)
-}
-
-func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]config.PurchaseExecution, error) {
-	args := m.Called(ctx, statuses, olderThan)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
-}
-
-func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
-	args := m.Called(ctx, record)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
-	args := m.Called(ctx, id)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*config.RIExchangeRecord, error) {
-	args := m.Called(ctx, token)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
-	args := m.Called(ctx, since, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*config.RIExchangeRecord, error) {
-	args := m.Called(ctx, id, fromStatus, toStatus)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
-	args := m.Called(ctx, id, exchangeID)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
-	args := m.Called(ctx, id, errorMsg)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
-	args := m.Called(ctx, id, approverEmail)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
-	args := m.Called(ctx, date)
-	return args.String(0), args.Error(1)
-}
-
-func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(int64), args.Error(1)
-}
-
-func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
-	args := m.Called(ctx, olderThan)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
-}
-
-func (m *MockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
-	return nil
-}
-func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
-	// Default returns (nil, nil); tests that exercise the ambient
-	// host-account tagging path set an explicit expectation via .On().
-	if m.hasExpectation("GetCloudAccountByExternalID") {
-		args := m.Called(ctx, provider, externalID)
-		if args.Get(0) == nil {
-			return nil, args.Error(1)
-		}
-		return args.Get(0).(*config.CloudAccount), args.Error(1)
-	}
-	return nil, nil
-}
-func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
-	return nil
-}
-func (m *MockConfigStore) DeleteCloudAccount(ctx context.Context, id string) error {
-	return nil
-}
-func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error {
-	return nil
-}
-func (m *MockConfigStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
-	return "", nil
-}
-func (m *MockConfigStore) DeleteAccountCredentials(ctx context.Context, accountID string) error {
-	return nil
-}
-func (m *MockConfigStore) HasAccountCredentials(ctx context.Context, accountID string) (bool, error) {
-	return false, nil
-}
-func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*config.AccountServiceOverride, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
-	return nil
-}
-func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
-	return nil
-}
-func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accountID string) ([]config.AccountServiceOverride, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
-	return nil
-}
-func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) CreateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
-	return nil
-}
-func (m *MockConfigStore) GetAccountRegistration(_ context.Context, _ string) (*config.AccountRegistration, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) GetAccountRegistrationByToken(_ context.Context, _ string) (*config.AccountRegistration, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) ListAccountRegistrations(_ context.Context, _ config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config.AccountRegistration) error {
-	return nil
-}
-func (m *MockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string) error {
-	return nil
-}
-func (m *MockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
-	return nil
-}
-
-// hasExpectation reports whether the test registered an expectation for the
-// given method. Lets the recommendations-cache stubs below default to
-// returning zero-values for pre-existing tests that predate the cache and
-// don't care about these methods, while still letting new tests assert via
-// .On(...).Return(...).
-func (m *MockConfigStore) hasExpectation(method string) bool {
-	for i := range m.ExpectedCalls {
-		if m.ExpectedCalls[i].Method == method {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	if !m.hasExpectation("ReplaceRecommendations") {
-		return nil
-	}
-	return m.Called(ctx, collectedAt, recs).Error(0)
-}
-func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
-	if !m.hasExpectation("UpsertRecommendations") {
-		return nil
-	}
-	return m.Called(ctx, collectedAt, recs, successfulCollects).Error(0)
-}
-func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
-	if !m.hasExpectation("ListStoredRecommendations") {
-		return nil, nil
-	}
-	args := m.Called(ctx, filter)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
-}
-func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
-	if !m.hasExpectation("GetRecommendationsFreshness") {
-		return &config.RecommendationsFreshness{}, nil
-	}
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.RecommendationsFreshness), args.Error(1)
-}
-func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
-	if !m.hasExpectation("SetRecommendationsCollectionError") {
-		return nil
-	}
-	return m.Called(ctx, errMsg).Error(0)
-}
-func (m *MockConfigStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
-	if !m.hasExpectation("MarkCollectionStarted") {
-		return true, nil
-	}
-	args := m.Called(ctx)
-	return args.Bool(0), args.Error(1)
-}
-func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context) error {
-	if !m.hasExpectation("ClearCollectionStarted") {
-		return nil
-	}
-	return m.Called(ctx).Error(0)
-}
-func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
-	if !m.hasExpectation("GetRIUtilizationCache") {
-		return nil, nil
-	}
-	args := m.Called(ctx, region, lookbackDays)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.RIUtilizationCacheEntry), args.Error(1)
-}
-func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
-	if !m.hasExpectation("UpsertRIUtilizationCache") {
-		return nil
-	}
-	return m.Called(ctx, region, lookbackDays, payload, fetchedAt).Error(0)
-}
+// MockConfigStore is the shared testify mock for config.StoreInterface.
+// All default behaviours and Fn-override fields live in internal/mocks.
+type MockConfigStore = mocks.MockConfigStore
 
 // MockEmailSender is a mock implementation of email.Sender
 type MockEmailSender struct {
@@ -552,6 +106,9 @@ func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
+func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
 func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }
@@ -578,6 +135,40 @@ func (m *MockPurchaseManager) SendUpcomingPurchaseNotifications(ctx context.Cont
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*purchase.NotificationResult), args.Error(1)
+}
+
+func (m *MockPurchaseManager) FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*purchase.FireResult), args.Error(1)
+}
+
+// TestSchedulerManagerInterface_FireScheduledDelayedPurchasesWired is a
+// wiring smoke test: it asserts that ManagerInterface exposes
+// FireScheduledDelayedPurchases and that MockPurchaseManager satisfies the
+// contract. If the method is ever removed from the interface or the mock,
+// this test fails to compile.
+//
+// The dispatch itself (ManagerInterface.FireScheduledDelayedPurchases ->
+// scheduler tick "fire_scheduled_purchases") is exercised by the
+// server/handler_test.go "fire_scheduled_purchases success" case.
+func TestSchedulerManagerInterface_FireScheduledDelayedPurchasesWired(t *testing.T) {
+	ctx := context.Background()
+	mockPurchase := new(MockPurchaseManager)
+
+	// The MockPurchaseManager must satisfy ManagerInterface at compile time.
+	var _ ManagerInterface = mockPurchase
+
+	mockPurchase.On("FireScheduledDelayedPurchases", ctx).
+		Return(&purchase.FireResult{Found: 1, Fired: 1}, nil)
+
+	result, err := mockPurchase.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Found)
+	assert.Equal(t, 1, result.Fired)
+	mockPurchase.AssertExpectations(t)
 }
 
 func TestSchedulerConfig(t *testing.T) {
@@ -2009,30 +1600,6 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 }
-
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
-func (m *MockConfigStore) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
-	return nil
-}
-func (m *MockConfigStore) CreateSuppressionTx(_ context.Context, _ pgx.Tx, _ *config.PurchaseSuppression) error {
-	return nil
-}
-func (m *MockConfigStore) DeleteSuppressionsByExecution(_ context.Context, _ string) error {
-	return nil
-}
-func (m *MockConfigStore) DeleteSuppressionsByExecutionTx(_ context.Context, _ pgx.Tx, _ string) error {
-	return nil
-}
-func (m *MockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
-	return nil, nil
-}
-func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
-	return m.SavePurchaseExecution(ctx, e)
-}
-func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
-func (m *MockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }
 
 // fakeSTSClient is a minimal in-test STSClient implementation used by the
 // ambient host-account tagging tests (issue #604). The fakeAccountID + err

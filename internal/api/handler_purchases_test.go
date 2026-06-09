@@ -296,6 +296,10 @@ func TestHandler_approvePurchase_SessionApproveAnyChainsToExecute(t *testing.T) 
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// approvePurchaseViaSession checks PurchaseDelayHours to decide whether
+	// to defer the SDK call (Gmail-style pre-fire delay, issue #291 wave-2).
+	// Delay=0 means immediate execute (the legacy path being tested here).
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
@@ -342,6 +346,8 @@ func TestHandler_approvePurchase_SessionExecuteFailureSurfacesAs409(t *testing.T
 		Recommendations: []config.RecommendationRecord{{ID: "r1"}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// approvePurchaseViaSession checks PurchaseDelayHours (issue #291 wave-2).
+	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{PurchaseDelayHours: 0}, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
@@ -3762,4 +3768,101 @@ func TestGatherAccountContactEmails_DBError_NoPIILeak(t *testing.T) {
 	logged := logBuf.String()
 	assert.NotContains(t, logged, acctUUID, "log must not contain the raw account UUID (issue #965 sibling)")
 	assert.NotContains(t, logged, rawDBErr, "log must not contain the raw DB error string (issue #965 sibling)")
+}
+
+// TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel verifies the
+// CAS safety property of scheduleApprovedExecution (Finding #2): if a
+// concurrent Cancel flips the execution to "cancelled" before the approve
+// writes, TransitionExecutionStatus returns ErrExecutionNotInExpectedStatus and
+// scheduleApprovedExecution surfaces that error rather than silently
+// overwriting the cancelled state.
+//
+// In the old blind-write code, SavePurchaseExecution would overwrite the
+// "cancelled" row with status="scheduled", losing the revoke. With the CAS fix
+// the row is never touched after a concurrent cancel wins.
+func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.T) {
+	ctx := context.Background()
+	execID := "aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		Status:      "pending",
+	}
+
+	concurrentCancelErr := fmt.Errorf("%w: execution %s is in status \"cancelled\", not one of [pending notified]",
+		config.ErrExecutionNotInExpectedStatus, execID)
+
+	mockConfig := new(MockConfigStore)
+	// TransitionExecutionStatus fails because a concurrent Cancel already landed.
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+		Return(nil, concurrentCancelErr)
+
+	handler := &Handler{config: mockConfig}
+
+	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com")
+	require.Error(t, err, "concurrent cancel must surface as an error, not a silent overwrite")
+	// SavePurchaseExecution must NEVER be called: the cancelled row is untouched.
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+	mockConfig.AssertExpectations(t)
+}
+
+// TestHandler_scheduleApprovedExecution_HappyPath verifies the normal path:
+// TransitionExecutionStatus succeeds and the returned execution has
+// ScheduledExecutionAt stamped.
+func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	execID := "11112222-3333-4444-5555-666677778888"
+
+	exec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		Status:      "pending",
+	}
+
+	// TransitionExecutionStatus returns an execution with status="scheduled".
+	transitioned := &config.PurchaseExecution{
+		ExecutionID: execID,
+		Status:      "scheduled",
+	}
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+		Return(transitioned, nil)
+	mockConfig.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+		return e.ExecutionID == execID &&
+			e.ScheduledExecutionAt != nil &&
+			*e.ApprovedBy == "actor@example.com"
+	})).Return(nil)
+
+	handler := &Handler{config: mockConfig}
+
+	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "scheduled", result.Status)
+	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
+	mockConfig.AssertExpectations(t)
+}
+
+// TestApproveWithDelay_CASLostMaps409 verifies that when scheduleApprovedExecution
+// returns ErrExecutionNotInExpectedStatus (concurrent cancel beat the approve CAS),
+// approveWithDelay surfaces 409 rather than 500 (Finding A, second-wave CR).
+func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
+	ctx := context.Background()
+	execID := "exec-cas-409"
+	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
+
+	concurrentCancelErr := fmt.Errorf("%w: execution %s already cancelled",
+		config.ErrExecutionNotInExpectedStatus, execID)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled").
+		Return(nil, concurrentCancelErr)
+
+	handler := &Handler{config: mockConfig}
+
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "CAS-lost error must be a ClientError")
+	assert.Equal(t, 409, ce.code, "concurrent cancel CAS race must map to 409, not 500")
+	mockConfig.AssertExpectations(t)
 }

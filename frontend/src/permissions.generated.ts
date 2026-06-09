@@ -25,6 +25,7 @@ export const USER_PERMS: ReadonlySet<string> = new Set([
   'create:plans',
   'delete:plans',
   'retry-own:purchases',
+  'revoke-own:purchases',
   'update:plans',
   'update:purchases',
   'view:history',

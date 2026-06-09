@@ -110,7 +110,11 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // partial-failure marker and is flagged IsAuditGap so its execution-level
 // dollars are excluded from the dashboard totals — the committed dollars are
 // already counted via the per-rec purchase_history rows that succeeded.
-var historyExecutionStatuses = []string{"pending", "notified", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
+// "scheduled" is included so Gmail-style pre-fire delayed executions (issue #291
+// wave-2) appear in the History view with a Revoke button before the cloud SDK
+// call fires. Without this entry the row is invisible to the History UI, making
+// the Revoke button unreachable (issue #290, second-wave CR Finding E).
+var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -324,6 +328,20 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case "cancelled":
 		annotateCancelled(row, exec, approver)
+	default:
+		// In-flight (approved/running/scheduled/paused) and audit-gap
+		// (partially_completed/completed) cases. Split out to keep this switch
+		// under the cyclomatic-complexity limit.
+		annotateInFlightOrAuditGapRow(row, exec, approver)
+	}
+}
+
+// annotateInFlightOrAuditGapRow handles the non-terminal and audit-gap statuses
+// for annotateHistoryRowByStatus: approved/running, scheduled, paused,
+// partially_completed, and completed (audit-gap). Extracted to keep the parent
+// switch under the cyclomatic-complexity limit.
+func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
+	switch exec.Status {
 	case "approved", "running":
 		// In-flight (issue #621): approved/running rows are NOT terminal —
 		// the synchronous AWS purchase is mid-execution or got interrupted
@@ -332,6 +350,18 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		// renders this as a finished purchase.
 		annotateApproved(row, exec, approver)
 		row.StatusDescription = "approved — purchase in progress"
+	case "scheduled":
+		// Gmail-style pre-fire delay (issue #291 wave-2): the cloud SDK has not
+		// been called yet. The "revocation window" for the frontend Revoke button
+		// is the time until scheduled_execution_at (after which the scheduler
+		// fires the SDK call and the row transitions to approved/running). Populate
+		// RevocationWindowClosesAt with the fire time so canRevokeCompletedRow can
+		// use its standard window check (issue #290, second-wave CR Finding E).
+		if exec.ScheduledExecutionAt != nil {
+			t := *exec.ScheduledExecutionAt
+			row.RevocationWindowClosesAt = &t
+		}
+		row.StatusDescription = "scheduled — revoke before execution window closes to cancel for free"
 	case "paused":
 		row.Approver = approver
 		row.StatusDescription = "purchase paused — resume or cancel from the plan"

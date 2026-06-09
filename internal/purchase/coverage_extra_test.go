@@ -880,6 +880,69 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	assert.True(t, exec.Recommendations[0].Purchased)
 }
 
+// TestManager_SavePurchaseHistory_RevocationWindow is the regression guard for
+// the issue #290 "dead Revoke button" gap: savePurchaseHistory is the real
+// write path for completed purchases, and it must stamp
+// RevocationWindowClosesAt for Azure (Timestamp + 7d free-cancel window) so the
+// History UI's canRevokeCompletedRow check shows the button. AWS and GCP have
+// no in-app direct-cancel window in Phase 1, so the field must stay nil and the
+// button must stay hidden.
+func TestManager_SavePurchaseHistory_RevocationWindow(t *testing.T) {
+	tests := []struct {
+		name         string
+		provider     string
+		wantWindow   bool // true => RevocationWindowClosesAt non-nil
+		wantDaysFrom int  // days after Timestamp when window is expected
+	}{
+		{name: "azure stamps 7-day window", provider: "azure", wantWindow: true, wantDaysFrom: config.AzureRevocationWindowDays},
+		{name: "aws leaves window nil", provider: "aws", wantWindow: false},
+		{name: "gcp leaves window nil", provider: "gcp", wantWindow: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+			var captured *config.PurchaseHistoryRecord
+			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).
+				Run(func(args mock.Arguments) {
+					captured = args.Get(1).(*config.PurchaseHistoryRecord)
+				}).Return(nil)
+
+			manager := &Manager{config: mockStore}
+
+			plan := &config.PurchasePlan{ID: "plan-rev", Name: "Revocation Window Plan"}
+			exec := &config.PurchaseExecution{ExecutionID: "exec-rev", PlanID: "plan-rev"}
+			rec := config.RecommendationRecord{
+				Provider:     tc.provider,
+				Service:      "ec2",
+				ResourceType: "c5.large",
+				Region:       "us-east-1",
+				Count:        1,
+			}
+			result := common.PurchaseResult{Success: true, CommitmentID: "commit-rev-001"}
+
+			err := manager.savePurchaseHistory(ctx, exec, plan, rec, result, "acct-1")
+			require.NoError(t, err)
+			require.NotNil(t, captured)
+
+			if !tc.wantWindow {
+				assert.Nil(t, captured.RevocationWindowClosesAt,
+					"%s purchases must not stamp a revocation window", tc.provider)
+				return
+			}
+
+			require.NotNil(t, captured.RevocationWindowClosesAt,
+				"azure purchases must stamp a revocation window so the Revoke button shows")
+			wantClose := captured.Timestamp.AddDate(0, 0, tc.wantDaysFrom)
+			assert.WithinDuration(t, wantClose, *captured.RevocationWindowClosesAt, time.Second,
+				"window must be Timestamp + %d days", tc.wantDaysFrom)
+		})
+	}
+}
+
 // TestManager_ExecuteSinglePurchase_DetailsByService is the regression guard
 // for issue #453. Before the fix, executeSinglePurchase assigned a value-
 // typed common.DatabaseDetails (and only when rec.Engine was non-empty);

@@ -41,7 +41,36 @@ const (
 	// network hang) that leave rows orphaned in an in-flight state.
 	// See internal/purchase/reaper.go + issue #678.
 	TaskReapStuckPurchases ScheduledTaskType = "reap_stuck_purchases"
+	// TaskFireScheduledPurchases fires purchase_executions in status=scheduled
+	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
+	// issue #291 wave-2). Wires the "fire_scheduled_purchases" event action
+	// to purchase.Manager.FireScheduledDelayedPurchases.
+	TaskFireScheduledPurchases ScheduledTaskType = "fire_scheduled_purchases"
+	// TaskFinalizeRevocations sweeps purchase_history rows with
+	// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
+	// These rows represent partial-success cases where the Azure Return API call
+	// succeeded but the subsequent DB write failed. The sweep ensures the audit
+	// record is eventually consistent without requiring the user to retry (which
+	// would be rejected by Azure). See issue #290 Finding #6.
+	TaskFinalizeRevocations ScheduledTaskType = "finalize_revocations"
 )
+
+// scheduledEventActions maps a raw scheduled-event action string to its
+// ScheduledTaskType. Kept as a table (rather than a switch) so adding a task
+// type stays a one-line change and ParseScheduledEvent's cyclomatic complexity
+// does not grow with the task list.
+var scheduledEventActions = map[string]ScheduledTaskType{
+	"collect_recommendations":     TaskCollectRecommendations,
+	"process_scheduled_purchases": TaskProcessScheduledPurchases,
+	"send_notifications":          TaskSendNotifications,
+	"cleanup":                     TaskCleanupExpiredRecords,
+	"analytics_refresh":           TaskRefreshAnalytics,
+	"analytics_collect":           TaskCollectAnalytics,
+	"ri_exchange_reshape":         TaskRIExchangeReshape,
+	"reap_stuck_purchases":        TaskReapStuckPurchases,
+	"fire_scheduled_purchases":    TaskFireScheduledPurchases,
+	"finalize_revocations":        TaskFinalizeRevocations,
+}
 
 // HandleScheduledTask processes a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
@@ -71,26 +100,26 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 
 // dispatchTask routes a scheduled task to its handler.
 func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTaskType) (any, error) {
-	switch taskType {
-	case TaskCollectRecommendations:
-		return app.handleCollectRecommendations(ctx)
-	case TaskProcessScheduledPurchases:
-		return app.handleProcessScheduledPurchases(ctx)
-	case TaskSendNotifications:
-		return app.handleSendNotifications(ctx)
-	case TaskCleanupExpiredRecords:
-		return app.handleCleanupExpiredRecords(ctx)
-	case TaskRefreshAnalytics:
-		return app.handleRefreshAnalytics(ctx)
-	case TaskCollectAnalytics:
-		return app.handleCollectAnalytics(ctx)
-	case TaskRIExchangeReshape:
-		return app.handleRIExchangeReshape(ctx)
-	case TaskReapStuckPurchases:
-		return app.handleReapStuckPurchases(ctx)
-	default:
+	// Map-based dispatch (rather than a switch) keeps this function under the
+	// cyclomatic-complexity limit as the task roster grows. Each handler adapts
+	// its concrete return type to (any, error) at the call site.
+	handlers := map[ScheduledTaskType]func(context.Context) (any, error){
+		TaskCollectRecommendations:    func(c context.Context) (any, error) { return app.handleCollectRecommendations(c) },
+		TaskProcessScheduledPurchases: func(c context.Context) (any, error) { return app.handleProcessScheduledPurchases(c) },
+		TaskSendNotifications:         func(c context.Context) (any, error) { return app.handleSendNotifications(c) },
+		TaskCleanupExpiredRecords:     func(c context.Context) (any, error) { return app.handleCleanupExpiredRecords(c) },
+		TaskRefreshAnalytics:          func(c context.Context) (any, error) { return app.handleRefreshAnalytics(c) },
+		TaskCollectAnalytics:          func(c context.Context) (any, error) { return app.handleCollectAnalytics(c) },
+		TaskRIExchangeReshape:         func(c context.Context) (any, error) { return app.handleRIExchangeReshape(c) },
+		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
+		TaskFireScheduledPurchases:    func(c context.Context) (any, error) { return app.handleFireScheduledPurchases(c) },
+		TaskFinalizeRevocations:       func(c context.Context) (any, error) { return app.handleFinalizeRevocations(c) },
+	}
+	handler, ok := handlers[taskType]
+	if !ok {
 		return nil, fmt.Errorf("unknown scheduled task type: %s", taskType)
 	}
+	return handler(ctx)
 }
 
 // taskLocker returns the configured TaskLocker, falling back to DB if set.
@@ -204,6 +233,39 @@ func (app *Application) handleReapStuckPurchases(ctx context.Context) (*purchase
 	return result, nil
 }
 
+// handleFireScheduledPurchases fires purchase_executions in status=scheduled
+// whose scheduled_execution_at is in the past. Part of the Gmail-style pre-fire
+// delay feature (issue #291 wave-2): approve defers the cloud SDK call; this
+// tick fires the SDK call when the window expires.
+func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purchase.FireResult, error) {
+	log.Println("Firing scheduled delayed purchases...")
+	result, err := app.Purchase.FireScheduledDelayedPurchases(ctx)
+	if err != nil {
+		log.Printf("Failed to fire scheduled purchases: %v", err)
+		return nil, err
+	}
+	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d errored=%d",
+		result.Found, result.Fired, result.RaceLost, result.Errored)
+	return result, nil
+}
+
+// handleFinalizeRevocations sweeps purchase_history rows with
+// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
+// Part of the partial-success reconciliation for Azure revocations (issue #290
+// Finding #6): if the Azure Return call succeeded but the DB write failed,
+// this sweep ensures the audit row is eventually consistent.
+func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchase.FinalizeResult, error) {
+	log.Println("Finalizing in-flight revocations...")
+	result, err := app.Purchase.FinalizeInFlightRevocations(ctx)
+	if err != nil {
+		log.Printf("Failed to finalize in-flight revocations: %v", err)
+		return nil, err
+	}
+	log.Printf("Finalize sweep complete: found=%d finalized=%d errored=%d",
+		result.Found, result.Finalized, result.Errored)
+	return result, nil
+}
+
 // handleRefreshAnalytics refreshes materialized views and analytics data
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
@@ -263,24 +325,8 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 	}
 
 	// Map action to task type
-	switch event.Action {
-	case "collect_recommendations":
-		return TaskCollectRecommendations, nil
-	case "process_scheduled_purchases":
-		return TaskProcessScheduledPurchases, nil
-	case "send_notifications":
-		return TaskSendNotifications, nil
-	case "cleanup":
-		return TaskCleanupExpiredRecords, nil
-	case "analytics_refresh":
-		return TaskRefreshAnalytics, nil
-	case "analytics_collect":
-		return TaskCollectAnalytics, nil
-	case "ri_exchange_reshape":
-		return TaskRIExchangeReshape, nil
-	case "reap_stuck_purchases":
-		return TaskReapStuckPurchases, nil
-	default:
-		return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
+	if taskType, ok := scheduledEventActions[event.Action]; ok {
+		return taskType, nil
 	}
+	return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
 }
