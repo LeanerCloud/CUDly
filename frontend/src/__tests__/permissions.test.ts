@@ -74,6 +74,9 @@ describe('permissions', () => {
         // Added by PR #804: revoke-own gates the History inline Revoke button
         // for completed Azure purchases within the free-cancel window.
         'revoke-own:purchases',
+        // Added by issue #292: sell-own gates the History "Sell on Marketplace"
+        // button for completed Standard RIs the user purchased themselves.
+        'sell-own:purchases',
       ];
       expected.forEach((p) => expect(perms.has(p)).toBe(true));
       // approve-own must NOT be in the standard user permission set (issue #1407).
