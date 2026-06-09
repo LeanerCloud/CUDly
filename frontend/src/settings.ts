@@ -77,6 +77,13 @@ export function setGlobalDefaultsForTest(defaults: { term: number; payment: stri
   cachedGlobalDefaults = { ...defaults };
 }
 
+/** Returns true when an API error signals a 403 permission-denied response. */
+function isPermissionDeniedError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as { status?: number }).status === 403
+    && error.message.startsWith('permission denied');
+}
+
 // sessionStorage key for the in-progress (unsaved) AWS External ID. Persists
 // across modal close/reopen cycles within the same session so the operator
 // can copy the value into AWS, close the modal, and come back to the same
@@ -3212,6 +3219,16 @@ export async function loadGlobalSettings(): Promise<void> {
 
     cachedSourceCloud = data.source_cloud ?? 'aws';
   } catch (error) {
+    // Issue #979: when the backend returns 403 with a "permission denied"
+    // message the non-admin user already has restricted visibility
+    // (Exchange Automation etc. are hidden). Silently hide the section
+    // so the page degrades gracefully instead of showing a red banner.
+    // All other failures (network errors, 5xx, or unrelated 403s) still
+    // surface the banner.
+    if (isPermissionDeniedError(error)) {
+      if (loadingEl) loadingEl.classList.add('hidden');
+      return;
+    }
     console.error('Failed to load settings:', error);
     if (loadingEl) loadingEl.classList.add('hidden');
     if (errorEl) {
