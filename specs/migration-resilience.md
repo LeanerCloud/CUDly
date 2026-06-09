@@ -52,8 +52,9 @@ On AWS, you do not have to rely on polling `/health`: the Lambda compute
 module ships a CloudWatch alarm (`<stack>-migration-failed`) backed by a
 log metric filter on the `"Migration failed"` log line. Because the app
 fail-opens, the built-in `AWS/Lambda` `Errors` metric stays clean during a
-broken migration — this alarm is what surfaces it. Wire its
-`alarm_sns_topic_arn` to the monitoring module's SNS topic to get paged.
+broken migration; this alarm is what surfaces it. Wire the
+`alarm_sns_topic_arn` variable (a list of SNS topic ARNs) to the monitoring
+module's SNS topic(s) to get paged.
 
 ## Recovery from a failed migration
 
