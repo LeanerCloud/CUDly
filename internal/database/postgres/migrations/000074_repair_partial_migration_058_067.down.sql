@@ -1,0 +1,14 @@
+-- 000074 down: intentional no-op.
+--
+-- The up migration is a repair that re-asserts schema from the 058-067 range
+-- so a partially-applied DB converges to the correct state. It does not OWN
+-- those objects -- migrations 058, 059, 063, 065, 066, and 067 do. Dropping
+-- the columns, indexes, triggers, functions, or materialized views here would
+-- corrupt any DB on which those source migrations are (now) correctly applied,
+-- since this repair and the originals add the very same objects.
+--
+-- Rolling back the migration version without touching the schema is the only
+-- safe behavior: the schema stays correct and the version counter decrements.
+-- A no-op .down.sql makes this explicit rather than hiding it behind a silent
+-- empty file.
+SELECT 1; -- no-op: repair migration is not independently reversible
