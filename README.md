@@ -17,7 +17,7 @@ CUDly is a comprehensive CLI tool for managing cloud cost commitments across AWS
 
 ## Supported Cloud Providers & Services
 
-### AWS Services (Production Ready)
+### AWS Services
 
 | Service | Commitment Type | Description |
 |---------|----------------|-------------|
@@ -47,6 +47,23 @@ CUDly is a comprehensive CLI tool for managing cloud cost commitments across AWS
 | Cloud SQL | Committed Use Discounts |
 | Memorystore | Committed Use Discounts |
 | Cloud Storage | Committed Use Discounts |
+
+### AWS CLI Support Matrix
+
+**Tested** means the service has been exercised end-to-end with real AWS
+accounts and validated in production workloads. **Experimental** means the
+implementation exists and is functional, but needs real-world validation --
+contributions and testers are very welcome.
+
+| AWS Service | CLI Flag | Status |
+| ----------- | -------- | ------ |
+| Amazon RDS | `rds` | **Tested** |
+| Amazon ElastiCache | `elasticache` | **Tested** |
+| Amazon EC2 (Reserved Instances) | `ec2` | Experimental (seeking testers) |
+| Amazon OpenSearch | `opensearch` | Experimental (seeking testers) |
+| Amazon Redshift | `redshift` | Experimental (seeking testers) |
+| Amazon MemoryDB | `memorydb` | Experimental (seeking testers) |
+| Savings Plans (Compute, EC2 Instance, SageMaker, Database) | `savingsplans` | Experimental (seeking testers) |
 
 ## Installation
 
@@ -427,7 +444,10 @@ CUDly/
 - **Plugin architecture** - Services registered and discovered at runtime
 - **Safety-first** - Multiple layers of protection against unintended purchases
 
-## Web Interface
+## Web Interface (Experimental)
+
+> **Note: The web GUI is experimental.** It is under active development and
+> has not been validated at scale. Use the CLI for production workloads.
 
 In addition to the CLI, this branch ships a browser-based dashboard. The same
 Go binary that runs the CLI also acts as the application server: it serves the
