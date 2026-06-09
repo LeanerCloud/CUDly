@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/analytics"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -147,8 +148,9 @@ func buildInventoryCommitment(p config.PurchaseHistoryRecord, accountName string
 //
 // Returns per-provider, per-service coverage breakdowns computed from
 // two data sources already available in the system:
-//   - Active commitments (purchase history): their MonthlyCost is the
-//     "covered" portion of monthly spend.
+//   - Active commitments (purchase history): their effective covered
+//     monthly spend (recurring MonthlyCost plus amortised upfront — see
+//     commitmentCoveredMonthly) is the "covered" portion of monthly spend.
 //   - Recommendations (scheduler): their Savings represent the remaining
 //     on-demand gap that could still be committed.
 //
@@ -175,15 +177,18 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	}
 
 	now := time.Now()
-	// coveredByKey accumulates MonthlyCost by "provider:service".
+	// coveredByKey accumulates the effective covered monthly spend by
+	// "provider:service". A commitment's covered monthly is its recurring
+	// MonthlyCost plus the amortised upfront, so an all-upfront commitment
+	// (MonthlyCost nil, UpfrontCost > 0 — typical for Azure RIs) still
+	// registers as covered instead of being silently dropped (issue: Azure
+	// showed $0 coverage while the dashboard reported active commitments).
 	coveredByKey := make(map[string]float64)
 	for _, p := range purchases {
 		if !isActiveCommitment(p, now) {
 			continue
 		}
-		if p.MonthlyCost != nil {
-			coveredByKey[p.Provider+":"+p.Service] += *p.MonthlyCost
-		}
+		coveredByKey[p.Provider+":"+p.Service] += commitmentCoveredMonthly(p)
 	}
 
 	// --- on-demand gap: recommendations -------------------------------------
@@ -243,6 +248,38 @@ func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter s
 		out[rec.Provider+":"+rec.Service] += rec.Savings
 	}
 	return out
+}
+
+// commitmentCoveredMonthly returns the effective covered monthly spend of a
+// single active commitment: its recurring MonthlyCost (when present) plus the
+// upfront amortised over the term. This mirrors the canonical effective-monthly
+// formula used elsewhere in the codebase (analytics.Collector amortises
+// UpfrontCost/(Term*MonthsPerYear); exchange_lookup adds MonthlyCost +
+// UpfrontCost/termMonths) so the Coverage tab and the savings analytics agree
+// on what "covered" means.
+//
+// MonthlyCost is *float64 because the provider API leaves it nil for
+// all-upfront commitments where there is no recurring charge (Azure RIs in
+// particular — see config.PurchaseHistoryRecord.MonthlyCost). The previous
+// Coverage code skipped those rows entirely, so an Azure subscription whose
+// commitments are all upfront rendered as $0 / "No usage detected" even though
+// the dashboard counted the same commitments. A nil MonthlyCost is treated as a
+// real $0 recurring component (not a fabricated total) and the upfront still
+// contributes its amortised share, so the covered figure is never silently 0.
+//
+// Term <= 0 cannot be amortised (division by zero); such a row contributes only
+// its recurring MonthlyCost. The scheduler only writes Term >= 1 rows, so this
+// guard matches analytics.Collector's skip-bad-term defence rather than papering
+// over real data.
+func commitmentCoveredMonthly(p config.PurchaseHistoryRecord) float64 {
+	var covered float64
+	if p.MonthlyCost != nil {
+		covered += *p.MonthlyCost
+	}
+	if p.Term > 0 {
+		covered += p.UpfrontCost / (float64(p.Term) * analytics.MonthsPerYear)
+	}
+	return covered
 }
 
 // buildCoverageBreakdown constructs the CoverageBreakdownResponse from
