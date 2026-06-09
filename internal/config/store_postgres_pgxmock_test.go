@@ -625,6 +625,83 @@ func TestPGXMock_GetPurchaseHistory_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestPGXMock_GetPurchaseHistoryByPurchaseID_Success asserts the DISTINCT
+// 25-column scan order used by GetPurchaseHistoryByPurchaseID. Unlike the
+// 24-column GetPurchaseHistory reader it adds revocation_in_flight (a plain
+// bool, NOT a nullable) at position 22, between support_case_id and the
+// marketplace columns (issue #290 Finding #6, migration 000072). A regression
+// here -- e.g. dropping the column or scanning it through the nullables struct
+// -- would shift every marketplace column by one and silently mis-read
+// offering_class / listing_id / listing_state.
+func TestPGXMock_GetPurchaseHistoryByPurchaseID_Success(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	cols := []string{
+		"account_id", "purchase_id", "timestamp", "provider", "service", "region",
+		"resource_type", "count", "term", "payment", "upfront_cost", "monthly_cost",
+		"estimated_savings", "plan_id", "plan_name", "ramp_step", "cloud_account_id",
+		// revocation columns (issue #290)
+		"revocation_window_closes_at", "revoked_at", "revoked_via", "support_case_id",
+		// partial-success reconciliation bool at position 22 (issue #290 Finding #6)
+		"revocation_in_flight",
+		// marketplace columns (issue #292)
+		"offering_class", "listing_id", "listing_state",
+	}
+	// monthly_cost scans straight into the *float64 r.MonthlyCost (not through
+	// the nullables struct), so the mock value must be a *float64.
+	monthly := 50.0
+	rows := pgxmock.NewRows(cols).
+		AddRow("acc-1", "pur-1", now, "aws", "ec2", "us-east-1",
+			"m5.large", 2, 1, "no-upfront", 100.0, &monthly, 200.0,
+			sql.NullString{Valid: true, String: "plan-1"},
+			sql.NullString{Valid: true, String: "My Plan"},
+			1, sql.NullString{Valid: true, String: "cloud-acct-1"},
+			// revocation columns (issue #290)
+			nil, nil, sql.NullString{}, sql.NullString{},
+			// revocation_in_flight bool at position 22
+			true,
+			// marketplace columns (issue #292)
+			sql.NullString{Valid: true, String: "standard"},
+			sql.NullString{Valid: true, String: "listing-1"},
+			sql.NullString{Valid: true, String: "active"})
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
+
+	record, err := store.GetPurchaseHistoryByPurchaseID(ctx, "pur-1")
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.Equal(t, "pur-1", record.PurchaseID)
+	assert.Equal(t, "plan-1", record.PlanID)
+	require.NotNil(t, record.MonthlyCost)
+	assert.Equal(t, 50.0, *record.MonthlyCost)
+	assert.True(t, record.RevocationInFlight)
+	// Marketplace columns must land in their own fields, not shifted by the
+	// extra bool.
+	assert.Equal(t, "standard", record.OfferingClass)
+	assert.Equal(t, "listing-1", record.ListingID)
+	assert.Equal(t, "active", record.ListingState)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetPurchaseHistoryByPurchaseID_NotFound returns (nil, nil) when
+// no row matches, so the revoke / marketplace handlers can distinguish "absent"
+// from a scan/query error.
+func TestPGXMock_GetPurchaseHistoryByPurchaseID_NotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"account_id"}) // no rows added
+	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
+
+	record, err := store.GetPurchaseHistoryByPurchaseID(ctx, "missing")
+	require.NoError(t, err)
+	assert.Nil(t, record)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── GetPurchaseHistoryFiltered (issue #701) ─────────────────────────────────
 
 // purchaseHistoryCols lists the SELECT columns for purchase_history rows in
