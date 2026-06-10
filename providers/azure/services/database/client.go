@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/sql/armsql"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -318,7 +319,7 @@ func (c *DatabaseClient) PurchaseCommitment(ctx context.Context, rec common.Reco
 		},
 		"location": c.region,
 		"properties": map[string]interface{}{
-			"reservedResourceType": "SqlDatabase",
+			"reservedResourceType": string(armreservations.ReservedResourceTypeSQLDatabases),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
