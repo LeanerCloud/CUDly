@@ -561,19 +561,34 @@ func TestClient_GetDurationString(t *testing.T) {
 	client := &Client{}
 
 	tests := []struct {
-		name     string
-		term     string
-		expected string
+		name      string
+		term      string
+		expected  string
+		expectErr bool
 	}{
-		{"1 year", "1yr", "31536000"},
-		{"3 years", "3yr", "94608000"},
-		{"3 numeric", "3", "94608000"},
-		{"default", "invalid", "31536000"},
+		{"1 year", "1yr", "31536000", false},
+		{"1 numeric", "1", "31536000", false},
+		{"3 years", "3yr", "94608000", false},
+		{"3 numeric", "3", "94608000", false},
+		// Regression for ARCH-04 (issue #1192): unrecognized or empty terms
+		// must error instead of silently mapping to a 1-year purchase. An
+		// empty term is what a 0/NULL Term DB row produces on the scheduler
+		// purchase path.
+		{"invalid term errors", "invalid", "", true},
+		{"empty term errors", "", "", true},
+		{"zero term errors", "0", "", true},
+		{"2yr term errors", "2yr", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.getDurationString(tt.term)
+			result, err := client.getDurationString(tt.term)
+			if tt.expectErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "unsupported RDS reservation term")
+				return
+			}
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
