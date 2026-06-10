@@ -345,13 +345,26 @@ func (s *PostgresAnalyticsStore) QueryMonthlyTotals(ctx context.Context, account
 func (s *PostgresAnalyticsStore) QueryByProvider(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, startDate, endDate time.Time) ([]ProviderBreakdown, error) {
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{startDate, endDate})
 
+	// Snapshot rows are run-rates written at (account, provider, service,
+	// region, commitment_type, timestamp) grain, so a (provider, service)
+	// bucket spans several rows at the SAME timestamp. Per H5 the inner query
+	// sums those rows into the bucket's instant total at each collection
+	// timestamp and the outer query averages the instant totals over time; a
+	// flat AVG would report the mean per-row run-rate instead of the bucket
+	// total (COR-02).
 	// #nosec G201 — accountClause uses only internally-built placeholders.
 	query := `
-		SELECT provider, service, AVG(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
-		FROM savings_snapshots
-		WHERE timestamp >= $1
-		  AND timestamp <= $2
-		  AND ` + accountClause + `
+		SELECT provider, service, AVG(ts_savings) as total_savings, AVG(ts_coverage) as avg_coverage
+		FROM (
+			SELECT provider, service, timestamp,
+			       SUM(total_savings) as ts_savings,
+			       AVG(coverage_percentage) as ts_coverage
+			FROM savings_snapshots
+			WHERE timestamp >= $1
+			  AND timestamp <= $2
+			  AND ` + accountClause + `
+			GROUP BY provider, service, timestamp
+		) per_ts
 		GROUP BY provider, service
 		ORDER BY total_savings DESC
 	`
@@ -392,13 +405,22 @@ func (s *PostgresAnalyticsStore) QueryByService(ctx context.Context, accountUUID
 		providerClause = fmt.Sprintf(" AND provider = $%d", len(args))
 	}
 
+	// Same H5 nested rollup as QueryByProvider: a (service, region) bucket
+	// spans accounts and commitment types at the same timestamp, so SUM the
+	// rows per timestamp first, then AVG the instant totals over time (COR-02).
 	// #nosec G201 — accountClause / providerClause use only internally-built placeholders.
 	query := fmt.Sprintf(`
-		SELECT service, region, AVG(total_savings) as total_savings, AVG(coverage_percentage) as avg_coverage
-		FROM savings_snapshots
-		WHERE timestamp >= $1
-		  AND timestamp <= $2
-		  AND %s%s
+		SELECT service, region, AVG(ts_savings) as total_savings, AVG(ts_coverage) as avg_coverage
+		FROM (
+			SELECT service, region, timestamp,
+			       SUM(total_savings) as ts_savings,
+			       AVG(coverage_percentage) as ts_coverage
+			FROM savings_snapshots
+			WHERE timestamp >= $1
+			  AND timestamp <= $2
+			  AND %s%s
+			GROUP BY service, region, timestamp
+		) per_ts
 		GROUP BY service, region
 		ORDER BY total_savings DESC
 	`, accountClause, providerClause)
