@@ -3,6 +3,7 @@ package synapse
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -852,3 +854,54 @@ func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
 // helper's contract is now exercised in providers/azure/services/internal/reservations
 // package tests; the synapse-side coverage is via the executor-level
 // PurchaseCommitment tests above.
+
+// TestPurchaseCommitment_canonicalReservedResourceType guards against
+// regression of issue #1189: the calculatePrice/purchase body must send the
+// canonical SDK enum value "SqlDataWarehouse", not the hand-written "SqlDW"
+// Azure rejects as an invalid reservedResourceType.
+func TestPurchaseCommitment_canonicalReservedResourceType(t *testing.T) {
+	mHTTP := &mockHTTPClient{}
+	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+
+	const orderID = "syn-order-rrt"
+	var capturedRRT string
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		if r.Body == nil {
+			return true
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var body map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &body); err == nil {
+			if props, ok := body["properties"].(map[string]interface{}); ok {
+				if rrt, ok := props["reservedResourceType"].(string); ok {
+					capturedRRT = rrt
+				}
+			}
+		}
+		return true
+	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(newHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	cred := &mockTokenCredential{token: "test-token"}
+	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
+
+	rec := common.Recommendation{
+		ResourceType:   "DW1000c",
+		Term:           "1yr",
+		Count:          1,
+		CommitmentCost: 5000.0,
+	}
+	_, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.Equal(t, string(armreservations.ReservedResourceTypeSQLDataWarehouse), capturedRRT)
+	assert.Contains(t, armreservations.PossibleReservedResourceTypeValues(),
+		armreservations.ReservedResourceType(capturedRRT),
+		"reservedResourceType %q must be a member of armreservations.PossibleReservedResourceTypeValues()", capturedRRT)
+}

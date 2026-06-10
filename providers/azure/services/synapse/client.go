@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
@@ -268,7 +269,7 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 		},
 		"location": c.region,
 		"properties": map[string]interface{}{
-			"reservedResourceType": "SqlDW",
+			"reservedResourceType": string(armreservations.ReservedResourceTypeSQLDataWarehouse),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
