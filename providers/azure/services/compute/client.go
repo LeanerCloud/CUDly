@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
@@ -427,7 +428,7 @@ func (c *ComputeClient) buildReservationBody(rec common.Recommendation, source, 
 		"sku":      map[string]string{"name": rec.ResourceType},
 		"location": c.region,
 		"properties": map[string]interface{}{
-			"reservedResourceType": "VirtualMachines",
+			"reservedResourceType": string(armreservations.ReservedResourceTypeVirtualMachines),
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
