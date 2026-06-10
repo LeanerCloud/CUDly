@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/consumption/armconsumption"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/sql/armsql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1245,4 +1246,55 @@ func TestDatabaseClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 	// (see providers/azure/services/internal/reservations/displayname.go).
 	assert.Regexp(t, `^sql-`, capturedDisplayName)
 	assert.Contains(t, capturedDisplayName, "GP_Gen5_2")
+}
+
+// TestDatabaseClient_PurchaseCommitment_CanonicalReservedResourceType guards
+// against regression of issue #1189: the calculatePrice/purchase body must
+// send the canonical SDK enum value "SqlDatabases", not the hand-written
+// "SqlDatabase" Azure rejects as an invalid reservedResourceType.
+func TestDatabaseClient_PurchaseCommitment_CanonicalReservedResourceType(t *testing.T) {
+	ctx := context.Background()
+	mockHTTP := &MockHTTPClient{}
+	mockCred := &MockTokenCredential{token: "test-token"}
+	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
+
+	const orderID = "azure-db-rrt"
+	var capturedRRT string
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
+			return false
+		}
+		if r.Body == nil {
+			return true
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var body map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &body); err == nil {
+			if props, ok := body["properties"].(map[string]interface{}); ok {
+				if rrt, ok := props["reservedResourceType"].(string); ok {
+					capturedRRT = rrt
+				}
+			}
+		}
+		return true
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
+		return r.Method == http.MethodPost &&
+			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+
+	rec := common.Recommendation{
+		ResourceType:   "GP_Gen5_2",
+		Term:           "1yr",
+		Count:          1,
+		CommitmentCost: 1500.0,
+	}
+	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	require.NoError(t, err)
+	assert.Equal(t, string(armreservations.ReservedResourceTypeSQLDatabases), capturedRRT)
+	assert.Contains(t, armreservations.PossibleReservedResourceTypeValues(),
+		armreservations.ReservedResourceType(capturedRRT),
+		"reservedResourceType %q must be a member of armreservations.PossibleReservedResourceTypeValues()", capturedRRT)
+	mockHTTP.AssertExpectations(t)
 }
