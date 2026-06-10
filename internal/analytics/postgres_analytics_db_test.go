@@ -44,6 +44,9 @@ func getMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
+// f64ptr returns a pointer to v for the nullable *float64 snapshot fields.
+func f64ptr(v float64) *float64 { return &v }
+
 func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 	skipIfNoDocker(t)
 
@@ -74,9 +77,9 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    1000.00,
-			TotalUsage:         800.00,
+			TotalUsage:         f64ptr(800.00),
 			TotalSavings:       200.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 			Metadata: map[string]interface{}{
 				"active_purchases": 5,
 				"collection_time":  now.Format(time.RFC3339),
@@ -98,9 +101,9 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 			Region:             "us-central1",
 			CommitmentType:     "RI",
 			TotalCommitment:    500.00,
-			TotalUsage:         400.00,
+			TotalUsage:         f64ptr(400.00),
 			TotalSavings:       100.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		}
 
 		err := store.SaveSnapshot(ctx, snapshot)
@@ -118,9 +121,9 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "SavingsPlan",
 			TotalCommitment:    2000.00,
-			TotalUsage:         1500.00,
+			TotalUsage:         f64ptr(1500.00),
 			TotalSavings:       500.00,
-			CoveragePercentage: 75.00,
+			CoveragePercentage: f64ptr(75.00),
 		}
 
 		err := store.SaveSnapshot(ctx, snapshot)
@@ -159,9 +162,9 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    1000.00,
-			TotalUsage:         800.00,
+			TotalUsage:         f64ptr(800.00),
 			TotalSavings:       200.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 		{
 			AccountID:          "123456789012",
@@ -171,9 +174,9 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    500.00,
-			TotalUsage:         400.00,
+			TotalUsage:         f64ptr(400.00),
 			TotalSavings:       100.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 		{
 			AccountID:          "123456789012",
@@ -183,9 +186,9 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 			Region:             "us-central1",
 			CommitmentType:     "RI",
 			TotalCommitment:    750.00,
-			TotalUsage:         600.00,
+			TotalUsage:         f64ptr(600.00),
 			TotalSavings:       150.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 	}
 
@@ -196,9 +199,9 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 
 	t.Run("query all snapshots for account", func(t *testing.T) {
 		req := analytics.QueryRequest{
-			AccountID: "123456789012",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
 		}
 
 		results, err := store.QuerySavings(ctx, req)
@@ -208,10 +211,10 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 
 	t.Run("query with provider filter", func(t *testing.T) {
 		req := analytics.QueryRequest{
-			AccountID: "123456789012",
-			Provider:  "aws",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			Provider:                     "aws",
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
 		}
 
 		results, err := store.QuerySavings(ctx, req)
@@ -224,10 +227,10 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 
 	t.Run("query with service filter", func(t *testing.T) {
 		req := analytics.QueryRequest{
-			AccountID: "123456789012",
-			Service:   "rds",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			Service:                      "rds",
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
 		}
 
 		results, err := store.QuerySavings(ctx, req)
@@ -238,10 +241,10 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 
 	t.Run("query with limit", func(t *testing.T) {
 		req := analytics.QueryRequest{
-			AccountID: "123456789012",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
-			Limit:     2,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
+			Limit:                        2,
 		}
 
 		results, err := store.QuerySavings(ctx, req)
@@ -251,9 +254,9 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 
 	t.Run("query returns empty for non-existent account", func(t *testing.T) {
 		req := analytics.QueryRequest{
-			AccountID: "999999999999",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"999999999999"}, "gcp": {"999999999999"}},
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
 		}
 
 		results, err := store.QuerySavings(ctx, req)
@@ -293,7 +296,7 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalSavings:       200.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 		{
 			AccountID:          "123456789012",
@@ -303,7 +306,7 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalSavings:       100.00,
-			CoveragePercentage: 75.00,
+			CoveragePercentage: f64ptr(75.00),
 		},
 		{
 			AccountID:          "123456789012",
@@ -313,7 +316,7 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 			Region:             "us-central1",
 			CommitmentType:     "RI",
 			TotalSavings:       150.00,
-			CoveragePercentage: 70.00,
+			CoveragePercentage: f64ptr(70.00),
 		},
 	}
 
@@ -323,7 +326,7 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 	}
 
 	t.Run("query by provider aggregates correctly", func(t *testing.T) {
-		breakdowns, err := store.QueryByProvider(ctx, "123456789012", now.Add(-24*time.Hour), now)
+		breakdowns, err := store.QueryByProvider(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, now.Add(-24*time.Hour), now)
 		require.NoError(t, err)
 		assert.NotEmpty(t, breakdowns)
 
@@ -371,7 +374,7 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalSavings:       200.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 		{
 			AccountID:          "123456789012",
@@ -381,7 +384,7 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 			Region:             "us-west-2",
 			CommitmentType:     "RI",
 			TotalSavings:       150.00,
-			CoveragePercentage: 75.00,
+			CoveragePercentage: f64ptr(75.00),
 		},
 	}
 
@@ -391,7 +394,7 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 	}
 
 	t.Run("query by service groups by region", func(t *testing.T) {
-		breakdowns, err := store.QueryByService(ctx, "123456789012", "aws", now.Add(-24*time.Hour), now)
+		breakdowns, err := store.QueryByService(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, "aws", now.Add(-24*time.Hour), now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 2) // Two regions
 
@@ -458,9 +461,9 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
 
 		// Verify data was inserted
 		req := analytics.QueryRequest{
-			AccountID: "123456789012",
-			StartDate: now.Add(-24 * time.Hour),
-			EndDate:   now,
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			StartDate:                    now.Add(-24 * time.Hour),
+			EndDate:                      now,
 		}
 		results, err := store.QuerySavings(ctx, req)
 		require.NoError(t, err)
@@ -545,9 +548,9 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 			Region:             "us-east-1",
 			CommitmentType:     "RI",
 			TotalCommitment:    1000.00,
-			TotalUsage:         800.00,
+			TotalUsage:         f64ptr(800.00),
 			TotalSavings:       200.00,
-			CoveragePercentage: 80.00,
+			CoveragePercentage: f64ptr(80.00),
 		},
 	}
 
@@ -561,14 +564,14 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("query monthly totals from materialized view", func(t *testing.T) {
-		summaries, err := store.QueryMonthlyTotals(ctx, "123456789012", 6)
+		summaries, err := store.QueryMonthlyTotals(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, 6)
 		require.NoError(t, err)
 		// May be empty if materialized view refresh happens before data is visible
 		assert.NotNil(t, summaries)
 	})
 
 	t.Run("query monthly totals for non-existent account", func(t *testing.T) {
-		summaries, err := store.QueryMonthlyTotals(ctx, "999999999999", 6)
+		summaries, err := store.QueryMonthlyTotals(ctx, nil, map[string][]string{"aws": {"999999999999"}, "gcp": {"999999999999"}}, 6)
 		require.NoError(t, err)
 		assert.Empty(t, summaries)
 	})
