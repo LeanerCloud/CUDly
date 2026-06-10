@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -283,20 +284,44 @@ func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+// providerAWS mirrors pkg/common's ProviderAWS value. Duplicated here
+// because internal/config must NOT import pkg/common (the dependency
+// direction is common -> config consumers, never the reverse; see the
+// RecommendationRecord.Details doc comment in types.go).
+const providerAWS = "aws"
+
 // recEffectiveSavingsPct computes the effective savings percentage for a
-// recommendation record. Mirrors the formula used client-side in
-// frontend/src/recommendations.ts::effectiveSavingsPct so server-side and
-// client-side filtering produce the same results.
+// recommendation record. Mirrors the logic used client-side in
+// frontend/src/recommendations.ts::displaySavingsPct / effectiveSavingsPct
+// so server-side and client-side filtering produce the same results.
 //
-// Returns (pct, true) when a meaningful percentage can be computed:
+// Preference order (matching the frontend's displaySavingsPct):
+//  1. rec.SavingsPercentage when non-nil and finite -- the provider-
+//     authoritative figure (AWS EstimatedMonthlySavingsPercentage,
+//     Azure/GCP converter SavingsPercentage).
+//  2. Reconstruction from savings and the on-demand baseline.
+//
+// All three providers (AWS, Azure, GCP) report `savings` as already-net
+// monthly savings -- the on-demand/recurring delta AFTER the amortized
+// upfront cost is factored in. The numerator is therefore rec.Savings
+// directly; subtracting amortized upfront again would double-count it and
+// drive the percentage negative for high-upfront RIs (issue #1103 fixed
+// this client-side, #1148 realigns the server). Amortized upfront appears
+// only in the denominator reconstruction:
 //
 //	amortized_upfront = upfront_cost / (term * 12)
-//	effective_savings = savings - amortized_upfront
-//	pct               = (effective_savings / on_demand_monthly) * 100
+//	on_demand_monthly = on_demand_cost, or monthly_cost + savings + amortized
+//	pct               = (savings / on_demand_monthly) * 100
 //
-// Returns (0, false) when any required input is absent or invalid (term == 0,
-// no on-demand baseline and no monthly_cost, or on-demand == 0).
+// Returns (0, false) when no meaningful percentage can be computed:
+// term == 0, no on-demand baseline and no monthly_cost, an AWS row without
+// an explicit on-demand baseline (the reconstruction diverges from Cost
+// Explorer's true baseline -- the frontend's #323 guard), or on-demand == 0.
 func recEffectiveSavingsPct(rec *RecommendationRecord) (float64, bool) {
+	if rec.SavingsPercentage != nil &&
+		!math.IsNaN(*rec.SavingsPercentage) && !math.IsInf(*rec.SavingsPercentage, 0) {
+		return *rec.SavingsPercentage, true
+	}
 	if rec.Term == 0 {
 		return 0, false
 	}
@@ -304,19 +329,20 @@ func recEffectiveSavingsPct(rec *RecommendationRecord) (float64, bool) {
 	if !hasOnDemand && rec.MonthlyCost == nil {
 		return 0, false
 	}
-	monthsInTerm := float64(rec.Term * 12)
-	amortized := rec.UpfrontCost / monthsInTerm
-	effectiveSavings := rec.Savings - amortized
+	if rec.Provider == providerAWS && !hasOnDemand {
+		return 0, false
+	}
 	var onDemand float64
 	if hasOnDemand {
 		onDemand = *rec.OnDemandCost
 	} else {
+		amortized := rec.UpfrontCost / float64(rec.Term*12)
 		onDemand = *rec.MonthlyCost + rec.Savings + amortized
 	}
 	if onDemand == 0 {
 		return 0, false
 	}
-	return (effectiveSavings / onDemand) * 100, true
+	return (rec.Savings / onDemand) * 100, true
 }
 
 // ListStoredRecommendations reads recommendations matching the filter.
