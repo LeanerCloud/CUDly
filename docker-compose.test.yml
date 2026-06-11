@@ -48,8 +48,19 @@ services:
       DB_AUTO_MIGRATE: "true"
       DB_MIGRATIONS_PATH: /app/migrations
 
-      # Secret provider (use env for testing)
+      # Secret provider (use env for testing). With the env provider,
+      # *_SECRET variables name the environment variable holding the value.
       SECRET_PROVIDER: env
+      ADMIN_EMAIL: admin@test.example
+      ADMIN_PASSWORD_SECRET: TEST_ADMIN_PASSWORD
+      TEST_ADMIN_PASSWORD: e2e-local-test-only-password
+      # Allow the all-zero dev encryption key; this stack never holds real
+      # cloud credentials.
+      CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY: "1"
+
+      # Scheduled-task auth: disabled for the local/CI compose stack (no
+      # cloud OIDC issuer or bearer secret available)
+      SCHEDULED_TASK_AUTH_MODE: disabled
 
       # DynamoDB tables (for backward compatibility testing)
       CONFIG_TABLE: test-config
@@ -59,7 +70,9 @@ services:
       GROUPS_TABLE: test-groups
       SESSIONS_TABLE: test-sessions
 
-      # Email configuration (mock)
+      # Email configuration: disabled, the app falls back to a no-op sender
+      # (SECRET_PROVIDER=env is not a supported email backend)
+      EMAIL_ENABLED: "false"
       EMAIL_ADDRESS: test@example.com
 
       # Feature flags
@@ -79,7 +92,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # Test runner (optional - for running integration tests in container)
+  # Test runner: black-box E2E suite (tests/e2e) against cudly-app over HTTP.
   test-runner:
     build:
       context: .
@@ -101,15 +114,9 @@ services:
       DB_SSL_MODE: disable
     networks:
       - cudly-test
-    command: >
-      sh -c "
-        echo 'Waiting for services to be ready...';
-        sleep 5;
-        echo 'Running E2E tests...';
-        go test -v -tags=integration ./...;
-      "
+    command: ["go", "test", "-v", "-tags=e2e", "./..."]
     profiles:
-      - test  # Only start with: docker-compose --profile test up
+      - test  # Only start with: docker compose --profile test up
 
 networks:
   cudly-test:
