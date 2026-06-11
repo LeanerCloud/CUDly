@@ -1015,6 +1015,32 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		"LastErr should reflect the failed account's error")
 }
 
+// TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs is the
+// scheduler-side COR-03 regression test: an account whose collection fn
+// errors (the shape Azure mergeServiceResults / GCP mergeRegionResults now
+// produce when every service call failed) must NOT land in
+// SucceededAccountIDs. UpsertRecommendations evicts stale rows only for
+// accounts listed there, so this is what preserves the previously collected
+// rows of an account hit by a transient full-provider failure.
+func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T) {
+	accounts := []config.CloudAccount{
+		{ID: "acct-ok", Name: "acct-ok", ExternalID: "e-ok"},
+		{ID: "acct-all-services-failed", Name: "acct-all-services-failed", ExternalID: "e-bad"},
+	}
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		if acct.ID == "acct-all-services-failed" {
+			return nil, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
+		}
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, nil
+	}
+
+	_, outcome := fanOutPerAccount(context.Background(), "Azure", accounts, fn)
+	assert.Equal(t, []string{"acct-ok"}, outcome.SucceededAccountIDs,
+		"a failed collection must not be eligible for stale-row eviction")
+	assert.Equal(t, 1, outcome.FailedCount)
+	assert.Contains(t, outcome.LastErr, "all 6 Azure recommendation services failed")
+}
+
 // TestFanOutPerAccount_ZeroAccounts: empty input → empty outcome,
 // no errors. The caller's "FailedCount == len(accounts) > 0" guard
 // correctly skips the all-failed error path.

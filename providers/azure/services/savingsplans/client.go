@@ -126,6 +126,12 @@ func (c *Client) GetRegion() string {
 // recommendations (the Benefits Recommendations API is still in preview).
 // This mirrors the AWS Savings Plans client which also returns empty here and
 // delegates to Cost Explorer centrally.
+//
+// NOTE: because this stub succeeds unconditionally, it is excluded from the
+// all-attempted-failed guard in the parent RecommendationsClientAdapter
+// (providers/azure/recommendations.go, COR-03). When this method starts
+// making real API calls, flip that call site's attempted flag back to the
+// params-filter value so its failures count toward the guard.
 func (c *Client) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
