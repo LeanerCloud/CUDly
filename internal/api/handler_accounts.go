@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -873,6 +874,12 @@ func gcpTokenExchangeAttempt(ctx context.Context, ts oauth2.TokenSource) (Accoun
 	defer cancel()
 	tokenChan := make(chan tokenResult, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("handler_accounts: gcp token-exchange goroutine panic: %v", r)
+				tokenChan <- tokenResult{err: fmt.Errorf("token exchange panic: %v", r)}
+			}
+		}()
 		tok, err := ts.Token()
 		tokenChan <- tokenResult{tok: tok, err: err}
 	}()
