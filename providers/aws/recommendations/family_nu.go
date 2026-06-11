@@ -14,9 +14,12 @@ import (
 //
 // Used by ApplyFamilyNUSizingRDS to translate AWS-rec-API's family-NU-
 // bundled buy recommendations into the family target NU need under
-// --target-coverage. Sizes not in this map evaluate to 0 NU, which
-// causes the family-NU step to leave the rec unchanged (the per-pool
-// sizing path still handles it downstream).
+// --target-coverage. Sizes not in this map evaluate to 0 NU. Recs
+// with an empty family prefix (unknown size suffix) are routed to
+// nonRDS by partitionRDSRecsByFamily and handled by the per-pool path.
+// Recs with a known family prefix but an unrecognised size suffix reach
+// sizeRDSFamilyRecs with 0 NU; if the whole family sums to zero
+// (currentNU <= 0) they are recorded in drops.NoNUSignal and dropped.
 var rdsInstanceNU = map[string]float64{
 	"nano":     0.25,
 	"micro":    0.5,
@@ -53,8 +56,9 @@ func RDSFamilyFromType(instanceType string) string {
 
 // rdsInstanceNUFromType returns the NU value for an instance type like
 // "db.r7g.2xlarge", parsing out the size suffix ("2xlarge" → 16). Returns
-// 0 when the size isn't recognised — callers treat that as "no family-NU
-// signal" and fall back to per-pool sizing.
+// 0 when the size isn't recognised. When a whole family's rec-NU sums to
+// zero inside sizeRDSFamilyRecs (currentNU <= 0), those recs are recorded
+// in drops.NoNUSignal and dropped rather than falling back to per-pool sizing.
 func rdsInstanceNUFromType(instanceType string) float64 {
 	parts := strings.Split(instanceType, ".")
 	if len(parts) < 3 {
@@ -131,6 +135,23 @@ func AggregateRDSFamilyCoverage(coverage PoolCoverageMap) map[string]FamilyCover
 	return out
 }
 
+// FamilyDropCounts holds the counts of family-level drops from
+// ApplyFamilyNUSizingRDS, split by the two distinct drop reasons so the
+// caller can record them into a DropSummary without importing cmd.
+type FamilyDropCounts struct {
+	// AlreadyAtTarget is the number of recs from families where the
+	// existing coverage already meets or exceeds the target (gap <= 0).
+	AlreadyAtTarget int
+	// NoNUSignal is the number of recs dropped because the family's
+	// AWS-recommended counts summed to zero NU (e.g. all recs at
+	// unknown/unrecognised sizes), so there is no scalable NU to apply
+	// the family target against. This is distinct from AlreadyAtTarget.
+	NoNUSignal int
+	// SizedToZero is the number of recs dropped because the family-wide
+	// scale factor produced a floor(0) count for that rec's size.
+	SizedToZero int
+}
+
 // ApplyFamilyNUSizingRDS replaces per-pool RI sizing with family-NU
 // sizing for RDS recommendations. AWS's GetReservationPurchaseRecommendation
 // already bundles size-flex demand within an instance family into a
@@ -152,25 +173,31 @@ func AggregateRDSFamilyCoverage(coverage PoolCoverageMap) map[string]FamilyCover
 //  4. Non-RDS recs are returned unchanged so callers can continue them
 //     through the per-pool sizing path.
 //
-// Returns (sizedRDS, nonRDS). When targetPct is outside (0,100] or
-// coverage has no family-NU signal for an RDS rec's family, the rec is
-// passed through unchanged in sizedRDS (so per-pool sizing downstream
-// doesn't re-process it — caller treats sizedRDS as already sized).
+// Returns (sizedRDS, nonRDS, drops). When targetPct is outside (0,100]
+// all recs are returned as nonRDS unchanged. When the CE coverage for
+// a family has no NU signal (family.TotalNU <= 0), that family's recs
+// are returned sized (as-is) in sizedRDS. When the family's
+// AWS-recommended counts sum to zero NU (currentNU <= 0 — all recs at
+// unrecognised sizes), those recs are dropped and recorded in
+// drops.NoNUSignal; they are NOT passed through to the per-pool path.
 func ApplyFamilyNUSizingRDS(
 	recs []common.Recommendation,
 	coverage PoolCoverageMap,
 	targetPct float64,
-) (sizedRDS, nonRDS []common.Recommendation) {
+) (sizedRDS, nonRDS []common.Recommendation, drops FamilyDropCounts) {
 	if targetPct <= 0 || targetPct > 100 {
-		return nil, recs
+		return nil, recs, drops
 	}
 	familyCov := AggregateRDSFamilyCoverage(coverage)
 	familyIdx, nonRDS := partitionRDSRecsByFamily(recs)
 	for fk, indices := range familyIdx {
-		sized := sizeRDSFamilyRecs(recs, indices, familyCov[fk], targetPct)
+		sized, familyDrops := sizeRDSFamilyRecs(recs, indices, familyCov[fk], targetPct)
 		sizedRDS = append(sizedRDS, sized...)
+		drops.AlreadyAtTarget += familyDrops.AlreadyAtTarget
+		drops.NoNUSignal += familyDrops.NoNUSignal
+		drops.SizedToZero += familyDrops.SizedToZero
 	}
-	return sizedRDS, nonRDS
+	return sizedRDS, nonRDS, drops
 }
 
 // partitionRDSRecsByFamily splits recs into (a) an index map keyed by
@@ -200,9 +227,16 @@ func partitionRDSRecsByFamily(recs []common.Recommendation) (map[string][]int, [
 	return familyIdx, nonRDS
 }
 
-// sizeRDSFamilyRecs sizes the recs in one family-key group: returns the
-// sized recs, drops empty/over-target families, and returns the
-// unchanged AWS-recommended counts when there's no coverage signal.
+// sizeRDSFamilyRecs sizes the recs in one family-key group. It returns
+// the sized recs and a drop-count struct. Three distinct outcomes exist:
+//   - family.TotalNU <= 0: CE coverage has no NU signal for this family;
+//     recs are returned as-is (AWS-recommended counts unchanged).
+//   - gap <= 0: family already at or above target; all recs are dropped
+//     and recorded in drops.AlreadyAtTarget.
+//   - currentNU <= 0: rec counts sum to zero NU (all at unrecognised
+//     sizes); recs are dropped and recorded in drops.NoNUSignal — they
+//     are NOT passed through to the per-pool sizing path.
+// The second return value reports how many recs were dropped and why.
 //
 // First pass scales each rec's Count and cost-bearing fields by the
 // family-wide scale factor; second pass sets the same family-level
@@ -216,20 +250,22 @@ func sizeRDSFamilyRecs(
 	indices []int,
 	family FamilyCoverage,
 	targetPct float64,
-) []common.Recommendation {
+) ([]common.Recommendation, FamilyDropCounts) {
+	var drops FamilyDropCounts
 	if family.TotalNU <= 0 {
 		// No coverage signal — keep AWS-recommended counts as-is.
 		out := make([]common.Recommendation, 0, len(indices))
 		for _, i := range indices {
 			out = append(out, recs[i])
 		}
-		return out
+		return out, drops
 	}
 	existingPct := family.CoveredNU / family.TotalNU * 100.0
 	gap := targetPct - existingPct
 	if gap <= 0 {
 		// Family already at-or-above target — drop the whole family's recs.
-		return nil
+		drops.AlreadyAtTarget = len(indices)
+		return nil, drops
 	}
 	targetNU := gap / 100.0 * family.TotalNU
 	currentNU := 0.0
@@ -237,31 +273,37 @@ func sizeRDSFamilyRecs(
 		currentNU += float64(recs[i].Count) * rdsInstanceNUFromType(recs[i].ResourceType)
 	}
 	if currentNU <= 0 {
-		// Recs sum to zero NU — nothing to scale.
-		return nil
+		// Recs sum to zero NU — family lookup returned no scalable signal.
+		// This is not the same as "already at target"; record separately.
+		drops.NoNUSignal = len(indices)
+		return nil, drops
 	}
 	scale := targetNU / currentNU
-	sized, totalNewNU := scaleFamilyRecs(recs, indices, scale)
+	sized, totalNewNU, zeroDrops := scaleFamilyRecs(recs, indices, scale)
+	drops.SizedToZero = zeroDrops
 	annotateFamilyProjection(sized, existingPct, totalNewNU, family.TotalNU)
-	return sized
+	return sized, drops
 }
 
 // scaleFamilyRecs is the first pass of sizeRDSFamilyRecs: applies the
 // family-wide scale factor to each rec's count and cost-bearing fields,
-// returning the surviving recs (newCount > 0) and the cumulative
-// post-scaling NU across them.
-func scaleFamilyRecs(recs []common.Recommendation, indices []int, scale float64) ([]common.Recommendation, float64) {
+// returning the surviving recs (newCount > 0), the cumulative
+// post-scaling NU across them, and the number of recs dropped because
+// floor(count * scale) == 0.
+func scaleFamilyRecs(recs []common.Recommendation, indices []int, scale float64) ([]common.Recommendation, float64, int) {
 	sized := make([]common.Recommendation, 0, len(indices))
 	totalNewNU := 0.0
+	zeroDrops := 0
 	for _, i := range indices {
 		rec, kept := scaleRDSRecInFamily(recs[i], scale)
 		if !kept {
+			zeroDrops++
 			continue
 		}
 		sized = append(sized, rec)
 		totalNewNU += float64(rec.Count) * rdsInstanceNUFromType(rec.ResourceType)
 	}
-	return sized, totalNewNU
+	return sized, totalNewNU, zeroDrops
 }
 
 // annotateFamilyProjection is the second pass: computes the cumulative
