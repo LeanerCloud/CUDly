@@ -69,7 +69,9 @@ func (c *Client) parseRecommendationDetail(ctx context.Context, details *types.R
 	}
 
 	// Parse AWS-provided cost details
-	c.parseAWSCostDetails(rec, details)
+	if err := c.parseAWSCostDetails(rec, details); err != nil {
+		return nil, fmt.Errorf("failed to parse AWS cost details: %w", err)
+	}
 
 	// Parse RI utilization signals used by --target-coverage sizing
 	c.parseRIUtilizationSignals(rec, details)
@@ -152,16 +154,25 @@ func (c *Client) parseCostInformation(details *types.ReservationPurchaseRecommen
 }
 
 // parseAWSCostDetails extracts upfront, on-demand, and recurring monthly cost from AWS details.
-func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) {
+//
+// A present-but-unparseable cost string is a hard error, consistent with
+// parseCostInformation: silently leaving the field at zero would surface a
+// wrong money figure (e.g. a $0 upfront on an all-upfront RI) into the
+// effective-savings math and purchase decisions with no signal.
+func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.UpfrontCost != nil {
-		if upfront, err := strconv.ParseFloat(*details.UpfrontCost, 64); err == nil {
-			rec.CommitmentCost = upfront
+		upfront, err := strconv.ParseFloat(*details.UpfrontCost, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse upfront cost %q: %w", *details.UpfrontCost, err)
 		}
+		rec.CommitmentCost = upfront
 	}
 	if details.EstimatedMonthlyOnDemandCost != nil {
-		if onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64); err == nil {
-			rec.OnDemandCost = onDemand
+		onDemand, err := strconv.ParseFloat(*details.EstimatedMonthlyOnDemandCost, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse estimated monthly on-demand cost %q: %w", *details.EstimatedMonthlyOnDemandCost, err)
 		}
+		rec.OnDemandCost = onDemand
 	} else {
 		// EstimatedMonthlyOnDemandCost absent from AWS CE response — OnDemandCost
 		// will be 0 and the scheduler's nonZeroPtr will store nil, causing the
@@ -172,10 +183,13 @@ func (c *Client) parseAWSCostDetails(rec *common.Recommendation, details *types.
 	// RecurringStandardMonthlyCost is the recurring charge per month for this RI.
 	// It is distinct from CommitmentCost (upfront) and EstimatedMonthlySavingsAmount.
 	if details.RecurringStandardMonthlyCost != nil {
-		if monthly, err := strconv.ParseFloat(*details.RecurringStandardMonthlyCost, 64); err == nil {
-			rec.RecurringMonthlyCost = &monthly
+		monthly, err := strconv.ParseFloat(*details.RecurringStandardMonthlyCost, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse recurring standard monthly cost %q: %w", *details.RecurringStandardMonthlyCost, err)
 		}
+		rec.RecurringMonthlyCost = &monthly
 	}
+	return nil
 }
 
 // serviceParserFunc defines the signature for service-specific parsers
