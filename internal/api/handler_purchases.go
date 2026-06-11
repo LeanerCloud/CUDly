@@ -1549,7 +1549,50 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	if err := validateCapacityConsistency(execReq.Recommendations, execReq.CapacityPercent); err != nil {
 		return ExecutePurchaseRequest{}, nil, err
 	}
+	// Enforce the per-permission Constraints (MaxPurchaseAmount, Providers,
+	// Services, Regions, AccountIDs) configured on the granting
+	// execute:purchases permission (SEC-01, issue #1141). Runs after the
+	// per-rec validation above so provider tokens are already normalized.
+	// Each recommendation must individually be granted by a permission; the
+	// amount cap is checked against the batch's total upfront cost so it
+	// cannot be evaded by splitting a large purchase across recs.
+	if err := h.requirePermissionConstraints(ctx, session, "execute", "purchases", purchaseConstraintSets(execReq.Recommendations)); err != nil {
+		return ExecutePurchaseRequest{}, nil, err
+	}
 	return execReq, session, nil
+}
+
+// purchaseConstraintSets builds one auth.PermissionConstraints per
+// recommendation in a web execute request, for the SEC-01 constraint
+// enforcement in validateExecutePurchaseRequest. Single-value Provider/
+// Service/Region/AccountIDs lists make the auth service's any-overlap
+// matcher equivalent to strict containment, so a batch cannot pass on the
+// strength of one in-scope rec while another rec is out of scope.
+// MaxPurchaseAmount carries the batch's total upfront cost (the same basis
+// as the global $10M sanity cap in validateAndTotalRecommendations) on
+// every set. A rec without a CloudAccountID omits the AccountIDs dimension;
+// account scoping is independently enforced against the session's
+// allowed_accounts by validatePurchaseRecommendationScope.
+func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.PermissionConstraints {
+	var totalUpfront float64
+	for i := range recs {
+		totalUpfront += recs[i].UpfrontCost
+	}
+	sets := make([]auth.PermissionConstraints, 0, len(recs))
+	for i := range recs {
+		rec := &recs[i]
+		c := auth.PermissionConstraints{
+			Providers:         []string{rec.Provider},
+			Services:          []string{rec.Service},
+			Regions:           []string{rec.Region},
+			MaxPurchaseAmount: totalUpfront,
+		}
+		if rec.CloudAccountID != nil && *rec.CloudAccountID != "" {
+			c.AccountIDs = []string{*rec.CloudAccountID}
+		}
+		sets = append(sets, c)
+	}
+	return sets
 }
 
 // normalizeCapacityPercent defaults an absent/zero capacity_percent to 100
