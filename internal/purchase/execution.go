@@ -1006,14 +1006,22 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 // four per-plan-type slugs in both spellings — pulled out of mapServiceType
 // to keep that switch under the gocyclo budget.
 //
-// TODO(#85): once purchase_executions JSONB rows persisted before the
-// "savingsplans" rename (~6-month retention window) have aged out, the
-// "savings-plans"-spelled aliases below can be removed and only the
-// dash-free spellings ("savingsplans", "savingsplans-compute", etc.)
-// need be matched here. The umbrella rename happened in PR #94; the
-// per-plan-type slugs were always dash-form on the wire so their
-// "savingsplans-*" aliases are forward-compat for any future
-// frontend-canonical normalisation.
+// TODO(#95): PR #94 (merged 2026-04-30) renamed "savings-plans" ->
+// "savingsplans". purchase_executions rows have a ~6-month retention window,
+// so the earliest safe drop date is 2026-10-30. Until then the
+// "savings-plans"-spelled aliases below must stay so Lambda-scheduled
+// executions persisted before PR #94 still map correctly on retry/approval.
+// To drop: verify zero rows with
+//
+//	SELECT id FROM purchase_executions
+//	WHERE recommendations::text LIKE '%"service":"savings-plans"%'
+//	LIMIT 1;
+//
+// then remove every "savings-plans*" key from this map and the matching
+// case in pkg/common/service_details_codec.go: newDetailsForService, and
+// flip the coverage_extra_test.go case (line ~60) to assert
+// ServiceType("savings-plans") (default-arm pass-through). The
+// "savingsplans-*" keys are forward-compat and should stay.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 	slugs := map[string]common.ServiceType{
 		"savings-plans":             common.ServiceSavingsPlans,
