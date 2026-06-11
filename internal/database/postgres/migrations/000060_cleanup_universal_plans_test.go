@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_CleanupUniversalPlans asserts that migration 000057 deletes
+// TestMigration_CleanupUniversalPlans asserts that migration 000060 deletes
 // every purchase_plans row that has no plan_accounts entry (universal plan)
 // while leaving correctly scoped plans intact.
 //
@@ -41,10 +41,10 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Run all migrations to head (includes 000057), then roll back one so we
-	// sit at 000056, seed fixtures, and re-run to apply 000057 in isolation.
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+	// Pin the DB at v59, seed fixtures, then apply 000060 in isolation.
+	// (Pinning by version stays correct as newer migrations land; the old
+	// "head minus one step" approach did not.)
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 59))
 
 	// Seed: two cloud accounts (needed for plan_accounts FK).
 	_, err = pool.Exec(ctx, `
@@ -95,7 +95,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 		    (id, account_id, purchase_id, timestamp, provider, service, region,
 		     resource_type, term, payment, plan_id, plan_name)
 		VALUES (
-		  'hhhhhhhh-hhhh-hhhh-hhhh-000000000001',
+		  'ffffffff-ffff-ffff-ffff-000000000001',
 		  '111111111111',
 		  'ri-abc123',
 		  NOW(), 'aws', 'rds', 'us-east-1', 'm5.large', 36, 'all-upfront',
@@ -105,8 +105,8 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Apply migration 000057.
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Apply migration 000060.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 60))
 
 	// Universal plans must be gone.
 	var universalCount int
@@ -118,7 +118,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 		)
 	`).Scan(&universalCount)
 	require.NoError(t, err)
-	assert.Equal(t, 0, universalCount, "both universal plans must be deleted by migration 000057")
+	assert.Equal(t, 0, universalCount, "both universal plans must be deleted by migration 000060")
 
 	// Scoped plan must survive.
 	var scopedCount int
@@ -127,7 +127,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 		WHERE id = '22222222-2222-2222-2222-000000000001'
 	`).Scan(&scopedCount)
 	require.NoError(t, err)
-	assert.Equal(t, 1, scopedCount, "scoped plan (with plan_accounts) must survive migration 000057")
+	assert.Equal(t, 1, scopedCount, "scoped plan (with plan_accounts) must survive migration 000060")
 
 	// Execution linked to deleted universal plan must have plan_id NULLed.
 	var execPlanID *string
@@ -142,15 +142,14 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	var histPlanID *string
 	err = pool.QueryRow(ctx, `
 		SELECT plan_id::TEXT FROM purchase_history
-		WHERE id = 'hhhhhhhh-hhhh-hhhh-hhhh-000000000001'
+		WHERE id = 'ffffffff-ffff-ffff-ffff-000000000001'
 	`).Scan(&histPlanID)
 	require.NoError(t, err)
 	assert.Nil(t, histPlanID, "history.plan_id must be NULLed when universal plan is deleted (ON DELETE SET NULL)")
 
-	// Idempotency: re-running the migration path must be a no-op.
+	// Idempotency: roll back 000060 (its down is a no-op by design), then
+	// migrate to head, which re-applies 000060 over already-cleaned data.
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
-	// Re-seed only the scoped plan to simulate a clean DB at version 56.
-	// The universal plans are intentionally absent (already cleaned up).
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 	var postIdempotentCount int

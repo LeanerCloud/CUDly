@@ -46,8 +46,11 @@ if [ "$DB_AUTO_MIGRATE" = "true" ]; then
   DB_USER=${DB_USER:-cudly}
   DB_SSL_MODE=${DB_SSL_MODE:-require}
 
-  # Get database password from secret or environment
-  if [ -n "$DB_PASSWORD_SECRET" ] && [ "$SECRET_PROVIDER" != "env" ]; then
+  # Get database password from secret or environment. Both variables default
+  # to empty: under `set -u` a bare expansion aborts the container when they
+  # are unset (e.g. the docker-compose test environment, which passes
+  # DB_PASSWORD directly).
+  if [ -n "${DB_PASSWORD_SECRET:-}" ] && [ "${SECRET_PROVIDER:-}" != "env" ]; then
     echo "   Resolving DB password from secret manager..."
     # Password will be resolved by the application
     # Migration will use the environment variable if available

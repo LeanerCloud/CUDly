@@ -75,10 +75,11 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		// Apply all migrations, then roll back to before 000064 so we
-		// can seed an admin and verify the backfill fires on re-apply.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+		// Pin the DB just below 000064 so we can seed an admin and
+		// verify the backfill fires when 000064 applies. (Pinning by
+		// version stays correct as newer migrations land; the old
+		// "head minus one step" approach did not.)
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 63))
 
 		// Seed an admin user in the Administrators group but NOT in Purchaser.
 		const adminEmail = "admin-purchaser-test@test.example"

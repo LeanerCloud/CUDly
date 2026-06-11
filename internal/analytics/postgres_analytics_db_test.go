@@ -335,8 +335,11 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 		for _, b := range breakdowns {
 			if b.Provider == "aws" && b.Service == "rds" {
 				found = true
-				assert.InDelta(t, 300.00, b.TotalSavings, 0.01) // 200 + 100
-				assert.InDelta(t, 77.5, b.AvgCoverage, 0.01)    // (80 + 75) / 2
+				// Snapshots are run-rates: aggregation over time uses AVG,
+				// not SUM (see migration 000074 / PR #1127).
+				assert.InDelta(t, 150.00, b.TotalSavings, 0.01) // AVG(200, 100)
+				require.NotNil(t, b.AvgCoverage)
+				assert.InDelta(t, 77.5, *b.AvgCoverage, 0.01) // (80 + 75) / 2
 			}
 		}
 		assert.True(t, found, "aws/rds breakdown not found")

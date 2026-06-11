@@ -455,6 +455,43 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	return nil
 }
 
+// MigrateToVersion migrates the schema up or down to exactly the given
+// version. Unlike RunMigrations it applies no post-migration Go logic
+// (admin seeding etc.), and unlike RollbackMigrations it targets a version
+// rather than a step count. Migration tests use it to pin the database at
+// the version just below the migration under test; fixed step counts from
+// head silently drift every time a newer migration lands.
+func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, version uint) error {
+	dsn := buildMigrateDSN(pool.Config(), "")
+
+	m, err := migrate.New(
+		fmt.Sprintf("file://%s", migrationsPath),
+		dsn,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create migrator: %w", err)
+	}
+	defer m.Close()
+
+	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
+	}
+
+	current, dirty, err := m.Version()
+	if err != nil {
+		return fmt.Errorf("failed to get migration version: %w", err)
+	}
+	if dirty {
+		return fmt.Errorf("database is in dirty state at version %d", current)
+	}
+	if current != version {
+		return fmt.Errorf("expected migration version %d, got %d", version, current)
+	}
+
+	log.Printf("Migrated to version %d", current)
+	return nil
+}
+
 // GetMigrationVersion returns the current migration version
 func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string) (uint, bool, error) {
 	dsn := buildMigrateDSN(pool.Config(), "")

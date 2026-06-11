@@ -53,7 +53,7 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Build database config
 	config := &database.Config{
 		Host:              host,
-		Port:              port.Int(),
+		Port:              int(port.Num()),
 		Database:          "cudly_test",
 		User:              "cudly_test",
 		Password:          "test_password",

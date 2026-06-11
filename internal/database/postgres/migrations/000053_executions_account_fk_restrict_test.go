@@ -26,12 +26,15 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Pin the schema at 000053 so the assertions exercise this migration's
+	// direct effects; later migrations change unrelated parts of the same
+	// tables (e.g. purchase_executions.execution_id becomes a UUID).
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 53))
 
 	// Verify the FK is RESTRICT after the migration.
 	var deleteAction string
 	err = pool.QueryRow(ctx, `
-		SELECT confdeltype
+		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'
 	`).Scan(&deleteAction)
@@ -40,18 +43,17 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 		"expected confdeltype 'r' (RESTRICT) after 000053, got %q", deleteAction)
 
 	// Negative-space guard: migration 000053 must only tighten the executions
-	// FK. The recommendations FK should stay ON DELETE SET NULL — orphaning a
-	// historical recommendation is fine (it's advisory data), unlike a pending
-	// execution (which represents money about to be spent).
+	// FK. The recommendations FK has been ON DELETE CASCADE since its creation
+	// in 000030 and must be left untouched.
 	var recsDeleteAction string
 	err = pool.QueryRow(ctx, `
-		SELECT confdeltype
+		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'recommendations_cloud_account_id_fkey'
 	`).Scan(&recsDeleteAction)
 	require.NoError(t, err)
-	assert.Equal(t, "n", recsDeleteAction,
-		"recommendations FK must stay SET NULL after 000053, got %q", recsDeleteAction)
+	assert.Equal(t, "c", recsDeleteAction,
+		"recommendations FK must stay CASCADE after 000053, got %q", recsDeleteAction)
 
 	// Behavioural test: insert an account + a pending execution that
 	// references it, then attempt to delete the account. Postgres must
@@ -66,7 +68,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 		INSERT INTO purchase_executions
 		    (execution_id, status, step_number, scheduled_date, cloud_account_id)
 		VALUES
-		    ('exec-fk-test', 'pending', 1, NOW(), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+		    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0001', 'pending', 1, NOW(), 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
 	`)
 	require.NoError(t, err)
 
@@ -77,16 +79,17 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 		strings.Contains(err.Error(), "23503") || strings.Contains(err.Error(), "foreign key"),
 		"expected FK violation, got %v", err)
 
-	// Cancel the execution, then the delete should succeed.
+	// RESTRICT applies to every referencing row regardless of status, so the
+	// account delete only succeeds once the execution row itself is removed
+	// (the API layer's Cancel-All-And-Delete flow does exactly that).
 	_, err = pool.Exec(ctx, `
-		UPDATE purchase_executions
-		   SET status = 'cancelled'
-		 WHERE execution_id = 'exec-fk-test'
+		DELETE FROM purchase_executions
+		 WHERE execution_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeee0001'
 	`)
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'`)
-	require.NoError(t, err, "DELETE should succeed once pending executions are cancelled")
+	require.NoError(t, err, "DELETE should succeed once referencing executions are removed")
 }
 
 // TestMigration_ExecutionsAccountFKRestrict_Rollback asserts that the
@@ -102,12 +105,15 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Pin the schema at 000053, then roll back exactly that migration. A
+	// fixed step count from head would exercise whichever migration happens
+	// to be newest instead of 000053's down.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 53))
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 
 	var deleteAction string
 	err = pool.QueryRow(ctx, `
-		SELECT confdeltype
+		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'
 	`).Scan(&deleteAction)
@@ -116,14 +122,14 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 		"expected confdeltype 'n' (SET NULL) after rollback, got %q", deleteAction)
 
 	// Negative-space guard: rolling back 000053 must not touch the
-	// recommendations FK — it has always been SET NULL and should stay so.
+	// recommendations FK — it has been CASCADE since 000030 and should stay so.
 	var recsDeleteAction string
 	err = pool.QueryRow(ctx, `
-		SELECT confdeltype
+		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'recommendations_cloud_account_id_fkey'
 	`).Scan(&recsDeleteAction)
 	require.NoError(t, err)
-	assert.Equal(t, "n", recsDeleteAction,
-		"recommendations FK must stay SET NULL after rollback, got %q", recsDeleteAction)
+	assert.Equal(t, "c", recsDeleteAction,
+		"recommendations FK must stay CASCADE after rollback, got %q", recsDeleteAction)
 }

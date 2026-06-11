@@ -1,0 +1,20 @@
+# Test-runner image for the docker-compose E2E suite (docker-compose.test.yml,
+# profile "test"). It only needs the Go toolchain and the stdlib-only module
+# under tests/e2e, so the build is fast and independent of the app's
+# dependency tree.
+#
+# Base image pinned by digest for the same supply-chain reasons as Dockerfile;
+# keep the digest in sync with the builder stage there.
+FROM golang:1.25.4-alpine3.21@sha256:3289aac2aac769e031d644313d094dbda745f28af81cd7a94137e73eefd58b33
+
+WORKDIR /e2e
+
+COPY tests/e2e/ ./
+
+# Pre-compile the test binary so `docker compose up` failures are runtime
+# failures, not compile errors discovered after the stack is already up.
+RUN go vet -tags=e2e ./... && go test -tags=e2e -run NONE ./...
+
+# docker-compose.test.yml overrides the command; this default keeps the image
+# usable standalone.
+CMD ["go", "test", "-v", "-tags=e2e", "./..."]
