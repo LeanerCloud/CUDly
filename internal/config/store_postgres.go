@@ -1546,8 +1546,8 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 			account_id, purchase_id, timestamp, provider, service, region,
 			resource_type, count, term, payment, upfront_cost, monthly_cost,
 			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source, revocation_window_closes_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			source, revocation_window_closes_at, offering_class
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -1570,6 +1570,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 		record.CloudAccountID,
 		record.Source,
 		record.RevocationWindowClosesAt,
+		nullStringFromString(record.OfferingClass),
 	)
 
 	if err != nil {
@@ -1579,13 +1580,35 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 	return nil
 }
 
+// UpdatePurchaseHistoryListing stamps the marketplace listing fields onto a
+// purchase_history row identified by its purchase_id (RI reservation ID).
+// Called by the marketplace-list handler after CreateReservedInstancesListing
+// succeeds (listing_id + listing_state="active") and by the status-poll path
+// when AWS reports closed or cancelled.
+func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	query := `
+		UPDATE purchase_history
+		SET listing_id = $1, listing_state = $2
+		WHERE purchase_id = $3
+	`
+	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID)
+	if err != nil {
+		return fmt.Errorf("failed to update listing state for purchase %s: %w", purchaseID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("purchase %s not found in history", purchaseID)
+	}
+	return nil
+}
+
 // GetPurchaseHistory retrieves purchase history for an account
 func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE account_id = $1
 		ORDER BY timestamp DESC
@@ -1601,7 +1624,8 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history
 		ORDER BY timestamp DESC
 		LIMIT $1
@@ -1759,7 +1783,8 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       offering_class, listing_id, listing_state
 		FROM purchase_history%s
 		ORDER BY timestamp DESC
 		LIMIT $%d
@@ -1774,10 +1799,13 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 //	account_id, purchase_id, timestamp, provider, service, region,
 //	resource_type, count, term, payment, upfront_cost, monthly_cost,
 //	estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+//	revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+//	offering_class, listing_id, listing_state
 //
-// The revocation columns were added in migration 000057. Queries must
-// include them explicitly so the Scan targets stay in sync.
+// The revocation columns were added in migration 000057; the marketplace
+// listing columns (offering_class, listing_id, listing_state) in the #292
+// migration. Queries must include them explicitly so the Scan targets stay
+// in sync.
 func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, args ...any) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1787,69 +1815,113 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 
 	records := make([]PurchaseHistoryRecord, 0)
 	for rows.Next() {
-		var record PurchaseHistoryRecord
-		var planID, planName, cloudAccountID sql.NullString
-		var monthlyCost sql.NullFloat64
-		var revocationWindowClosesAt, revokedAt *time.Time
-		var revokedVia, supportCaseID sql.NullString
-
-		err := rows.Scan(
-			&record.AccountID,
-			&record.PurchaseID,
-			&record.Timestamp,
-			&record.Provider,
-			&record.Service,
-			&record.Region,
-			&record.ResourceType,
-			&record.Count,
-			&record.Term,
-			&record.Payment,
-			&record.UpfrontCost,
-			&monthlyCost,
-			&record.EstimatedSavings,
-			&planID,
-			&planName,
-			&record.RampStep,
-			&cloudAccountID,
-			&revocationWindowClosesAt,
-			&revokedAt,
-			&revokedVia,
-			&supportCaseID,
-		)
+		record, err := scanPurchaseHistoryRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan purchase history: %w", err)
+			return nil, err
 		}
-
-		// Handle nullable monthly_cost: nil means "provider did not return a
-		// monthly breakdown"; 0.0 means "explicitly $0 recurring charge".
-		if monthlyCost.Valid {
-			v := monthlyCost.Float64
-			record.MonthlyCost = &v
-		}
-
-		// Handle nullable strings
-		if planID.Valid {
-			record.PlanID = planID.String
-		}
-		if planName.Valid {
-			record.PlanName = planName.String
-		}
-		if cloudAccountID.Valid {
-			record.CloudAccountID = &cloudAccountID.String
-		}
-		record.RevocationWindowClosesAt = revocationWindowClosesAt
-		record.RevokedAt = revokedAt
-		if revokedVia.Valid {
-			record.RevokedVia = revokedVia.String
-		}
-		if supportCaseID.Valid {
-			record.SupportCaseID = supportCaseID.String
-		}
-
 		records = append(records, record)
 	}
 
 	return records, rows.Err()
+}
+
+// scanPurchaseHistoryRow scans a single purchase_history row and reconciles the
+// nullable columns into a PurchaseHistoryRecord. It is pulled out of
+// queryPurchaseHistory to keep that function under the cyclomatic limit. The
+// column order must match the SELECT lists in GetPurchaseHistory /
+// GetAllPurchaseHistory / GetPurchaseHistoryFiltered (base columns, then the
+// revocation columns from issue #290, then the marketplace columns from #292).
+// purchaseHistoryNullables holds the nullable scan targets shared by every
+// purchase_history reader (scanPurchaseHistoryRow, GetPurchaseHistoryByPurchaseID).
+// Centralising the NULL reconciliation in applyTo keeps each reader's
+// cyclomatic complexity under the gocyclo budget as columns accrue across
+// issues #290 (revocation) and #292 (marketplace).
+type purchaseHistoryNullables struct {
+	monthlyCost              sql.NullFloat64
+	planID                   sql.NullString
+	planName                 sql.NullString
+	cloudAccountID           sql.NullString
+	revocationWindowClosesAt *time.Time
+	revokedAt                *time.Time
+	revokedVia               sql.NullString
+	supportCaseID            sql.NullString
+	offeringClass            sql.NullString
+	listingID                sql.NullString
+	listingState             sql.NullString
+}
+
+// applyTo reconciles the nullable columns into record. monthly_cost is left as
+// a nil pointer when the provider returned no monthly breakdown (distinct from
+// an explicit $0 recurring charge); the revocation-window timestamps map
+// directly onto their pointer fields.
+func (n *purchaseHistoryNullables) applyTo(record *PurchaseHistoryRecord) {
+	if n.monthlyCost.Valid {
+		v := n.monthlyCost.Float64
+		record.MonthlyCost = &v
+	}
+	if n.planID.Valid {
+		record.PlanID = n.planID.String
+	}
+	if n.planName.Valid {
+		record.PlanName = n.planName.String
+	}
+	if n.cloudAccountID.Valid {
+		record.CloudAccountID = &n.cloudAccountID.String
+	}
+	record.RevocationWindowClosesAt = n.revocationWindowClosesAt
+	record.RevokedAt = n.revokedAt
+	if n.revokedVia.Valid {
+		record.RevokedVia = n.revokedVia.String
+	}
+	if n.supportCaseID.Valid {
+		record.SupportCaseID = n.supportCaseID.String
+	}
+	if n.offeringClass.Valid {
+		record.OfferingClass = n.offeringClass.String
+	}
+	if n.listingID.Valid {
+		record.ListingID = n.listingID.String
+	}
+	if n.listingState.Valid {
+		record.ListingState = n.listingState.String
+	}
+}
+
+func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
+	var record PurchaseHistoryRecord
+	var n purchaseHistoryNullables
+
+	if err := rows.Scan(
+		&record.AccountID,
+		&record.PurchaseID,
+		&record.Timestamp,
+		&record.Provider,
+		&record.Service,
+		&record.Region,
+		&record.ResourceType,
+		&record.Count,
+		&record.Term,
+		&record.Payment,
+		&record.UpfrontCost,
+		&n.monthlyCost,
+		&record.EstimatedSavings,
+		&n.planID,
+		&n.planName,
+		&record.RampStep,
+		&n.cloudAccountID,
+		&n.revocationWindowClosesAt,
+		&n.revokedAt,
+		&n.revokedVia,
+		&n.supportCaseID,
+		&n.offeringClass,
+		&n.listingID,
+		&n.listingState,
+	); err != nil {
+		return PurchaseHistoryRecord{}, fmt.Errorf("failed to scan purchase history: %w", err)
+	}
+
+	n.applyTo(&record)
+	return record, nil
 }
 
 // GetPurchaseHistoryByPurchaseID returns the single purchase_history row
@@ -1857,14 +1929,16 @@ func (s *PostgresStore) queryPurchaseHistory(ctx context.Context, query string, 
 // does not exist. The revocation-window columns (revocation_window_closes_at,
 // revoked_at, revoked_via, support_case_id) are read alongside the base
 // columns so the revoke endpoint can check idempotency without a second round
-// trip (issue #290).
+// trip (issue #290). The marketplace columns (offering_class, listing_id,
+// listing_state) are read so the marketplace-list handler can validate
+// offering_class and look up the cloud account (issue #292).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
 		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
-		       revocation_in_flight
+		       revocation_in_flight, offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE purchase_id = $1
 		LIMIT 1
@@ -1880,10 +1954,11 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 	}
 
 	var r PurchaseHistoryRecord
-	var planID, planName, cloudAccountID sql.NullString
-	var revocationWindowClosesAt, revokedAt *time.Time
-	var revokedVia, supportCaseID sql.NullString
+	var n purchaseHistoryNullables
 
+	// Note the extra revocation_in_flight bool between support_case_id and the
+	// marketplace columns; it scans straight into r.RevocationInFlight rather
+	// than through the shared nullables struct.
 	if err := rows.Scan(
 		&r.AccountID,
 		&r.PurchaseID,
@@ -1898,36 +1973,25 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		&r.UpfrontCost,
 		&r.MonthlyCost,
 		&r.EstimatedSavings,
-		&planID,
-		&planName,
+		&n.planID,
+		&n.planName,
 		&r.RampStep,
-		&cloudAccountID,
-		&revocationWindowClosesAt,
-		&revokedAt,
-		&revokedVia,
-		&supportCaseID,
+		&n.cloudAccountID,
+		&n.revocationWindowClosesAt,
+		&n.revokedAt,
+		&n.revokedVia,
+		&n.supportCaseID,
 		&r.RevocationInFlight,
+		&n.offeringClass,
+		&n.listingID,
+		&n.listingState,
 	); err != nil {
 		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
 	}
 
-	if planID.Valid {
-		r.PlanID = planID.String
-	}
-	if planName.Valid {
-		r.PlanName = planName.String
-	}
-	if cloudAccountID.Valid {
-		r.CloudAccountID = &cloudAccountID.String
-	}
-	r.RevocationWindowClosesAt = revocationWindowClosesAt
-	r.RevokedAt = revokedAt
-	if revokedVia.Valid {
-		r.RevokedVia = revokedVia.String
-	}
-	if supportCaseID.Valid {
-		r.SupportCaseID = supportCaseID.String
-	}
+	// MonthlyCost is scanned directly above (not through n.monthlyCost), so
+	// leave n.monthlyCost zero-valued; applyTo will not overwrite r.MonthlyCost.
+	n.applyTo(&r)
 
 	return &r, rows.Err()
 }

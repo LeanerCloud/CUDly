@@ -55,6 +55,13 @@ export type Action =
   | 'update-any'
   | 'revoke-own'
   | 'revoke-any'
+  // sell-own / sell-any gate the "Sell on Marketplace" button (issue #292).
+  // Mirrors the backend ActionSellOwn / ActionSellAny constants in
+  // internal/auth/types.go. sell-own:purchases is granted to every
+  // authenticated user via DefaultUserPermissions; sell-any has no default
+  // non-admin grant.
+  | 'sell-own'
+  | 'sell-any'
   | 'admin';
 
 // Resource names. Closed enum for the same reason.

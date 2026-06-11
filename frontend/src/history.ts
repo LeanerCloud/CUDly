@@ -581,6 +581,70 @@ function retryThresholdReached(p: HistoryPurchase): boolean {
   return (p.retry_attempt_n ?? 0) >= RETRY_THRESHOLD;
 }
 
+// canSellOnMarketplace returns true when the current session is permitted
+// to list the given completed history row on the AWS RI Marketplace
+// (issue #292). UX gate only -- the backend authorizeSessionSell in
+// internal/api/handler_marketplace.go remains the security boundary; a
+// false-positive here surfaces as a 403 toast on click.
+//
+// Conditions:
+//   * row must be a completed purchase (status "completed" or absent);
+//   * offering_class must be "standard";
+//   * no active listing already (listing_state != "active"); and
+//   * admin, or non-admin user (sell-own covers their own accounts --
+//     we can't efficiently check per-account ownership client-side, so
+//     we show the button for all non-admin users and let the backend 403
+//     when the account is out of scope).
+function canSellOnMarketplace(p: HistoryPurchase): boolean {
+  const status = normalizeStatus(p).toLowerCase();
+  if (status !== 'completed') return false;
+  if ((p.offering_class || '').toLowerCase() !== 'standard') return false;
+  if ((p.listing_state || '').toLowerCase() === 'active') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  // Gate on the sell verbs, not bare sign-in, so we don't show Sell to a
+  // role that lacks sell-own/sell-any and avoid frontend/backend auth drift
+  // (the backend authorizeSessionSell would 403 anyway). admin:* satisfies
+  // sell-own here since it is not carved out of admin.
+  if (
+    !canAccess('admin', '*') &&
+    !canAccess('sell-any', 'purchases') &&
+    !canAccess('sell-own', 'purchases')
+  ) {
+    return false;
+  }
+  // Guard against listing a matured RI: compute remaining months from the
+  // purchase timestamp and the total term. term is in months; timestamp is
+  // the purchase date. We require at least 1 full month remaining.
+  const termMonths = typeof p.term === 'number' ? p.term : Number(p.term) || 0;
+  if (termMonths <= 0) return false;
+  const purchaseMs = new Date(p.timestamp).getTime();
+  if (!Number.isFinite(purchaseMs)) return false;
+  const elapsedMonths = (Date.now() - purchaseMs) / (1000 * 60 * 60 * 24 * 30.4375);
+  const remainingMonths = termMonths - elapsedMonths;
+  if (remainingMonths < 1) return false;
+  return true;
+}
+
+// canCancelMarketplaceListing returns true when there is an active listing
+// that the current session can cancel.
+function canCancelMarketplaceListing(p: HistoryPurchase): boolean {
+  if ((p.listing_state || '').toLowerCase() !== 'active') return false;
+  const user = getCurrentUser();
+  if (!user) return false;
+  // Same sell-verb gate as canSellOnMarketplace: cancelling a listing is a
+  // marketplace write, so require sell-own/sell-any (or admin) rather than
+  // bare sign-in to keep the UX gate aligned with authorizeSessionSell.
+  if (
+    !canAccess('admin', '*') &&
+    !canAccess('sell-any', 'purchases') &&
+    !canAccess('sell-own', 'purchases')
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // shortExecID renders the first 8 chars of a UUID so inline lineage
 // links ("Retried as #abc12345") stay readable in the table cell. The
 // full ID is preserved in the data-history-status attribute so the
@@ -603,7 +667,9 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
   const cell = btn.closest('td') || btn.parentElement;
   if (!cell) return [btn];
   return Array.from(
-    cell.querySelectorAll<HTMLButtonElement>('.history-approve-btn, .history-cancel-btn, .history-revoke-btn'),
+    cell.querySelectorAll<HTMLButtonElement>(
+      '.history-approve-btn, .history-cancel-btn, .history-revoke-btn, .history-marketplace-sell-btn, .history-marketplace-cancel-btn',
+    ),
   );
 }
 
@@ -682,15 +748,29 @@ function renderActionCell(p: HistoryPurchase): string {
     // see "this is a retry" provenance.
     lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">↻ Retry #${p.retry_attempt_n}</span>`);
   }
-  if (lineage.length > 0) {
-    return lineage.join(' ');
+  // Build the trailing action buttons so they compose with lineage links
+  // — a retry-descendant can also have an active listing that needs a
+  // Cancel button, or be an Azure row still inside its revoke window.
+  const trailingActions: string[] = [];
+  if (p.purchase_id) {
+    // Completed Azure row within revocation window: Revoke button (issue
+    // #290). Only Azure supports direct in-app revocation; AWS and GCP have
+    // no cancel API so the button is suppressed for those providers.
+    if (canRevokeCompletedRow(p)) {
+      trailingActions.push(`<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}">Revoke</button>`);
+    }
+    // Completed Standard RI rows (AWS): Cancel listing / Sell on Marketplace
+    // (issue #292). Mutually exclusive with revoke in practice (revoke is
+    // Azure-only, marketplace is AWS Standard-RI-only).
+    if (canCancelMarketplaceListing(p)) {
+      trailingActions.push(`<button type="button" class="btn-link history-marketplace-cancel-btn" data-marketplace-cancel-id="${escapeHtml(p.purchase_id)}">Cancel listing ${escapeHtml(p.listing_id || '')}</button>`);
+    } else if (canSellOnMarketplace(p)) {
+      trailingActions.push(`<button type="button" class="btn-link history-marketplace-sell-btn" data-marketplace-sell-id="${escapeHtml(p.purchase_id)}">Sell on Marketplace</button>`);
+    }
   }
 
-  // Completed Azure row within revocation window: show Revoke button
-  // (issue #290). Only Azure supports direct in-app revocation; AWS and
-  // GCP have no cancel API so the button is suppressed for those providers.
-  if (canRevokeCompletedRow(p) && p.purchase_id) {
-    return `<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}">Revoke</button>`;
+  if (lineage.length > 0 || trailingActions.length > 0) {
+    return [...lineage, ...trailingActions].join(' ');
   }
 
   return escapeHtml(p.plan_name || '-');
@@ -1053,6 +1133,128 @@ function wireRowActionHandlers(container: HTMLElement): void {
         await loadHistory();
       } catch (reloadError) {
         console.error('Failed to reload history after revoke:', reloadError);
+      }
+    });
+  });
+
+  // Wire Sell on Marketplace button (issue #292).
+  // Flow: pricing/schedule modal (RI summary + default price + 12% fee) →
+  // user confirms → createMarketplaceListing. We never skip the pricing
+  // modal (CR finding: going straight from confirmDialog to the API call
+  // denies the user informed consent about the price and fee).
+  container.querySelectorAll<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['marketplaceSellId'];
+      if (!id) return;
+
+      // Look up the purchase record so we can show a meaningful price summary.
+      const purchase = lastPurchases.find(p => p.purchase_id === id);
+
+      // Build a pricing modal body with RI summary and fee breakdown.
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'marketplace-pricing-modal-body';
+
+      if (purchase) {
+        const termMonths = typeof purchase.term === 'number' ? purchase.term : Number(purchase.term) || 0;
+        const purchaseMs = new Date(purchase.timestamp).getTime();
+        const elapsedMonths = Number.isFinite(purchaseMs)
+          ? (Date.now() - purchaseMs) / (1000 * 60 * 60 * 24 * 30.4375)
+          : 0;
+        const remainingMonths = Math.max(0, Math.round(termMonths - elapsedMonths));
+        const upfront = purchase.upfront_cost ?? 0;
+        const monthly = purchase.monthly_cost ?? 0;
+        // Prorate the upfront cost to its residual value over the remaining
+        // term. Using the full upfront overstates the listing value for a
+        // partially elapsed RI (a 12-month RI at month 6 has only half its
+        // upfront value left). Mirrors resolveMarketplacePriceSchedule in
+        // internal/api/handler_marketplace.go, which drops the upfront term to
+        // 0 when the original term is unknown (<=0); we do the same here.
+        const upfrontRemaining = termMonths > 0 ? upfront * (remainingMonths / termMonths) : 0;
+        const totalValue = upfrontRemaining + monthly * remainingMonths;
+        const listPrice = totalValue * 0.95;
+        const netProceeds = listPrice * 0.88;
+
+        const summaryEl = document.createElement('dl');
+        summaryEl.className = 'marketplace-pricing-summary';
+        const addRow = (label: string, value: string): void => {
+          const dt = document.createElement('dt');
+          dt.textContent = label;
+          const dd = document.createElement('dd');
+          dd.textContent = value;
+          summaryEl.appendChild(dt);
+          summaryEl.appendChild(dd);
+        };
+        addRow('RI ID', id);
+        addRow('Region', purchase.region || '-');
+        addRow('Resource type', purchase.resource_type || '-');
+        addRow('Remaining term', remainingMonths === 1 ? '1 month' : `${remainingMonths} months`);
+        addRow('Default list price', formatCurrency(listPrice));
+        addRow('AWS fee (12%)', formatCurrency(listPrice * 0.12));
+        addRow('Estimated net proceeds', formatCurrency(netProceeds));
+        bodyEl.appendChild(summaryEl);
+      }
+
+      const noteEl = document.createElement('p');
+      noteEl.className = 'marketplace-pricing-note';
+      noteEl.textContent = 'AWS charges a 12% transaction fee on proceeds. The default schedule prices the listing at 5% below remaining value. You can adjust pricing by contacting your administrator or modifying the schedule via the API. This action cannot be undone without cancelling the listing.';
+      bodyEl.appendChild(noteEl);
+
+      const ok = await confirmDialog({
+        title: 'List this RI on the AWS Marketplace?',
+        body: bodyEl,
+        confirmLabel: 'Confirm listing',
+        destructive: false,
+      });
+      if (!ok) return;
+
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach(b => { b.disabled = true; });
+      try {
+        await api.createMarketplaceListing(id);
+      } catch (sellError) {
+        console.error('Failed to list RI on Marketplace:', sellError);
+        const err = sellError as Error;
+        showToast({ message: `Failed to list on Marketplace: ${err.message || 'unknown error'}`, kind: 'error' });
+        rowActions.forEach(b => { b.disabled = false; });
+        return;
+      }
+      showToast({ message: 'RI listed on Marketplace successfully', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after Marketplace listing:', reloadError);
+      }
+    });
+  });
+
+  // Wire Cancel listing button (issue #292)
+  container.querySelectorAll<HTMLButtonElement>('.history-marketplace-cancel-btn[data-marketplace-cancel-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset['marketplaceCancelId'];
+      if (!id) return;
+      const ok = await confirmDialog({
+        title: 'Cancel this Marketplace listing?',
+        body: 'This will remove the listing from the AWS Marketplace. Any existing buyer negotiations will be cancelled. You can relist the RI at any time.',
+        confirmLabel: 'Cancel listing',
+        destructive: true,
+      });
+      if (!ok) return;
+      const rowActions = sameRowActions(btn);
+      rowActions.forEach(b => { b.disabled = true; });
+      try {
+        await api.cancelMarketplaceListing(id);
+      } catch (cancelError) {
+        console.error('Failed to cancel Marketplace listing:', cancelError);
+        const err = cancelError as Error;
+        showToast({ message: `Failed to cancel listing: ${err.message || 'unknown error'}`, kind: 'error' });
+        rowActions.forEach(b => { b.disabled = false; });
+        return;
+      }
+      showToast({ message: 'Marketplace listing cancelled', kind: 'success', timeout: 5_000 });
+      try {
+        await loadHistory();
+      } catch (reloadError) {
+        console.error('Failed to reload history after Marketplace cancel:', reloadError);
       }
     });
   });
