@@ -593,9 +593,11 @@ func TestPostgresStoreDB_PurchaseExecutions(t *testing.T) {
 
 	t.Run("GetExecutionByID not found", func(t *testing.T) {
 		nonexistentID := uuid.New().String()
-		_, err := store.GetExecutionByID(ctx, nonexistentID)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		exec, err := store.GetExecutionByID(ctx, nonexistentID)
+		// Contract: not-found lookups return (nil, nil); every caller maps
+		// the nil execution to its own not-found error.
+		require.NoError(t, err)
+		assert.Nil(t, exec)
 	})
 
 	t.Run("GetExecutionByPlanAndDate success", func(t *testing.T) {
