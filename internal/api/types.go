@@ -218,6 +218,15 @@ type AuthServiceInterface interface {
 	DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) error
 	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error)
+	// HasAPIKeyPermissionAPI validates a user API key and checks the
+	// requested action/resource against the key's effective permissions
+	// (the intersection of the key's scoped permissions with the owning
+	// user's group-derived permissions). Returns the owning user's ID and
+	// whether the permission is held; a non-nil error means the key did
+	// not validate or the lookup failed, and callers must deny (fail
+	// closed). Wired into requirePermission so per-key scoping is
+	// enforced at request time (issue #1142).
+	HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error)
 }
 
 // Auth request/response types (to avoid import cycle with auth package)

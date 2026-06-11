@@ -797,6 +797,105 @@ func TestService_ComputeEffectivePermissions(t *testing.T) {
 	})
 }
 
+// TestService_HasAPIKeyPermissionAPI is the regression test for issue #1142:
+// per-key scoped permissions were persisted and UI-exposed but never enforced
+// at request time (ComputeEffectivePermissions had no request-path caller).
+// HasAPIKeyPermissionAPI is the request-path enforcement point wired into
+// requirePermission.
+func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
+	ctx := context.Background()
+
+	rawKey := "test-api-key-123456"
+	hash := sha256.Sum256([]byte(rawKey))
+	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	userGrpID := "00000000-0000-5000-8000-000000000005"
+	userGrp := func() *Group {
+		return &Group{ID: userGrpID, Permissions: []Permission{
+			{Action: ActionView, Resource: ResourceRecommendations},
+			{Action: ActionCreate, Resource: ResourcePlans},
+		}}
+	}
+
+	// setup returns a service whose store resolves rawKey to a key scoped to
+	// keyPerms, owned by an active user whose group grants view:recommendations
+	// and create:plans. This is the exact data shape of a scoped key created
+	// through POST /api/auth/api-keys.
+	setup := func(t *testing.T, keyPerms []Permission) *Service {
+		t.Helper()
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true, GroupIDs: []string{userGrpID}}
+		keyRecord := &UserAPIKey{
+			ID:          "key-1",
+			UserID:      "user-123",
+			KeyHash:     keyHash,
+			IsActive:    true,
+			Permissions: keyPerms,
+		}
+
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(keyRecord, nil)
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("UpdateAPIKeyLastUsed", mock.Anything, "key-1").Return(nil).Maybe()
+		mockStore.On("GetGroup", ctx, userGrpID).Return(userGrp(), nil)
+		return service
+	}
+
+	t.Run("scoped key grants its in-scope permission", func(t *testing.T) {
+		service := setup(t, []Permission{{Action: ActionView, Resource: ResourceRecommendations}})
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		require.NoError(t, err)
+		assert.Equal(t, "user-123", userID)
+		assert.True(t, has)
+	})
+
+	t.Run("regression #1142: scoped key cannot exceed its scope even when the user holds the permission", func(t *testing.T) {
+		// The key is scoped to view:recommendations only; the owning user's
+		// group also grants create:plans. The key must NOT inherit it.
+		service := setup(t, []Permission{{Action: ActionView, Resource: ResourceRecommendations}})
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
+		require.NoError(t, err)
+		assert.Equal(t, "user-123", userID)
+		assert.False(t, has, "scoped key must not grant permissions outside its scope")
+	})
+
+	t.Run("key permission the user lacks is denied (intersection)", func(t *testing.T) {
+		// The key claims admin:users but the user's group never granted it.
+		service := setup(t, []Permission{{Action: ActionAdmin, Resource: ResourceUsers}})
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionAdmin, ResourceUsers)
+		require.NoError(t, err)
+		assert.Equal(t, "user-123", userID)
+		assert.False(t, has, "key must not grant permissions the owning user does not hold")
+	})
+
+	t.Run("unscoped key inherits the owner's group permissions", func(t *testing.T) {
+		service := setup(t, nil)
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionCreate, ResourcePlans)
+		require.NoError(t, err)
+		assert.Equal(t, "user-123", userID)
+		assert.True(t, has)
+	})
+
+	t.Run("invalid key fails closed with an error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(nil, nil)
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		assert.Error(t, err)
+		assert.Empty(t, userID)
+		assert.False(t, has)
+	})
+}
+
 func TestService_validateAPIKeyPermissions(t *testing.T) {
 	ctx := context.Background()
 

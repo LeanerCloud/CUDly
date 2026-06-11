@@ -113,3 +113,31 @@ func (s *Service) RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) err
 func (s *Service) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (*UserAPIKey, *User, error) {
 	return s.ValidateUserAPIKey(ctx, apiKey)
 }
+
+// HasAPIKeyPermissionAPI validates a user API key and checks the requested
+// action/resource against the key's effective permissions: the intersection
+// of the key's scoped permissions with the owning user's group-derived
+// permissions (ComputeEffectivePermissions). A key created without explicit
+// permissions inherits the owner's full permission set. Returns the owning
+// user's ID and whether the permission is held.
+//
+// Fail closed: any validation failure (unknown, revoked, or expired key,
+// inactive owner) or permission-lookup error returns a non-nil error and
+// callers must deny access.
+func (s *Service) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error) {
+	key, user, err := s.ValidateUserAPIKey(ctx, apiKey)
+	if err != nil {
+		return "", false, err
+	}
+
+	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
+	if err != nil {
+		return "", false, fmt.Errorf("computing effective API key permissions: %w", err)
+	}
+
+	// AuthContext.HasPermission applies the same matching semantics as
+	// session-based checks, including the admin:* wildcard with its
+	// money-spending carve-outs (issue #923).
+	effective := &AuthContext{User: user, Permissions: perms}
+	return user.ID, effective.HasPermission(action, resource), nil
+}
