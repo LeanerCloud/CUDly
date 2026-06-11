@@ -206,11 +206,15 @@ const apiKeyAdminUserID = "admin-api-key"
 
 // requirePermission validates authentication and checks if the user holds the
 // specified permission. The stateless admin API key bypasses the per-user
-// permission lookup (it is a full-access infrastructure credential). Every
-// other caller is checked against their group-derived permissions: a member of
-// the Administrators group holds {admin, *} and passes any check, while a user
-// with no groups holds no permissions and is denied (fail closed). Returns the
-// session on success so callers can read session.UserID for account filtering.
+// permission lookup (it is a full-access infrastructure credential). A user
+// API key is checked against its effective permissions: the intersection of
+// the key's scoped permissions with the owning user's group-derived
+// permissions (issue #1142 - previously user API keys 401'd here and per-key
+// scoping was never enforced). Every other caller is checked against their
+// group-derived permissions: a member of the Administrators group holds
+// {admin, *} and passes any check, while a user with no groups holds no
+// permissions and is denied (fail closed). Returns the session on success so
+// callers can read session.UserID for account filtering.
 func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource string) (*Session, error) {
 	apiKey := extractAPIKey(req)
 	if h.checkAdminAPIKey(apiKey) {
@@ -219,6 +223,22 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	// User API key: authorize against the key's effective permissions. A
+	// valid key that lacks the permission is denied (fail closed). A key
+	// that fails validation falls through to bearer-token auth, matching
+	// resolveAuthenticatedUserID, so a stale x-api-key header cannot lock
+	// out a caller that also presents a valid session.
+	if apiKey != "" {
+		userID, has, err := h.auth.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+		if err == nil {
+			if !has {
+				return nil, NewClientError(403, fmt.Sprintf("permission denied: requires %s on %s", action, resource))
+			}
+			return &Session{UserID: userID}, nil
+		}
+		logging.Debugf("User API key permission check failed: %v", err)
 	}
 
 	token := h.extractBearerToken(req)

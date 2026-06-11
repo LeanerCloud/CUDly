@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -648,4 +649,135 @@ func TestFormatTimePtr(t *testing.T) {
 		result := formatTimePtr(&testTime)
 		assert.Contains(t, result, "2024-06-15T10:30:00")
 	})
+}
+
+// TestRequirePermission_UserAPIKey is the regression test for issue #1142:
+// user API keys previously hit a hard 401 in requirePermission (only the
+// admin API key and bearer-token sessions were recognized), so the per-key
+// scoped permissions persisted at key-creation time were never enforced.
+// requirePermission now authorizes user API keys against their effective
+// permissions via HasAPIKeyPermissionAPI.
+func TestRequirePermission_UserAPIKey(t *testing.T) {
+	ctx := context.Background()
+
+	// The exact failing request shape: x-api-key header carrying a user API
+	// key, no bearer token (Authorization / X-Authorization absent).
+	newReq := func() *events.LambdaFunctionURLRequest {
+		return &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "cudly-user-key"},
+		}
+	}
+
+	t.Run("regression #1142: key with in-scope permission is authorized as its owner", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
+			Return("user-123", true, nil)
+
+		handler := &Handler{auth: mockAuth}
+		session, err := handler.requirePermission(ctx, newReq(), "view", "recommendations")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "user-123", session.UserID)
+	})
+
+	t.Run("regression #1142: scoped key is denied an out-of-scope permission with 403", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "execute", "purchases").
+			Return("user-123", false, nil)
+
+		handler := &Handler{auth: mockAuth}
+		session, err := handler.requirePermission(ctx, newReq(), "execute", "purchases")
+		require.Error(t, err)
+		assert.Nil(t, session)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 403, ce.code)
+		assert.Contains(t, err.Error(), "permission denied")
+	})
+
+	t.Run("invalid key with no bearer token is rejected with 401", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
+			Return("", false, errors.New("invalid API key"))
+
+		handler := &Handler{auth: mockAuth}
+		session, err := handler.requirePermission(ctx, newReq(), "view", "recommendations")
+		require.Error(t, err)
+		assert.Nil(t, session)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 401, ce.code)
+	})
+
+	t.Run("invalid key falls through to a valid bearer session", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "stale-key", "view", "recommendations").
+			Return("", false, errors.New("invalid API key"))
+		mockAuth.On("ValidateSession", ctx, "session-token").
+			Return(&Session{UserID: "user-456"}, nil)
+		mockAuth.On("HasPermissionAPI", ctx, "user-456", "view", "recommendations").
+			Return(true, nil)
+
+		handler := &Handler{auth: mockAuth}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{
+				"x-api-key":     "stale-key",
+				"Authorization": "Bearer session-token",
+			},
+		}
+		session, err := handler.requirePermission(ctx, req, "view", "recommendations")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "user-456", session.UserID)
+	})
+
+	t.Run("admin API key still bypasses the per-key permission lookup", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+		handler := &Handler{auth: mockAuth, apiKey: "admin-infra-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "admin-infra-key"},
+		}
+		session, err := handler.requirePermission(ctx, req, "view", "recommendations")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, apiKeyAdminUserID, session.UserID)
+		mockAuth.AssertNotCalled(t, "HasAPIKeyPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+}
+
+// TestGetRecommendations_UserAPIKey exercises the real failing scenario from
+// issue #1142 end to end at the handler layer: GET /api/recommendations with
+// only an x-api-key user key returned 401 before the fix even when the key
+// was scoped to view:recommendations.
+func TestGetRecommendations_UserAPIKey(t *testing.T) {
+	ctx := context.Background()
+
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("HasAPIKeyPermissionAPI", ctx, "cudly-user-key", "view", "recommendations").
+		Return("user-123", true, nil)
+	// Account scoping resolves against the key's owning user.
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-123").
+		Return([]string(nil), nil)
+
+	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+		Return([]config.RecommendationRecord{}, nil)
+
+	handler := &Handler{auth: mockAuth, scheduler: mockScheduler}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"x-api-key": "cudly-user-key"},
+	}
+
+	result, err := handler.getRecommendations(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.Summary.TotalCount)
 }
