@@ -133,26 +133,12 @@ func (c *CacheClient) GetRegion() string {
 	return c.region
 }
 
-// CacheRetailPriceItem is the Azure Retail Prices API item shape for
-// Redis Cache. Lifted from the previous inline anonymous struct so it
-// can serve as the type parameter to pricing.FetchAll.
-type CacheRetailPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	MeterName       string  `json:"meterName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}
+// CacheRetailPriceItem is a type alias for pricing.RetailPriceItem kept for
+// backward compatibility within this package.
+type CacheRetailPriceItem = pricing.RetailPriceItem
 
-// AzureRetailPrice is the service-local envelope consumers still reference.
-type AzureRetailPrice struct {
-	Items []CacheRetailPriceItem `json:"Items"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets Redis Cache reservation recommendations from Azure Consumption API
 func (c *CacheClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {

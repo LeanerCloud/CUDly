@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/providers/azure/internal/httpclient"
+	"github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	azrecs "github.com/LeanerCloud/CUDly/providers/azure/internal/recommendations"
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
@@ -111,23 +111,8 @@ func (c *SearchClient) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice represents pricing information from Azure Retail Prices API
-type AzureRetailPrice struct {
-	Items []struct {
-		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
-		ArmRegionName   string  `json:"armRegionName"`
-		ProductName     string  `json:"productName"`
-		ServiceName     string  `json:"serviceName"`
-		ArmSKUName      string  `json:"armSkuName"`
-		MeterName       string  `json:"meterName"`
-		ReservationTerm string  `json:"reservationTerm"`
-		Type            string  `json:"type"`
-	} `json:"Items"`
-	NextPageLink string `json:"NextPageLink"`
-	Count        int    `json:"Count"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API
 func (c *SearchClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
@@ -515,37 +500,19 @@ func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string,
 	}, nil
 }
 
-// fetchAzurePricing fetches pricing data from Azure Retail Prices API
+// fetchAzurePricing fetches all pages of pricing data from the Azure Retail
+// Prices API for the given OData filter expression.
 func (c *SearchClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
-	baseURL := "https://prices.azure.com/api/retail/prices"
 	params := url.Values{}
 	params.Add("$filter", filter)
 	params.Add("api-version", "2023-01-01-preview")
+	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
-	fullURL := baseURL + "?" + params.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call pricing API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var priceData AzureRetailPrice
-	if err := json.NewDecoder(resp.Body).Decode(&priceData); err != nil {
-		return nil, fmt.Errorf("failed to decode pricing response: %w", err)
-	}
-
-	return &priceData, nil
+	return &AzureRetailPrice{Items: items}, nil
 }
 
 // azureTermString returns the Retail Prices API ReservationTerm string for the
@@ -559,18 +526,7 @@ func azureTermString(termYears int) string {
 }
 
 // extractSearchPricing extracts on-demand and reservation pricing from price items
-func extractSearchPricing(items []struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	MeterName       string  `json:"meterName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}, termYears int) (onDemand, reservation float64, currency string) {
+func extractSearchPricing(items []pricing.RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 
