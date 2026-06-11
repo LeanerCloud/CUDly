@@ -168,29 +168,22 @@ func (h *Handler) isPlanAllowedCached(ctx context.Context, session *Session, pla
 }
 
 // buildPlannedPurchase converts a (plan, execution) pair into the API-facing PlannedPurchase.
-// Provider/service/term/payment are taken from the first service entry, matching prior behaviour.
+// Provider/service/term/payment are taken from firstServiceConfig (lexicographic key order)
+// so the result is deterministic regardless of map iteration order.
 func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecution) PlannedPurchase {
-	var provider, service, payment string
-	var term int
-	for _, svcCfg := range plan.Services {
-		provider = svcCfg.Provider
-		service = svcCfg.Service
-		term = svcCfg.Term
-		payment = svcCfg.Payment
-		break
-	}
+	svc := firstServiceConfig(plan)
 	return PlannedPurchase{
 		ID:               exec.ExecutionID,
 		PlanID:           exec.PlanID,
 		PlanName:         plan.Name,
 		ScheduledDate:    exec.ScheduledDate.Format("2006-01-02"),
-		Provider:         provider,
-		Service:          service,
+		Provider:         svc.Provider,
+		Service:          svc.Service,
 		ResourceType:     "Various",
 		Region:           "Multiple",
 		Count:            len(exec.Recommendations),
-		Term:             term,
-		Payment:          payment,
+		Term:             svc.Term,
+		Payment:          svc.Payment,
 		EstimatedSavings: exec.EstimatedSavings,
 		UpfrontCost:      exec.TotalUpfrontCost,
 		Status:           exec.Status,
