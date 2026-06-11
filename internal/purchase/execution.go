@@ -240,8 +240,17 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	if err != nil {
 		acctExec.Status = "failed"
 		acctExec.Error = err.Error()
-		m.saveExecutionStatusBestEffort(ctx, &acctExec)
-		return false, fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+		credErr := fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
+		// The failed row is as much a part of the audit trail as a success
+		// row: if persisting it fails, surface that loss exactly like the
+		// post-purchase save below does instead of silently dropping it.
+		if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
+			return false, errors.Join(
+				fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr),
+				credErr,
+			)
+		}
+		return false, credErr
 	}
 
 	accountID := account.ExternalID
