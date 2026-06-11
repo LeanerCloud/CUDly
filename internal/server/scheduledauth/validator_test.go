@@ -1043,6 +1043,97 @@ func TestWarmup_HitsJWKSEndpoint(t *testing.T) {
 	}
 }
 
+// defaultClientGuard is a RoundTripper installed into http.DefaultClient
+// to prove JWKS traffic does NOT flow through the default client
+// (SEC-04 regression guard: warmup and key fetches must use the
+// hardened client). Any request through it is counted and rejected.
+type defaultClientGuard struct {
+	calls atomic.Int64
+}
+
+func (g *defaultClientGuard) RoundTrip(*http.Request) (*http.Response, error) {
+	g.calls.Add(1)
+	return nil, errors.New("http.DefaultClient must not be used for JWKS traffic")
+}
+
+// swapDefaultClient replaces http.DefaultClient with a guarded client
+// for the duration of the test. No tests in this package use
+// t.Parallel() (same precedent as the global log-writer swap in
+// TestWarmup_LoggedAndNonFatal_OnDeadEndpoint), so mutating the global
+// is safe; t.Cleanup restores it.
+func swapDefaultClient(t *testing.T) *defaultClientGuard {
+	t.Helper()
+	guard := &defaultClientGuard{}
+	orig := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: guard}
+	t.Cleanup(func() { http.DefaultClient = orig })
+	return guard
+}
+
+// SEC-04 regression: the OIDC validator must construct its own hardened
+// HTTP client rather than relying on http.DefaultClient / the default
+// transport for JWKS traffic.
+func TestNew_OIDC_UsesHardenedHTTPClient(t *testing.T) {
+	v := newOIDCValidator(t, "http://127.0.0.1:1/jwks")
+
+	if v.httpClient == nil {
+		t.Fatalf("oidc validator must carry a hardened HTTP client")
+	}
+	if v.httpClient == http.DefaultClient {
+		t.Fatalf("oidc validator must not use http.DefaultClient")
+	}
+	if v.httpClient.Timeout == 0 {
+		t.Fatalf("hardened client must have an overall timeout")
+	}
+	if v.httpClient.Transport == nil || v.httpClient.Transport == http.DefaultTransport {
+		t.Fatalf("hardened client must not ride the default transport")
+	}
+}
+
+// SEC-04 regression: Warmup must probe the JWKS endpoint through the
+// hardened client, never http.DefaultClient. Pre-fix this fails: the
+// guard intercepts the probe and the JWKS server is never reached.
+func TestWarmup_BypassesDefaultClient(t *testing.T) {
+	key := newTestKey(t, "kid-1")
+	srv := newJWKSServer(t, jwks(key))
+	v := newOIDCValidator(t, srv.URL)
+	guard := swapDefaultClient(t)
+
+	before := srv.hits.Load()
+	v.Warmup(context.Background())
+
+	if got := guard.calls.Load(); got != 0 {
+		t.Fatalf("Warmup made %d request(s) through http.DefaultClient; want 0", got)
+	}
+	if after := srv.hits.Load(); after <= before {
+		t.Fatalf("Warmup never reached the JWKS endpoint (before=%d after=%d)", before, after)
+	}
+}
+
+// SEC-04 regression: go-oidc's RemoteKeySet fetch (triggered by token
+// verification) must also go through the hardened client supplied via
+// oidc.ClientContext. Pre-fix this fails: go-oidc falls back to
+// http.DefaultClient, the guard rejects the fetch, and validation
+// errors out.
+func TestValidate_OIDC_KeyFetchBypassesDefaultClient(t *testing.T) {
+	key := newTestKey(t, "kid-1")
+	srv := newJWKSServer(t, jwks(key))
+	v := newOIDCValidator(t, srv.URL)
+	guard := swapDefaultClient(t)
+
+	tok := signToken(t, key, baseClaims(time.Now(),
+		testSchedulerSubject,
+		"https://api.example.com",
+		"https://accounts.example.com"))
+
+	if err := v.Validate(context.Background(), "Bearer "+tok); err != nil {
+		t.Fatalf("expected valid token, got: %v", err)
+	}
+	if got := guard.calls.Load(); got != 0 {
+		t.Fatalf("key fetch made %d request(s) through http.DefaultClient; want 0", got)
+	}
+}
+
 func TestValidateJWKSBody_RequiresKeysArray(t *testing.T) {
 	tests := []struct {
 		name    string

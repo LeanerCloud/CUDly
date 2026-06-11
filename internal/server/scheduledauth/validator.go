@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+
+	"github.com/LeanerCloud/CUDly/pkg/httpclient"
 )
 
 // Mode is the authentication mode used for scheduled-task requests.
@@ -66,8 +68,10 @@ type Validator struct {
 	verifier    *oidc.IDTokenVerifier // nil unless mode == ModeOIDC; backed by go-oidc's single-flight RemoteKeySet
 	verMu       sync.RWMutex          // guards verifier and lastRebuild during rotation-recovery rebuilds
 	lastRebuild time.Time             // last verifier rebuild; rate-limits attacker-driven JWKS refetches
+	keySet      *oidc.RemoteKeySet    // nil unless mode == ModeOIDC; powered by go-oidc's single-flight cache
 	jwksURL     string                // remembered for Warmup and rotation rebuild; empty unless mode == ModeOIDC
 	issuer      string                // OIDC issuer URL; empty unless mode == ModeOIDC; needed to rebuild verifier
+	httpClient  *http.Client          // hardened client for all JWKS fetches; nil unless mode == ModeOIDC
 	audiences   map[string]struct{}
 	subjects    map[string]struct{}
 	skew        time.Duration
@@ -167,8 +171,15 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	v.subjects = subs
 	v.jwksURL = cfg.JWKSURL
 	v.issuer = cfg.Issuer
-	keySet := oidc.NewRemoteKeySet(context.Background(), cfg.JWKSURL)
-	v.verifier = oidc.NewVerifier(cfg.Issuer, keySet, &oidc.Config{
+	// All JWKS traffic (warmup probe and go-oidc key fetches) goes
+	// through the hardened shared client: IMDS/metadata endpoints are
+	// blocked and dial/TLS/overall timeouts apply. The JWKS URL is
+	// operator-supplied (SCHEDULED_TASK_OIDC_JWKS_URL), so a
+	// misconfigured or compromised value must not be able to reach
+	// internal/metadata endpoints via the default transport.
+	v.httpClient = httpclient.New()
+	v.keySet = oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), v.httpClient), cfg.JWKSURL)
+	v.verifier = oidc.NewVerifier(cfg.Issuer, v.keySet, &oidc.Config{
 		// Pin to RS256. Google's tokens are RS256; rejecting anything
 		// else closes the alg=none / alg=HS256 confusion family.
 		SupportedSigningAlgs: []string{string(oidc.RS256)},
@@ -220,9 +231,10 @@ func (v *Validator) Mode() Mode {
 }
 
 // warmupTimeout is the fallback deadline for the JWKS warmup probe
-// when the caller passes a context without one. http.DefaultClient
-// has no timeout, so without this guard a misconfigured / unreachable
-// JWKS endpoint would block startup indefinitely.
+// when the caller passes a context without one. The hardened client
+// has its own overall timeout, but startup should fail the probe much
+// faster than that when the JWKS endpoint is misconfigured or
+// unreachable.
 const warmupTimeout = 5 * time.Second
 
 // Warmup performs a best-effort sanity check on the JWKS endpoint at
@@ -254,7 +266,7 @@ func (v *Validator) Warmup(ctx context.Context) {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
 	}
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: unsafe operation intentional
+	resp, err := v.httpClient.Do(req)
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup fetch failed for %s: %v "+
 			"(validator will retry on first request)", v.jwksURL, err)
@@ -438,7 +450,7 @@ func (v *Validator) verifyWithRotationRetry(ctx context.Context, rawToken string
 			return nil, err
 		}
 		log.Printf("scheduledauth: oidc signature verification failed; rebuilding key set for rotation retry")
-		newKS := oidc.NewRemoteKeySet(context.Background(), v.jwksURL)
+		newKS := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), v.httpClient), v.jwksURL)
 		v.verifier = oidc.NewVerifier(v.issuer, newKS, &oidc.Config{
 			SupportedSigningAlgs: []string{string(oidc.RS256)},
 			SkipClientIDCheck:    true,
