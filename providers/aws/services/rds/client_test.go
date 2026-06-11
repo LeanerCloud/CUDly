@@ -584,8 +584,9 @@ func TestClient_GetDurationString(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := client.getDurationString(tt.term)
 			if tt.expectErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "unsupported RDS reservation term")
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported RDS reservation term")
+				}
 				return
 			}
 			assert.NoError(t, err)
@@ -891,6 +892,34 @@ func TestFindOfferingID_InvalidAZConfig_Errors(t *testing.T) {
 	require.Error(t, err, "findOfferingID must error on invalid non-empty AZConfig (CR #1085)")
 	assert.Contains(t, err.Error(), "AZConfig")
 	assert.Contains(t, err.Error(), "typo-az")
+}
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedDBInstancesOfferings call,
+// rather than silently matching (and buying) a 1-year offering. A "0" term is
+// what a 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockRDS := &MockRDSClient{}
+	t.Cleanup(func() { mockRDS.AssertExpectations(t) })
+	client := &Client{client: mockRDS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		Service:       common.ServiceRelationalDB,
+		ResourceType:  "db.r5.large",
+		PaymentOption: "all-upfront",
+		Term:          "0",
+		Details: &common.DatabaseDetails{
+			Engine:   "mysql",
+			AZConfig: "single-az",
+		},
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	require.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)")
+	assert.Contains(t, err.Error(), "unsupported RDS reservation term")
+	mockRDS.AssertNotCalled(t, "DescribeReservedDBInstancesOfferings", mock.Anything, mock.Anything)
 }
 
 // TestNormalizeEngineName_AmbiguousErrors is the M6 regression test:
