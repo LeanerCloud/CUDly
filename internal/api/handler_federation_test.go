@@ -1123,6 +1123,334 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Extended matrix: CLI renders, ARM renders, single-file shape (issue #316)
+// ---------------------------------------------------------------------------
+
+// canonicalPurchaseActions is a subset of the permission actions that every
+// AWS-target CLI render must include. The full list is embedded in the
+// template as a heredoc; we pin the most security-relevant entries so a
+// template edit that accidentally drops a purchase permission is caught here.
+var canonicalPurchaseActions = []string{
+	"ec2:PurchaseReservedInstancesOffering",
+	"rds:PurchaseReservedDBInstancesOffering",
+	"savingsplans:CreateSavingsPlan",
+}
+
+// canonicalReadActions is a subset of the read/describe permissions that
+// every AWS-target CLI render must include alongside the purchase actions.
+var canonicalReadActions = []string{
+	"ec2:DescribeReservedInstances",
+	"rds:DescribeReservedDBInstances",
+	"savingsplans:DescribeSavingsPlans",
+}
+
+// TestGetFederationIaC_CLIMatrix is a comprehensive table-driven test for
+// all CLI target/source combinations. It verifies:
+//   - ContentType is text/x-shellscript (single-file shape, no zip).
+//   - ContentEncoding is empty (not base64-wrapped like zip formats).
+//   - Output starts with the bash shebang.
+//   - Filename matches the expected pattern.
+//   - Archera opt-in is absent by default (default-off guarantee).
+//   - For AWS targets: canonical purchase and read actions are present.
+//   - Contact email from the session does not appear raw in the script
+//     outside the CONTACT_EMAIL assignment (no PII leak into script body).
+func TestGetFederationIaC_CLIMatrix(t *testing.T) {
+	cases := []struct {
+		name             string
+		target           string
+		source           string
+		sourceCloud      string
+		wantFileSuffix   string
+		wantContent      []string
+		wantNoContent    []string
+		checkPermissions bool // true for AWS-target cases that embed IAM policy
+	}{
+		{
+			name:             "aws-cross-account",
+			target:           "aws",
+			source:           "aws",
+			sourceCloud:      "aws",
+			wantFileSuffix:   "aws-cross-account-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "aws iam create-role", "SOURCE_ACCOUNT_ID"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: true,
+		},
+		{
+			name:             "aws-wif-from-azure",
+			target:           "aws",
+			source:           "azure",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "aws-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "create-open-id-connect-provider", "login.microsoftonline.com"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: true,
+		},
+		{
+			name:             "aws-wif-from-gcp",
+			target:           "aws",
+			source:           "gcp",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "aws-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "create-open-id-connect-provider"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: true,
+		},
+		{
+			name:             "azure-wif-from-aws",
+			target:           "azure",
+			source:           "aws",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "azure-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "az ad app create", "Reservation Purchaser"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: false,
+		},
+		{
+			name:             "azure-wif-from-gcp",
+			target:           "azure",
+			source:           "gcp",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "azure-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "az ad app create"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: false,
+		},
+		{
+			name:             "gcp-sa-impersonation",
+			target:           "gcp",
+			source:           "gcp",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "gcp-sa-impersonation-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "gcloud iam service-accounts", "SOURCE_SERVICE_ACCOUNT"},
+			wantNoContent:    []string{"archera", "Archera"},
+			checkPermissions: false,
+		},
+		{
+			name:             "gcp-wif-from-aws",
+			target:           "gcp",
+			source:           "aws",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "gcp-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "workload-identity-pools create", "providers create-oidc"},
+			wantNoContent:    []string{"archera", "Archera", "create-aws"},
+			checkPermissions: false,
+		},
+		{
+			name:             "gcp-wif-from-azure",
+			target:           "gcp",
+			source:           "azure",
+			sourceCloud:      "gcp",
+			wantFileSuffix:   "gcp-wif-cli.sh",
+			wantContent:      []string{"#!/usr/bin/env bash", "workload-identity-pools create", "providers create-oidc"},
+			wantNoContent:    []string{"archera", "Archera", "create-aws"},
+			checkPermissions: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
+			h := federationHandler()
+
+			// Use federationReqWithDomain so CUDlyAPIURL is set and the
+			// registration block renders — we need the full output to verify PII.
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "cli",
+			}))
+			require.NoError(t, err)
+
+			// Single-file shape: must NOT be base64-encoded (no zip wrapping).
+			assert.Empty(t, res.ContentEncoding,
+				"CLI render must be plain text, not base64-encoded")
+			assert.Equal(t, "text/x-shellscript", res.ContentType,
+				"CLI render must have text/x-shellscript content-type")
+			assert.Contains(t, res.Filename, tc.wantFileSuffix,
+				"CLI render filename must contain expected pattern")
+
+			// Content assertions.
+			for _, needle := range tc.wantContent {
+				assert.Contains(t, res.Content, needle,
+					"CLI render must contain %q", needle)
+			}
+			for _, needle := range tc.wantNoContent {
+				assert.NotContains(t, res.Content, needle,
+					"CLI render must NOT contain %q (Archera default-off)", needle)
+			}
+
+			// Permission set for AWS-target renders.
+			if tc.checkPermissions {
+				for _, action := range canonicalPurchaseActions {
+					assert.Contains(t, res.Content, action,
+						"AWS CLI render must include purchase action %q", action)
+				}
+				for _, action := range canonicalReadActions {
+					assert.Contains(t, res.Content, action,
+						"AWS CLI render must include read action %q", action)
+				}
+			}
+
+			// PII guard: the session email must not appear raw in the script
+			// body outside the CONTACT_EMAIL env-var assignment. The email
+			// is legitimately present as the default value for CONTACT_EMAIL
+			// (e.g. CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-admin@example.com}"),
+			// but it must not be repeated elsewhere (e.g. embedded in a URL,
+			// a hardcoded JSON field, or a curl argument).
+			//
+			// Strategy: strip the CONTACT_EMAIL assignment line and verify
+			// the email does not appear in the remaining content.
+			sessionEmail := "admin@example.com"
+			scriptWithoutAssignment := strings.ReplaceAll(res.Content,
+				`CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`+sessionEmail+`}"`,
+				"CONTACT_EMAIL_ASSIGNMENT_REMOVED")
+			assert.NotContains(t, scriptWithoutAssignment, sessionEmail,
+				"session email must not appear in CLI script body outside CONTACT_EMAIL assignment (PII leak)")
+		})
+	}
+}
+
+// TestGetFederationIaC_ARMMatrix is a comprehensive table-driven test for
+// ARM renders across all valid source-cloud combinations. ARM is always a
+// zip containing the azure-wif.arm.json template. The matrix verifies:
+//   - The zip contains the expected files.
+//   - The ARM JSON is structurally valid (schema, parameters, resources, outputs).
+//   - The role assignment resource targets the Reservation Purchaser role.
+//   - Archera opt-in is absent from all ARM artifacts (default-off guarantee).
+//   - Deploy script contains the registration block.
+func TestGetFederationIaC_ARMMatrix(t *testing.T) {
+	armSources := []string{"aws", "gcp"} // azure-self-source requires sourceCloud=azure
+	for _, source := range armSources {
+		source := source
+		t.Run("target=azure/source="+source, func(t *testing.T) {
+			h := federationHandler()
+
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": "azure", "source": source, "format": "arm",
+			}))
+			require.NoError(t, err)
+
+			// Zip shape.
+			assert.Equal(t, "application/zip", res.ContentType)
+			assert.Equal(t, "base64", res.ContentEncoding)
+			assert.Contains(t, res.Filename, "azure-wif-arm.zip")
+
+			files := unzipResponse(t, res)
+
+			// Required files.
+			require.Contains(t, files, "azure-wif.arm.json", "ARM zip must contain azure-wif.arm.json")
+			require.Contains(t, files, "azure-wif-bicep-params.json", "ARM zip must contain params file")
+			require.Contains(t, files, "deploy-azure.sh", "ARM zip must contain deploy script")
+			require.Contains(t, files, "README.txt", "ARM zip must contain README")
+
+			// ARM template structure.
+			var armTemplate map[string]any
+			require.NoError(t, json.Unmarshal(files["azure-wif.arm.json"], &armTemplate),
+				"ARM template must be valid JSON")
+			assert.Contains(t, armTemplate, "$schema", "ARM template must have $schema field")
+			assert.Contains(t, armTemplate, "parameters", "ARM template must have parameters")
+			assert.Contains(t, armTemplate, "resources", "ARM template must have resources")
+			assert.Contains(t, armTemplate, "outputs", "ARM template must have outputs")
+
+			// Schema must be an ARM subscription-deployment schema.
+			schema, _ := armTemplate["$schema"].(string)
+			assert.Contains(t, schema, "subscriptionDeploymentTemplate",
+				"ARM template must use subscription-scope deployment schema")
+
+			// Resources must contain a role assignment for Reservation Purchaser.
+			resourcesRaw, _ := armTemplate["resources"].([]any)
+			require.NotEmpty(t, resourcesRaw, "ARM template must have at least one resource")
+			armJSON := string(files["azure-wif.arm.json"])
+			assert.Contains(t, armJSON, "Microsoft.Authorization/roleAssignments",
+				"ARM template must include role assignment resource")
+			// f7b75c60 is the well-known Reservation Purchaser role definition ID.
+			assert.Contains(t, armJSON, "f7b75c60",
+				"ARM template must reference the Reservation Purchaser role definition ID")
+
+			// Archera default-off: no Archera references in any ARM artifact.
+			for name, content := range files {
+				assert.NotContains(t, strings.ToLower(string(content)), "archera",
+					"ARM artifact %q must not reference Archera (default-off guarantee)", name)
+			}
+
+			// Params file must be valid JSON with a parameters key.
+			var params map[string]any
+			require.NoError(t, json.Unmarshal(files["azure-wif-bicep-params.json"], &params),
+				"ARM params file must be valid JSON")
+			assert.Contains(t, params, "parameters", "ARM params file must have parameters key")
+
+			// Deploy script must have the registration block (CUDlyAPIURL is set via domain).
+			deployScript := string(files["deploy-azure.sh"])
+			assert.Contains(t, deployScript, "/api/register",
+				"deploy script must include registration curl call")
+			assert.Contains(t, deployScript, `case "$HTTP_CODE"`,
+				"deploy script must handle HTTP response codes")
+		})
+	}
+}
+
+// TestGetFederationIaC_SingleFileRenderShape verifies that single-file
+// (non-zip) renders always produce a plain-text response with no
+// ContentEncoding — the caller can write the Content bytes directly to
+// a file without any decoding step. This is the invariant that
+// distinguishes CLI from zip formats (bundle/cfn/bicep/arm).
+func TestGetFederationIaC_SingleFileRenderShape(t *testing.T) {
+	// Every format that singleFileSpec accepts must produce a plain-text
+	// response. Currently only "cli" qualifies.
+	h := federationHandler()
+
+	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
+		"target": "aws", "source": "gcp", "format": "cli",
+	}))
+	require.NoError(t, err)
+
+	// Single-file invariants.
+	assert.Empty(t, res.ContentEncoding,
+		"single-file render must have no ContentEncoding (caller writes bytes directly)")
+	assert.Equal(t, "text/x-shellscript", res.ContentType,
+		"CLI single-file render must be text/x-shellscript")
+	assert.NotEmpty(t, res.Content,
+		"single-file render must have non-empty Content")
+	assert.NotEmpty(t, res.Filename,
+		"single-file render must have a non-empty Filename")
+
+	// Content must be readable as UTF-8 text (no binary content).
+	assert.True(t, strings.HasPrefix(res.Content, "#!/usr/bin/env bash"),
+		"CLI single-file render must start with bash shebang")
+}
+
+// TestGetFederationIaC_CLIArcheraDefaultOff is a dedicated regression test
+// for the Archera default-off guarantee across all CLI formats. Even if a
+// future template change adds Archera opt-in logic, the default render
+// (no special request params) must not include any Archera references.
+func TestGetFederationIaC_CLIArcheraDefaultOff(t *testing.T) {
+	cliCombos := []struct{ target, source, sourceCloud string }{
+		{"aws", "aws", "aws"},
+		{"aws", "gcp", "gcp"},
+		{"azure", "aws", "gcp"},
+		{"gcp", "gcp", "gcp"},
+		{"gcp", "aws", "gcp"},
+	}
+
+	for _, tc := range cliCombos {
+		tc := tc
+		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
+			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
+			h := federationHandler()
+
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "cli",
+			}))
+			require.NoError(t, err)
+
+			lowerContent := strings.ToLower(res.Content)
+			assert.NotContains(t, lowerContent, "archera",
+				"CLI render for target=%s/source=%s must not reference Archera by default",
+				tc.target, tc.source)
+		})
+	}
+}
+
 // TestValidateFederationTargetSource unit-tests the guard directly, covering
 // all self-source rejection and allow cases (issues #42 and #140).
 func TestValidateFederationTargetSource(t *testing.T) {
