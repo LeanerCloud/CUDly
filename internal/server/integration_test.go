@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 )
 
@@ -106,8 +107,6 @@ func TestApplicationLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-
-	ctx := testutil.TestContext(t)
 
 	// Set up test environment
 	testutil.SetEnv(t, "VERSION", "integration-test")
