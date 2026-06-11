@@ -77,8 +77,18 @@ jobs:
       - name: Force-delete all staging ECR repos
         run: |
           for REPO in $(aws ecr describe-repositories \
-            --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" \
+            --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
             --output text 2>/dev/null); do
+            # Defense in depth: refuse anything outside the staging naming
+            # pattern (in particular the bare 'cudly' prod-adjacent repo)
+            # even if the query filter above is ever loosened.
+            case "$REPO" in
+              cudly-staging*) ;;
+              *)
+                echo "Refusing to delete non-staging ECR repo '$REPO'; staging cleanup only deletes cudly-staging* repos"
+                exit 1
+                ;;
+            esac
             echo "Force-deleting ECR repo $REPO..."
             aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
               || echo "  Failed to delete $REPO (may already be gone)"
@@ -137,8 +147,18 @@ jobs:
       - name: Force-delete all staging ECR repos
         run: |
           for REPO in $(aws ecr describe-repositories \
-            --query "repositories[?starts_with(repositoryName,'cudly-staging') || repositoryName=='cudly'].repositoryName" \
+            --query "repositories[?starts_with(repositoryName,'cudly-staging')].repositoryName" \
             --output text 2>/dev/null); do
+            # Defense in depth: refuse anything outside the staging naming
+            # pattern (in particular the bare 'cudly' prod-adjacent repo)
+            # even if the query filter above is ever loosened.
+            case "$REPO" in
+              cudly-staging*) ;;
+              *)
+                echo "Refusing to delete non-staging ECR repo '$REPO'; staging cleanup only deletes cudly-staging* repos"
+                exit 1
+                ;;
+            esac
             echo "Force-deleting ECR repo $REPO..."
             aws ecr delete-repository --repository-name "$REPO" --force 2>/dev/null \
               || echo "  Failed to delete $REPO (may already be gone)"
