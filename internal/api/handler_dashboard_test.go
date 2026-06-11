@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -63,8 +64,9 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	// No account_id / account_ids filter → calculateCommitmentMetrics uses GetAllPurchaseHistory.
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	// No account_id / account_ids filter → calculateCommitmentMetrics fetches the
+	// uncapped active set across all accounts via GetActivePurchaseHistory.
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{
@@ -125,7 +127,7 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 100,
 	}, nil)
@@ -168,7 +170,7 @@ func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFu
 
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	// Global ServiceConfig has Coverage=0 (zero-value — operator never set it).
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 0,
@@ -843,7 +845,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("no purchase history", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		handler := &Handler{config: mockStore}
 
@@ -857,7 +859,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("purchase history error returns zeros", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return(nil, errors.New("db error"))
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(nil, errors.New("db error"))
 
 		handler := &Handler{config: mockStore}
 
@@ -883,7 +885,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return(purchases, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
@@ -910,7 +912,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return(purchases, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
@@ -937,7 +939,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			},
 		}
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return(purchases, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
@@ -970,7 +972,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 				// Status "" = completed DB row — must be counted
 			},
 		}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"account-123"}}, Limit: 1000}).Return(purchases, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(purchases, nil)
 
 		handler := &Handler{config: mockStore}
 
@@ -983,10 +985,10 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			"failed commitment's savings must not appear in committedMonthly")
 	})
 
-	// Multi-account scope: a UUID-filtered request must use GetPurchaseHistoryFiltered
+	// Multi-account scope: a UUID-filtered request must use GetActivePurchaseHistory
 	// scoped to the supplied cloud_account_id UUIDs. Rows from account C must NOT
 	// appear when the filter contains only A and B.
-	t.Run("multi-account UUID filter routes to GetPurchaseHistoryFiltered", func(t *testing.T) {
+	t.Run("multi-account UUID filter routes to GetActivePurchaseHistory", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		purchaseTime := time.Now().AddDate(0, -2, 0)
 
@@ -1000,7 +1002,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 			{CloudAccountID: &accountBID, Timestamp: purchaseTime, Term: 1, EstimatedSavings: 150.0},
 		}
 		uuids := []string{accountAID, accountBID}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: uuids, Limit: 1000}).
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), uuids, map[string][]string(nil)).
 			Return(purchasesAB, nil)
 		// GetPurchaseHistory must not be called — no On registration so it
 		// would panic if accidentally invoked.
@@ -1027,11 +1029,10 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		externalOnly := []config.PurchaseHistoryRecord{
 			{AccountID: "999988887777", Timestamp: purchaseTime, Term: 1, EstimatedSavings: 175.0},
 		}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-			AccountIDs:            []string{"bbbbbbbb-1111-2222-3333-444444444444"},
-			ExternalIDsByProvider: map[string][]string{"aws": {"999988887777"}},
-			Limit:                 1000,
-		}).Return(externalOnly, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+			[]string{"bbbbbbbb-1111-2222-3333-444444444444"},
+			map[string][]string{"aws": {"999988887777"}},
+		).Return(externalOnly, nil)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		handler := &Handler{config: mockStore}
@@ -1042,6 +1043,68 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		assert.Equal(t, 1, activeCommitments, "external-id-only commitment must be counted")
 		assert.Equal(t, 175.0, committedMonthly)
 	})
+}
+
+// TestHandler_calculateCommitmentMetrics_NoTruncationBeyond1000 is the
+// regression test for issue #1140 (review finding PERF-01): the dashboard KPI
+// path used a newest-first 1000-row capped GetAllPurchaseHistory read and
+// filtered "active" in Go, so once purchase_history exceeded 1000 rows the
+// FIRST rows dropped were exactly the oldest still-active 1y/3y commitments,
+// silently understating ActiveCommitments / CommittedMonthly.
+//
+// The data shape replicates the real failure: 1000 newer-but-expired rows plus
+// one older still-active 3-year commitment that falls outside the newest-1000
+// window. The mocks emulate the store contract for each read: the capped
+// all-history page returns only the newest 1000 rows (active row truncated
+// away), while GetActivePurchaseHistory returns the complete SQL-filtered
+// active set with no cap. Pre-fix the handler took the capped path and
+// reported 0 active commitments; post-fix it must report the old commitment.
+func TestHandler_calculateCommitmentMetrics_NoTruncationBeyond1000(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	// Oldest row: 3-year commitment purchased ~2.5 years ago, still active.
+	oldActive := config.PurchaseHistoryRecord{
+		AccountID:        "111122223333",
+		PurchaseID:       "p-old-active",
+		Provider:         "aws",
+		Service:          "ec2",
+		Term:             3,
+		Timestamp:        now.AddDate(0, -30, 0),
+		EstimatedSavings: 120.0,
+	}
+	// 1000 newer rows: 1-year commitments purchased ~2 years ago, all expired.
+	newestFirst := make([]config.PurchaseHistoryRecord, 0, 1000)
+	for i := 999; i >= 0; i-- {
+		newestFirst = append(newestFirst, config.PurchaseHistoryRecord{
+			AccountID:        "111122223333",
+			PurchaseID:       fmt.Sprintf("p-expired-%04d", i),
+			Provider:         "aws",
+			Service:          "ec2",
+			Term:             1,
+			Timestamp:        now.AddDate(-2, 0, 0).Add(time.Duration(i) * time.Minute),
+			EstimatedSavings: 10.0,
+		})
+	}
+
+	mockStore := new(MockConfigStore)
+	// Old capped read: ORDER BY timestamp DESC LIMIT 1000 keeps only the 1000
+	// newer (expired) rows; the still-active oldest row is truncated away.
+	mockStore.On("GetAllPurchaseHistory", ctx, 1000).Return(newestFirst, nil)
+	// SQL active-only read: no cap, returns exactly the live commitments.
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
+		Return([]config.PurchaseHistoryRecord{oldActive}, nil)
+
+	handler := &Handler{config: mockStore}
+
+	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, nil, nil)
+
+	assert.Equal(t, 1, activeCommitments,
+		"the still-active 3y commitment beyond the old 1000-row cap must be counted")
+	assert.Equal(t, 120.0, committedMonthly,
+		"CommittedMonthly must include the still-active commitment dropped by the old capped read")
+	assert.InDelta(t, 120.0, savingsByService["ec2"], 0.001)
+	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
 }
 
 // TestAggregateActiveCommitmentsPerService covers the core primitive used by
@@ -1136,8 +1199,8 @@ func TestHandler_getDashboardSummary_CurrentSavingsPopulated(t *testing.T) {
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	// No account_id / account_ids filter, so calculateCommitmentMetrics fetches
-	// across all accounts via GetAllPurchaseHistory.
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(purchases, nil)
+	// across all accounts via GetActivePurchaseHistory (uncapped, active-only).
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(purchases, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{
@@ -1180,8 +1243,9 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
 		[]config.RecommendationRecord{{Service: "EC2", Savings: 400.0}}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
-	// No account filter, so the no-filter fetch path (GetAllPurchaseHistory) runs.
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(purchases, nil)
+	// No account filter, so the all-accounts fetch path (GetActivePurchaseHistory
+	// with an empty scope) runs.
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(purchases, nil)
 
 	mockAuth, req := adminDashboardReq(ctx)
 	handler := &Handler{
@@ -1247,7 +1311,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
-		mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{
@@ -1271,7 +1335,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-		mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{

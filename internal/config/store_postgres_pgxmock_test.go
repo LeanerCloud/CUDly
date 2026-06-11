@@ -896,6 +896,57 @@ func TestPGXMock_GetPurchaseHistoryFiltered_NoFilters(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// ─── GetActivePurchaseHistory (issue #1140) ──────────────────────────────────
+
+// TestPGXMock_GetActivePurchaseHistory_Unscoped asserts the emitted SQL pushes
+// the active filter into the WHERE clause with NO LIMIT (the `$` anchor after
+// ORDER BY proves no trailing LIMIT clause), so the result is bounded by the
+// number of live commitments and a newest-first row cap can never silently
+// drop the oldest still-active 1y/3y commitments (issue #1140). It also pins
+// the full 21-column SELECT including the issue-#290 revocation columns:
+// before this fix the query selected only 17 columns while
+// queryPurchaseHistory scans 21 destinations, so every call failed at Scan.
+func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
+	mock.ExpectQuery(
+		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) > \$1 ORDER BY timestamp DESC$`,
+	).WithArgs(now).WillReturnRows(rows)
+
+	records, err := store.GetActivePurchaseHistory(ctx, now, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetActivePurchaseHistory_AccountScoped asserts the dual-column
+// account predicate (same shape as GetPurchaseHistoryFiltered, issues
+// #701/#498/#866) composes with the active filter, again with no LIMIT, so the
+// dashboard KPI path and the inventory endpoints get the complete active set
+// for the selected account scope (issue #1140).
+func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "111122223333")...)
+	mock.ExpectQuery(
+		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) > \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
+	).WithArgs(now, []string{"acct-uuid-1"}, "aws", []string{"111122223333"}).WillReturnRows(rows)
+
+	records, err := store.GetActivePurchaseHistory(ctx, now,
+		[]string{"acct-uuid-1"}, map[string][]string{"aws": {"111122223333"}})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "111122223333", records[0].AccountID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestPGXMock_GetPurchaseHistoryFiltered_PartialFilters asserts that
 // supplying only a subset of filters (here: provider + start, no account ids,
 // no end) emits exactly two AND clauses and binds the right positional

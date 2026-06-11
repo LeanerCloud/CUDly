@@ -38,7 +38,8 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	purchases, err := h.fetchCommitmentRecords(ctx, params)
+	now := time.Now()
+	purchases, err := h.fetchCommitmentRecords(ctx, now, params)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +50,6 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	}
 
 	nameByID := h.resolveAccountNamesByID(ctx)
-	now := time.Now()
 
 	commitments := make([]InventoryCommitment, 0, len(purchases))
 	for _, p := range purchases {
@@ -70,12 +70,14 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	return InventoryCommitmentsResponse{Commitments: commitments}, nil
 }
 
-// fetchCommitmentRecords reads purchase history from the store, honoring
-// optional `account_id` and `provider` query params the same way
-// fetchPurchaseHistory does for /api/history. Limit defaults to
-// MaxListLimit — commitments are a strict subset of purchase history (we
-// drop expired rows before returning) so a high cap is appropriate; an
-// over-truncation here would silently hide rows the user is entitled to.
+// fetchCommitmentRecords reads the active purchase_history rows from the
+// store, honouring optional `account_id` and `provider` query params the same
+// way fetchPurchaseHistory does for /api/history. The read goes through
+// GetActivePurchaseHistory so the active filter runs in SQL with no row cap:
+// a newest-first LIMIT page dropped exactly the oldest still-active 1y/3y
+// commitments once history exceeded the cap, silently hiding rows the user is
+// entitled to (issue #1140). The result is bounded by the number of live
+// commitments, not by all history ever recorded.
 //
 // The singular `account_id` (a top-bar chip cloud_accounts UUID for current
 // callers, or a raw external number for legacy ones) is resolved to the
@@ -86,19 +88,13 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 //
 // `provider` filtering is applied in-memory after the store read so the
 // record set is small enough that a post-read filter has negligible cost.
-func (h *Handler) fetchCommitmentRecords(ctx context.Context, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
-	var rows []config.PurchaseHistoryRecord
-	var err error
+func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
+	var uuids []string
+	var externalIDsByProvider map[string][]string
 	if accountID := params["account_id"]; accountID != "" {
-		uuids, externalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
-		rows, err = h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
-			AccountIDs:            uuids,
-			ExternalIDsByProvider: externalIDsByProvider,
-			Limit:                 config.MaxListLimit,
-		})
-	} else {
-		rows, err = h.config.GetAllPurchaseHistory(ctx, config.MaxListLimit)
+		uuids, externalIDsByProvider = h.resolveSingleAccountFilterIDs(ctx, accountID)
 	}
+	rows, err := h.config.GetActivePurchaseHistory(ctx, asOf, uuids, externalIDsByProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +163,8 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	}
 
 	// --- covered: active commitments ----------------------------------------
-	purchases, err := h.fetchCommitmentRecords(ctx, params)
+	now := time.Now()
+	purchases, err := h.fetchCommitmentRecords(ctx, now, params)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +173,6 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	now := time.Now()
 	// coveredByKey accumulates the effective covered monthly spend by
 	// "provider:service". A commitment's covered monthly is its recurring
 	// MonthlyCost plus the amortized upfront, so an all-upfront commitment

@@ -91,7 +91,8 @@ func (c *Collector) Collect(ctx context.Context) error {
 	// bounded by the number of live commitments rather than by all history ever
 	// recorded. This avoids silently truncating older-but-still-active 1y/3y
 	// commitments the way a single capped all-history page did.
-	purchases, err := c.configStore.GetActivePurchaseHistory(ctx, now)
+	// nil/nil account scope: the collector aggregates across all accounts.
+	purchases, err := c.configStore.GetActivePurchaseHistory(ctx, now, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to get active purchase history: %w", err)
 	}
