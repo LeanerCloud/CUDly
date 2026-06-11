@@ -303,4 +303,13 @@ type StoreInterface interface {
 	// participate in the transaction. Nested transactions are not
 	// supported — fn must not call WithTx recursively.
 	WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error
+
+	// Notification mutes (issue #297 / migration 000076).
+	// UpsertNotificationMute inserts or updates a mute row for (email, scope).
+	// Idempotent: calling it again for an already-muted address is a no-op on
+	// muted_at but does replace unmute_token if the token changes.
+	UpsertNotificationMute(ctx context.Context, recipientEmail, scope, unmuteToken string) error
+	// IsNotificationMuted returns true when (email, scope) has a row in
+	// muted_recipients. The email comparison is case-insensitive.
+	IsNotificationMuted(ctx context.Context, recipientEmail, scope string) (bool, error)
 }
