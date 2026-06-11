@@ -39,7 +39,7 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	}
 
 	now := time.Now()
-	purchases, err := h.fetchCommitmentRecords(ctx, now, params)
+	purchases, err := h.fetchCommitmentRecords(ctx, now, session, params)
 	if err != nil {
 		return nil, err
 	}
@@ -86,13 +86,37 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 // #701/#498/#866 bug was that passing the UUID to the single-column
 // GetPurchaseHistory (account_id) matched nothing.
 //
+// When no explicit `account_id` is supplied, a restricted session's
+// allowed_accounts scope is pushed into the SQL read via
+// resolveAllowedAccountScope, the same contract as the dashboard KPI path
+// (issue #956): without it the store would read every tenant's active
+// commitments and only trim them in memory afterwards. A restricted session
+// whose allowed_accounts match no account resolves to the non-nil-but-empty
+// sentinel and short-circuits to an empty result without querying (an empty
+// scope sent to the store would match ALL rows, not none). Unrestricted /
+// admin sessions resolve to a nil scope and keep the all-accounts read. The
+// in-memory filterPurchaseHistoryByAllowedAccounts in the callers still runs
+// afterwards; it is what trims an explicit account_id outside the session's
+// scope and serves as defence in depth for the no-param path.
+//
 // `provider` filtering is applied in-memory after the store read so the
 // record set is small enough that a post-read filter has negligible cost.
-func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
+func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, session *Session, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
 	var uuids []string
 	var externalIDsByProvider map[string][]string
 	if accountID := params["account_id"]; accountID != "" {
 		uuids, externalIDsByProvider = h.resolveSingleAccountFilterIDs(ctx, accountID)
+	} else {
+		var err error
+		uuids, externalIDsByProvider, err = h.resolveAllowedAccountScope(ctx, session)
+		if err != nil {
+			return nil, err
+		}
+		// Non-nil empty scope: restricted session with zero accessible
+		// accounts. Querying with it would match every row, so short-circuit.
+		if uuids != nil && len(uuids) == 0 && len(externalIDsByProvider) == 0 {
+			return nil, nil
+		}
 	}
 	rows, err := h.config.GetActivePurchaseHistory(ctx, asOf, uuids, externalIDsByProvider)
 	if err != nil {
@@ -164,7 +188,7 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 
 	// --- covered: active commitments ----------------------------------------
 	now := time.Now()
-	purchases, err := h.fetchCommitmentRecords(ctx, now, params)
+	purchases, err := h.fetchCommitmentRecords(ctx, now, session, params)
 	if err != nil {
 		return nil, err
 	}
