@@ -118,7 +118,8 @@ type StoreInterface interface {
 	GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error)
 	GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error)
 	// GetActivePurchaseHistory returns every purchase_history row whose commitment
-	// is still within its term at asOf (term > 0 AND timestamp + term years > asOf),
+	// is still within its term at asOf (term > 0 AND timestamp + term years >= asOf;
+	// the expiry boundary is inclusive, matching the API layer's isActiveCommitment),
 	// newest-first, optionally scoped to a set of accounts. The account scope uses
 	// the same dual-column predicate as GetPurchaseHistoryFiltered: accountIDs
 	// match cloud_account_id (cloud_accounts UUIDs) and externalIDsByProvider

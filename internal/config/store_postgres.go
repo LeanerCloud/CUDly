@@ -1623,11 +1623,14 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 // it cannot silently truncate older-but-still-active 1y/3y commitments the way
 // a newest-first LIMIT page does (issue #1140). term*8760 hours matches the
 // collector's HoursPerYear and the API layer's commitmentExpiry (both 365*24)
-// so the SQL and Go term windows agree.
+// so the SQL and Go term windows agree. The expiry comparison is inclusive
+// (expiry >= asOf): a commitment expiring exactly at asOf is still active,
+// matching the API layer's isActiveCommitment (!now.After(expiry)) so the SQL
+// result set and the Go-side active checks share one boundary definition.
 func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]PurchaseHistoryRecord, error) {
 	conds := []string{
 		"term > 0",
-		"timestamp + make_interval(hours => term * 8760) > $1",
+		"timestamp + make_interval(hours => term * 8760) >= $1",
 	}
 	args := []any{asOf}
 	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)
