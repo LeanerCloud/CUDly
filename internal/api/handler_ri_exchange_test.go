@@ -263,7 +263,7 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 	}, nil)
 
 	// Transition from pending→cancelled fails (record is not pending)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled").
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
 	_, err := h.rejectRIExchange(ctx, id, token)
@@ -291,7 +291,7 @@ func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
 	}, nil)
 
 	// Transition from pending→processing fails (record is cancelled)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
 	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
@@ -321,7 +321,7 @@ func TestApproveRIExchange_DoubleApprove(t *testing.T) {
 	}, nil)
 
 	// Transition from pending→processing fails (already processing)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
 	_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
@@ -380,7 +380,7 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 		CreatedByUserID: &creatorID,
 	}, nil).Once()
 
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil)
 	// executeApprovedExchange calls GetRIExchangeDailySpend + GetGlobalConfig
 	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
@@ -402,7 +402,7 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	// The exchange execution will fail (no real AWS SDK) but we verify the
 	// dispatch reached the session-authed path.
 	mockStore.AssertCalled(t, "GetRIExchangeRecord", ctx, id)
-	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
+	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 	mockStore.AssertCalled(t, "FailRIExchange", ctx, id, mock.AnythingOfType("string"))
 	mockStore.AssertCalled(t, "StampRIExchangeApprovedBy", ctx, id, adminSession.Email)
 }
@@ -435,7 +435,7 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 			CreatedByUserID: &ownerID,
 		}, nil)
 
-		mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+		mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 			Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
 		mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
@@ -450,7 +450,7 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 		}
 		_, err := h.approveRIExchange(ctx, req, id, "")
 		require.NoError(t, err)
-		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
+		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 	})
 
 	t.Run("other user exchange rejected", func(t *testing.T) {
@@ -499,7 +499,7 @@ func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
 		SourceRIIDs:   []string{"ri-1"},
 		PaymentDue:    "10.00",
 	}, nil)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing").
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing"}, nil)
 	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
@@ -511,7 +511,7 @@ func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
 	req := &events.LambdaFunctionURLRequest{}
 	_, err := h.approveRIExchange(ctx, req, id, token)
 	require.NoError(t, err)
-	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing")
+	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 }
 
 func TestRejectRIExchange_MissingToken(t *testing.T) {
@@ -1394,4 +1394,65 @@ func TestClassifyRecsAge(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Audit actor stamping tests (issue #1009) ---
+
+// TestApproveRIExchange_SessionActorStamped asserts that the session-authed
+// approval path passes the session UserID as the actor to TransitionRIExchangeStatus
+// so that transitioned_by is set on the ri_exchange_history row.
+func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	const actorID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const id = "550e8400-e29b-41d4-a716-446655441001"
+
+	adminSession := &Session{UserID: actorID, Email: "admin@example.com"}
+	mockAuth.On("ValidateSession", ctx, "admin-bearer").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID: id, Status: "pending", ApprovalToken: "tok", SourceRIIDs: []string{"ri-1"}, PaymentDue: "10.00",
+	}, nil)
+	// Actor must be the session UserID.
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing",
+		mock.MatchedBy(func(a *string) bool { return a != nil && *a == actorID }),
+	).Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "10.00"}, nil)
+	mockStore.On("GetRIExchangeDailySpend", mock.Anything, mock.Anything).Return("0", nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD: 1000, RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer admin-bearer"},
+	}
+	_, err := (&Handler{config: mockStore, auth: mockAuth}).approveRIExchange(ctx, req, id, "")
+	require.NoError(t, err)
+}
+
+// TestRejectRIExchange_TokenPathActorIsNil asserts that the token-based rejection
+// path passes nil as the actor param so that transitioned_by = NULL on the row.
+// Token-based paths have no session, so no human actor can be attributed.
+func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	const id = "550e8400-e29b-41d4-a716-446655441002"
+
+	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
+		ID: id, Status: "pending", ApprovalToken: "tok",
+	}, nil)
+	// Token path: actor must be nil.
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled",
+		(*string)(nil),
+	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil)
+
+	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
+	require.NoError(t, err)
 }

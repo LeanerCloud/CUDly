@@ -51,8 +51,8 @@ func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, toke
 	return args.Error(0)
 }
 
-func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string) error {
-	args := m.Called(ctx, execID, actor)
+func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) error {
+	args := m.Called(ctx, execID, actor, transitionedBy)
 	return args.Error(0)
 }
 

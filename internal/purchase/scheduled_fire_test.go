@@ -79,7 +79,7 @@ func TestFireScheduledDelayedPurchases_CASLostToRevokeClassifiedAsRaceLost(t *te
 	row := dueExec("exec-revoked")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "approved").
+	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "approved", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-revoked cannot transition from %q to %q",
 			config.ErrExecutionNotInExpectedStatus, "cancelled", "approved"))
 
@@ -106,7 +106,7 @@ func TestFireScheduledDelayedPurchases_RowVanishedTreatedAsRaceLost(t *testing.T
 	row := dueExec("exec-gone")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-gone", []string{"scheduled"}, "approved").
+	store.On("TransitionExecutionStatus", ctx, "exec-gone", []string{"scheduled"}, "approved", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-gone", config.ErrNotFound))
 
 	mgr := newFireManager(store)
@@ -130,7 +130,7 @@ func TestFireScheduledDelayedPurchases_HardDBErrorClassifiedAsErrored(t *testing
 	row := dueExec("exec-dberr")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-dberr", []string{"scheduled"}, "approved").
+	store.On("TransitionExecutionStatus", ctx, "exec-dberr", []string{"scheduled"}, "approved", (*string)(nil)).
 		Return(nil, fmt.Errorf("connection reset by peer"))
 
 	mgr := newFireManager(store)
