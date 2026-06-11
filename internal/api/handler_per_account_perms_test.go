@@ -74,6 +74,10 @@ func scopedAuthMock(ctx context.Context) *MockAuthService {
 	// Grant every permission so role-gating doesn't interfere with what we
 	// actually want to test (account-level scoping).
 	m.On("HasPermissionAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything).Return(true, nil)
+	// Likewise grant the SEC-01 execution-time constraint check; constraint
+	// behaviour has its own dedicated tests.
+	m.On("HasPermissionForConstraintsAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Maybe()
 	m.On("GetAllowedAccountsAPI", ctx, permsScopedUserID).Return([]string{permsAccA}, nil)
 	return m
 }

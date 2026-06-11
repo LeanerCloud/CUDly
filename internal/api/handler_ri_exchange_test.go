@@ -1018,6 +1018,9 @@ func (m *mockAuthForExchange) ListGroupsAPI(_ context.Context) (any, error)     
 func (m *mockAuthForExchange) HasPermissionAPI(_ context.Context, _, _, _ string) (bool, error) {
 	return true, nil
 }
+func (m *mockAuthForExchange) HasPermissionForConstraintsAPI(_ context.Context, _, _, _ string, _ []auth.PermissionConstraints) (bool, error) {
+	return true, nil
+}
 func (m *mockAuthForExchange) GetUserPermissionsAPI(_ context.Context, _ string) (any, error) {
 	return nil, nil
 }
@@ -1286,6 +1289,48 @@ func TestExecuteExchange_EmptyRegionReturns400(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, err.Error(), "region is required")
+}
+
+// TestExecuteExchange_PermissionConstraintsDenied is the SEC-01 (#1141)
+// regression test for the exchange path: a session that passes the bare
+// execute:ri-exchange gate (as a constrained permission does) but whose
+// per-permission Constraints reject the request must receive a 403 before
+// the exchange is submitted to AWS. The constraint set must carry the AWS
+// EC2 scope, the request's region, and the max_payment_due_usd guardrail
+// as the amount.
+func TestExecuteExchange_PermissionConstraintsDenied(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	userSession := &Session{
+		UserID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+		Email:  "exchanger@example.com",
+	}
+	mockAuth.On("ValidateSession", ctx, "exchange-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute", "ri-exchange").Return(true, nil)
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userSession.UserID, "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			if len(sets) != 1 {
+				return false
+			}
+			c := sets[0]
+			return assert.ObjectsAreEqual([]string{"aws"}, c.Providers) &&
+				assert.ObjectsAreEqual([]string{"ec2"}, c.Services) &&
+				assert.ObjectsAreEqual([]string{"eu-central-1"}, c.Regions) &&
+				c.MaxPurchaseAmount == 250.50
+		})).Return(false, nil)
+
+	h := &Handler{auth: mockAuth}
+	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer exchange-token"},
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","max_payment_due_usd":"250.50","region":"eu-central-1"}`,
+	})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a ClientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints")
 }
 
 // TestGetExchangeQuote_EmptyRegionResolvesFromSDK pins finding 01-L4:

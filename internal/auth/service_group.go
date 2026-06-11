@@ -161,9 +161,17 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 		return false, err
 	}
 
+	return s.permissionsAllow(permissions, action, resource, constraints), nil
+}
+
+// permissionsAllow reports whether any permission in the effective set grants
+// action on resource under the given request-side constraints. Extracted from
+// HasPermission so batch callers (HasPermissionForConstraintsAPI) can evaluate
+// several constraint sets against a single permission fetch.
+func (s *Service) permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
 	for _, perm := range permissions {
 		if checkAdminPermission(perm) {
-			return true, nil
+			return true
 		}
 
 		if !checkPermissionMatch(perm, action, resource) {
@@ -174,10 +182,10 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 			continue
 		}
 
-		return true, nil
+		return true
 	}
 
-	return false, nil
+	return false
 }
 
 func checkAdminPermission(perm Permission) bool {

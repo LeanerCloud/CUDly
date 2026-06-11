@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -3292,6 +3293,7 @@ func TestHandler_executePurchase_DirectExec_NoPermission(t *testing.T) {
 	// Base execute:purchases grant — passes the validateExecutePurchaseRequest
 	// gate but does not carry execute-any or execute-own for the direct path.
 	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute-own", "purchases").Return(false, nil)
 	// Scope check: no allowed_accounts restriction for this test.
@@ -3309,6 +3311,67 @@ func TestHandler_executePurchase_DirectExec_NoPermission(t *testing.T) {
 	require.True(t, ok, "expected a clientError")
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "execute-any or execute-own")
+}
+
+// TestHandler_executePurchase_PermissionConstraintsDenied is the SEC-01
+// (#1141) regression test: a session whose execute:purchases permission is
+// granted (the bare verb/resource gate passes, exactly as it does for a
+// constrained permission) but whose per-permission Constraints reject the
+// request must receive a 403 BEFORE any execution is persisted. Pre-fix the
+// handler never consulted the constraints, so this request was saved and
+// proceeded to the approval flow.
+func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	// No store expectations registered: the request must be rejected before
+	// SavePurchaseExecution / GetPendingExecutions are reached.
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	userSession := &Session{
+		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		Email:  "capped@example.com",
+	}
+	mockAuth.On("ValidateSession", ctx, "capped-token").Return(userSession, nil)
+	// The bare verb/resource gate passes - this is exactly what happens for
+	// a permission that carries Constraints, because HasPermissionAPI checks
+	// with nil request-side constraints.
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, "execute", "purchases").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, userSession.UserID).Return([]string{}, nil)
+	// The constraint check must receive one set per recommendation, each
+	// carrying the batch's TOTAL upfront cost ($3000 + $2500 = $5500) and
+	// that rec's provider/service/region as single-value lists.
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userSession.UserID, "execute", "purchases",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			if len(sets) != 2 {
+				return false
+			}
+			for _, c := range sets {
+				if c.MaxPurchaseAmount != 5500.0 {
+					return false
+				}
+			}
+			return assert.ObjectsAreEqual([]string{"aws"}, sets[0].Providers) &&
+				assert.ObjectsAreEqual([]string{"ec2"}, sets[0].Services) &&
+				assert.ObjectsAreEqual([]string{"us-east-1"}, sets[0].Regions) &&
+				assert.ObjectsAreEqual([]string{"eu-west-1"}, sets[1].Regions)
+		})).Return(false, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer capped-token"},
+		Body: `{"recommendations": [
+			{"id": "rec-1", "provider": "aws", "service": "ec2", "region": "us-east-1", "count": 1, "term": 1, "payment": "all-upfront", "upfront_cost": 3000.0, "savings": 50.0},
+			{"id": "rec-2", "provider": "aws", "service": "ec2", "region": "eu-west-1", "count": 2, "term": 1, "payment": "all-upfront", "upfront_cost": 2500.0, "savings": 100.0}
+		]}`,
+	}
+	_, err := handler.executePurchase(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got: %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "constraints")
 }
 
 // TestHandler_executePurchase_DirectExec_ExecuteAny verifies that a session
@@ -3333,6 +3396,7 @@ func TestHandler_executePurchase_DirectExec_ExecuteAny(t *testing.T) {
 	// removed in issue #940 — HasPermissionAPI is now always consulted.
 	// First, the outer gate: requirePermission("execute","purchases").
 	mockAuth.On("HasPermissionAPI", ctx, adminSession.UserID, "execute", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// Then the direct-execute gate: authorizeSessionExecuteDirect("execute-any").
 	mockAuth.On("HasPermissionAPI", ctx, adminSession.UserID, "execute-any", "purchases").Return(true, nil)
 	// Scope check: no allowed_accounts restriction for this test.
@@ -3372,6 +3436,7 @@ func TestHandler_executePurchase_DirectExec_ExecuteOwn_Owner(t *testing.T) {
 	}
 	mockAuth.On("ValidateSession", ctx, "owner-token").Return(ownerSession, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerID, "execute-own", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerID).Return([]string{}, nil)
