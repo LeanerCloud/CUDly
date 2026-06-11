@@ -12,7 +12,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,17 +46,20 @@ func azureTestHandler(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// newTestAzureResolver creates an AzureResolver backed by a mock HTTP server.
+// newTestAzureResolver creates an AzureResolver backed by a mock HTTPS server.
+// TLS is required because the GA Key Vault challenge policy only attaches
+// credentials over TLS-protected connections; server.Client() supplies a
+// transport that trusts the test server's certificate.
 // The handler must NOT reference the server variable (it is created inside this function).
 func newTestAzureResolver(t *testing.T, handler http.HandlerFunc) (*AzureResolver, *httptest.Server) {
 	t.Helper()
 
-	server := httptest.NewServer(azureTestHandler(handler))
+	server := httptest.NewTLSServer(azureTestHandler(handler))
 
 	cred := &fakeTokenCredential{}
 	client, err := azsecrets.NewClient(server.URL, cred, &azsecrets.ClientOptions{
 		ClientOptions: policy.ClientOptions{
-			InsecureAllowCredentialWithHTTP: true,
+			Transport: server.Client(),
 			Retry: policy.RetryOptions{
 				MaxRetries: 0,
 			},
