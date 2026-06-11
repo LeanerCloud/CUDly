@@ -31,10 +31,11 @@ func getServiceStringForCostExplorer(service common.ServiceType) string {
 
 // convertPaymentOption converts payment option string to AWS type.
 //
-// Deprecated: this function silently defaults to NoUpfront for unrecognized
-// values and is retained only for the legacy RI recommendation-fetch path in
-// client.go (owned by #865/#1075). New callers must use convertPaymentOptionE
-// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
+// Deprecated: this function silently returns the empty ("") PaymentOption for
+// unrecognized values, which Cost Explorer rejects with a validation error. It
+// is retained only for the legacy RI recommendation-fetch path in client.go
+// (owned by #865/#1075). New callers must use convertPaymentOptionE and
+// propagate the error. See open-questions/fix-aws-converters.md OQ-1.
 func convertPaymentOption(option string) types.PaymentOption {
 	v, _ := convertPaymentOptionE(option)
 	return v
@@ -72,10 +73,11 @@ func convertTermInYearsE(term string) (types.TermInYears, error) {
 
 // convertTermInYears converts term string to AWS type.
 //
-// Deprecated: this function silently defaults to OneYear for unrecognized
-// values and is retained only for the legacy RI recommendation-fetch path in
-// client.go (owned by #865/#1075). New callers must use convertTermInYearsE
-// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
+// Deprecated: this function silently returns the empty ("") TermInYears for
+// unrecognized values, which Cost Explorer rejects with a validation error. It
+// is retained only for the legacy RI recommendation-fetch path in client.go
+// (owned by #865/#1075). New callers must use convertTermInYearsE and
+// propagate the error. See open-questions/fix-aws-converters.md OQ-1.
 func convertTermInYears(term string) types.TermInYears {
 	v, _ := convertTermInYearsE(term)
 	return v
@@ -99,10 +101,11 @@ func convertLookbackPeriodE(period string) (types.LookbackPeriodInDays, error) {
 
 // convertLookbackPeriod converts lookback period string to AWS type.
 //
-// Deprecated: this function silently defaults to SevenDays for unrecognized
-// values and is retained only for the legacy RI recommendation-fetch path in
-// client.go (owned by #865/#1075). New callers must use convertLookbackPeriodE
-// and propagate the error. See open-questions/fix-aws-converters.md OQ-1.
+// Deprecated: this function silently returns the empty ("") LookbackPeriodInDays
+// for unrecognized values, which Cost Explorer rejects with a validation error.
+// It is retained only for the legacy RI recommendation-fetch path in client.go
+// (owned by #865/#1075). New callers must use convertLookbackPeriodE and
+// propagate the error. See open-questions/fix-aws-converters.md OQ-1.
 func convertLookbackPeriod(period string) types.LookbackPeriodInDays {
 	v, _ := convertLookbackPeriodE(period)
 	return v
