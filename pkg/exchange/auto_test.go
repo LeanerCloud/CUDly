@@ -3,6 +3,7 @@ package exchange
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
@@ -56,6 +57,7 @@ type mockExchangeClient struct {
 	quoteErr      error
 	executeResult string
 	executeErr    error
+	executeCalls  int
 }
 
 func (m *mockExchangeClient) GetQuote(_ context.Context, _ ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
@@ -63,6 +65,7 @@ func (m *mockExchangeClient) GetQuote(_ context.Context, _ ExchangeQuoteRequest)
 }
 
 func (m *mockExchangeClient) Execute(_ context.Context, _ ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
+	m.executeCalls++
 	return m.executeResult, m.quoteResult, m.executeErr
 }
 
@@ -257,6 +260,46 @@ func TestRunAutoExchange_AutoMode_DailySpendDBError_FailsClosed(t *testing.T) {
 
 	assert.Len(t, result.Failed, 1)
 	assert.Contains(t, result.Failed[0].Error, "daily cap check failed")
+}
+
+// TestProcessAutoExchange_UnparseablePaymentDue_FailsClosed is the regression
+// test for COR-04: an unparseable or empty paymentDueStr must abort the
+// exchange and persist a failed record, never count as $0 toward the
+// MaxPaymentDailyUSD cap. RunAutoExchange always builds a parseable string
+// today, so processAutoExchange is exercised directly with the bad inputs.
+func TestProcessAutoExchange_UnparseablePaymentDue_FailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, paymentDueStr := range []string{"not-a-number", ""} {
+		t.Run(fmt.Sprintf("paymentDue=%q", paymentDueStr), func(t *testing.T) {
+			t.Parallel()
+			store := &mockExchangeStore{dailySpend: "0"}
+			client := &mockExchangeClient{executeResult: "exch-should-not-happen"}
+			params := defaultParams(store, client)
+			params.Config.Mode = "auto"
+
+			rec := ReshapeRecommendation{
+				SourceRIID:         "ri-001",
+				SourceInstanceType: "m5.xlarge",
+				TargetInstanceType: "m5.large",
+				SourceCount:        1,
+				TargetCount:        2,
+				UtilizationPercent: 50.0,
+			}
+			perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
+
+			outcome := processAutoExchange(context.Background(), params, rec, "offering-123", paymentDueStr, perExchangeCap)
+
+			assert.Contains(t, outcome.Error, "failed to parse payment due")
+			assert.Empty(t, outcome.ExchangeID)
+			assert.Zero(t, client.executeCalls, "exchange must not execute on unparseable payment due")
+
+			// A failed record must be persisted for the audit trail,
+			// mirroring the dailySpent parse-failure branch.
+			require.Len(t, store.savedRecords, 1)
+			assert.Equal(t, "failed", store.savedRecords[0].Status)
+			assert.Contains(t, store.savedRecords[0].Error, "failed to parse payment due")
+		})
+	}
 }
 
 func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
