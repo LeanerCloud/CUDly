@@ -49,6 +49,10 @@ type Client struct {
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
 	// fan-out per scheduler tick).
 	skuCatalog skuCatalog
+
+	// recLookbackPeriod is forwarded to GetReservationPurchaseRecommendation
+	// as LookbackPeriodInDays. Defaults to "7d" when empty.
+	recLookbackPeriod string
 }
 
 // NewClient creates a new recommendations client
@@ -94,13 +98,20 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 // instanceTypeLookup returns the cached SKU entry for instanceType.
 // On the first call the catalogue is built by calling the pager factory.
 // ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue — the caller falls back to
+// the instance type was not in the catalogue -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
 		return instanceTypeSKUEntry{}, false
 	}
 	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
+}
+
+// SetRecLookbackPeriod configures the LookbackPeriodInDays used by
+// GetRecommendationsForService. Valid values: "7d", "30d", "60d".
+// An empty or unrecognised value falls back to "7d" at call time.
+func (c *Client) SetRecLookbackPeriod(period string) {
+	c.recLookbackPeriod = period
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
@@ -237,6 +248,44 @@ var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", 
 // throttle on one (term, payment) combo doesn't suppress the others;
 // only an error where every combo fails is propagated. This mirrors
 // the "continue on per-service error" tolerance in GetAllRecommendations.
+// fetchSingleComboRecs fetches recommendations for one (term, payment) pair.
+// If the context is already done before the call, it returns (nil, ctx.Err()).
+// If GetRecommendations returns an error after ctx cancellation, it also
+// returns (nil, ctx.Err()) so the caller exits the sweep immediately. Per-combo
+// errors (throttle, 5xx) return (nil, err) with ctx.Err() == nil, signalling
+// skip-and-continue tolerance in the outer loop.
+func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.ServiceType, term string, payment string) ([]common.Recommendation, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	lookback := c.recLookbackPeriod
+	if lookback == "" {
+		lookback = "7d"
+	}
+	params := common.RecommendationParams{
+		Service:        service,
+		PaymentOption:  payment,
+		Term:           term,
+		LookbackPeriod: lookback,
+		Region:         "",
+	}
+	recs, err := c.GetRecommendations(ctx, params)
+	if err != nil {
+		// A canceled / deadline-exceeded ctx is NOT a per-combo
+		// failure to be tolerated -- every subsequent combo
+		// would just hit the same dead context and waste time
+		// while we accumulate "failures" that hide the real
+		// reason. Short-circuit so the caller sees the ctx
+		// error verbatim. Per-combo errors (throttle, 5xx)
+		// keep the existing skip-and-continue tolerance.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return recs, nil
+}
+
 func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
 	allRecs := make([]common.Recommendation, 0)
 	var lastErr error
@@ -244,26 +293,9 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	attempts := 0
 	for _, term := range defaultDiscoveryTerms {
 		for _, payment := range defaultDiscoveryPaymentOptions {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
 			attempts++
-			params := common.RecommendationParams{
-				Service:        service,
-				PaymentOption:  payment,
-				Term:           term,
-				LookbackPeriod: "7d",
-				Region:         "",
-			}
-			recs, err := c.GetRecommendations(ctx, params)
+			recs, err := c.fetchSingleComboRecs(ctx, service, term, payment)
 			if err != nil {
-				// A canceled / deadline-exceeded ctx is NOT a per-combo
-				// failure to be tolerated — every subsequent combo
-				// would just hit the same dead context and waste time
-				// while we accumulate "failures" that hide the real
-				// reason. Short-circuit so the caller sees the ctx
-				// error verbatim. Per-combo errors (throttle, 5xx)
-				// keep the existing skip-and-continue tolerance.
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}

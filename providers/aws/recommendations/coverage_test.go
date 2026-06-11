@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
@@ -15,15 +16,21 @@ import (
 
 // mockCoverageCE extends the test mock with a configurable GetReservationCoverage
 // response so the coverage path can be exercised without hitting AWS.
+// lastTimePeriod captures the TimePeriod from the most recent call so tests can
+// assert that the CE window matches the requested lookbackDays.
 type mockCoverageCE struct {
 	mockCostExplorerAPI
 	coverageOutput *costexplorer.GetReservationCoverageOutput
 	coverageError  error
 	coverageCalls  int
+	lastTimePeriod *types.DateInterval
 }
 
 func (m *mockCoverageCE) GetReservationCoverage(ctx context.Context, params *costexplorer.GetReservationCoverageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationCoverageOutput, error) {
 	m.coverageCalls++
+	if params != nil {
+		m.lastTimePeriod = params.TimePeriod
+	}
 	if m.coverageError != nil {
 		return nil, m.coverageError
 	}
@@ -116,6 +123,55 @@ func TestGetRICoverageMap_LookbackDefault(t *testing.T) {
 	require.NoError(t, err)
 	wantCalls := len(regions) * (len(coverageServiceFilters) + len(rdsCoverageEngines))
 	assert.Equal(t, wantCalls, mock.coverageCalls)
+}
+
+// TestGetRICoverageMap_LookbackWindowWidth asserts that the CE TimePeriod
+// sent to GetReservationCoverage spans exactly lookbackDays calendar days.
+// This test is deliberately discriminating: it parses the YYYY-MM-DD Start
+// and End strings and verifies end-start == N days so a regression in the
+// window math (e.g. reverting to a hardcoded 30) causes a test failure.
+func TestGetRICoverageMap_LookbackWindowWidth(t *testing.T) {
+	cases := []struct {
+		name         string
+		lookbackDays int
+	}{
+		{"14-day window", 14},
+		{"60-day window", 60},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockCoverageCE{coverageOutput: &costexplorer.GetReservationCoverageOutput{}}
+			client := NewClientWithAPI(mock, "us-east-1")
+
+			before := time.Now().UTC()
+			_, err := client.GetRICoverageMap(context.Background(), tc.lookbackDays, []string{"us-east-1"})
+			after := time.Now().UTC()
+			require.NoError(t, err)
+			require.NotNil(t, mock.lastTimePeriod, "GetReservationCoverage must have been called with a TimePeriod")
+			require.NotNil(t, mock.lastTimePeriod.Start)
+			require.NotNil(t, mock.lastTimePeriod.End)
+
+			start, err := time.Parse("2006-01-02", aws.ToString(mock.lastTimePeriod.Start))
+			require.NoError(t, err, "TimePeriod.Start must be a valid YYYY-MM-DD date")
+			end, err := time.Parse("2006-01-02", aws.ToString(mock.lastTimePeriod.End))
+			require.NoError(t, err, "TimePeriod.End must be a valid YYYY-MM-DD date")
+
+			// CE dates are truncated to day; allow for midnight-boundary
+			// skew of at most 1 day when the test runs near UTC midnight.
+			spanDays := int(end.Sub(start).Hours() / 24)
+			assert.Equal(t, tc.lookbackDays, spanDays,
+				"CE TimePeriod must span exactly lookbackDays days (start=%s end=%s)",
+				aws.ToString(mock.lastTimePeriod.Start),
+				aws.ToString(mock.lastTimePeriod.End))
+
+			// Sanity: the End date must fall within the test's execution window.
+			endUTC := end
+			assert.True(t, !endUTC.Before(before.Truncate(24*time.Hour)),
+				"TimePeriod.End must not be before test start")
+			assert.True(t, !endUTC.After(after.Add(24*time.Hour)),
+				"TimePeriod.End must not be more than a day after test completion")
+		})
+	}
 }
 
 // TestApplyCoverageMapToRecommendations covers the org-wide pool matching:

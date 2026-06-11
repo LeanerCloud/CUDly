@@ -174,6 +174,12 @@ func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, loo
 	return r.client.GetRICoverageMap(ctx, lookbackDays, regions)
 }
 
+// SetRecLookbackPeriod configures the LookbackPeriodInDays forwarded to
+// GetReservationPurchaseRecommendation. Valid values: "7d", "30d", "60d".
+func (r *RecommendationsClientAdapter) SetRecLookbackPeriod(period string) {
+	r.client.SetRecLookbackPeriod(period)
+}
+
 // NewRecommendationsClientDirect creates a new recommendations client returning the concrete type
 // (needed for GetRIUtilization which is not part of the generic provider interface).
 func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {
