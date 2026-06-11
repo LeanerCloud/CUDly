@@ -3341,7 +3341,9 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", ctx, userSession.UserID).Return([]string{}, nil)
 	// The constraint check must receive one set per recommendation, each
 	// carrying the batch's TOTAL upfront cost ($3000 + $2500 = $5500) and
-	// that rec's provider/service/region as single-value lists.
+	// that rec's provider/service/region as single-value lists. These recs
+	// carry no cloud_account_id, so AccountIDs must be the unattributed
+	// sentinel (never empty, which the auth matcher treats as satisfied).
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userSession.UserID, "execute", "purchases",
 		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
 			if len(sets) != 2 {
@@ -3349,6 +3351,9 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 			}
 			for _, c := range sets {
 				if c.MaxPurchaseAmount != 5500.0 {
+					return false
+				}
+				if !assert.ObjectsAreEqual([]string{unattributedAccountConstraint}, c.AccountIDs) {
 					return false
 				}
 			}
@@ -3372,6 +3377,31 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 	require.True(t, ok, "expected a clientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "constraints")
+}
+
+// TestPurchaseConstraintSets_AccountDimensionAlwaysPopulated pins the SEC-01
+// fail-closed shape of the AccountIDs dimension: every constraint set must
+// carry a non-empty AccountIDs list. The auth matcher treats an empty
+// request-side list as "dimension not specified = satisfied", so a rec
+// without a cloud_account_id must carry the unattributed sentinel; omitting
+// the dimension would let an AccountIDs-constrained execute:purchases
+// permission authorize an unattributed purchase (fail-open).
+func TestPurchaseConstraintSets_AccountDimensionAlwaysPopulated(t *testing.T) {
+	attributed := "11111111-2222-3333-4444-555555555555"
+	empty := ""
+	sets := purchaseConstraintSets([]config.RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 100, CloudAccountID: &attributed},
+		{Provider: "aws", Service: "rds", Region: "eu-west-1", UpfrontCost: 200, CloudAccountID: nil},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 300, CloudAccountID: &empty},
+	})
+	require.Len(t, sets, 3)
+	assert.Equal(t, []string{attributed}, sets[0].AccountIDs)
+	assert.Equal(t, []string{unattributedAccountConstraint}, sets[1].AccountIDs)
+	assert.Equal(t, []string{unattributedAccountConstraint}, sets[2].AccountIDs)
+	for i, c := range sets {
+		assert.NotEmpty(t, c.AccountIDs, "set %d must always carry the AccountIDs dimension", i)
+		assert.Equal(t, 600.0, c.MaxPurchaseAmount, "set %d must carry the batch total upfront", i)
+	}
 }
 
 // TestHandler_executePurchase_DirectExec_ExecuteAny verifies that a session

@@ -243,6 +243,19 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 	return session, nil
 }
 
+// unattributedAccountConstraint is the request-side AccountIDs value passed
+// to requirePermissionConstraints when a request cannot be attributed to a
+// registered cloud account (a recommendation without a cloud_account_id, or
+// an RI exchange on a deployment whose running account is not registered).
+// The auth matcher treats an EMPTY request-side list as "dimension not
+// specified = satisfied", so omitting AccountIDs would let a permission
+// constrained to specific accounts authorize an unattributed request
+// (fail-open). Sending this sentinel keeps the list non-empty: it can never
+// equal a real cloud account UUID, so a permission constrained to real
+// accounts denies the request (fail closed), while a permission without an
+// AccountIDs constraint still matches via the empty-permission-side rule.
+const unattributedAccountConstraint = "unattributed"
+
 // requirePermissionConstraints re-checks an already-authenticated session
 // against request-derived permission constraint sets, so the Constraints
 // (MaxPurchaseAmount, Providers, Services, Regions, AccountIDs) configured on
