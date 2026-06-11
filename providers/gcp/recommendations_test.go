@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -265,4 +266,62 @@ func TestGCPRegionConcurrency(t *testing.T) {
 		os.Unsetenv("CUDLY_GCP_REGION_PARALLELISM")
 		assert.Equal(t, defaultGCPRegionConcurrency, gcpRegionConcurrency())
 	})
+}
+
+// TestMergeRegionResults_AllAttemptedFailed is the COR-03 regression test:
+// when EVERY attempted (region, service) call errors (the shape produced by a
+// project-wide throttle or an RBAC gap that survives getRegions), the merge
+// must return a non-nil error instead of (empty, nil). Pre-fix, the per-region
+// errors were logged in collectRegion and dropped, so a total failure surfaced
+// as an empty successful collection: the scheduler counted the account in
+// SucceededAccountIDs, UpsertRecommendations evicted all previously collected
+// rows for it, and last_collection_error was cleared.
+func TestMergeRegionResults_AllAttemptedFailed(t *testing.T) {
+	rbacErr := errors.New("googleapi: Error 403: missing recommender.commitmentRecommendations.list")
+
+	results := map[string]regionResult{
+		"europe-west1": {attempted: 4, failed: 4, lastErr: rbacErr},
+		"us-central1":  {attempted: 4, failed: 4, lastErr: rbacErr},
+	}
+
+	recs, err := mergeRegionResults([]string{"europe-west1", "us-central1"}, results)
+
+	require.Error(t, err, "all-attempted-failed merge must fail loud, not return (empty, nil)")
+	assert.ErrorIs(t, err, rbacErr, "the underlying service error must be wrapped")
+	assert.Contains(t, err.Error(), "all 8 GCP recommendation service calls failed across 2 regions")
+	assert.Nil(t, recs)
+}
+
+// TestMergeRegionResults_PartialFailureStillSucceeds pins the tolerated
+// partial-failure behaviour: a single successful (region, service) call is
+// enough for the merge to return its recommendations with a nil error.
+func TestMergeRegionResults_PartialFailureStillSucceeds(t *testing.T) {
+	throttleErr := errors.New("googleapi: Error 429: quota exceeded")
+	computeRec := common.Recommendation{Service: common.ServiceCompute, Provider: common.ProviderGCP, Region: "us-central1"}
+
+	results := map[string]regionResult{
+		"europe-west1": {attempted: 4, failed: 4, lastErr: throttleErr},
+		"us-central1": {
+			compute:   []common.Recommendation{computeRec},
+			attempted: 4,
+			failed:    3,
+			lastErr:   throttleErr,
+		},
+	}
+
+	recs, err := mergeRegionResults([]string{"europe-west1", "us-central1"}, results)
+
+	require.NoError(t, err, "partial failure must still return the successful calls' recs")
+	require.Len(t, recs, 1)
+	assert.Equal(t, "us-central1", recs[0].Region)
+}
+
+// TestMergeRegionResults_NoAttemptsIsNotAFailure asserts the guard does not
+// fire when nothing was attempted (zero regions, or every service filtered
+// out by params): that case keeps the previous empty-success behaviour.
+func TestMergeRegionResults_NoAttemptsIsNotAFailure(t *testing.T) {
+	recs, err := mergeRegionResults(nil, map[string]regionResult{})
+
+	require.NoError(t, err)
+	assert.Empty(t, recs)
 }
