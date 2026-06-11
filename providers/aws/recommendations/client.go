@@ -344,7 +344,7 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 		return nil
 	})
 	g.Go(func() error {
-		spRecs, spErr = c.GetRecommendationsForService(gctx, common.ServiceSavingsPlans)
+		spRecs, spErr = c.GetRecommendationsForService(gctx, common.ServiceSavingsPlansAll)
 		return nil
 	})
 

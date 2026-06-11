@@ -56,16 +56,21 @@ const (
 
 	// Savings/Commitments
 	//
-	// ServiceSavingsPlans is the canonical umbrella identifier for AWS Savings
-	// Plans. The string value "savingsplans" (no hyphen) matches the frontend's
-	// identifier and the value persisted in service_configs.service /
-	// purchase_history.service so that direct comparisons
-	// (rec.Service == ServiceSavingsPlans) work without a normaliser. See
-	// issue #85 for the rationale (frontend chosen as canonical to avoid a
-	// SQL data migration). Code that needs to recognise pre-#85 persisted
-	// "savings-plans" rows (e.g. purchase_executions JSONB blobs) goes
-	// through the mapper in internal/purchase/execution.go.
-	ServiceSavingsPlans ServiceType = "savingsplans" // AWS Savings Plans (umbrella)
+	// ServiceSavingsPlansAll is the umbrella sentinel for all AWS Savings Plans.
+	// Its string value "savingsplans" (no hyphen) matches the frontend identifier
+	// and the value persisted in service_configs.service / purchase_history.service
+	// so that direct comparisons work without a normaliser. See issue #85 for the
+	// rationale (frontend chosen as canonical to avoid a SQL data migration).
+	//
+	// This is NOT a per-plan-type slug. The four granular forms are:
+	//   ServiceSavingsPlansCompute, ServiceSavingsPlansEC2Instance,
+	//   ServiceSavingsPlansSageMaker, ServiceSavingsPlansDatabase.
+	// Use SavingsPlansPlanTypes() to iterate over them in canonical order.
+	//
+	// Code that needs to recognise pre-#85 persisted "savings-plans" rows
+	// (e.g. purchase_executions JSONB blobs) goes through the mapper in
+	// internal/purchase/execution.go.
+	ServiceSavingsPlansAll ServiceType = "savingsplans" // umbrella sentinel for "any SP"
 
 	// Per-plan-type Savings Plans slugs. Each maps 1:1 to an AWS
 	// types.SupportedSavingsPlansType so users can configure term/payment
@@ -100,15 +105,15 @@ func (s ServiceType) String() string {
 	return string(s)
 }
 
-// IsSavingsPlan reports whether s is any Savings Plans service slug —
-// the legacy umbrella (ServiceSavingsPlans), any of the four per-plan-type
+// IsSavingsPlan reports whether s is any Savings Plans service slug --
+// the umbrella sentinel (ServiceSavingsPlansAll), any of the four per-plan-type
 // constants, or the dash-free frontend spelling "savingsplans" that the API
 // handler stores verbatim without normalisation. Use it when code needs to
 // recognise the Savings Plans family irrespective of plan type (e.g., stats
 // aggregation, region-ignoring filters, display-name branching).
 func IsSavingsPlan(s ServiceType) bool {
 	switch s {
-	case ServiceSavingsPlans,
+	case ServiceSavingsPlansAll,
 		ServiceSavingsPlansCompute,
 		ServiceSavingsPlansEC2Instance,
 		ServiceSavingsPlansSageMaker,
@@ -116,6 +121,20 @@ func IsSavingsPlan(s ServiceType) bool {
 		return true
 	}
 	return string(s) == "savingsplans"
+}
+
+// SavingsPlansPlanTypes returns the four per-plan-type SP slugs in canonical
+// iteration order (Compute -> EC2Instance -> SageMaker -> Database). Use this
+// for any fan-out over "all SP plan types"; it makes the 4-way expansion
+// visible at the call site instead of relying on the umbrella sentinel
+// (ServiceSavingsPlansAll) to expand implicitly inside the rec collector.
+func SavingsPlansPlanTypes() []ServiceType {
+	return []ServiceType{
+		ServiceSavingsPlansCompute,
+		ServiceSavingsPlansEC2Instance,
+		ServiceSavingsPlansSageMaker,
+		ServiceSavingsPlansDatabase,
+	}
 }
 
 // CommitmentType represents different commitment types across clouds
@@ -521,7 +540,7 @@ type SavingsPlanDetails struct {
 }
 
 func (d SavingsPlanDetails) GetServiceType() ServiceType {
-	return ServiceSavingsPlans
+	return ServiceSavingsPlansAll
 }
 
 func (d SavingsPlanDetails) GetDetailDescription() string {
