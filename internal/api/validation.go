@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"net/mail"
 	"regexp"
 	"strconv"
@@ -602,9 +603,10 @@ func decodeBase64Password(encoded string) (string, error) {
 
 // parseMinSavingsParam parses a numeric savings-floor query parameter.
 // Returns (0, nil) when the parameter is absent or empty (no floor).
-// Returns 400 when the value is present but not a valid non-negative
-// integer or float. Fractional values are allowed (e.g. "12.5") since
-// savings floors can be sub-dollar amounts.
+// Returns 400 when the value is present but not a finite non-negative
+// integer or float (NaN and +/-Inf are rejected: a NaN floor silently
+// disables or inverts the filter downstream). Fractional values are
+// allowed (e.g. "12.5") since savings floors can be sub-dollar amounts.
 //
 // paramName is included in the error message so callers can distinguish
 // min_savings_usd vs min_savings_pct errors in client logs.
@@ -614,8 +616,8 @@ func parseMinSavingsParam(raw string, paramName string) (float64, error) {
 		return 0, nil
 	}
 	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		return 0, NewClientError(400, fmt.Sprintf("%s must be a non-negative number", paramName))
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, NewClientError(400, fmt.Sprintf("%s must be a finite non-negative number", paramName))
 	}
 	if v < 0 {
 		return 0, NewClientError(400, fmt.Sprintf("%s must be non-negative", paramName))
