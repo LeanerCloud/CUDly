@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,7 +286,7 @@ func TestMockSecretID_EdgeCases(t *testing.T) {
 // TestMockAzureSecretsPager_MultiplePages tests the mock pager with multiple pages.
 func TestMockAzureSecretsPager_MultiplePages(t *testing.T) {
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{
+		pages: [][]*azsecrets.SecretProperties{
 			{}, // empty first page
 			{}, // empty second page
 		},
@@ -319,7 +319,7 @@ func TestMockAzureSecretsPager_Error(t *testing.T) {
 // TestMockAzureSecretsPager_EmptyPages tests the mock pager with empty pages slice.
 func TestMockAzureSecretsPager_EmptyPages(t *testing.T) {
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{},
+		pages: [][]*azsecrets.SecretProperties{},
 	}
 
 	assert.False(t, pager.More())
@@ -328,7 +328,7 @@ func TestMockAzureSecretsPager_EmptyPages(t *testing.T) {
 // TestMockAzureSecretsPager_NoMorePages tests NextPage when there are no more pages.
 func TestMockAzureSecretsPager_NoMorePages(t *testing.T) {
 	pager := &MockAzureSecretsPager{
-		pages:       [][]*azsecrets.SecretItem{{}},
+		pages:       [][]*azsecrets.SecretProperties{{}},
 		currentPage: 1, // Already past the first page
 	}
 

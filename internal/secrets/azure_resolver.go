@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
 
 // AzureResolver implements Resolver for Azure Key Vault.
@@ -88,7 +88,7 @@ func (r *AzureResolver) ListSecrets(ctx context.Context, filter string) ([]strin
 	secrets := make([]string, 0)
 
 	// Create pager for listing secrets
-	pager := r.client.NewListSecretsPager(nil)
+	pager := r.client.NewListSecretPropertiesPager(nil)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
