@@ -907,8 +907,9 @@ func TestClient_GetDurationStringForAPI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := client.getDurationStringForAPI(tt.term)
 			if tt.expectErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "unsupported MemoryDB reservation term")
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported MemoryDB reservation term")
+				}
 				return
 			}
 			assert.NoError(t, err)
