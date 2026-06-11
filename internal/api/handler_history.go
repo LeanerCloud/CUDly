@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -55,12 +56,14 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// scheduled_date) so the two halves of the merged response are
 	// consistently scoped (issue #701).
 	//
-	// Stale pending/notified executions are expired asynchronously AFTER the
-	// response is assembled so the GET handler is a pure read (issue #1032):
-	// the caller sees current DB state; the transitions fire in a goroutine
-	// and the next History load reflects the updated status.
+	// Stale pending/notified executions are expired AFTER the response is
+	// assembled so the GET handler is a pure read (issue #1032): the caller
+	// sees current DB state and the next History load reflects the updated
+	// status. On servers the transitions fire in a goroutine; on Lambda they
+	// run synchronously before returning because the execution environment
+	// freezes once the response is out (issue #1170).
 	extra, staleExecs := h.fetchExecutionsAsHistory(ctx, filters)
-	h.expireStaleExecutionsAsync(staleExecs)
+	h.expireStaleExecutions(staleExecs)
 
 	all := make([]config.PurchaseHistoryRecord, 0, len(completed)+len(extra))
 	all = append(all, completed...)
@@ -129,11 +132,11 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // to "multiple" because a single execution can span providers. The approver
 // address is looked up from global config once and attached to pending/
 // notified rows so the UI can tell the user exactly whose inbox holds the
-// approval link. Stale pending/notified executions are expired asynchronously
-// after this call returns (see expireStaleExecutionsAsync) so the GET is a
-// pure read: the response rows carry the pre-transition status and the
-// next request sees the updated state. A listing error is logged and
-// skipped — completed history must still render.
+// approval link. Stale pending/notified executions are expired after this
+// call returns (see expireStaleExecutions) so the GET is a pure read:
+// the response rows carry the pre-transition status and the next request
+// sees the updated state. A listing error is logged and skipped — completed
+// history must still render.
 //
 // The filter set (issue #701) is applied in Go against the synthetic row:
 // provider via the recs' collapsed provider, account via CloudAccountID,
@@ -160,10 +163,10 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		if exec.Status == "completed" && exec.Error == "" {
 			continue
 		}
-		// Collect stale pending/notified executions for the post-response
-		// async expire sweep. We do NOT mutate status here to keep the GET
-		// read-only: the response reflects current DB state; the background
-		// goroutine fires the transition so the next request sees "expired".
+		// Collect stale pending/notified executions for the post-assembly
+		// expire sweep. We do NOT mutate status here to keep the GET
+		// read-only: the response reflects current DB state; the sweep
+		// fires the transition so the next request sees "expired".
 		if isStaleExecution(exec) {
 			staleExecs = append(staleExecs, exec)
 		}
@@ -190,32 +193,50 @@ func isStaleExecution(exec config.PurchaseExecution) bool {
 	return time.Since(exec.ScheduledDate) >= approvalExpiryWindow
 }
 
-// expireStaleExecutionsAsync fires TransitionExecutionStatus for each stale
-// execution in a best-effort goroutine that outlives the request context.
-// Using context.Background() ensures the transitions are not cancelled when
-// the HTTP handler returns. Errors are logged and skipped — a missed
-// transition leaves the row "pending" until the next History load, which is
-// better than blocking the read response.
+// expireStaleExecutions fires TransitionExecutionStatus for each stale
+// execution. On long-running servers this happens in a best-effort goroutine
+// that outlives the request context: context.Background() ensures the
+// transitions are not cancelled when the HTTP handler returns. On Lambda that
+// guarantee does not hold: the execution environment freezes as soon as the
+// response is returned, so a background goroutine would be suspended
+// mid-sweep and stale rows could stay "pending" indefinitely (issue #1170).
+// There the sweep runs synchronously before the handler returns, mirroring
+// the SWR cache's isLambda gate (ri_utilization_cache.go) and using the same
+// runtime.IsLambda detection helper. The sweep is a handful of cheap UPDATEs,
+// so the synchronous cost on Lambda is negligible. Errors are logged and
+// skipped — a missed transition leaves the row "pending" until the next
+// History load, which is better than failing the read response.
 //
-// The goroutine is idempotent per execution ID: TransitionExecutionStatus is
+// The sweep is idempotent per execution ID: TransitionExecutionStatus is
 // guarded by the FROM-status list ("pending","notified"), so a concurrent
 // caller that wins the race causes the loser's update to affect 0 rows and
 // return an error, which is already handled by the Warnf below. Two
-// simultaneous GET requests can both spawn a goroutine for the same stale
-// row; only one transition commits — this is safe and expected.
-func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecution) {
+// simultaneous GET requests can both sweep the same stale row; only one
+// transition commits — this is safe and expected.
+func (h *Handler) expireStaleExecutions(staleExecs []config.PurchaseExecution) {
 	if len(staleExecs) == 0 {
 		return
 	}
-	go func() {
-		ctx := context.Background()
-		for _, exec := range staleExecs {
-			_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
-			if err != nil {
-				logging.Warnf("history: async expire of execution %s failed: %v", exec.ExecutionID, err)
-			}
+	if runtime.IsLambda() {
+		h.expireStaleExecutionsSweep(staleExecs)
+		return
+	}
+	go h.expireStaleExecutionsSweep(staleExecs)
+}
+
+// expireStaleExecutionsSweep is the shared sweep body for both branches of
+// expireStaleExecutions. It deliberately uses context.Background()
+// rather than the request context: on servers the goroutine outlives the
+// request, and on Lambda the request context may carry a deadline that
+// should not abort the best-effort transitions.
+func (h *Handler) expireStaleExecutionsSweep(staleExecs []config.PurchaseExecution) {
+	ctx := context.Background()
+	for _, exec := range staleExecs {
+		_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
+		if err != nil {
+			logging.Warnf("history: expire sweep for execution %s failed: %v", exec.ExecutionID, err)
 		}
-	}()
+	}
 }
 
 // resolveUserEmails builds a map of user-ID to email by calling GetUser once
