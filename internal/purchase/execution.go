@@ -1012,9 +1012,11 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 // "savings-plans"-spelled aliases below must stay so Lambda-scheduled
 // executions persisted before PR #94 still map correctly on retry/approval.
 // To drop: verify zero rows with
-//   SELECT id FROM purchase_executions
-//   WHERE recommendations::text LIKE '%"service":"savings-plans"%'
-//   LIMIT 1;
+//
+//	SELECT id FROM purchase_executions
+//	WHERE recommendations::text LIKE '%"service":"savings-plans"%'
+//	LIMIT 1;
+//
 // then remove every "savings-plans*" key from this map and the matching
 // case in pkg/common/service_details_codec.go: newDetailsForService, and
 // flip the coverage_extra_test.go case (line ~60) to assert
