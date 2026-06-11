@@ -841,3 +841,119 @@ func TestGetSQLPricing_CommitmentPriceIsTermTotal(t *testing.T) {
 	assert.Less(t, pricing.SavingsPercentage, float64(50),
 		"SavingsPercentage must be realistic (not ~100%)")
 }
+
+func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Inject a billing mock with a known on-demand price and a separate
+	// commitment SKU. getSQLPricing derives CommitmentPrice from the
+	// "commitment" SKU (CommitmentPrice = commitmentHourly * 8760), so
+	// RecurringMonthlyCost must equal CommitmentPrice / 12 (one year = 12 months).
+	const onDemandHourly = 0.12    // USD/h per vCPU -- representative db-n1-standard-1 value
+	const commitmentHourly = 0.102 // USD/h -- 1yr CUD rate from the catalog
+	mockBilling := &MockBillingService{
+		skus: &cloudbilling.ListSkusResponse{
+			Skus: []*cloudbilling.Sku{
+				{
+					Description:    "db-n1-standard-1 Cloud SQL",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        int64(onDemandHourly * 1e9),
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					// Commitment SKU required by getSQLPricing: without a
+					// "commitment" SKU it errors and RecurringMonthlyCost stays nil.
+					Description:    "db-n1-standard-1 Cloud SQL commitment 1yr",
+					ServiceRegions: []string{"us-central1"},
+					PricingInfo: []*cloudbilling.PricingInfo{
+						{
+							PricingExpression: &cloudbilling.PricingExpression{
+								TieredRates: []*cloudbilling.TierRate{
+									{
+										UnitPrice: &cloudbilling.Money{
+											Units:        0,
+											Nanos:        int64(commitmentHourly * 1e9),
+											CurrencyCode: "USD",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetBillingService(mockBilling)
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		PrimaryImpact: &recommenderpb.Impact{
+			Category: recommenderpb.Impact_COST,
+			Projection: &recommenderpb.Impact_CostProjection{
+				CostProjection: &recommenderpb.CostProjection{
+					Cost: &money.Money{Units: -100, CurrencyCode: "USD"},
+				},
+			},
+		},
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{
+					Operations: []*recommenderpb.Operation{
+						{Resource: "projects/test/instances/db-n1-standard-1"},
+					},
+				},
+			},
+		},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+
+	// RecurringMonthlyCost must be a non-nil pointer to a positive value for
+	// a monthly Cloud SQL CUD recommendation.
+	require.NotNil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be non-nil when billing lookup succeeds")
+	assert.Greater(t, *rec.RecurringMonthlyCost, 0.0, "RecurringMonthlyCost must be positive for a monthly Cloud SQL CUD")
+
+	// Verify the value matches CommitmentPrice / 12 exactly. CommitmentPrice is
+	// the commitment SKU's hourly rate scaled to the 1yr term total.
+	const hoursIn1yr = 8760.0
+	expectedMonthly := commitmentHourly * hoursIn1yr / 12
+	assert.InDelta(t, expectedMonthly, *rec.RecurringMonthlyCost, 1e-6)
+}
+
+func TestCloudSQLClient_ConvertGCPRecommendation_RecurringMonthlyCost_BillingFailure(t *testing.T) {
+	ctx := context.Background()
+	client, _ := NewClient(ctx, "test-project", "us-central1")
+
+	// Inject a billing mock that always errors; RecurringMonthlyCost must
+	// remain nil (frontend renders "—") rather than a zero or stale value.
+	client.SetBillingService(&MockBillingService{err: errors.New("billing unavailable")})
+
+	gcpRec := &recommenderpb.Recommendation{
+		Name: "test-rec",
+		Content: &recommenderpb.RecommendationContent{
+			OperationGroups: []*recommenderpb.OperationGroup{
+				{Operations: []*recommenderpb.Operation{{Resource: "projects/test/instances/db-n1-standard-1"}}},
+			},
+		},
+	}
+
+	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{})
+	require.NotNil(t, rec)
+	assert.Nil(t, rec.RecurringMonthlyCost, "RecurringMonthlyCost must be nil when billing lookup fails")
+}
