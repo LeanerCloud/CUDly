@@ -190,6 +190,34 @@ func TestService_ValidateSession(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("constant-time mismatch rejects session even when DB row exists", func(t *testing.T) {
+		// The DB returned a session row but its stored token hash does not
+		// match the hash we derived from the supplied token string. The
+		// constant-time guard (added alongside the API-key and reset-token
+		// equivalents in PR #837) must reject the request to avoid leaking
+		// timing information through the SQL equality oracle.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		hashedToken := hashSessionToken("some-token")
+		mismatchSession := &Session{
+			Token:     "completely-different-hash",
+			UserID:    "user-999",
+			Email:     "mismatch@example.com",
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
+
+		mockStore.On("GetSession", ctx, hashedToken).Return(mismatchSession, nil).Once()
+
+		session, err := service.ValidateSession(ctx, "some-token")
+		assert.Error(t, err)
+		assert.Nil(t, session)
+		assert.Contains(t, err.Error(), "session not found")
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestService_Logout(t *testing.T) {
@@ -631,7 +659,7 @@ func TestService_ErrorPaths(t *testing.T) {
 		testUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			PasswordResetToken:  "hashed-token",
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
