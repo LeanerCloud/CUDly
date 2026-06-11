@@ -1237,7 +1237,7 @@ describe('Account overrides modal', () => {
 
   test('Overrides button opens an account-scoped modal whose title binds to the account', async () => {
     (api.listAccounts as jest.Mock).mockResolvedValue([
-      { id: 'acc-1', name: 'AWS Prod', provider: 'aws', external_id: '540659244915', enabled: true },
+      { id: 'acc-1', name: 'AWS Prod', provider: 'aws', external_id: '123456789012', enabled: true },
     ]);
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
       { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', payment: 'all-upfront' },
@@ -1245,7 +1245,7 @@ describe('Account overrides modal', () => {
 
     await loadAccountsForProvider('aws');
     const btn = document.querySelector(
-      `button[aria-label="Service overrides for AWS Prod (540659244915)"]`,
+      `button[aria-label="Service overrides for AWS Prod (123456789012)"]`,
     ) as HTMLButtonElement;
     btn.click();
     await new Promise(r => setTimeout(r, 0));
@@ -1253,12 +1253,12 @@ describe('Account overrides modal', () => {
     const modal = document.getElementById('account-overrides-modal') as HTMLElement;
     expect(modal.classList.contains('hidden')).toBe(false);
     const title = document.getElementById('account-overrides-modal-title') as HTMLElement;
-    expect(title.textContent).toBe('Service overrides for AWS Prod (540659244915)');
+    expect(title.textContent).toBe('Service overrides for AWS Prod (123456789012)');
   });
 
   test('switching accounts swaps the modal title; only one account context is active at a time', async () => {
     (api.listAccounts as jest.Mock).mockResolvedValue([
-      { id: 'acc-a', name: 'AWS Prod',  provider: 'aws', external_id: '540659244915', enabled: true },
+      { id: 'acc-a', name: 'AWS Prod',  provider: 'aws', external_id: '123456789012', enabled: true },
       { id: 'acc-b', name: 'CUDly host', provider: 'aws', external_id: '909626172446', enabled: true },
     ]);
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
@@ -1268,7 +1268,7 @@ describe('Account overrides modal', () => {
 
     // Click Overrides on Account A.
     (document.querySelector(
-      `button[aria-label="Service overrides for AWS Prod (540659244915)"]`,
+      `button[aria-label="Service overrides for AWS Prod (123456789012)"]`,
     ) as HTMLButtonElement).click();
     await new Promise(r => setTimeout(r, 0));
     expect(titleEl.textContent).toContain('AWS Prod');
