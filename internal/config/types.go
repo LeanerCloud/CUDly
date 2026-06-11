@@ -48,7 +48,7 @@ type GlobalConfig struct {
 
 	// RecommendationsLookbackDays is the AWS Cost Explorer lookback window
 	// (days) used when fetching fresh recommendations. Must be one of 7,
-	// 30, or 60 — the AWS Cost Explorer LookbackPeriodInDays enum.
+	// 30, or 60 -- the AWS Cost Explorer LookbackPeriodInDays enum.
 	// GCP CUD Recommender has no equivalent lookback parameter (fixed
 	// internally); this setting applies to AWS only.
 	// Default: 7.
@@ -61,6 +61,14 @@ type GlobalConfig struct {
 	// 0 means immediate-execute (backward compat). Valid range: [0, 168].
 	// Default: 48.
 	PurchaseDelayHours int `json:"purchase_delay_hours" db:"purchase_delay_hours"`
+
+	// OfferingClass controls the EC2 Reserved Instance offering class used
+	// during purchase. Accepted values: "convertible" (default) and
+	// "standard". Convertible RIs can be exchanged for a different
+	// instance family/size/region/OS; Standard RIs are locked to the exact
+	// instance type for the full term but are ~5% cheaper.
+	// Unknown values are rejected at purchase time with an explicit error.
+	OfferingClass string `json:"offering_class,omitempty" dynamodbav:"offering_class,omitempty"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider

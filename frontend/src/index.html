@@ -497,6 +497,22 @@
                         </div>
                     </fieldset>
 
+                    <fieldset class="settings-category" id="ec2-ri-offering-class">
+                        <legend><span class="provider-badge aws">AWS</span> Reserved Instance Class</legend>
+                        <p class="settings-help">Controls whether EC2 Reserved Instances are purchased as Convertible or Standard. Convertible RIs can be exchanged for a different instance family, size, OS, or region later. Standard RIs are approximately 5% cheaper but are locked to the exact instance type for the full term and cannot be exchanged.</p>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label for="setting-ec2-offering-class">Reserved Instance class</label>
+                            </div>
+                            <div class="setting-input">
+                                <select id="setting-ec2-offering-class">
+                                    <option value="convertible" selected>Convertible (default -- exchangeable for different families/sizes/OS later)</option>
+                                    <option value="standard">Standard (~5% cheaper, locked to the exact instance for the full term)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- AWS Settings -->
                     <fieldset class="settings-category provider-settings" id="aws-settings">
                         <legend><span class="provider-badge aws">AWS</span> Service Defaults</legend>
