@@ -95,6 +95,14 @@ type RecommendationsClientAdapter struct {
 // providers/azure/recommendations.go (closes #258, commit b10326c5) and the
 // AWS service-loop parallelisation (closes #266).
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+	// Context cancellation is terminal: bail out before any API fan-out.
+	// Newer cloud.google.com/go/compute REST clients can complete a regions
+	// List call (and return a real 403) even when ctx is already cancelled,
+	// which would otherwise be swallowed by the permission branch below.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Get list of regions to check
 	regions, err := r.getRegions(ctx)
 	if err != nil {
@@ -102,7 +110,8 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		// service account lacks Compute Viewer on this project. Log at Warn
 		// so it doesn't spam as ERROR in Lambda — the application-layer auth
 		// still works; only GCP recommendations for this account are skipped.
-		// See issue #247.
+		// See issue #247. A cancelled ctx never reaches this branch (guarded
+		// above), so a genuine 403 is the only thing swallowed here.
 		if isPermissionError(err) {
 			logging.Warnf("GCP account %s: skipping recommendations — insufficient Compute permission to list regions (grant roles/compute.viewer): %v", r.projectID, err)
 			return []common.Recommendation{}, nil
