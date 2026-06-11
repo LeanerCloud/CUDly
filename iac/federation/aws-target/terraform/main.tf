@@ -36,6 +36,19 @@ resource "aws_iam_policy" "cudly" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "CostExplorer"
+        Effect = "Allow"
+        Action = [
+          "ce:GetReservationPurchaseRecommendation",
+          "ce:GetReservationUtilization",
+          "ce:GetReservationCoverage",
+          "ce:GetSavingsPlansPurchaseRecommendation",
+          "ce:GetSavingsPlansUtilization",
+          "ce:GetSavingsPlansCoverage",
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "EC2Reservations"
         Effect = "Allow"
         Action = [
