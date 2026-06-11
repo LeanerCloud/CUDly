@@ -505,8 +505,9 @@ func TestRequiredMonthsForTerm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := requiredMonthsForTerm(tt.term)
 			if tt.expectErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "unsupported Redshift reservation term")
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported Redshift reservation term")
+				}
 				return
 			}
 			assert.NoError(t, err)
