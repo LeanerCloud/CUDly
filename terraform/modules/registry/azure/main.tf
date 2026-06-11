@@ -6,13 +6,27 @@ resource "azurerm_container_registry" "main" {
   sku                 = var.sku
   admin_enabled       = var.enable_admin_user
 
-  # Premium-SKU policy attributes. In azurerm 4.x these are scalar
-  # attributes on the resource (the v3.x nested `retention_policy` /
-  # `trust_policy` blocks were removed). Set them conditionally on SKU
-  # — null leaves the provider default in place for non-Premium SKUs.
+  # Premium-SKU policy settings. quarantine_policy_enabled is a scalar
+  # attribute; trust_policy and retention_policy are nested blocks in
+  # azurerm 3.x (4.x replaced them with the scalar trust_policy_enabled /
+  # retention_policy_in_days attributes), so they are emitted via dynamic
+  # blocks only for the Premium SKU.
   quarantine_policy_enabled = var.sku == "Premium"
-  trust_policy_enabled      = var.sku == "Premium"
-  retention_policy_in_days  = var.sku == "Premium" ? var.image_retention_days : null
+
+  dynamic "trust_policy" {
+    for_each = var.sku == "Premium" ? [1] : []
+    content {
+      enabled = true
+    }
+  }
+
+  dynamic "retention_policy" {
+    for_each = var.sku == "Premium" ? [1] : []
+    content {
+      days    = var.image_retention_days
+      enabled = true
+    }
+  }
 
   tags = var.tags
 }
