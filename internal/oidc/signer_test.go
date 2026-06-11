@@ -2,14 +2,58 @@ package oidc
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
 )
+
+// assertRawES256JWS verifies that jws is a compact JWS whose signature
+// segment is the RFC 7518 section 3.4 raw R || S form (exactly 64 bytes
+// for P-256) and that it verifies against pub. It checks the signature
+// three independent ways so the test fails on the pre-fix DER-emitting
+// code: (1) the decoded signature is exactly 64 bytes; (2) the R || S
+// split verifies via ecdsa.Verify; (3) a real JOSE/JWT ES256 parser
+// (golang-jwt) accepts the token, proving real OIDC consumers like
+// Azure AD would too.
+func assertRawES256JWS(t *testing.T, jws string, pub *ecdsa.PublicKey) {
+	t.Helper()
+
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWS parts, got %d", len(parts))
+	}
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	// (1) Raw R || S is exactly 64 bytes for P-256. DER signatures are
+	// ~70-72 bytes and start with 0x30, so this rejects the pre-fix output.
+	if len(sig) != 64 {
+		t.Fatalf("JWS signature is %d bytes, want 64-byte raw R||S (RFC 7518 ES256); first byte 0x%02x", len(sig), sig[0])
+	}
+
+	// (2) Split R || S and verify with the public key over the signing input.
+	r := new(big.Int).SetBytes(sig[:32])
+	s := new(big.Int).SetBytes(sig[32:])
+	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if !ecdsa.Verify(pub, digest[:], r, s) {
+		t.Errorf("raw R||S ECDSA signature verify failed")
+	}
+
+	// (3) A real JOSE/JWT ES256 parser must accept the token.
+	if _, err := jwt.Parse(jws, func(*jwt.Token) (any, error) {
+		return pub, nil
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation()); err != nil {
+		t.Errorf("golang-jwt ES256 parse/verify failed: %v", err)
+	}
+}
 
 func TestLocalSignerMintAndVerify(t *testing.T) {
 	ctx := context.Background()
@@ -43,8 +87,9 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		t.Fatalf("unmarshal header: %v", err)
 	}
-	if header["alg"] != "RS256" {
-		t.Errorf("alg=%v, want RS256", header["alg"])
+	// Positively assert ES256 -- this is the invariant the fix-422 change guards.
+	if header["alg"] != "ES256" {
+		t.Errorf("alg=%v, want ES256 (PKCS1v15/RS256 is no longer permitted)", header["alg"])
 	}
 	if header["typ"] != "JWT" {
 		t.Errorf("typ=%v, want JWT", header["typ"])
@@ -66,20 +111,17 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Errorf("iss mismatch: %v vs %v", decoded["iss"], claims["iss"])
 	}
 
-	// Verify the signature end-to-end with the signer's public key.
-	sigBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		t.Fatalf("decode signature: %v", err)
-	}
-	pub, err := signer.PublicKey(ctx)
+	// Verify the JWS signature end-to-end. The signature MUST be the
+	// RFC 7518 section 3.4 raw R || S form (64 bytes for P-256), not DER.
+	rawPub, err := signer.PublicKey(ctx)
 	if err != nil {
 		t.Fatalf("public key: %v", err)
 	}
-	signingInput := parts[0] + "." + parts[1]
-	digest := sha256.Sum256([]byte(signingInput))
-	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sigBytes); err != nil {
-		t.Errorf("signature verify failed: %v", err)
+	ecPub, ok := rawPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("public key is not *ecdsa.PublicKey, got %T", rawPub)
 	}
+	assertRawES256JWS(t, jws, ecPub)
 }
 
 func TestBuildJWKS(t *testing.T) {
@@ -96,18 +138,23 @@ func TestBuildJWKS(t *testing.T) {
 		t.Fatalf("want 1 key, got %d", len(jwks.Keys))
 	}
 	k := jwks.Keys[0]
-	if k.Kty != "RSA" || k.Use != "sig" || k.Alg != "RS256" {
+	// Positively assert EC/ES256 -- guards against regression back to RSA/RS256.
+	if k.Kty != "EC" || k.Use != "sig" || k.Alg != "ES256" {
 		t.Errorf("jwk metadata wrong: %+v", k)
 	}
-	if k.Kid == "" || k.N == "" || k.E == "" {
-		t.Errorf("jwk missing kid/n/e: %+v", k)
+	if k.Crv != "P-256" {
+		t.Errorf("jwk crv wrong: got %q, want P-256", k.Crv)
 	}
-	if _, err := base64.RawURLEncoding.DecodeString(k.N); err != nil {
-		t.Errorf("n not base64url: %v", err)
+	if k.Kid == "" || k.X == "" || k.Y == "" {
+		t.Errorf("jwk missing kid/x/y: %+v", k)
 	}
-	if _, err := base64.RawURLEncoding.DecodeString(k.E); err != nil {
-		t.Errorf("e not base64url: %v", err)
+	if _, err := base64.RawURLEncoding.DecodeString(k.X); err != nil {
+		t.Errorf("x not base64url: %v", err)
 	}
+	if _, err := base64.RawURLEncoding.DecodeString(k.Y); err != nil {
+		t.Errorf("y not base64url: %v", err)
+	}
+	// RSA fields are structurally absent from the EC JWK type.
 }
 
 func TestBuildDiscovery(t *testing.T) {
@@ -118,32 +165,9 @@ func TestBuildDiscovery(t *testing.T) {
 	if d.JWKSURI != "https://cudly.example.com/.well-known/jwks.json" {
 		t.Errorf("jwks_uri=%s", d.JWKSURI)
 	}
-	if len(d.IDTokenSigningAlgValuesSupported) != 1 || d.IDTokenSigningAlgValuesSupported[0] != "RS256" {
-		t.Errorf("alg values wrong: %v", d.IDTokenSigningAlgValuesSupported)
-	}
-}
-
-func TestBigEndianExponent(t *testing.T) {
-	cases := []struct {
-		in   int
-		want []byte
-	}{
-		{65537, []byte{0x01, 0x00, 0x01}},
-		{3, []byte{0x03}},
-		{0, []byte{0x00}},
-		{256, []byte{0x01, 0x00}},
-	}
-	for _, c := range cases {
-		got := bigEndianExponent(c.in)
-		if len(got) != len(c.want) {
-			t.Errorf("%d: len %d want %d", c.in, len(got), len(c.want))
-			continue
-		}
-		for i := range got {
-			if got[i] != c.want[i] {
-				t.Errorf("%d: byte %d = 0x%02x want 0x%02x", c.in, i, got[i], c.want[i])
-			}
-		}
+	// Positively assert ES256 in the discovery document.
+	if len(d.IDTokenSigningAlgValuesSupported) != 1 || d.IDTokenSigningAlgValuesSupported[0] != "ES256" {
+		t.Errorf("alg values wrong: %v, want [ES256]", d.IDTokenSigningAlgValuesSupported)
 	}
 }
 
@@ -162,5 +186,21 @@ func TestComputeKeyIDStableAcrossCalls(t *testing.T) {
 	}
 	if a != b {
 		t.Errorf("kid changed between calls: %s vs %s", a, b)
+	}
+}
+
+func TestComputeKeyIDChangesOnKeyRotation(t *testing.T) {
+	s1, err := NewLocalSigner()
+	if err != nil {
+		t.Fatalf("new signer 1: %v", err)
+	}
+	s2, err := NewLocalSigner()
+	if err != nil {
+		t.Fatalf("new signer 2: %v", err)
+	}
+	k1, _ := s1.KeyID(context.Background())
+	k2, _ := s2.KeyID(context.Background())
+	if k1 == k2 {
+		t.Errorf("different keys produced the same kid: %s", k1)
 	}
 }

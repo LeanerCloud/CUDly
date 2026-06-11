@@ -88,8 +88,10 @@ func TestHandleOIDCJWKS(t *testing.T) {
 		t.Fatalf("keys=%d want 1", len(jwks.Keys))
 	}
 	k := jwks.Keys[0]
-	if k.Kty != "RSA" || k.Alg != "RS256" || k.Kid == "" || k.N == "" {
-		t.Errorf("jwk malformed: %+v", k)
+	// ES256: EC key with P-256 curve. Positively assert the algorithm
+	// change -- regression to RSA/RS256 must not pass.
+	if k.Kty != "EC" || k.Alg != "ES256" || k.Crv != "P-256" || k.Kid == "" || k.X == "" || k.Y == "" {
+		t.Errorf("jwk malformed (want EC/ES256/P-256): %+v", k)
 	}
 }
 
