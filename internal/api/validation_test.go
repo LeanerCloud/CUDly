@@ -531,6 +531,19 @@ func TestParseMinSavingsParam(t *testing.T) {
 		{"non-numeric word", "thirty", "min_savings_usd", 0, true},
 		{"negative value", "-5", "min_savings_usd", 0, true},
 		{"mixed string", "30abc", "min_savings_usd", 0, true},
+
+		// Non-finite inputs (COR-09 regression, issue #1183):
+		// strconv.ParseFloat accepts these case-insensitively, but a NaN
+		// floor silently excludes all rows in SQL (monthly_savings >= NaN)
+		// or applies no pct floor; +Inf excludes everything. All must 400.
+		{"NaN", "NaN", "min_savings_usd", 0, true},
+		{"lowercase nan", "nan", "min_savings_usd", 0, true},
+		{"positive infinity", "+Inf", "min_savings_usd", 0, true},
+		{"bare infinity", "Inf", "min_savings_usd", 0, true},
+		{"infinity word", "Infinity", "min_savings_usd", 0, true},
+		{"negative infinity", "-Inf", "min_savings_usd", 0, true},
+		{"pct NaN", "NaN", "min_savings_pct", 0, true},
+		{"pct infinity", "Inf", "min_savings_pct", 0, true},
 	}
 
 	for _, tc := range cases {
