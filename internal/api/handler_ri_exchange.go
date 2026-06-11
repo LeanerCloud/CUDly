@@ -20,6 +20,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/exchange"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	awsprovider "github.com/LeanerCloud/CUDly/providers/aws"
@@ -716,7 +717,8 @@ func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
 // Requires execute:ri-exchange (deliberately separate from execute:purchases)
 // because RI exchanges are financially irreversible once submitted to AWS.
 func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
-	if _, err := h.requirePermission(ctx, req, "execute", "ri-exchange"); err != nil {
+	session, err := h.requirePermission(ctx, req, "execute", "ri-exchange")
+	if err != nil {
 		return nil, err
 	}
 
@@ -734,6 +736,21 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	}
 
 	region := body.Region
+
+	// Enforce the per-permission Constraints configured on the granting
+	// execute:ri-exchange permission (SEC-01, issue #1141). RI exchanges
+	// are AWS EC2 only and region-scoped; the amount cap is checked against
+	// the caller's max_payment_due_usd guardrail, which ExecuteExchange
+	// independently enforces against the actual quoted payment due.
+	maxPayment, _ := maxRat.Float64()
+	if err := h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
+		Providers:         []string{string(common.ProviderAWS)},
+		Services:          []string{string(common.ServiceEC2)},
+		Regions:           []string{region},
+		MaxPurchaseAmount: maxPayment,
+	}}); err != nil {
+		return nil, err
+	}
 
 	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
 		Region:           region,

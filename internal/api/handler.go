@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/accounts"
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
@@ -240,6 +241,33 @@ func (h *Handler) requirePermission(ctx context.Context, req *events.LambdaFunct
 	}
 
 	return session, nil
+}
+
+// requirePermissionConstraints re-checks an already-authenticated session
+// against request-derived permission constraint sets, so the Constraints
+// (MaxPurchaseAmount, Providers, Services, Regions, AccountIDs) configured on
+// the granting group permission are enforced at execution time (SEC-01,
+// issue #1141). Callers must have passed requirePermission for the same
+// action/resource first; this adds the constraint dimension once the request
+// body is parsed and validated. The stateless admin API key is a full-access
+// infrastructure credential with no user row, so it bypasses the check just
+// like it bypasses requirePermission's per-user lookup. Fails closed on a
+// missing auth service or a lookup error.
+func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, action, resource string, constraintSets []auth.PermissionConstraints) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	if h.auth == nil {
+		return fmt.Errorf("authentication service not configured")
+	}
+	has, err := h.auth.HasPermissionForConstraintsAPI(ctx, session.UserID, action, resource, constraintSets)
+	if err != nil {
+		return fmt.Errorf("permission constraint check failed: %w", err)
+	}
+	if !has {
+		return NewClientError(403, fmt.Sprintf("permission denied: this request exceeds the constraints configured on your %s permission for %s", action, resource))
+	}
+	return nil
 }
 
 // getAllowedAccounts returns the list of account IDs the user is allowed to

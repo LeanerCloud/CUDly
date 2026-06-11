@@ -1138,6 +1138,10 @@ func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, actio
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
 
+func (a *authServiceAdapter) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, constraintSets []auth.PermissionConstraints) (bool, error) {
+	return a.service.HasPermissionForConstraintsAPI(ctx, userID, action, resource, constraintSets)
+}
+
 func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
 	return a.service.GetUserPermissionsAPI(ctx, userID)
 }
