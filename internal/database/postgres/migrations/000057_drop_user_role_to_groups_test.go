@@ -47,10 +47,10 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Apply to head, then roll back 000057 so the DB sits at v56 where the
-	// `role` column still exists and we can seed role-bearing rows.
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+	// Pin the DB at v56, where the `role` column still exists and we can
+	// seed role-bearing rows. (Pinning by version stays correct as newer
+	// migrations land; the old "head minus one step" approach did not.)
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 56))
 
 	// Seed one user per legacy role, each with empty group_ids (the pre-#907
 	// state where authorization came from the role, not groups). Also seed a
@@ -74,8 +74,9 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	require.NoError(t, err)
 	seed("unknown@test.example", "legacy-custom")
 
-	// Re-apply 000057.
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Apply exactly 000057 so the mapping assertions below are not affected
+	// by later group migrations (000064 adds admins to Purchaser, etc.).
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 57))
 
 	// Role -> group mapping must preserve access.
 	assert.Equal(t, []string{defaultAdminGroupIDTest},
@@ -111,6 +112,9 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 		        ARRAY['`+readOnlyUsersGroupIDTest+`']::uuid[], NOW(), NOW())
 	`)
 	require.NoError(t, err, "a user with at least one group must insert successfully")
+
+	// The rest of the chain must still apply cleanly over the migrated data.
+	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 }
 
 // assertColumnAbsent fails if the named column still exists on the table.
@@ -138,7 +142,8 @@ func TestMigration_DropUserRoleToGroups_Down(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Pin at v57 so the rollback below exercises exactly 000057's down.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 57))
 
 	// Seed group-only users (post-#907 shape) before rolling back.
 	_, err = pool.Exec(ctx, `

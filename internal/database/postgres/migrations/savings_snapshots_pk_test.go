@@ -56,28 +56,14 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-
-		// Count how many applied migrations are above version 26.
-		// Using COUNT from schema_migrations is correct even when migration
-		// numbering has gaps: Steps(-n) steps back through n applied
-		// migrations, so we need the actual row count, not an arithmetic
-		// difference between version numbers.
-		var stepsToRollback int
-		err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version > 26`).Scan(&stepsToRollback)
-		require.NoError(t, err)
-		require.Greater(t, stepsToRollback, 0, "there should be migrations above 000026")
-
-		// RollbackMigrations caps a single call at 10 steps; call in a loop.
-		const maxRollbackPerCall = 10
-		for remaining := stepsToRollback; remaining > 0; remaining -= maxRollbackPerCall {
-			batch := remaining
-			if batch > maxRollbackPerCall {
-				batch = maxRollbackPerCall
-			}
-			require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, batch),
-				"rollback to 000026 should succeed")
-		}
+		// Pin the schema at 000027 (which re-created the PK over 000018's
+		// version), then roll back exactly 000027. The previous
+		// count-rows-in-schema_migrations approach was broken: golang-migrate
+		// keeps a single (version, dirty) row, so the count was always 1 and
+		// the loop only ever rolled back the newest migration.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 27))
+		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1),
+			"rollback of 000027 should succeed")
 
 		// Verify the constraint is gone (000027 was rolled back).
 		var constraintExists bool

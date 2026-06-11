@@ -59,13 +59,11 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		// Run migrations up to but not including 000040 by running all,
-		// then forcing the migration version back to 000039 and undoing
-		// 000040 — equivalent to "stop just before 000040". Simpler: run
-		// all migrations, then run down once to undo 000040, then
-		// truncate and seed.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+		// Pin the DB at 000039 (just below the migration under test) and
+		// seed before applying 000040. (Pinning by version stays correct
+		// as newer migrations land; the old "head minus one step"
+		// approach did not.)
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 39))
 
 		// Seed: a single umbrella row with non-default values.
 		_, err = pool.Exec(ctx, `
@@ -73,8 +71,8 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 			VALUES ('aws', 'savings-plans', true, 1, 'no-upfront', 90.50, 'weekly-25pct')`)
 		require.NoError(t, err)
 
-		// Up: run 000040.
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		// Up: apply exactly 000040.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 40))
 
 		got := queryAWSSPRows(t, pool)
 		expected := []string{
@@ -104,6 +102,14 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, r.term)
 		assert.Equal(t, "no-upfront", r.payment)
+
+		// Forward again to head: the full chain must re-apply cleanly and
+		// land on the four split rows.
+		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		got = queryAWSSPRows(t, pool)
+		require.Len(t, got, 4, "expected 4 per-plan-type rows after migrating to head")
+		_, hasUmbrella = got["savings-plans"]
+		assert.False(t, hasUmbrella, "umbrella row should stay deleted at head")
 	})
 
 	t.Run("scenario 2: umbrella + PR #71 sagemaker row (different values)", func(t *testing.T) {
@@ -112,8 +118,8 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+		// Pin the DB at 000039, just below the migration under test.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 39))
 
 		// Seed both rows with intentionally divergent term/payment so
 		// we can verify which value wins per slot.
@@ -161,19 +167,23 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		defer container.Cleanup(ctx)
 		pool := container.DB.Pool()
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+		// Pin the DB at 000039, just below the migration under test.
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 39))
 
 		// Confirm no SP rows present pre-migration.
 		require.Empty(t, queryAWSSPRows(t, pool))
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 40))
 
 		// Migration is a no-op with no SP rows to seed from.
 		assert.Empty(t, queryAWSSPRows(t, pool), "no-op when no umbrella row exists")
 
 		// Down should also be a no-op.
 		require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+		assert.Empty(t, queryAWSSPRows(t, pool))
+
+		// Full chain to head stays a no-op for SP rows.
+		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 		assert.Empty(t, queryAWSSPRows(t, pool))
 	})
 }
@@ -193,8 +203,8 @@ func TestMigration_SplitSavingsPlans_PurchasePlansJSONB(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
+	// Pin the DB at 000039, just below the migration under test.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 39))
 
 	// Seed two plans: one with the umbrella SP key, one with only RDS
 	// (untouched control). Both have a non-SP key (aws:rds) that must
@@ -205,6 +215,18 @@ func TestMigration_SplitSavingsPlans_PurchasePlansJSONB(t *testing.T) {
 		 '{"aws:savings-plans": {"term": "1yr", "payment": "all-upfront"}, "aws:rds": {"term": "3yr"}}'::jsonb),
 		('22222222-2222-2222-2222-222222222222', 'rds-only-plan',
 		 '{"aws:rds": {"term": "1yr"}}'::jsonb)`)
+	require.NoError(t, err)
+
+	// Scope both plans to an account: migration 000060 deletes purchase_plans
+	// rows that have no plan_accounts entry, and the chain to head runs it.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO cloud_accounts (id, name, provider, external_id)
+		VALUES ('cccccccc-cccc-cccc-cccc-000000000001', 'sp-test-acct', 'aws', '333333333333')`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO plan_accounts (plan_id, account_id) VALUES
+		('11111111-1111-1111-1111-111111111111', 'cccccccc-cccc-cccc-cccc-000000000001'),
+		('22222222-2222-2222-2222-222222222222', 'cccccccc-cccc-cccc-cccc-000000000001')`)
 	require.NoError(t, err)
 
 	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
