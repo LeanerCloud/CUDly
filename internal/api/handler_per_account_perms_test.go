@@ -503,12 +503,10 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
 	// Issue #956: a restricted session with no explicit account filter scopes the
 	// commitment metrics to its allowed_accounts (permsAccA), so the handler calls
-	// GetPurchaseHistoryFiltered scoped to account A — NOT GetAllPurchaseHistory.
+	// GetActivePurchaseHistory scoped to account A — NOT an unscoped all-accounts read.
 	// permsAccA has no ExternalID, so only the UUID half of the filter is set.
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-		AccountIDs: []string{permsAccA},
-		Limit:      1000,
-	}).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil)).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -554,10 +552,8 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
-		AccountIDs: []string{permsAccA},
-		Limit:      1000,
-	}).Return(accountARows, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"),
+		[]string{permsAccA}, map[string][]string(nil)).Return(accountARows, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -842,7 +838,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -913,7 +909,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil

@@ -123,12 +123,18 @@ type StoreInterface interface {
 	GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error)
 	// GetActivePurchaseHistory returns every purchase_history row whose commitment
 	// is still within its term at asOf (term > 0 AND timestamp + term years > asOf),
-	// across all accounts, newest-first. Unlike GetAllPurchaseHistory it is not
-	// row-capped: the analytics collector needs the complete active set, and
-	// filtering expired commitments in SQL keeps the result bounded by the number
-	// of live commitments rather than by all history ever recorded (so it cannot
-	// silently truncate older-but-still-active 1y/3y commitments).
-	GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]PurchaseHistoryRecord, error)
+	// newest-first, optionally scoped to a set of accounts. The account scope uses
+	// the same dual-column predicate as GetPurchaseHistoryFiltered: accountIDs
+	// match cloud_account_id (cloud_accounts UUIDs) and externalIDsByProvider
+	// matches account_id per provider, OR'd together so rows carrying only one
+	// identifier are still returned (issues #701/#498/#866). Both empty means all
+	// accounts. Unlike GetAllPurchaseHistory it is not row-capped: the analytics
+	// collector, dashboard KPIs, and inventory endpoints need the complete active
+	// set, and filtering expired commitments in SQL keeps the result bounded by
+	// the number of live commitments rather than by all history ever recorded (so
+	// it cannot silently truncate older-but-still-active 1y/3y commitments the
+	// way a newest-first capped page does, issue #1140).
+	GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]PurchaseHistoryRecord, error)
 	// GetPurchaseHistoryFiltered reads purchase_history rows matching the
 	// PurchaseHistoryFilter, newest-first, capped at filter.Limit. Each field is
 	// applied independently and only when populated (see PurchaseHistoryFilter).

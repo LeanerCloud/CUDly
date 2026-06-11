@@ -103,7 +103,7 @@ func (m *mockConfigStoreForHealth) GetAllPurchaseHistory(ctx context.Context, li
 	return nil, nil
 }
 
-func (m *mockConfigStoreForHealth) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
+func (m *mockConfigStoreForHealth) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 	return nil, nil
 }
 
