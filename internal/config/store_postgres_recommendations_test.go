@@ -173,8 +173,8 @@ func TestPostgresStore_ListStoredRecommendations_FilterPushdown(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 
-	// Filter by min savings.
-	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{MinSavings: 25})
+	// Filter by min savings (dollar floor, pushed down to SQL).
+	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{MinSavingsUSD: 25})
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 	assert.Equal(t, "rds", got[0].Service)
