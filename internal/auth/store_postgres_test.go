@@ -37,6 +37,14 @@ func (m *MockDBConnection) Exec(ctx context.Context, sql string, args ...interfa
 	return mockArgs.Get(0).(pgconn.CommandTag), mockArgs.Error(1)
 }
 
+func (m *MockDBConnection) Begin(ctx context.Context) (pgx.Tx, error) {
+	mockArgs := m.Called(ctx)
+	if mockArgs.Get(0) == nil {
+		return nil, mockArgs.Error(1)
+	}
+	return mockArgs.Get(0).(pgx.Tx), mockArgs.Error(1)
+}
+
 func (m *MockDBConnection) Ping(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
