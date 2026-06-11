@@ -189,6 +189,9 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 		return
 	}
 
+	// A nil PaymentDueUSD documents a zero-cost exchange (no payment due),
+	// distinct from a parse failure: processAutoExchange fails closed on any
+	// string that does not parse as a decimal.
 	paymentDueStr := "0"
 	if quote.PaymentDueUSD != nil {
 		paymentDueStr = quote.PaymentDueUSD.FloatString(6)
@@ -378,12 +381,17 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		return outcome
 	}
 
+	// paymentDueStr is always a decimal here: processRecommendation sets it to
+	// "0" when the quote has no PaymentDueUSD (the documented nil-means-zero
+	// case) and to FloatString(6) otherwise. A parse failure therefore means a
+	// caller passed garbage; fail closed instead of counting $0 toward the
+	// daily cap, mirroring the dailySpent branch above.
 	paymentDue, err := ParseDecimalRat(paymentDueStr)
 	if err != nil {
-		logging.Warnf("failed to parse payment due %q: %v, using zero", paymentDueStr, err)
-	}
-	if paymentDue == nil {
-		paymentDue = new(big.Rat)
+		logging.Errorf("failed to parse payment due %q for %s: %v", paymentDueStr, rec.SourceRIID, err)
+		outcome.Error = fmt.Sprintf("failed to parse payment due %q: %v", paymentDueStr, err)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
+		return outcome
 	}
 
 	newTotal := new(big.Rat).Add(dailySpent, paymentDue)
