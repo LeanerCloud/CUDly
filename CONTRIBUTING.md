@@ -116,8 +116,10 @@ export GOWORK="$PWD/go.work.local"
 After adding or removing a worktree, update `go.work.local` to match:
 
 ```bash
-# Quick regeneration from git worktree list
-go work edit -use $(git worktree list --porcelain | awk '/^worktree/{print $2}' | tail -n +2 | tr '\n' ' ') 2>/dev/null || true
+# Quick regeneration from git worktree list (space-safe: keeps full paths,
+# adds one -use entry per worktree; skips the main checkout on line 1)
+git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 |
+  while IFS= read -r wt; do go work edit -use "$wt"; done
 ```
 
 The committed `go.work` (listing only this repository's own modules) keeps
