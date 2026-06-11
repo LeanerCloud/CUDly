@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
-import { formatDateTime, formatRelativeTime } from './utils';
+import { escapeHtml, formatDateTime, formatRelativeTime } from './utils';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { openModal, closeModal } from './modal';
@@ -388,13 +388,4 @@ function showError(message: string): void {
   } else {
     showToast({ message, kind: 'error' });
   }
-}
-
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
