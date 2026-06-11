@@ -125,7 +125,8 @@ func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[s
 
 // resolveAllowedAccountScope resolves a restricted session's allowed_accounts
 // into the dual-column purchase-history filter inputs so dashboard commitment
-// metrics never include accounts the session can't access (issue #956). It lists
+// metrics and the inventory endpoints (fetchCommitmentRecords) never include
+// accounts the session can't access (issue #956). It lists
 // the cloud accounts, keeps those the session matches via auth.MatchesAccount,
 // and resolves their UUIDs through resolveAccountFilterIDs (same code path as an
 // explicit filter).
