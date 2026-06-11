@@ -57,7 +57,7 @@ terraform apply -var-file="../../../profiles/aws/prod.tfvars"
 
 ## Creating a New Profile
 
-### Option 1: Copy from Example
+### Copy from Example
 
 ```bash
 # Copy example profile
@@ -68,22 +68,6 @@ vim profiles/aws/my-profile.tfvars
 
 # Use it
 terraform apply -var-file="../../../profiles/aws/my-profile.tfvars"
-```
-
-### Option 2: Use Profile Generator
-
-```bash
-# Generate new profile interactively
-./scripts/generate-profile.sh
-
-# Prompts for:
-# - Cloud provider (aws/azure/gcp)
-# - Environment name
-# - Region
-# - Compute platform
-# - Other settings
-
-# Creates: profiles/{provider}/{name}.tfvars
 ```
 
 ## Profile Contents
@@ -380,32 +364,6 @@ cd "terraform/environments/${PROVIDER}/${PROFILE}"
 
 terraform init
 terraform $ACTION -var-file="../../../../${PROFILE_FILE}"
-```
-
-### generate-profile.sh
-
-```bash
-#!/bin/bash
-# Interactive profile generator
-
-echo "Creating new Terraform profile..."
-read -p "Cloud provider (aws/azure/gcp): " provider
-read -p "Profile name: " profile_name
-read -p "Region: " region
-read -p "Compute platform: " compute_platform
-
-cat > "profiles/${provider}/${profile_name}.tfvars" <<EOF
-# Auto-generated profile
-provider         = "${provider}"
-environment      = "${profile_name}"
-region           = "${region}"
-compute_platform = "${compute_platform}"
-project_name     = "cudly"
-
-# Add more settings as needed
-EOF
-
-echo "✅ Profile created: profiles/${provider}/${profile_name}.tfvars"
 ```
 
 ## Related Documentation
