@@ -90,7 +90,7 @@ func TestRevokePurchase_NilAuthService(t *testing.T) {
 	// auth == nil: the handler must fail closed with a 403 ClientError before
 	// reaching any session or store call. No mock setup needed.
 	h := &Handler{auth: nil}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid")
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid", "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -101,7 +101,7 @@ func TestRevokePurchase_EmptyPurchaseID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := &Handler{}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), "")
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), "", "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -125,7 +125,7 @@ func TestRevokePurchase_PurchaseNotFound(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, "pid-1").Return((*config.PurchaseHistoryRecord)(nil), nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid-1")
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid-1", "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -154,7 +154,7 @@ func TestRevokePurchase_AlreadyRevoked(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.NoError(t, err)
 	m, ok := result.(*revokePurchaseResult)
 	require.True(t, ok)
@@ -182,7 +182,7 @@ func TestRevokePurchase_AWSReturns422(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -209,7 +209,7 @@ func TestRevokePurchase_GCPReturns422(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -236,7 +236,7 @@ func TestRevokePurchase_AzureOutsideWindow(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -351,7 +351,7 @@ func TestRevokePurchase_UsesStampedWindow(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -584,7 +584,7 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"cancelled"/nil).
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
@@ -625,7 +625,7 @@ func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *test
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
@@ -657,7 +657,7 @@ func TestRevokePurchase_ScheduledExecution_CASRace(t *testing.T) {
 		Return(false, "approved", nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -697,7 +697,7 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	// Negative invariant: the WRONG method must never be called for a scheduled row.
 	// Placed AFTER the handler call so it actually fires post-execution (Finding F-1, second-wave CR).
 	mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -732,7 +732,7 @@ func TestRevokePurchase_ScheduledExecution_RevokeOwnCreator(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
@@ -763,7 +763,7 @@ func TestRevokePurchase_ScheduledExecution_RevokeOwnWrongCreator(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -1008,7 +1008,7 @@ func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T)
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.NoError(t, err)
 
 	pending, ok := result.(*revokeReconcilePendingResult)
@@ -1048,7 +1048,7 @@ func TestRevokePurchase_AzureWithinSafetyMarginRejected(t *testing.T) {
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -1329,8 +1329,12 @@ func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
 		mockAuth.AssertExpectations(t)
 	})
 
+	// The unified revokePurchase resolves the ID against purchase_executions
+	// before requiring a session (the token path has no session), so a DB error
+	// here short-circuits before ValidateSession is reached. Allow it to be
+	// called or not so the ordering change does not make the expectation flaky.
 	adminSess := revokeAdminSession()
-	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil).Maybe()
 
 	// GetExecutionByID returns a genuine DB error (not a not-found nil).
 	dbErr := errors.New("pq: connection closed unexpectedly")
@@ -1339,7 +1343,7 @@ func TestRevokePurchase_GetExecutionByIDDBError_Returns500(t *testing.T) {
 	mockStore.AssertNotCalled(t, "GetPurchaseHistoryByPurchaseID", mock.Anything, mock.Anything)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
-	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid-dberr")
+	_, err := h.revokePurchase(ctx, sessionReq("tok"), "pid-dberr", "")
 	require.Error(t, err, "DB error from GetExecutionByID must surface as an error, not silent passthrough")
 	// The error wraps the DB error; it is NOT a ClientError (not user-facing 500 shape)
 	// but the router will convert it to a 500 response. Verify the DB error is present.
@@ -1380,7 +1384,7 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 		h := &Handler{config: mockStore, auth: mockAuth}
-		result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+		result, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 		require.NoError(t, err)
 		m, ok := result.(map[string]string)
 		require.True(t, ok)
@@ -1405,7 +1409,7 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 			Return(false, "completed", nil).Once()
 
 		h := &Handler{config: mockStore, auth: mockAuth}
-		_, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
+		_, err := h.revokePurchase(ctx, sessionReq("tok"), execID, "")
 		require.Error(t, err)
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "CAS race-lost must surface as a ClientError")

@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"time"
@@ -33,19 +34,10 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return fmt.Errorf("execution not found: %s", executionID)
 	}
 
-	// Validate token using constant-time comparison to prevent timing attacks.
-	if execution.ApprovalToken == "" || token == "" {
-		return fmt.Errorf("invalid approval token")
-	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
-		return fmt.Errorf("invalid approval token")
-	}
-
-	// Enforce token TTL (issue #397). Legacy rows that pre-date migration
-	// 000051 have ApprovalTokenExpiresAt == nil and are passed through
-	// for backward compatibility; all new rows carry a non-nil deadline.
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return fmt.Errorf("approval token has expired")
+	// Validate the approval token (constant-time compare + TTL). Shared with
+	// loadCancelableExecution so the two token-auth paths can never drift.
+	if err := validateApprovalToken(execution, token); err != nil {
+		return err
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
@@ -63,6 +55,18 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	} else {
 		logging.Infof("purchase[%s]: ApproveExecution (token path) completed in %s",
 			executionID, time.Since(t0))
+		// Token rotation (best-effort): clear the ApprovalToken after a
+		// successful approve so a leaked token cannot be replayed for a
+		// different action (e.g. revoke). We do this via a follow-up
+		// SavePurchaseExecution on a freshly-fetched row so we don't
+		// stomp a completed_at or other fields written by executeAndFinalize.
+		// The accept-small-race comment: if a concurrent read sees the pre-
+		// rotation row between this point and the save completing, it will
+		// find an empty-string token and reject the request, which is the
+		// desired security outcome even if the window is tiny.
+		if rotateErr := m.rotateApprovalToken(ctx, executionID); rotateErr != nil {
+			logging.Warnf("purchase[%s]: ApproveExecution: token rotation failed (best-effort): %v", executionID, rotateErr)
+		}
 	}
 	return err
 }
@@ -228,6 +232,51 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 	}
 
 	logging.Infof("Execution %s cancelled", executionID)
+	// Token rotation (best-effort): same rationale as in ApproveExecution.
+	if rotateErr := m.rotateApprovalToken(ctx, executionID); rotateErr != nil {
+		logging.Warnf("purchase[%s]: CancelExecution: token rotation failed (best-effort): %v", executionID, rotateErr)
+	}
+	return nil
+}
+
+// rotateApprovalToken clears the ApprovalToken on the execution after a
+// successful approve or cancel. This prevents a leaked token from being
+// replayed for a different action (e.g. using an old approval token to
+// trigger a revoke). The rotation is best-effort: if the follow-up save
+// fails the operation (approve/cancel) has already landed, so we only
+// warn rather than surfacing an error to the caller.
+func (m *Manager) rotateApprovalToken(ctx context.Context, executionID string) error {
+	exec, err := m.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("rotateApprovalToken: failed to fetch execution: %w", err)
+	}
+	if exec == nil {
+		return fmt.Errorf("rotateApprovalToken: execution not found: %s", executionID)
+	}
+	exec.ApprovalToken = ""
+	exec.ApprovalTokenExpiresAt = nil
+	return m.config.SavePurchaseExecution(ctx, exec)
+}
+
+// validateApprovalToken validates a token against the execution's stored
+// ApprovalToken using a constant-time comparison and enforces the token TTL.
+// SHA-256 both inputs first so that variable-length strings can't leak token
+// length via the comparison path (Finding #4). Legacy rows that pre-date
+// migration 000051 have ApprovalTokenExpiresAt == nil and pass the expiry
+// check for backward compatibility (issue #397). Shared by ApproveExecution
+// and loadCancelableExecution so the two token-auth paths never drift.
+func validateApprovalToken(execution *config.PurchaseExecution, token string) error {
+	if execution.ApprovalToken == "" || token == "" {
+		return fmt.Errorf("invalid approval token")
+	}
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
+		return fmt.Errorf("invalid approval token")
+	}
+	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
+		return fmt.Errorf("approval token has expired")
+	}
 	return nil
 }
 
@@ -242,17 +291,8 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 	if execution == nil {
 		return nil, fmt.Errorf("execution not found: %s", executionID)
 	}
-	if execution.ApprovalToken == "" || token == "" {
-		return nil, fmt.Errorf("invalid approval token")
-	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(token)) != 1 {
-		return nil, fmt.Errorf("invalid approval token")
-	}
-
-	// Enforce token TTL (issue #397). Same backward-compat nil-guard as
-	// ApproveExecution: legacy rows without ApprovalTokenExpiresAt pass through.
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return nil, fmt.Errorf("approval token has expired")
+	if err := validateApprovalToken(execution, token); err != nil {
+		return nil, err
 	}
 
 	// Only pending/notified rows are cancelable — shares the single

@@ -298,7 +298,7 @@ func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	path := req.RequestContext.HTTP.Path
-	logging.Debugf("API Request: %s %s", method, path)
+	logging.Debugf("API Request: %s %s", method, redactURL(path))
 
 	// Validate request
 	if response := h.validateRequest(ctx, req, method, path, corsHeaders); response != nil {

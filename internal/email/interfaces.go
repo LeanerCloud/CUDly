@@ -27,6 +27,13 @@ type SenderInterface interface {
 	// (issue #291 wave-2). Notifies the user that the purchase will execute at
 	// RevocationWindowClosesAt and includes a one-click revoke link.
 	SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error
+	// SendPurchaseExecutedNotification fires after a purchase executes
+	// (regardless of whether it came from the approval-email path or the
+	// direct-execute path). Recipients: global notification_email, per-account
+	// contact emails, and the requester. The data must carry RevocationToken
+	// and RevocationWindowClosesAt so the email embeds a one-click revoke link
+	// valid for the AWS cancel window.
+	SendPurchaseExecutedNotification(ctx context.Context, data NotificationData) error
 	SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error
 	SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error
 }

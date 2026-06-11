@@ -66,6 +66,12 @@ func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 	return args.Error(0)
 }
 
+// SendPurchaseExecutedNotification mocks the post-execution notification operation (issue #291).
+func (m *MockEmailSender) SendPurchaseExecutedNotification(ctx context.Context, data email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
 func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data email.RegistrationNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
@@ -87,6 +93,7 @@ type EmailSenderAPI interface {
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
 	SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error
+	SendPurchaseExecutedNotification(ctx context.Context, data email.NotificationData) error
 }
 
 // Ensure MockEmailSender implements EmailSenderAPI
