@@ -877,3 +877,43 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 	assert.Contains(t, capturedID, "3x-1yr", "count and term must be embedded: %q", capturedID)
 	assert.LessOrEqual(t, len(capturedID), 60, "must fit AWS reservation-ID cap")
 }
+
+func TestClient_GetDurationStringForAPI(t *testing.T) {
+	client := &Client{}
+
+	tests := []struct {
+		name      string
+		term      string
+		expected  string
+		expectErr bool
+	}{
+		{"1 year", "1yr", "1yr", false},
+		{"1 numeric", "1", "1yr", false},
+		{"12 months", "12", "1yr", false},
+		{"3 years", "3yr", "3yr", false},
+		{"3 numeric", "3", "3yr", false},
+		{"36 months", "36", "3yr", false},
+		// Regression for ARCH-04 (issue #1192): unrecognized or empty terms
+		// must error instead of silently mapping to a 1-year purchase. An
+		// empty term is what a 0/NULL Term DB row produces on the scheduler
+		// purchase path.
+		{"invalid term errors", "invalid", "", true},
+		{"empty term errors", "", "", true},
+		{"zero term errors", "0", "", true},
+		{"2yr term errors", "2yr", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := client.getDurationStringForAPI(tt.term)
+			if tt.expectErr {
+				if assert.Error(t, err) {
+					assert.Contains(t, err.Error(), "unsupported MemoryDB reservation term")
+				}
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
