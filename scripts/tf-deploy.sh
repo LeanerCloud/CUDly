@@ -1,8 +1,9 @@
 #!/bin/bash
 # Terraform Deployment Helper Script
-# Usage: ./scripts/tf-deploy.sh <provider> <profile> [action]
+# Usage: ./scripts/tf-deploy.sh <provider> <profile> [action] [extra terraform args...]
 # Example: ./scripts/tf-deploy.sh aws dev
 # Example: ./scripts/tf-deploy.sh aws prod plan
+# Example: ./scripts/tf-deploy.sh aws dev apply -target=module.frontend
 
 set -euo pipefail
 
@@ -31,12 +32,18 @@ log_error() {
 }
 
 # Parse arguments
-PROVIDER=$1
-PROFILE=$2
+PROVIDER=${1:-}
+PROFILE=${2:-}
 ACTION=${3:-apply}
 
+# Any further arguments are forwarded verbatim to terraform (e.g. -target=...).
+EXTRA_ARGS=()
+if [ "$#" -gt 3 ]; then
+    EXTRA_ARGS=("${@:4}")
+fi
+
 if [ -z "$PROVIDER" ] || [ -z "$PROFILE" ]; then
-    log_error "Usage: $0 <provider> <profile> [action]"
+    log_error "Usage: $0 <provider> <profile> [action] [extra terraform args...]"
     echo ""
     echo "Examples:"
     echo "  $0 aws dev           # Deploy to AWS dev"
@@ -112,34 +119,36 @@ fi
 log_info "Running terraform ${ACTION}..."
 echo ""
 
+# ${EXTRA_ARGS[@]+...} keeps the empty-array expansion safe under set -u
+# on bash 3.2 (macOS default).
 case $ACTION in
     plan)
-        terraform plan -var-file="$PROFILE_FILE"
+        terraform plan -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
     apply)
-        terraform apply -var-file="$PROFILE_FILE"
+        terraform apply -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
     destroy)
         log_warning "This will destroy all resources!"
         read -p "Are you sure? (type 'yes' to confirm): " confirm
         if [ "$confirm" = "yes" ]; then
-            terraform destroy -var-file="$PROFILE_FILE"
+            terraform destroy -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         else
             log_info "Destroy cancelled"
             exit 0
         fi
         ;;
     show)
-        terraform show
+        terraform show ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
     refresh)
-        terraform refresh -var-file="$PROFILE_FILE"
+        terraform refresh -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
     output)
-        terraform output
+        terraform output ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
     *)
-        terraform $ACTION -var-file="$PROFILE_FILE"
+        terraform "$ACTION" -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         ;;
 esac
 
