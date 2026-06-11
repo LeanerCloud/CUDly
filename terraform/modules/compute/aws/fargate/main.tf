@@ -255,8 +255,12 @@ resource "aws_iam_role_policy" "org_discovery" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["organizations:ListAccounts", "organizations:DescribeOrganization"]
+        Effect = "Allow"
+        Action = [
+          "organizations:ListAccounts",
+          "organizations:DescribeAccount",
+          "organizations:DescribeOrganization",
+        ]
         Resource = "*"
       }
     ]
@@ -304,18 +308,20 @@ resource "aws_iam_role_policy" "ri_exchange" {
           "ec2:AcceptReservedInstancesExchangeQuote",
           "ec2:PurchaseReservedInstancesOffering",
           "ec2:DescribeInstanceTypeOfferings",
+          "ec2:DescribeRegions",
           # RDS reserved instances
           "rds:DescribeReservedDBInstances",
           "rds:DescribeReservedDBInstancesOfferings",
           "rds:PurchaseReservedDBInstancesOffering",
+          "rds:DescribeDBInstances",
           # ElastiCache reserved nodes
           "elasticache:DescribeReservedCacheNodes",
           "elasticache:DescribeReservedCacheNodesOfferings",
           "elasticache:PurchaseReservedCacheNodesOffering",
           # OpenSearch reserved instances
-          "es:DescribeReservedElasticsearchInstances",
-          "es:DescribeReservedElasticsearchInstanceOfferings",
-          "es:PurchaseReservedElasticsearchInstanceOffering",
+          "es:DescribeReservedInstances",
+          "es:DescribeReservedInstanceOfferings",
+          "es:PurchaseReservedInstanceOffering",
           # Redshift reserved nodes
           "redshift:DescribeReservedNodes",
           "redshift:DescribeReservedNodeOfferings",
@@ -327,11 +333,12 @@ resource "aws_iam_role_policy" "ri_exchange" {
           # Cost Explorer
           "ce:GetReservationUtilization",
           "ce:GetReservationPurchaseRecommendation",
+          "ce:GetReservationCoverage",
           "ce:GetSavingsPlansPurchaseRecommendation",
           "ce:GetSavingsPlansUtilization",
+          "ce:GetSavingsPlansCoverage",
           # Savings Plans
           "savingsplans:DescribeSavingsPlans",
-          "savingsplans:DescribeSavingsPlanRates",
           "savingsplans:DescribeSavingsPlansOfferingRates",
           "savingsplans:DescribeSavingsPlansOfferings",
           "savingsplans:CreateSavingsPlan",

@@ -60,6 +60,19 @@ resource "aws_iam_policy" "cudly" {
     Statement = concat(
       [
         {
+          Sid    = "CostExplorer"
+          Effect = "Allow"
+          Action = [
+            "ce:GetReservationPurchaseRecommendation",
+            "ce:GetReservationUtilization",
+            "ce:GetReservationCoverage",
+            "ce:GetSavingsPlansPurchaseRecommendation",
+            "ce:GetSavingsPlansUtilization",
+            "ce:GetSavingsPlansCoverage",
+          ]
+          Resource = "*"
+        },
+        {
           Sid    = "EC2Reservations"
           Effect = "Allow"
           Action = [

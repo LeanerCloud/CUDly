@@ -38,10 +38,23 @@ Parameters:
     Description: Human-readable name for this account in CUDly.
     Default: ""
 
+  EnableOrgDiscovery:
+    Type: String
+    Description: >
+      Grant organizations:ListAccounts and organizations:DescribeOrganization so
+      CUDly can enumerate all accounts in the AWS Organization through this role.
+      Set to "true" only when this role is deployed in an Organizations management
+      or delegated-administrator account. Leave "false" in member-account
+      deployments. Mirrors enable_org_discovery in the Terraform module.
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
 Conditions:
   DoRegister: !And
     - !Not [!Equals [!Ref CUDlyAPIURL, ""]]
     - !Not [!Equals [!Ref ContactEmail, ""]]
+
+  OrgDiscoveryEnabled: !Equals [!Ref EnableOrgDiscovery, "true"]
 
 Resources:
   CUDlyPolicy:
@@ -52,6 +65,16 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: CostExplorer
+            Effect: Allow
+            Action:
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetReservationUtilization
+              - ce:GetReservationCoverage
+              - ce:GetSavingsPlansPurchaseRecommendation
+              - ce:GetSavingsPlansUtilization
+              - ce:GetSavingsPlansCoverage
+            Resource: "*"
           - Sid: EC2Reservations
             Effect: Allow
             Action:
@@ -106,6 +129,15 @@ Resources:
               - es:DescribeReservedInstanceOfferings
               - es:DescribeReservedInstances
             Resource: "*"
+          - !If
+            - OrgDiscoveryEnabled
+            - Sid: OrganizationsDiscovery
+              Effect: Allow
+              Action:
+                - organizations:ListAccounts
+                - organizations:DescribeOrganization
+              Resource: "*"
+            - !Ref AWS::NoValue
 
   CUDlyRole:
     Type: AWS::IAM::Role
