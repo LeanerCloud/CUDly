@@ -269,7 +269,7 @@ func TestRenderPurchaseApprovalRequestEmail_NewContextFields_Issue287(t *testing
 		Recommendations: []RecommendationSummary{{
 			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
 			Count: 8, Term: 3, Payment: "all-upfront", UpfrontCost: 1234.56,
-			MonthlySavings: 58.0, AccountLabel: "AWS 540659244915",
+			MonthlySavings: 58.0, AccountLabel: "AWS 123456789012",
 		}},
 	}
 
@@ -280,7 +280,7 @@ func TestRenderPurchaseApprovalRequestEmail_NewContextFields_Issue287(t *testing
 	assert.Contains(t, body, "Term: 3yr")
 	assert.Contains(t, body, "Payment: all-upfront")
 	assert.Contains(t, body, "Upfront: $1234.56")
-	assert.Contains(t, body, "Account: AWS 540659244915")
+	assert.Contains(t, body, "Account: AWS 123456789012")
 
 	// Requested-by header.
 	assert.Contains(t, body, "Cristi M")
@@ -318,7 +318,7 @@ func TestRenderPurchaseApprovalRequestEmailHTML_Issue287(t *testing.T) {
 		Recommendations: []RecommendationSummary{{
 			Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
 			Count: 8, Term: 3, Payment: "all-upfront", UpfrontCost: 1234.56,
-			MonthlySavings: 58.0, AccountLabel: "AWS 540659244915",
+			MonthlySavings: 58.0, AccountLabel: "AWS 123456789012",
 		}},
 	}
 
