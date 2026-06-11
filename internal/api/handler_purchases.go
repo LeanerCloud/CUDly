@@ -1569,9 +1569,12 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 // strength of one in-scope rec while another rec is out of scope.
 // MaxPurchaseAmount carries the batch's total upfront cost (the same basis
 // as the global $10M sanity cap in validateAndTotalRecommendations) on
-// every set. A rec without a CloudAccountID omits the AccountIDs dimension;
-// account scoping is independently enforced against the session's
-// allowed_accounts by validatePurchaseRecommendationScope.
+// every set. AccountIDs is ALWAYS populated: a rec without a CloudAccountID
+// carries unattributedAccountConstraint so an AccountIDs-constrained
+// permission denies it (the auth matcher treats an empty request-side list
+// as satisfied, so omitting the dimension would fail open). Session-level
+// allowed_accounts scoping is independently enforced by
+// validatePurchaseRecommendationScope.
 func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.PermissionConstraints {
 	var totalUpfront float64
 	for i := range recs {
@@ -1580,16 +1583,17 @@ func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.Permissio
 	sets := make([]auth.PermissionConstraints, 0, len(recs))
 	for i := range recs {
 		rec := &recs[i]
-		c := auth.PermissionConstraints{
+		accountID := unattributedAccountConstraint
+		if rec.CloudAccountID != nil && *rec.CloudAccountID != "" {
+			accountID = *rec.CloudAccountID
+		}
+		sets = append(sets, auth.PermissionConstraints{
 			Providers:         []string{rec.Provider},
 			Services:          []string{rec.Service},
 			Regions:           []string{rec.Region},
+			AccountIDs:        []string{accountID},
 			MaxPurchaseAmount: totalUpfront,
-		}
-		if rec.CloudAccountID != nil && *rec.CloudAccountID != "" {
-			c.AccountIDs = []string{*rec.CloudAccountID}
-		}
-		sets = append(sets, c)
+		})
 	}
 	return sets
 }

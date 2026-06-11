@@ -739,11 +739,24 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 
 	// Enforce the per-permission Constraints configured on the granting
 	// execute:ri-exchange permission (SEC-01, issue #1141). RI exchanges
-	// are AWS EC2 only and region-scoped; the amount cap is checked against
-	// the caller's max_payment_due_usd guardrail, which ExecuteExchange
-	// independently enforces against the actual quoted payment due.
+	// are AWS EC2 only and region-scoped, and operate on the RIs of the
+	// deployment's own AWS account, so AccountIDs carries the registered
+	// cloud account the running deployment resolves to (fail closed on a
+	// resolution error; unattributedAccountConstraint when the deployment
+	// maps to no registered account, so an AccountIDs-constrained
+	// permission denies). The amount cap is checked against the caller's
+	// max_payment_due_usd guardrail, which ExecuteExchange independently
+	// enforces against the actual quoted payment due.
 	maxPayment, _ := maxRat.Float64()
+	cloudAccountID, err := h.resolveReshapeCloudAccountID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	if cloudAccountID == "" {
+		cloudAccountID = unattributedAccountConstraint
+	}
 	if err := h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
+		AccountIDs:        []string{cloudAccountID},
 		Providers:         []string{string(common.ProviderAWS)},
 		Services:          []string{string(common.ServiceEC2)},
 		Regions:           []string{region},
