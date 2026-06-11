@@ -10,13 +10,14 @@
 export { formatRelativeTime, formatDate } from '../utils';
 
 /**
- * Escape HTML to prevent XSS
+ * Escape HTML to prevent XSS. Re-exported from the shared utils module:
+ * the previous local DOM round-trip (div.textContent -> div.innerHTML)
+ * did not escape quote characters, so values interpolated inside
+ * double-quoted attributes could break out of the attribute. The shared
+ * implementation escapes &, <, >, " and ' and is safe in both text and
+ * attribute contexts.
  */
-export function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+export { escapeHtml } from '../utils';
 
 import { showToast } from '../toast';
 
