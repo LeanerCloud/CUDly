@@ -3437,7 +3437,10 @@ describe('Issue #111: per-bucket Payment seed from per-account service override'
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // fetchOverridesForAccounts is a separate async function (one extra
+    // microtask boundary vs the previous inline Promise.all); four ticks
+    // are needed for openFanOutModal to finish populating the DOM.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     // Change the multi-account 1yr bucket's bucket-level Payment dropdown.
     const bucketSelects = Array.from(
@@ -3783,7 +3786,10 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // fetchOverridesForAccounts is a separate async function (one extra
+    // microtask boundary vs the previous inline Promise.all); four ticks
+    // are needed for openFanOutModal to finish populating the DOM.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     // The fan-out modal renders one section per bucket; the SP section
     // title carries the combined plan-type label.
@@ -3812,7 +3818,10 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // fetchOverridesForAccounts is a separate async function (one extra
+    // microtask boundary vs the previous inline Promise.all); four ticks
+    // are needed for openFanOutModal to finish populating the DOM.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     // The SP bucket section must contain a <details> element with the
     // plan-type breakdown (issue #249).
@@ -3859,7 +3868,10 @@ describe('Issue #132: bulk-buy collapses SP plan types into one bucket', () => {
 
     await loadRecommendations();
     (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // fetchOverridesForAccounts is a separate async function (one extra
+    // microtask boundary vs the previous inline Promise.all); four ticks
+    // are needed for openFanOutModal to finish populating the DOM.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 
     const spSections = Array.from(document.querySelectorAll('.fanout-bucket')).filter(
       (s) => s.querySelector('h4')?.textContent?.includes('Savings Plans'),

@@ -31,6 +31,7 @@ function canActOnRecommendations(): boolean {
   return canAccess('execute', 'purchases') || canAccess('create', 'plans');
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { fetchOverridesForAccounts } from './lib/overrides';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -4072,18 +4073,7 @@ async function openFanOutModal(
       if (r.cloud_account_id) allAccountIDs.add(r.cloud_account_id);
     }
   }
-  const overridesByAccount = new Map<string, AccountServiceOverride[]>();
-  await Promise.all(
-    Array.from(allAccountIDs).map(async (id) => {
-      try {
-        const list = await api.listAccountServiceOverrides(id);
-        overridesByAccount.set(id, list);
-      } catch {
-        // Silent fallback to toolbar seed — a network blip shouldn't
-        // block the user from purchasing.
-      }
-    }),
-  );
+  const overridesByAccount = await fetchOverridesForAccounts(allAccountIDs);
 
   const buckets: FanOutBucket[] = bucketEntries
     .filter(([_key, recs]) => recs.length > 0)
@@ -4833,17 +4823,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[]):
   for (const r of currentPurchaseRecommendations) {
     if (r.cloud_account_id) accountIDs.add(r.cloud_account_id);
   }
-  const overridesByAccount = new Map<string, AccountServiceOverride[]>();
-  await Promise.all(
-    Array.from(accountIDs).map(async (id) => {
-      try {
-        const list = await api.listAccountServiceOverrides(id);
-        overridesByAccount.set(id, list);
-      } catch {
-        // Silent fallback to rec-own / paymentOptionsFor[0] seed.
-      }
-    }),
-  );
+  const overridesByAccount = await fetchOverridesForAccounts(accountIDs);
 
   // Compute seed per rec and mutate currentPurchaseRecommendations in
   // place so the in-flight modal state matches what the dropdowns
