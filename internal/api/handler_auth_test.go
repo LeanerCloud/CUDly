@@ -708,7 +708,9 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
-	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(errors.New("invalid or expired token"))
+	// Use the exact string the real service emits so isResetPasswordClientError
+	// classifies it as a 400 client error, not a 500 internal error.
+	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(errors.New("invalid or expired reset token"))
 
 	handler := &Handler{auth: mockAuth}
 
@@ -718,9 +720,13 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("newpassword123"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "bad-token", "new_password": "` + encoded + `"}`}
 	result, err := handler.resetPassword(ctx, req)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "invalid or expired token")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expired-token error must be wrapped as a client error (400)")
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "invalid or expired reset token")
+	mockAuth.AssertExpectations(t)
 }
 
 // Issue #459: ConfirmPasswordReset errors must surface as a 4xx client
@@ -747,6 +753,7 @@ func TestHandler_resetPassword_ErrorIsClientError(t *testing.T) {
 	require.True(t, ok, "expected ConfirmPasswordReset failures to be wrapped in a clientError")
 	assert.Equal(t, 400, ce.code)
 	assert.Contains(t, ce.Error(), "current password")
+	mockAuth.AssertExpectations(t)
 }
 func TestHandler_updateProfile_Success(t *testing.T) {
 	ctx := context.Background()
