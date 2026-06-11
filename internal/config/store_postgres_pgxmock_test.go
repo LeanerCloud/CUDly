@@ -902,7 +902,9 @@ func TestPGXMock_GetPurchaseHistoryFiltered_NoFilters(t *testing.T) {
 // the active filter into the WHERE clause with NO LIMIT (the `$` anchor after
 // ORDER BY proves no trailing LIMIT clause), so the result is bounded by the
 // number of live commitments and a newest-first row cap can never silently
-// drop the oldest still-active 1y/3y commitments (issue #1140). It also pins
+// drop the oldest still-active 1y/3y commitments (issue #1140). The pinned
+// `>= $1` expiry comparison is inclusive so a commitment expiring exactly at
+// asOf stays active, matching the API layer's isActiveCommitment. It also pins
 // the full 21-column SELECT including the issue-#290 revocation columns:
 // before this fix the query selected only 17 columns while
 // queryPurchaseHistory scans 21 destinations, so every call failed at Scan.
@@ -914,7 +916,7 @@ func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) > \$1 ORDER BY timestamp DESC$`,
+		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 ORDER BY timestamp DESC$`,
 	).WithArgs(now).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now, nil, nil)
@@ -936,7 +938,7 @@ func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "111122223333")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) > \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
+		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
 	).WithArgs(now, []string{"acct-uuid-1"}, "aws", []string{"111122223333"}).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now,
