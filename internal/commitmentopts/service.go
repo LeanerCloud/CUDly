@@ -162,13 +162,14 @@ func (s *Service) Validate(ctx context.Context, provider, service string, term i
 	}
 	combos, ok := byService[service]
 	if !ok {
-		// We have probe data for this provider but not for this service.
-		// This typically means the service is not commitment-capable per
-		// the probe (e.g. Savings Plans has no per-service offering list)
-		// or it is a new service not yet covered by the probe set.
-		// Log at Warn so operators can detect misconfigured service names
-		// or probe gaps without blocking the plan save (05-M4). The
-		// frontend's hardcoded rules are the primary user-facing gate.
+		// We have data for this provider but not this service key.
+		// The probe ran but returned no combos for this service
+		// (e.g. a plan type not sold in the account's region).
+		// Permissive fallback keeps parity with ErrNoData so unknown
+		// services are never silently blocked. Log at Warn so operators
+		// can detect misconfigured service names or probe gaps without
+		// blocking the plan save (05-M4). The frontend's hardcoded
+		// rules are the primary user-facing gate.
 		logging.Warnf("commitmentopts: provider %q known in probe data but service %q absent; treating as valid (term=%d payment=%q)",
 			provider, service, term, payment)
 		return true, nil
