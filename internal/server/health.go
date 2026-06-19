@@ -11,10 +11,10 @@ import (
 
 // HealthStatus represents the overall health of the application.
 type HealthStatus struct {
-	Status    string                 `json:"status"`
-	Version   string                 `json:"version"`
 	Timestamp time.Time              `json:"timestamp"`
 	Checks    map[string]CheckResult `json:"checks"`
+	Status    string                 `json:"status"`
+	Version   string                 `json:"version"`
 }
 
 // CheckResult represents the result of a health check.
@@ -84,7 +84,7 @@ func (app *Application) checkMigrations() CheckResult {
 	if app.dbConfig == nil || !app.dbConfig.AutoMigrate {
 		return CheckResult{Status: "disabled", Message: "AutoMigrate is off"}
 	}
-	err, finishedAt := app.snapshotMigrationState()
+	finishedAt, err := app.snapshotMigrationState()
 	switch {
 	case finishedAt.IsZero():
 		return CheckResult{Status: "pending", Message: "migrations have not run yet"}

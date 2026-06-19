@@ -22,7 +22,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	type spRow struct {
+	type spRow struct { //nolint:govet // field order matches Scan() call order for clarity; reordering for alignment would obscure the SQL column correspondence
 		service      string
 		term         int
 		payment      string

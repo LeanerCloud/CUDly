@@ -1736,6 +1736,7 @@ func TestConfigSetting_DifferentValueTypes(t *testing.T) {
 				Value: tt.value,
 				Type:  tt.dataType,
 			}
+			assert.Equal(t, "test."+tt.dataType, setting.Key)
 			assert.Equal(t, tt.value, setting.Value)
 			assert.Equal(t, tt.dataType, setting.Type)
 		})

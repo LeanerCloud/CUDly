@@ -114,8 +114,7 @@ func (s *additionalMockStore) GetExecutionByPlanAndDate(ctx context.Context, pla
 	return &executions[0], nil
 }
 
-//nolint:unparam // mock mirrors the production store signature; query fixed by the single test path
-func (s *additionalMockStore) queryPurchaseHistory(ctx context.Context, query string, args ...interface{}) ([]PurchaseHistoryRecord, error) {
+func (s *additionalMockStore) queryPurchaseHistory(ctx context.Context, query string, args ...interface{}) ([]PurchaseHistoryRecord, error) { //nolint:unparam // test helper; callers happen to pass the same SQL but the parameter enables reuse
 	rows, err := s.mock.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

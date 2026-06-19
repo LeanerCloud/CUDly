@@ -34,8 +34,7 @@ func (f *fakeAccountConfigReader) GetAccountServiceOverride(_ context.Context, a
 	return f.overrides[accountID+"|"+provider+"|"+service], nil
 }
 
-//nolint:unparam // test helper: provider fixed by design across current callers
-func acctRec(account, provider, service string) RecommendationRecord {
+func acctRec(account, provider, service string) RecommendationRecord { //nolint:unparam // provider is always "aws" in current tests but the parameter is kept for future multi-provider test cases
 	return RecommendationRecord{
 		Provider:       provider,
 		Service:        service,

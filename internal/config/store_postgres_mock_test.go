@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -284,7 +283,7 @@ func (s *testablePostgresStore) GetPurchasePlan(ctx context.Context, planID stri
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
+			return nil, errors.New("purchase plan not found")
 		}
 		return nil, err
 	}

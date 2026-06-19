@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -279,7 +280,7 @@ func TestSpaFileServer_ServesExistingFile(t *testing.T) {
 
 	handler := spaFileServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/app.js", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -291,7 +292,7 @@ func TestSpaFileServer_ServesIndexForRoot(t *testing.T) {
 
 	handler := spaFileServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -303,7 +304,7 @@ func TestSpaFileServer_SPAFallbackForUnknownPath(t *testing.T) {
 
 	handler := spaFileServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/some/route", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/some/route", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -315,7 +316,7 @@ func TestSpaFileServer_404ForMissingExtensionFile(t *testing.T) {
 
 	handler := spaFileServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/missing.png", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/missing.png", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -327,7 +328,7 @@ func TestSpaFileServer_404WhenIndexMissing(t *testing.T) {
 
 	handler := spaFileServer(dir)
 
-	req := httptest.NewRequest(http.MethodGet, "/any/route", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/any/route", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 

@@ -137,7 +137,7 @@ func (app *Application) taskLocker() TaskLocker {
 func taskLockID(taskType ScheduledTaskType) int64 {
 	h := fnv.New64a()
 	h.Write([]byte("cudly:task:" + string(taskType)))
-	return int64(h.Sum64())
+	return int64(h.Sum64()) //nolint:gosec // intentional bit-pattern reinterpret for advisory lock ID; overflow is acceptable
 }
 
 // handleCollectRecommendations collects cost optimization recommendations.
@@ -177,12 +177,7 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 }
 
 // handleCleanupExpiredRecords cleans up expired sessions and execution records.
-//
-// contract for the handler family registered in the task dispatch map; error is
-// reserved for the failure modes the sibling handlers already surface.
-//
-//nolint:unparam // scheduled-task handler: (result, error) shape is the shared
-func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
+func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) { //nolint:unparam // error return required by dispatch table func(context.Context)(any,error)
 	log.Println("Cleaning up expired records...")
 
 	result := map[string]int64{
@@ -272,12 +267,7 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 }
 
 // handleRefreshAnalytics refreshes materialized views and analytics data.
-//
-// contract for the handler family registered in the task dispatch map; error is
-// reserved for the failure modes the sibling handlers already surface.
-//
-//nolint:unparam // scheduled-task handler: (result, error) shape is the shared
-func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
+func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) { //nolint:unparam // error return required by dispatch table func(context.Context)(any,error)
 	log.Println("Refreshing analytics...")
 
 	result := map[string]any{

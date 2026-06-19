@@ -33,7 +33,7 @@ type SecretResolver interface {
 	Close() error
 }
 
-// NewConnection creates a new database connection pool
+// NewConnection creates a new database connection pool.
 // If secretResolver is provided and config.PasswordSecret is set, password will be retrieved from secret manager.
 func NewConnection(ctx context.Context, config *Config, secretResolver SecretResolver) (*Connection, error) {
 	// Check if secret resolver is needed but not provided
@@ -215,8 +215,8 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	if config.MinConnections > math.MaxInt32 {
 		return nil, fmt.Errorf("MinConnections value %d exceeds int32 max", config.MinConnections)
 	}
-	poolConfig.MaxConns = int32(config.MaxConnections)
-	poolConfig.MinConns = int32(config.MinConnections)
+	poolConfig.MaxConns = int32(config.MaxConnections) //nolint:gosec // overflow guarded by the bounds check above
+	poolConfig.MinConns = int32(config.MinConnections) //nolint:gosec // overflow guarded by the bounds check above
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = config.HealthCheckPeriod
@@ -283,7 +283,7 @@ func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 }
 
 // BeginTx starts a new transaction with options.
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // pgx.TxOptions is part of the pgx public API; callers pass by value matching the pgx.Pool interface
 	return c.pool.BeginTx(ctx, txOptions)
 }
 
