@@ -24,12 +24,11 @@ type AWSKMSClient interface {
 // The private key never leaves KMS.
 type AWSKMSSigner struct {
 	client AWSKMSClient
-	keyID  string
-
-	once   sync.Once
-	pubKey *ecdsa.PublicKey
-	kid    string
 	err    error
+	pubKey *ecdsa.PublicKey
+	keyID  string
+	kid    string
+	once   sync.Once
 }
 
 // NewAWSKMSSigner constructs a signer bound to the given KMS key. The

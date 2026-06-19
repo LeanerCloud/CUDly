@@ -51,7 +51,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("public key is not *ecdsa.PublicKey, got %T", rawPub)
 	}
-	if ecPub.X.Cmp(key.PublicKey.X) != 0 || ecPub.Y.Cmp(key.PublicKey.Y) != 0 {
+	if ecPub.X.Cmp(key.X) != 0 || ecPub.Y.Cmp(key.Y) != 0 {
 		t.Fatal("public key point mismatch")
 	}
 

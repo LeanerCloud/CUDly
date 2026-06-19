@@ -40,12 +40,11 @@ func (w gcpKMSWrapper) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKey
 // private half never leaves the KMS.
 type GCPKMSSigner struct {
 	client      GCPKMSClient
-	keyResource string // full resource name, incl. /cryptoKeyVersions/N
-
-	once   sync.Once
-	pubKey *ecdsa.PublicKey
-	kid    string
-	err    error
+	err         error
+	pubKey      *ecdsa.PublicKey
+	keyResource string
+	kid         string
+	once        sync.Once
 }
 
 // NewGCPKMSSigner constructs a signer bound to a specific KMS key
