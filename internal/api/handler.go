@@ -267,6 +267,9 @@ const unattributedAccountConstraint = "unattributed"
 // like it bypasses requirePermission's per-user lookup. Fails closed on a
 // missing auth service or a lookup error.
 func (h *Handler) requirePermissionConstraints(ctx context.Context, session *Session, action, resource string, constraintSets []auth.PermissionConstraints) error {
+	if session == nil {
+		return fmt.Errorf("internal error: nil session passed to requirePermissionConstraints")
+	}
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}

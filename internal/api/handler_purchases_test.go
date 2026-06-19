@@ -3392,6 +3392,8 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 			return assert.ObjectsAreEqual([]string{"aws"}, sets[0].Providers) &&
 				assert.ObjectsAreEqual([]string{"ec2"}, sets[0].Services) &&
 				assert.ObjectsAreEqual([]string{"us-east-1"}, sets[0].Regions) &&
+				assert.ObjectsAreEqual([]string{"aws"}, sets[1].Providers) &&
+				assert.ObjectsAreEqual([]string{"ec2"}, sets[1].Services) &&
 				assert.ObjectsAreEqual([]string{"eu-west-1"}, sets[1].Regions)
 		})).Return(false, nil)
 
