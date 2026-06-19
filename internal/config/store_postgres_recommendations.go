@@ -322,6 +322,9 @@ func recEffectiveSavingsPct(rec *RecommendationRecord) (float64, bool) {
 		!math.IsNaN(*rec.SavingsPercentage) && !math.IsInf(*rec.SavingsPercentage, 0) {
 		return *rec.SavingsPercentage, true
 	}
+	if rec.Term == 0 {
+		return 0, false
+	}
 	onDemand, ok := recOnDemandBaseline(rec)
 	if !ok || onDemand == 0 {
 		return 0, false
