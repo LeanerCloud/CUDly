@@ -27,7 +27,7 @@ import (
 //  2. Otherwise, fall back to the legacy IncludeSPTypes/ExcludeSPTypes
 //     filter mechanism (for callers passing the umbrella ServiceSavingsPlans
 //     slug or for direct CLI invocations that haven't been migrated yet).
-func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) { //nolint:gocritic // hugeParam: RecommendationParams is read-only here; changing to pointer would cascade through many callers and tests
 	planTypes := planTypesForParams(params)
 
 	if len(planTypes) == 0 {
@@ -82,7 +82,7 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 // fetchSPAllPages paginates over all pages of SP recommendations for a single
 // plan type. ctx.Err() is checked at the top of each iteration so cancellation
 // is terminal (per feedback_ctx_cancel_terminal.md, issue #692).
-func (c *Client) fetchSPAllPages(
+func (c *Client) fetchSPAllPages( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
 	ctx context.Context,
 	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
 	params common.RecommendationParams,
@@ -158,8 +158,8 @@ func (c *Client) fetchSPPageWithRetry(
 	return result, nil
 }
 
-// parseSavingsPlansRecommendations converts Savings Plans recommendations
-func (c *Client) parseSavingsPlansRecommendations(
+// parseSavingsPlansRecommendations converts Savings Plans recommendations.
+func (c *Client) parseSavingsPlansRecommendations( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
 	spRec *types.SavingsPlansPurchaseRecommendation,
 	params common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
@@ -194,7 +194,7 @@ func parseOptionalFloat(field string, s *string) float64 {
 // hoursPerMonth is the standard AWS billing constant for monthly cost calculations.
 const hoursPerMonth = 730.0
 
-func (c *Client) parseSavingsPlanDetail(
+func (c *Client) parseSavingsPlanDetail( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
 	params common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
@@ -252,7 +252,7 @@ func (c *Client) parseSavingsPlanDetail(
 	//     frontend can distinguish "known-zero" from "data not provided".
 	//   - partial-upfront / no-upfront: recurring ≈ HourlyCommitmentToPurchase
 	//     × 730. For partial-upfront this slightly over-counts (it includes the
-	//     amortised upfront portion), but AWS CE does not expose the recurring-
+	//     amortized upfront portion), but AWS CE does not expose the recurring-
 	//     only hourly rate directly, so this is the best available approximation.
 	//   - nil: HourlyCommitmentToPurchase was absent from the API response
 	//     (should not happen for well-formed CE responses, but handled defensively).
@@ -296,7 +296,7 @@ func (c *Client) parseSavingsPlanDetail(
 // otherwise it falls back to the legacy IncludeSPTypes/ExcludeSPTypes filter.
 // See the getSavingsPlansRecommendations docstring for the full resolution
 // order.
-func planTypesForParams(params common.RecommendationParams) []types.SupportedSavingsPlansType {
+func planTypesForParams(params common.RecommendationParams) []types.SupportedSavingsPlansType { //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
 	if pt, ok := planTypeForServiceSlug(params.Service); ok {
 		return []types.SupportedSavingsPlansType{pt}
 	}
@@ -339,10 +339,21 @@ func serviceSlugForPlanType(pt types.SupportedSavingsPlansType) common.ServiceTy
 	return common.ServiceSavingsPlans
 }
 
+// normalizeFilterSet lowercases each entry in filters and returns them as a
+// set (map[string]bool). Extracted from getFilteredPlanTypes so the function
+// literal does not capture outer variables (gocritic unlambda).
+func normalizeFilterSet(filters []string) map[string]bool {
+	result := make(map[string]bool, len(filters))
+	for _, f := range filters {
+		result[strings.ToLower(f)] = true
+	}
+	return result
+}
+
 // getFilteredPlanTypes returns the list of Savings Plan types to query based
 // on include/exclude filters. Iterates a fixed-order slice rather than a map
 // so the returned order is deterministic — downstream "first plan type wins"
-// behaviour and test assertions can rely on it.
+// behavior and test assertions can rely on it.
 func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.SupportedSavingsPlansType {
 	allPlanTypes := []struct {
 		name string
@@ -354,21 +365,12 @@ func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.Suppo
 		{"database", types.SupportedSavingsPlansTypeDatabaseSp},
 	}
 
-	// Normalize filter values to lowercase
-	normalizeFilters := func(filters []string) map[string]bool {
-		result := make(map[string]bool)
-		for _, f := range filters {
-			result[strings.ToLower(f)] = true
-		}
-		return result
-	}
-
-	includeMap := normalizeFilters(includeSPTypes)
-	excludeMap := normalizeFilters(excludeSPTypes)
+	includeMap := normalizeFilterSet(includeSPTypes)
+	excludeMap := normalizeFilterSet(excludeSPTypes)
 
 	var result []types.SupportedSavingsPlansType
 
-	// If include list is specified, only include those types
+	// If include list is specified, only include those types.
 	if len(includeMap) > 0 {
 		for _, item := range allPlanTypes {
 			if includeMap[item.name] && !excludeMap[item.name] {
@@ -376,7 +378,7 @@ func getFilteredPlanTypes(includeSPTypes, excludeSPTypes []string) []types.Suppo
 			}
 		}
 	} else {
-		// Include all types except those in the exclude list
+		// Include all types except those in the exclude list.
 		for _, item := range allPlanTypes {
 			if !excludeMap[item.name] {
 				result = append(result, item.typ)
