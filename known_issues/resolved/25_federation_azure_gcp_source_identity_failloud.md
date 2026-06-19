@@ -1,6 +1,7 @@
 # Known Issues: Federation IaC — Azure/GCP source-identity fail-loud guards
 
 > **Audit status (2026-04-22):** `1 needs triage · 0 resolved (new file)`
+> **GitHub Issue:** #41
 
 Surfaced during the zero-touch federation bundle work
 (`fix(api): pre-fill ContactEmail from Session.Email and fail loud on empty SourceAccountID`).

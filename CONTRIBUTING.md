@@ -247,11 +247,15 @@ needs periodic housekeeping.
 ### Entry format
 
 Each file must begin with a `# Known Issues: <topic>` heading followed by an
-audit-status line:
+audit-status line and a GitHub Issue reference:
 
 ```text
 > **Audit status (<YYYY-MM-DD>):** `<N> needs triage · <M> resolved`
+> **GitHub Issue:** #<N>
 ```
+
+The `**GitHub Issue:** #<N>` line is mandatory so the bulk sweep script can
+cross-check issue state without relying on free-form body text.
 
 Subsequent sections use `## SEVERITY: Short title` (e.g. `## MEDIUM: ...`) and
 include at minimum: **Files** (affected paths), **Description**, **Why
@@ -292,7 +296,7 @@ To perform a sweep:
 grep -rl "#<issue-number>" known_issues/
 
 # Cross-check all referenced issues in bulk
-grep -h "closes #\|Fixes #\|#[0-9]\+" known_issues/*.md \
+grep -rh "GitHub Issue:" known_issues/*.md \
   | grep -oE '#[0-9]+' | sort -u \
   | xargs -I{} gh issue view {} --json state,number,title --jq '[.number,.state,.title]'
 ```
