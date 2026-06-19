@@ -2060,6 +2060,7 @@ export async function openAddPurchasesModal(planId: string, planName: string): P
   tomorrow.setDate(tomorrow.getDate() + 1);
   const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
   startDateInput.value = tomorrow.toISOString().split('T')[0] ?? '';
+  startDateInput.min = new Date().toISOString().split('T')[0] ?? '';
 
   // Add event listeners
   document.getElementById('add-purchases-cancel')?.addEventListener('click', closeAddPurchasesModal);

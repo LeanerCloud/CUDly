@@ -615,3 +615,42 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Add Purchases modal: start-date picker min attribute (QA 5.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The start-date input must have its `min` attribute set to today's ISO date
+ * so the browser date-picker blocks past dates while still allowing today.
+ * The default value stays tomorrow (to encourage scheduling ahead), but min
+ * is today so a same-day purchase remains possible.
+ */
+describe('Add Purchases modal: start-date picker enforces future-only dates (QA 5.6)', () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const plansList = document.createElement('div');
+    plansList.id = 'plans-list';
+    const ppList = document.createElement('div');
+    ppList.id = 'planned-purchases-list';
+    document.body.replaceChildren(plansList, ppList);
+
+    await openAddPurchasesModal('plan-xyz', 'My Test Plan');
+  });
+
+  it('sets min to today on the start-date input after the modal opens', () => {
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    expect(input).not.toBeNull();
+
+    const todayIso = new Date().toISOString().split('T')[0];
+    expect(input.min).toBe(todayIso);
+  });
+
+  it('keeps the default value set to tomorrow, not today', () => {
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowIso = tomorrow.toISOString().split('T')[0];
+    expect(input.value).toBe(tomorrowIso);
+  });
+});
