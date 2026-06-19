@@ -13,6 +13,9 @@ import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { formatTrendAxisTick } from './modules/chart-utils';
+// Re-export for backward compatibility (tests and other callers import from dashboard.ts).
+export { formatTrendAxisTick } from './modules/chart-utils';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -987,18 +990,6 @@ export function renderSavingsByService(
       },
     },
   });
-}
-
-/**
- * Format a millisecond timestamp for the savings-trend x-axis tick label.
- * Exported for unit testing.
- */
-export function formatTrendAxisTick(tsMs: number, intervalHint: 'hourly' | 'daily' | 'weekly'): string {
-  const d = new Date(tsMs);
-  if (intervalHint === 'hourly') {
-    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /**
