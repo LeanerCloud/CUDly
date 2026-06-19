@@ -325,24 +325,33 @@ func recEffectiveSavingsPct(rec *RecommendationRecord) (float64, bool) {
 	if rec.Term == 0 {
 		return 0, false
 	}
-	hasOnDemand := rec.OnDemandCost != nil && *rec.OnDemandCost > 0
-	if !hasOnDemand && rec.MonthlyCost == nil {
-		return 0, false
-	}
-	if rec.Provider == providerAWS && !hasOnDemand {
-		return 0, false
-	}
-	var onDemand float64
-	if hasOnDemand {
-		onDemand = *rec.OnDemandCost
-	} else {
-		amortized := rec.UpfrontCost / float64(rec.Term*12)
-		onDemand = *rec.MonthlyCost + rec.Savings + amortized
-	}
-	if onDemand == 0 {
+	onDemand, ok := recOnDemandBaseline(rec)
+	if !ok || onDemand == 0 {
 		return 0, false
 	}
 	return (rec.Savings / onDemand) * 100, true
+}
+
+// recOnDemandBaseline returns the monthly on-demand baseline used as the
+// denominator in recEffectiveSavingsPct, and whether one could be determined.
+// It prefers the provider-reported OnDemandCost; otherwise it reconstructs the
+// baseline as monthly_cost + net savings + amortized upfront. It returns
+// ok=false when no baseline can be derived: no explicit on-demand and no
+// monthly_cost, or an AWS row without an explicit on-demand baseline (the
+// reconstruction diverges from Cost Explorer's true baseline -- the frontend's
+// #323 guard). Callers must ensure rec.Term != 0 before calling.
+func recOnDemandBaseline(rec *RecommendationRecord) (float64, bool) {
+	if rec.OnDemandCost != nil && *rec.OnDemandCost > 0 {
+		return *rec.OnDemandCost, true
+	}
+	if rec.MonthlyCost == nil {
+		return 0, false
+	}
+	if rec.Provider == providerAWS {
+		return 0, false
+	}
+	amortized := rec.UpfrontCost / float64(rec.Term*12)
+	return *rec.MonthlyCost + rec.Savings + amortized, true
 }
 
 // ListStoredRecommendations reads recommendations matching the filter.
