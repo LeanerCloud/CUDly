@@ -198,28 +198,14 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     await jsonRoute(route, ACCOUNTS);
   });
 
-  // Freshness — fresh, no error, so auto-refresh-on-stale stays quiet.
-  await page.route('**/api/recommendations/freshness', async (route) => {
-    record(route);
-    await jsonRoute(route, {
-      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      last_collection_error: null,
-    });
-  });
-
-  // Refresh — synchronous-success path. Tests that need to assert on refresh
-  // behaviour can override this with their own page.route.
-  await page.route('**/api/recommendations/refresh', async (route) => {
-    record(route);
-    await jsonRoute(route, {
-      started_at: new Date().toISOString(),
-      last_collected_at: new Date().toISOString(),
-    });
-  });
-
   // Main recommendations list. Filtered server-side by the `provider` query
   // param (the only filter the frontend still pushes down — Service / Region
   // / numerics are all client-side via applyColumnFilters).
+  //
+  // Registered before the more-specific /freshness, /refresh, and /*/detail
+  // handlers below: Playwright runs handlers in reverse-registration order, so
+  // those later-registered patterns take precedence over this wildcard when the
+  // URL matches both.
   await page.route('**/api/recommendations*', async (route) => {
     record(route);
     if (route.request().method() !== 'GET') {
@@ -241,6 +227,29 @@ export async function mockApi(page: Page): Promise<MockHandle> {
       recommendations: rows,
       summary: SUMMARY,
       regions: ['us-east-1', 'us-west-2', 'eu-west-1', 'eastus', 'westeurope', 'us-central1', 'europe-west1'],
+    });
+  });
+
+  // Freshness — fresh, no error, so auto-refresh-on-stale stays quiet.
+  // Registered AFTER **/api/recommendations* so it takes precedence over the
+  // wildcard for freshness-specific URLs.
+  await page.route('**/api/recommendations/freshness', async (route) => {
+    record(route);
+    await jsonRoute(route, {
+      last_collected_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      last_collection_error: null,
+    });
+  });
+
+  // Refresh — synchronous-success path. Tests that need to assert on refresh
+  // behaviour can override this with their own page.route.
+  // Registered AFTER **/api/recommendations* so it takes precedence over the
+  // wildcard for refresh-specific URLs.
+  await page.route('**/api/recommendations/refresh', async (route) => {
+    record(route);
+    await jsonRoute(route, {
+      started_at: new Date().toISOString(),
+      last_collected_at: new Date().toISOString(),
     });
   });
 
