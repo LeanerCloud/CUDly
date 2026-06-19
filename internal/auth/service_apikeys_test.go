@@ -1013,6 +1013,7 @@ func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
 
 	mockStore := new(MockStore)
 	service := &Service{store: mockStore}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
 	mockStore.On("GetUserByID", mock.Anything, "user-panic").Return(user, nil)
@@ -1035,8 +1036,6 @@ func TestValidateUserAPIKey_UpdateLastUsedPanicIsRecovered(t *testing.T) {
 	// Block until the goroutine has executed (and panicked + recovered).
 	// Reaching this line means the process survived -- recover() caught the panic.
 	<-done
-
-	mockStore.AssertExpectations(t)
 }
 
 func TestService_validateAPIKeyPermissions(t *testing.T) {
