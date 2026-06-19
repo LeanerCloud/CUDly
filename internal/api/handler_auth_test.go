@@ -707,6 +707,7 @@ func TestHandler_resetPasswordStatus_NoAuthService(t *testing.T) {
 func TestHandler_resetPassword_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	// Use the exact string the real service emits so isResetPasswordClientError
 	// classifies it as a 400 client error, not a 500 internal error.
@@ -737,6 +738,7 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 func TestHandler_resetPassword_ErrorIsClientError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("this is your current password, choose a different one"))
