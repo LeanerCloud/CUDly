@@ -12,6 +12,10 @@ touching `frontend/**`. The workflow shipped, but the corresponding
 required-checks list. A PR that breaks the frontend build can currently be
 merged without a block (issue #377).
 
+The workflow targets the `main` branch only. The `feat/multicloud-web-frontend`
+trigger was removed in the commit that merged that branch into `main`
+(`4f7d429a8`), so `Build frontend` only ever runs for PRs targeting `main`.
+
 > **Note on context naming**: GitHub branch-protection contexts are derived
 > from the **job `name:`** field, not the workflow `name:` field. The workflow
 > is named `Frontend build (PR)` but its single job is named `Build frontend`,
@@ -20,7 +24,7 @@ merged without a block (issue #377).
 
 ## Required checks -- canonical list
 
-Both `feat/multicloud-web-frontend` and `main` should require:
+`main` should require:
 
 - `Build frontend`
 - Any other checks already present at the time an admin applies this runbook
@@ -30,17 +34,14 @@ Both `feat/multicloud-web-frontend` and `main` should require:
 
 These commands require repo-admin permission on LeanerCloud/CUDly.
 
-### Step 1 -- retrieve the current required checks for each branch
+### Step 1 -- retrieve the current required checks for main
 
 ```bash
-gh api repos/LeanerCloud/CUDly/branches/feat/multicloud-web-frontend/protection \
-  --jq '.required_status_checks.contexts'
-
 gh api repos/LeanerCloud/CUDly/branches/main/protection \
   --jq '.required_status_checks.contexts'
 ```
 
-If either returns `"Branch not protected"` (HTTP 404), the protection rule
+If this returns `"Branch not protected"` (HTTP 404), the protection rule
 must be created from scratch; use the `gh api -X PUT` form in Step 3.
 
 ### Step 2 -- add the check to an already-protected branch
@@ -48,11 +49,6 @@ must be created from scratch; use the `gh api -X PUT` form in Step 3.
 Replace `EXISTING_CHECK_1` etc. with the contexts returned by Step 1:
 
 ```bash
-gh api -X PATCH \
-  repos/LeanerCloud/CUDly/branches/feat/multicloud-web-frontend/protection/required_status_checks \
-  -F 'contexts[]=EXISTING_CHECK_1' \
-  -F 'contexts[]=Build frontend'
-
 gh api -X PATCH \
   repos/LeanerCloud/CUDly/branches/main/protection/required_status_checks \
   -F 'contexts[]=EXISTING_CHECK_1' \
@@ -64,20 +60,6 @@ gh api -X PATCH \
 Adjust `required_pull_request_reviews` and `enforce_admins` to taste:
 
 ```bash
-gh api -X PUT \
-  repos/LeanerCloud/CUDly/branches/feat/multicloud-web-frontend/protection \
-  --input - <<'EOF'
-{
-  "required_status_checks": {
-    "strict": true,
-    "contexts": ["Build frontend"]
-  },
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null
-}
-EOF
-
 gh api -X PUT \
   repos/LeanerCloud/CUDly/branches/main/protection \
   --input - <<'EOF'
@@ -96,14 +78,11 @@ EOF
 ### Step 4 -- verify
 
 ```bash
-gh api repos/LeanerCloud/CUDly/branches/feat/multicloud-web-frontend/protection \
-  --jq '.required_status_checks.contexts'
-
 gh api repos/LeanerCloud/CUDly/branches/main/protection \
   --jq '.required_status_checks.contexts'
 ```
 
-Both should include `"Build frontend"`.
+The output should include `"Build frontend"`.
 
 ### Step 5 -- smoke test
 
