@@ -7,7 +7,7 @@
 // Without this package every service client carries a near-identical
 // copy of the pagination loop — the same seen-URL guard, the same
 // max-pages cap, the same per-page timeout, the same error wording.
-// Centralising those invariants means a bug in one (e.g. a missing
+// Centralizing those invariants means a bug in one (e.g. a missing
 // timeout) can't diverge across services.
 package pricing
 
@@ -32,8 +32,8 @@ type HTTPClient interface {
 // type in their own package so the JSON decode produces values the caller
 // already knows how to read.
 type Page[T any] struct {
-	Items        []T    `json:"Items"`
 	NextPageLink string `json:"NextPageLink"`
+	Items        []T    `json:"Items"`
 	Count        int    `json:"Count"`
 }
 
@@ -44,7 +44,7 @@ const DefaultPageTimeout = 10 * time.Second
 
 // DefaultMaxPages caps the NextPageLink loop. The Azure Retail Prices API
 // paginates at 100 items per page, so 50 pages is 5000 items — more than
-// any realistic SKU/region/term query. The cap is purely a defence against
+// any realistic SKU/region/term query. The cap is purely a defense against
 // a server bug returning a NextPageLink that never empties.
 const DefaultMaxPages = 50
 
@@ -96,7 +96,7 @@ func fetchOnePage[T any](ctx context.Context, httpClient HTTPClient, pageURL str
 	pageCtx, cancel := context.WithTimeout(ctx, pageTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(pageCtx, "GET", pageURL, nil)
+	req, err := http.NewRequestWithContext(pageCtx, http.MethodGet, pageURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request (page %d): %w", pageIdx, err)
 	}
@@ -107,7 +107,10 @@ func fetchOnePage[T any](ctx context.Context, httpClient HTTPClient, pageURL str
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("pricing API returned status %d (page %d); reading error body: %w", resp.StatusCode, pageIdx, err)
+		}
 		return nil, fmt.Errorf("pricing API returned status %d (page %d): %s", resp.StatusCode, pageIdx, string(body))
 	}
 

@@ -22,12 +22,12 @@ type fakeItem struct {
 
 // fakeHTTPClient is a scripted HTTP client — Do returns a fixed response
 // or error per URL. Keeping the fake inside this file avoids depending on
-// testify/mock for a simple behaviour contract.
+// testify/mock for a simple behavior contract.
 type fakeHTTPClient struct {
 	responses map[string]*http.Response
 	errors    map[string]error
-	calls     []*http.Request
 	beforeDo  func(*http.Request)
+	calls     []*http.Request
 }
 
 func newFakeHTTPClient() *fakeHTTPClient {
@@ -65,10 +65,10 @@ func okJSONResponse(body string) *http.Response {
 // merged into the returned slice in order.
 func TestFetchAll_MergesPages(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/page1"] = okJSONResponse(
+	client.responses["https://prices.example/page1"] = okJSONResponse( //nolint:bodyclose // body closed by fetchOnePage via defer resp.Body.Close()
 		`{"Items":[{"name":"a"}],"NextPageLink":"https://prices.example/page2"}`,
 	)
-	client.responses["https://prices.example/page2"] = okJSONResponse(
+	client.responses["https://prices.example/page2"] = okJSONResponse( //nolint:bodyclose // body closed by fetchOnePage via defer resp.Body.Close()
 		`{"Items":[{"name":"b"},{"name":"c"}],"NextPageLink":""}`,
 	)
 
@@ -85,7 +85,7 @@ func TestFetchAll_MergesPages(t *testing.T) {
 // it. Without the seen-URL set the walker would loop forever.
 func TestFetchAll_RejectsSelfReferentialNextPageLink(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/loop"] = okJSONResponse(
+	client.responses["https://prices.example/loop"] = okJSONResponse( //nolint:bodyclose // body closed by fetchOnePage via defer resp.Body.Close()
 		`{"Items":[],"NextPageLink":"https://prices.example/loop"}`,
 	)
 
@@ -105,7 +105,7 @@ func TestFetchAll_HonoursMaxPagesCap(t *testing.T) {
 		if i < 9 {
 			next = "https://prices.example/page" + string(rune('a'+i+1))
 		}
-		client.responses[url] = okJSONResponse(
+		client.responses[url] = okJSONResponse( //nolint:bodyclose // body closed by fetchOnePage via defer resp.Body.Close()
 			`{"Items":[{"name":"` + string(rune('a'+i)) + `"}],"NextPageLink":"` + next + `"}`,
 		)
 	}
@@ -124,7 +124,7 @@ func TestFetchAll_HonoursMaxPagesCap(t *testing.T) {
 // a deadline, and a page failure does NOT cancel the outer ctx.
 func TestFetchAll_PerPageTimeout(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/page1"] = okJSONResponse(
+	client.responses["https://prices.example/page1"] = okJSONResponse( //nolint:bodyclose // body closed by fetchOnePage via defer resp.Body.Close()
 		`{"Items":[{"name":"a"}],"NextPageLink":"https://prices.example/page2"}`,
 	)
 	client.errors["https://prices.example/page2"] = context.DeadlineExceeded
@@ -144,7 +144,7 @@ func TestFetchAll_PerPageTimeout(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "page 1")
 	assert.Contains(t, err.Error(), "timeout")
-	assert.NoError(t, outerCtx.Err(), "outer ctx must not be cancelled by a per-page timeout")
+	assert.NoError(t, outerCtx.Err(), "outer ctx must not be canceled by a per-page timeout")
 }
 
 // TestFetchAll_RejectsNonOKStatus covers the HTTP-error path: any non-200

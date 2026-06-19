@@ -26,7 +26,7 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return args.Get(0).(*http.Response), args.Error(1)
 }
 
-func fakeResp(status int, body string) *http.Response {
+func fakeResp(status int, body string) *http.Response { //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	return &http.Response{
 		StatusCode: status,
 		Body:       io.NopCloser(bytes.NewBufferString(body)),
@@ -46,12 +46,12 @@ func TestDoPurchaseTwoStep_HappyPath(t *testing.T) {
 	calcResp := `{"properties":{"reservationOrderId":"azure-order-abc123","paymentSchedule":{}}}`
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, calcResp), nil).Once()
+	})).Return(fakeResp(http.StatusOK, calcResp), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// purchase returns 200.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/azure-order-abc123/purchase"
-	})).Return(fakeResp(http.StatusOK, `{"id":"azure-order-abc123"}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"id":"azure-order-abc123"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "test-token")
 	require.NoError(t, err)
@@ -67,11 +67,11 @@ func TestDoPurchaseTwoStep_PurchaseAccepted(t *testing.T) {
 	calcResp := `{"properties":{"reservationOrderId":"order-202"}}`
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, calcResp), nil).Once()
+	})).Return(fakeResp(http.StatusOK, calcResp), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-202/purchase"
-	})).Return(fakeResp(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(fakeResp(http.StatusAccepted, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok")
 	require.NoError(t, err)
@@ -90,22 +90,22 @@ func TestDoPurchaseTwoStep_SessionTimeoutThenSuccess(t *testing.T) {
 	// First calculatePrice call -- returns order ID "order-first".
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-first"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-first"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// First purchase call returns session timeout.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-first/purchase"
-	})).Return(fakeResp(http.StatusBadRequest, sessionTimeoutBody), nil).Once()
+	})).Return(fakeResp(http.StatusBadRequest, sessionTimeoutBody), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// Second calculatePrice call -- returns order ID "order-second".
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-second"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-second"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// Second purchase call succeeds.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-second/purchase"
-	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok")
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestDoPurchaseTwoStep_CalculateFailure(t *testing.T) {
 	ctx := context.Background()
 
 	m.On("Do", mock.Anything).Return(
-		fakeResp(http.StatusUnprocessableEntity, `{"error":{"code":"InvalidSKU"}}`), nil,
+		fakeResp(http.StatusUnprocessableEntity, `{"error":{"code":"InvalidSKU"}}`), nil, //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	).Once()
 
 	_, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok")
@@ -138,11 +138,11 @@ func TestDoPurchaseTwoStep_PurchaseNonTimeoutFailure(t *testing.T) {
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"ord-x"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"ord-x"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/ord-x/purchase"
-	})).Return(fakeResp(http.StatusForbidden, `{"error":"Forbidden"}`), nil).Once()
+	})).Return(fakeResp(http.StatusForbidden, `{"error":"Forbidden"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	_, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok")
 	require.Error(t, err)
@@ -170,7 +170,7 @@ func TestDoPurchaseTwoStep_PurchaseHTTPError(t *testing.T) {
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"ord-y"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"ord-y"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/ord-y/purchase"
@@ -188,7 +188,7 @@ func TestDoPurchaseTwoStep_EmptyOrderID(t *testing.T) {
 	ctx := context.Background()
 
 	m.On("Do", mock.Anything).Return(
-		fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":""}}`), nil,
+		fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":""}}`), nil, //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	).Once()
 
 	_, err := DoPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok")
@@ -278,10 +278,10 @@ func TestApplyPurchaseTags_NoTags(t *testing.T) {
 // orderListJSON renders a single-page list-reservation-orders response with
 // the given orders. Used by all FindReservationOrderByIdempotencyToken tests.
 func orderListJSON(orders []struct {
+	OtherTags         map[string]string
 	Name              string
 	IdempotencyToken  string
 	ProvisioningState string
-	OtherTags         map[string]string
 }, nextLink string) string {
 	out := `{"value":[`
 	for i, o := range orders {
@@ -318,10 +318,10 @@ func TestFindReservationOrderByIdempotencyToken_Match(t *testing.T) {
 	ctx := context.Background()
 
 	body := orderListJSON([]struct {
+		OtherTags         map[string]string
 		Name              string
 		IdempotencyToken  string
 		ProvisioningState string
-		OtherTags         map[string]string
 	}{
 		{Name: "order-other", IdempotencyToken: "other-tok", ProvisioningState: "Succeeded"},
 		{Name: "order-match", IdempotencyToken: "wanted-tok", ProvisioningState: "Succeeded"},
@@ -329,7 +329,7 @@ func TestFindReservationOrderByIdempotencyToken_Match(t *testing.T) {
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodGet && r.URL.String() == listURL
-	})).Return(fakeResp(http.StatusOK, body), nil).Once()
+	})).Return(fakeResp(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 	require.NoError(t, err)
@@ -342,15 +342,15 @@ func TestFindReservationOrderByIdempotencyToken_NoMatch(t *testing.T) {
 	ctx := context.Background()
 
 	body := orderListJSON([]struct {
+		OtherTags         map[string]string
 		Name              string
 		IdempotencyToken  string
 		ProvisioningState string
-		OtherTags         map[string]string
 	}{
 		{Name: "order-1", IdempotencyToken: "some-other-tok", ProvisioningState: "Succeeded"},
 	}, "")
 
-	m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once()
+	m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 	require.NoError(t, err)
@@ -359,25 +359,25 @@ func TestFindReservationOrderByIdempotencyToken_NoMatch(t *testing.T) {
 }
 
 // TestFindReservationOrderByIdempotencyToken_SkipsTerminalFailed pins the
-// state filter: a cancelled/failed/expired order carrying the same idempotency
+// state filter: a canceled/failed/expired order carrying the same idempotency
 // tag MUST NOT short-circuit a legitimate fresh purchase. Mirrors the AWS EC2
 // findRIByIdempotencyToken filter (state in active|payment-pending).
 func TestFindReservationOrderByIdempotencyToken_SkipsTerminalFailed(t *testing.T) {
-	for _, state := range []string{"Cancelled", "Failed", "Expired"} {
+	for _, state := range []string{"Cancelled", "Failed", "Expired"} { //nolint:misspell // Azure API uses British spelling "Cancelled"
 		t.Run(state, func(t *testing.T) {
 			m := &mockHTTPClient{}
 			ctx := context.Background()
 
 			body := orderListJSON([]struct {
+				OtherTags         map[string]string
 				Name              string
 				IdempotencyToken  string
 				ProvisioningState string
-				OtherTags         map[string]string
 			}{
 				{Name: "order-dead", IdempotencyToken: "wanted-tok", ProvisioningState: state},
 			}, "")
 
-			m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once()
+			m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 			orderID, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 			require.NoError(t, err)
@@ -399,15 +399,15 @@ func TestFindReservationOrderByIdempotencyToken_AcceptsInFlightStates(t *testing
 			ctx := context.Background()
 
 			body := orderListJSON([]struct {
+				OtherTags         map[string]string
 				Name              string
 				IdempotencyToken  string
 				ProvisioningState string
-				OtherTags         map[string]string
 			}{
 				{Name: "order-live", IdempotencyToken: "wanted-tok", ProvisioningState: state},
 			}, "")
 
-			m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once()
+			m.On("Do", mock.Anything).Return(fakeResp(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 			orderID, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 			require.NoError(t, err)
@@ -433,7 +433,7 @@ func TestFindReservationOrderByIdempotencyToken_403(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
 
-	m.On("Do", mock.Anything).Return(fakeResp(http.StatusForbidden, `{"error":"insufficient permissions"}`), nil).Once()
+	m.On("Do", mock.Anything).Return(fakeResp(http.StatusForbidden, `{"error":"insufficient permissions"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	_, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 	require.Error(t, err)
@@ -460,29 +460,29 @@ func TestFindReservationOrderByIdempotencyToken_PaginatedFollowsNextLink(t *test
 
 	// Page 1: no match, but a nextLink to page 2.
 	page1 := orderListJSON([]struct {
+		OtherTags         map[string]string
 		Name              string
 		IdempotencyToken  string
 		ProvisioningState string
-		OtherTags         map[string]string
 	}{
 		{Name: "order-p1", IdempotencyToken: "other-tok", ProvisioningState: "Succeeded"},
 	}, nextURL)
 	// Page 2: the match.
 	page2 := orderListJSON([]struct {
+		OtherTags         map[string]string
 		Name              string
 		IdempotencyToken  string
 		ProvisioningState string
-		OtherTags         map[string]string
 	}{
 		{Name: "order-p2-match", IdempotencyToken: "wanted-tok", ProvisioningState: "Succeeded"},
 	}, "")
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.String() == listURL
-	})).Return(fakeResp(http.StatusOK, page1), nil).Once()
+	})).Return(fakeResp(http.StatusOK, page1), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.String() == nextURL
-	})).Return(fakeResp(http.StatusOK, page2), nil).Once()
+	})).Return(fakeResp(http.StatusOK, page2), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, found, err := FindReservationOrderByIdempotencyToken(ctx, m, "tok", "wanted-tok")
 	require.NoError(t, err)
@@ -496,7 +496,7 @@ func TestFindReservationOrderByIdempotencyToken_PaginatedFollowsNextLink(t *test
 // TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup pins the CLI legacy path:
 // when no idempotency token is supplied the wrapper falls straight through to
 // the raw DoPurchaseTwoStep (no list call), preserving the pre-issue-721
-// behaviour for callers without an owning execution.
+// behavior for callers without an owning execution.
 func TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -504,10 +504,10 @@ func TestDoIdempotentPurchaseTwoStep_EmptyToken_NoLookup(t *testing.T) {
 	// Only the standard calculatePrice + purchase calls -- no list call.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-no-tok"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-no-tok"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-no-tok/purchase"
-	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", "")
 	require.NoError(t, err)
@@ -528,15 +528,15 @@ func TestDoIdempotentPurchaseTwoStep_NoMatch_FallsThroughToPurchase(t *testing.T
 	// Step 1: list call returns empty.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodGet && r.URL.String() == listURL
-	})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// Step 2: calculatePrice.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-fresh"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"order-fresh"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// Step 3: purchase.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-fresh/purchase"
-	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", "fresh-tok-1")
 	require.NoError(t, err)
@@ -553,17 +553,17 @@ func TestDoIdempotentPurchaseTwoStep_Match_ShortCircuits(t *testing.T) {
 	ctx := context.Background()
 
 	body := orderListJSON([]struct {
+		OtherTags         map[string]string
 		Name              string
 		IdempotencyToken  string
 		ProvisioningState string
-		OtherTags         map[string]string
 	}{
 		{Name: "order-already-bought", IdempotencyToken: "redrive-tok", ProvisioningState: "Succeeded"},
 	}, "")
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodGet && r.URL.String() == listURL
-	})).Return(fakeResp(http.StatusOK, body), nil).Once()
+	})).Return(fakeResp(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", "redrive-tok")
 	require.NoError(t, err)
@@ -586,7 +586,7 @@ func TestDoIdempotentPurchaseTwoStep_LookupFailure_DoesNotPurchase(t *testing.T)
 
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodGet
-	})).Return(fakeResp(http.StatusInternalServerError, `{"error":"upstream down"}`), nil).Once()
+	})).Return(fakeResp(http.StatusInternalServerError, `{"error":"upstream down"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	_, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", "tok-failing")
 	require.Error(t, err)
@@ -616,15 +616,15 @@ func TestDoIdempotentPurchaseTwoStep_DifferentTokens_DistinctReservations(t *tes
 		// Lookup: empty (no prior order for this token).
 		m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 			return r.Method == http.MethodGet && r.URL.String() == listURL
-		})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once()
+		})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		// calculatePrice mints the order ID.
 		m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 			return r.Method == http.MethodPost && r.URL.String() == calcURL
-		})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"`+mintedOrderID+`"}}`), nil).Once()
+		})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"`+mintedOrderID+`"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		// purchase succeeds.
 		m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 			return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+mintedOrderID+"/purchase"
-		})).Return(fakeResp(http.StatusOK, `{}`), nil).Once()
+		})).Return(fakeResp(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 		got, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", idemTok)
 		require.NoError(t, err)
@@ -642,7 +642,7 @@ func TestDoIdempotentPurchaseTwoStep_DifferentTokens_DistinctReservations(t *tes
 // TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow verifies the two-step
 // flow's session-timeout retry semantics from PR #680 still work under the
 // new wrapper -- the wrapper is purely additive for the lookup, and once it
-// falls through to DoPurchaseTwoStep the original retry behaviour applies.
+// falls through to DoPurchaseTwoStep the original retry behavior applies.
 func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 	m := &mockHTTPClient{}
 	ctx := context.Background()
@@ -652,23 +652,23 @@ func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 	// Lookup: no match.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodGet
-	})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"value":[]}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// calculatePrice #1.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"first"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"first"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// purchase #1 returns session-timeout.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/first/purchase"
-	})).Return(fakeResp(http.StatusBadRequest, sessionTimeoutBody), nil).Once()
+	})).Return(fakeResp(http.StatusBadRequest, sessionTimeoutBody), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// calculatePrice #2 (retry).
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.String() == calcURL
-	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"second"}}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{"properties":{"reservationOrderId":"second"}}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// purchase #2 succeeds.
 	m.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/second/purchase"
-	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once()
+	})).Return(fakeResp(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	orderID, err := DoIdempotentPurchaseTwoStep(ctx, m, calcURL, []byte(testBody), "tok", "retry-tok")
 	require.NoError(t, err)
@@ -678,7 +678,7 @@ func TestDoIdempotentPurchaseTwoStep_PreservesTwoStepFlow(t *testing.T) {
 
 // TestParseTermYears verifies the canonical term parser (M4 regression:
 // before this fix, five service clients used a literal "3yr"||"3" check that
-// silently treated unrecognised terms as 1yr instead of returning an error).
+// silently treated unrecognized terms as 1yr instead of returning an error).
 func TestParseTermYears(t *testing.T) {
 	tests := []struct {
 		term    string
@@ -695,7 +695,7 @@ func TestParseTermYears(t *testing.T) {
 		{"1YR", 1, false},   // case-insensitive
 		{"3YR", 3, false},   // case-insensitive
 		{" 1yr ", 1, false}, // whitespace-tolerant
-		{"5yr", 0, true},    // unrecognised term must error (pre-fix: silently returned 1)
+		{"5yr", 0, true},    // unrecognized term must error (pre-fix: silently returned 1)
 		{"P1Y", 0, true},    // ISO 8601 form not supported by this parser
 		{"bogus", 0, true},
 	}
