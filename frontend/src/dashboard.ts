@@ -1017,19 +1017,15 @@ export async function loadSavingsTrendChart(): Promise<void> {
   const now = new Date();
   const nowMs = now.getTime();
   const isAllRange = savingsTrendRange === 'all';
-  // For 'all', pass the Unix epoch as the start sentinel so the backend
-  // returns every data point it holds. parseDateRange on the backend
-  // defaults a missing start to (end - 7d), so we must send an explicit
-  // floor rather than omitting the param — epoch is the lowest valid
-  // RFC3339 value and has no practical upper bound on history length.
-  // A client-side 3650-day ceiling would silently truncate accounts with
-  // purchase history older than ~10 years.
-  const epochStart = '1970-01-01T00:00:00Z';
   const days = isAllRange ? null : parseInt(savingsTrendRange, 10);
-  // windowStart is the left edge of the axis; for 'all' it is overridden
-  // below to the earliest purchase timestamp (or now-365d if no purchases).
+  // For 'all', use a rolling ~365-day window — the maximum history the
+  // analytics API allows (~366-day cap in handler_analytics.go). Sending a
+  // 1970 epoch sentinel caused HTTP 400 "date range too large" which the
+  // catch block rendered as an empty-state error (QA 3.1). The axisMinMs
+  // anchor-to-earliest-point logic below still applies so sparse data fills
+  // the full chart width correctly.
   const windowStartMs = isAllRange ? nowMs - 365 * 86400_000 : nowMs - (days as number) * 86400_000;
-  const intervalDays = isAllRange ? 3650 : (days as number);
+  const intervalDays = isAllRange ? 365 : (days as number);
   const interval: 'hourly' | 'daily' | 'weekly' = intervalDays <= 7 ? 'hourly' : intervalDays <= 90 ? 'daily' : 'weekly';
 
   try {
@@ -1043,10 +1039,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     const accountIDs = state.getCurrentAccountIDs();
     const provider = state.getCurrentProvider();
     const data = await api.getSavingsAnalytics({
-      // For 'all': send the epoch sentinel so the backend returns unbounded
-      // history. Omitting start would cause parseDateRange to default to
-      // (end - 7d), silently clipping the chart (see handler_analytics.go).
-      start: isAllRange ? epochStart : new Date(windowStartMs).toISOString(),
+      start: new Date(windowStartMs).toISOString(),
       end: now.toISOString(),
       interval,
       ...(provider ? { provider } : {}),
@@ -1128,6 +1121,13 @@ export async function loadSavingsTrendChart(): Promise<void> {
           legend: { display: false },
           tooltip: {
             callbacks: {
+              // Format the x timestamp as a human-readable date so the tooltip
+              // header shows a date string rather than the raw 13-digit
+              // millisecond value (QA 3.2).
+              title: (items) => {
+                const raw = items[0]?.raw as { x: number; y: number } | undefined;
+                return raw?.x != null ? formatTrendAxisTick(raw.x, interval) : '';
+              },
               label: (ctx) => `Cumulative savings: $${((ctx.raw as { x: number; y: number }).y).toLocaleString()}`,
             },
           },
