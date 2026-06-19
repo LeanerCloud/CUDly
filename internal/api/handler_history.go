@@ -208,6 +208,11 @@ func (h *Handler) expireStaleExecutionsAsync(staleExecs []config.PurchaseExecuti
 		return
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logging.Warnf("history: expireStaleExecutionsAsync goroutine panic: %v", r)
+			}
+		}()
 		ctx := context.Background()
 		for _, exec := range staleExecs {
 			_, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
