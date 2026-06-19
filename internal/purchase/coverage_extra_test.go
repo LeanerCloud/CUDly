@@ -965,17 +965,14 @@ func TestManager_SavePurchaseHistory_RevocationWindow(t *testing.T) {
 // A second sub-test below covers the legacy fallback (empty Details JSON).
 func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 	cases := []struct {
-		name        string
-		service     string
-		serviceType common.ServiceType
-		region      string
-		resource    string
-		engine      string
-		details     common.ServiceDetails
-		// assertDetails inspects the rec.Details captured by the mock
-		// PurchaseCommitment call and asserts both the concrete pointer
-		// type and the per-service fields the AWS client reads.
+		details       common.ServiceDetails
 		assertDetails func(t *testing.T, d common.ServiceDetails)
+		name          string
+		service       string
+		serviceType   common.ServiceType
+		region        string
+		resource      string
+		engine        string
 	}{
 		{
 			name:        "ec2_windows",
@@ -1203,13 +1200,13 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 // mis-purchase as the default.
 func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 	cases := []struct {
+		assertDetails func(t *testing.T, d common.ServiceDetails)
 		name          string
 		service       string
 		serviceType   common.ServiceType
 		region        string
 		resource      string
 		engine        string
-		assertDetails func(t *testing.T, d common.ServiceDetails)
 	}{
 		{
 			name:        "legacy_ec2",

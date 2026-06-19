@@ -45,9 +45,9 @@ func (m *multiPageRDSMajorVersionsMock) DescribeDBMajorEngineVersions(
 }
 
 // rdsMajorVersion builds a minimal DBMajorEngineVersion for tests.
-func rdsMajorVersion(engine, major string) rdstypes.DBMajorEngineVersion {
+func rdsMajorVersion(major string) rdstypes.DBMajorEngineVersion {
 	return rdstypes.DBMajorEngineVersion{
-		Engine:             aws.String(engine),
+		Engine:             aws.String("mysql"),
 		MajorEngineVersion: aws.String(major),
 		SupportedEngineLifecycles: []rdstypes.SupportedEngineLifecycle{
 			{
@@ -66,21 +66,21 @@ func TestFetchMajorEngineVersionsForEngine_Paginates(t *testing.T) {
 		pages: []*awsrds.DescribeDBMajorEngineVersionsOutput{
 			{
 				DBMajorEngineVersions: []rdstypes.DBMajorEngineVersion{
-					rdsMajorVersion("mysql", "5.7"),
-					rdsMajorVersion("mysql", "8.0"),
+					rdsMajorVersion("5.7"),
+					rdsMajorVersion("8.0"),
 				},
 				Marker: aws.String("tok1"),
 			},
 			{
 				DBMajorEngineVersions: []rdstypes.DBMajorEngineVersion{
-					rdsMajorVersion("mysql", "8.4"),
-					rdsMajorVersion("mysql", "9.0"),
+					rdsMajorVersion("8.4"),
+					rdsMajorVersion("9.0"),
 				},
 				Marker: aws.String("tok2"),
 			},
 			{
 				DBMajorEngineVersions: []rdstypes.DBMajorEngineVersion{
-					rdsMajorVersion("mysql", "9.1"),
+					rdsMajorVersion("9.1"),
 				},
 				Marker: nil,
 			},
@@ -105,7 +105,7 @@ func TestFetchMajorEngineVersionsForEngine_EmptyMarkerTerminates(t *testing.T) {
 		pages: []*awsrds.DescribeDBMajorEngineVersionsOutput{
 			{
 				DBMajorEngineVersions: []rdstypes.DBMajorEngineVersion{
-					rdsMajorVersion("mysql", "8.0"),
+					rdsMajorVersion("8.0"),
 				},
 				Marker: aws.String(""), // empty string -- must terminate
 			},
@@ -133,7 +133,7 @@ func (m *alwaysNextPageRDSMock) DescribeDBMajorEngineVersions(
 	m.calls++
 	return &awsrds.DescribeDBMajorEngineVersionsOutput{
 		DBMajorEngineVersions: []rdstypes.DBMajorEngineVersion{
-			rdsMajorVersion("mysql", fmt.Sprintf("5.%d", m.calls)),
+			rdsMajorVersion(fmt.Sprintf("5.%d", m.calls)),
 		},
 		Marker: aws.String(fmt.Sprintf("tok%d", m.calls)),
 	}, nil

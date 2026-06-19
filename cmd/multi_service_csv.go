@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,7 +14,9 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 )
 
-// determineCSVCoverage determines the coverage percentage to use for CSV mode
+// determineCSVCoverage determines the coverage percentage to use for CSV mode.
+//
+//nolint:gocritic // hugeParam: Config is shared with callers in multi_service.go; pointer change cascades across multiple files
 func determineCSVCoverage(cfg Config) float64 {
 	// When using CSV input, default to 100% coverage (use exact numbers from CSV)
 	// unless user explicitly provided a different coverage value
@@ -24,15 +27,15 @@ func determineCSVCoverage(cfg Config) float64 {
 	return cfg.Coverage
 }
 
-// loadRecommendationsFromCSV reads and returns recommendations from a CSV file
+// loadRecommendationsFromCSV reads and returns recommendations from a CSV file.
 func loadRecommendationsFromCSV(csvPath string) ([]common.Recommendation, error) {
 	file, err := os.Open(csvPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open CSV file: %w", err)
 	}
 	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Warning: failed to close CSV file %s: %v", csvPath, err)
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close CSV file %s: %v", csvPath, closeErr)
 		}
 	}()
 
@@ -48,15 +51,15 @@ func loadRecommendationsFromCSV(csvPath string) ([]common.Recommendation, error)
 	colIdx := buildColumnIndexMap(header)
 
 	// Parse all records
-	recommendations, err := parseCSVRecords(reader, colIdx)
+	recs, err := parseCSVRecords(reader, colIdx)
 	if err != nil {
 		return nil, err
 	}
 
-	return recommendations, nil
+	return recs, nil
 }
 
-// buildColumnIndexMap creates a map from column names to indices
+// buildColumnIndexMap creates a map from column names to indices.
 func buildColumnIndexMap(header []string) map[string]int {
 	colIdx := make(map[string]int)
 	for i, col := range header {
@@ -65,13 +68,13 @@ func buildColumnIndexMap(header []string) map[string]int {
 	return colIdx
 }
 
-// parseCSVRecords reads and parses all CSV records
+// parseCSVRecords reads and parses all CSV records.
 func parseCSVRecords(reader *csv.Reader, colIdx map[string]int) ([]common.Recommendation, error) {
-	var recommendations []common.Recommendation
+	var recs []common.Recommendation
 
 	for {
 		record, err := reader.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -91,13 +94,13 @@ func parseCSVRecords(reader *csv.Reader, colIdx map[string]int) ([]common.Recomm
 			return nil, err
 		}
 
-		recommendations = append(recommendations, rec)
+		recs = append(recs, rec)
 	}
 
-	return recommendations, nil
+	return recs, nil
 }
 
-// parseCSVRecord parses a single CSV record into a Recommendation
+// parseCSVRecord parses a single CSV record into a Recommendation.
 func parseCSVRecord(record []string, colIdx map[string]int) (common.Recommendation, error) {
 	rec := common.Recommendation{}
 
@@ -154,7 +157,7 @@ func parseCSVRecord(record []string, colIdx map[string]int) (common.Recommendati
 	return rec, nil
 }
 
-// getCSVField safely retrieves a string field from a CSV record
+// getCSVField safely retrieves a string field from a CSV record.
 func getCSVField(record []string, colIdx map[string]int, fieldName string) string {
 	if idx, ok := colIdx[fieldName]; ok && idx < len(record) {
 		return record[idx]
@@ -162,7 +165,7 @@ func getCSVField(record []string, colIdx map[string]int, fieldName string) strin
 	return ""
 }
 
-// parseCSVInt parses an integer field from a CSV record
+// parseCSVInt parses an integer field from a CSV record.
 func parseCSVInt(record []string, colIdx map[string]int, fieldName string, target *int) error {
 	value := getCSVField(record, colIdx, fieldName)
 	if value == "" {
@@ -175,7 +178,7 @@ func parseCSVInt(record []string, colIdx map[string]int, fieldName string, targe
 	return nil
 }
 
-// parseCSVFloat parses a float field from a CSV record
+// parseCSVFloat parses a float field from a CSV record.
 func parseCSVFloat(record []string, colIdx map[string]int, fieldName string, target *float64) error {
 	value := getCSVField(record, colIdx, fieldName)
 	if value == "" {
@@ -188,7 +191,7 @@ func parseCSVFloat(record []string, colIdx map[string]int, fieldName string, tar
 	return nil
 }
 
-// writeMultiServiceCSVReport writes purchase results to a CSV file
+// writeMultiServiceCSVReport writes purchase results to a CSV file.
 func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string) error {
 	if len(results) == 0 {
 		return nil
@@ -199,8 +202,8 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 		return fmt.Errorf("failed to create CSV file: %w", err)
 	}
 	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Warning: failed to close CSV file %s: %v", filepath, err)
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close CSV file %s: %v", filepath, closeErr)
 		}
 	}()
 
@@ -244,8 +247,9 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 		return sorted[i].Recommendation.CommitmentCost > sorted[j].Recommendation.CommitmentCost
 	})
 
-	for _, r := range sorted {
-		rec := r.Recommendation
+	for i := range sorted {
+		r := &sorted[i]
+		rec := &r.Recommendation
 		errStr := ""
 		if r.Error != nil {
 			errStr = r.Error.Error()
@@ -277,8 +281,8 @@ func writeMultiServiceCSVReport(results []common.PurchaseResult, filepath string
 			formatExistingCoverage(rec),
 			formatPercentOrBlank(rec.ProjectedCoverage),
 		}
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("failed to write CSV row: %w", err)
+		if writeErr := writer.Write(row); writeErr != nil {
+			return fmt.Errorf("failed to write CSV row: %w", writeErr)
 		}
 	}
 
@@ -306,7 +310,8 @@ func buildTotalRow(results []common.PurchaseResult) []string {
 	var totalCount int
 	var totalNU, totalUpfront, totalRecurring, totalSavings float64
 	hasRecurring := false
-	for _, r := range results {
+	for i := range results {
+		r := &results[i]
 		totalCount += r.Recommendation.Count
 		totalNU += float64(r.Recommendation.Count) * recommendations.RDSInstanceNUFromType(r.Recommendation.ResourceType)
 		totalUpfront += r.Recommendation.CommitmentCost
@@ -351,7 +356,7 @@ func formatIntOrBlank(v int) string {
 // instance type doesn't follow the RDS three-part naming. Useful for
 // grouping rows in the CSV by family-NU bucket so operators can see at
 // a glance which recs belong to the same size-flex family.
-func extractRDSFamily(rec common.Recommendation) string {
+func extractRDSFamily(rec *common.Recommendation) string {
 	if rec.Service != common.ServiceRDS && rec.Service != common.ServiceRelationalDB {
 		return ""
 	}
@@ -364,7 +369,7 @@ func extractRDSFamily(rec common.Recommendation) string {
 // into a single rec at one size — without this column, operators have
 // to compute NU by hand to verify the bundling. Renders blank for
 // non-RDS rows and for sizes not in the standard NU scale.
-func formatNormalizedUnitsOrBlank(rec common.Recommendation) string {
+func formatNormalizedUnitsOrBlank(rec *common.Recommendation) string {
 	if rec.Service != common.ServiceRDS && rec.Service != common.ServiceRelationalDB {
 		return ""
 	}
@@ -384,7 +389,7 @@ func formatNormalizedUnitsOrBlank(rec common.Recommendation) string {
 //
 // Both value and pointer Details are accepted to mirror extractEngine
 // (parser path stores pointers; CSV-loader path constructs values).
-func extractDeployment(rec common.Recommendation) string {
+func extractDeployment(rec *common.Recommendation) string {
 	switch details := rec.Details.(type) {
 	case *common.DatabaseDetails:
 		if details != nil {
@@ -406,7 +411,7 @@ func extractDeployment(rec common.Recommendation) string {
 // path constructs the value forms; the dispatch in generatePurchaseID does
 // the same trick. Without the pointer cases the column silently blanks
 // every row coming from the live parser path.
-func extractEngine(rec common.Recommendation) string {
+func extractEngine(rec *common.Recommendation) string {
 	switch details := rec.Details.(type) {
 	case *common.DatabaseDetails:
 		if details != nil {
@@ -443,7 +448,7 @@ func extractEngine(rec common.Recommendation) string {
 // Previously both the no-data and the genuine-zero cases rendered as a
 // blank cell, conflating "we don't know" with "definitely zero" and
 // making it impossible to spot pools where the CE signal was missing.
-func formatExistingCoverage(rec common.Recommendation) string {
+func formatExistingCoverage(rec *common.Recommendation) string {
 	if !rec.ExistingCoverageKnown {
 		return "n/a"
 	}
@@ -493,7 +498,7 @@ func formatAvgInstancesOrBlank(v float64) string {
 // next to Instances so operators can read "you have X running, Y are
 // already covered, this rec adds N more" without doing the arithmetic.
 // Blank when either signal is zero (we can't compute a meaningful value).
-func formatCoveredInstancesOrBlank(rec common.Recommendation) string {
+func formatCoveredInstancesOrBlank(rec *common.Recommendation) string {
 	if rec.AverageInstancesUsedPerHour <= 0 || rec.ExistingCoveragePct <= 0 {
 		return ""
 	}

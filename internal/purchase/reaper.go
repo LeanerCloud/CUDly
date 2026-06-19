@@ -38,12 +38,12 @@ const failedStatus = "failed"
 // a real executor.
 const DefaultReapAfter = 10 * time.Minute
 
-// reapAfterEnvVar is the env var read by ParseReapAfterFromEnv. Centralised
+// reapAfterEnvVar is the env var read by ParseReapAfterFromEnv. Centralized
 // so the wiring code, the tests, and future ops documentation all reference
 // the same name.
 const reapAfterEnvVar = "PURCHASE_APPROVED_REAP_AFTER"
 
-// ReapResult summarises one sweep of ReapStuckExecutions. Returned for the
+// ReapResult summarizes one sweep of ReapStuckExecutions. Returned for the
 // scheduled-task handler to log + surface in CloudWatch / metrics.
 type ReapResult struct {
 	// Found is the number of rows the SELECT returned (i.e. stuck rows the
@@ -52,7 +52,7 @@ type ReapResult struct {
 	// Reaped is the number of rows that successfully transitioned to
 	// "failed" via the atomic CAS. Reaped <= Found; the gap is rows the
 	// real executor finished between the SELECT and the CAS (CAS race
-	// rejected the reap — correct behaviour, not an error).
+	// rejected the reap — correct behavior, not an error).
 	Reaped int `json:"reaped"`
 	// RaceLost is the number of rows where the CAS rejected the reap
 	// because the row's status changed between the SELECT and the
@@ -130,8 +130,8 @@ func (m *Manager) ReapStuckExecutions(ctx context.Context, reapAfter time.Durati
 	}
 
 	now := time.Now()
-	for _, exec := range stuck {
-		m.reapOne(ctx, &exec, reapAfter, now, result)
+	for i := range stuck {
+		m.reapOne(ctx, &stuck[i], reapAfter, now, result)
 	}
 
 	logging.Infof("purchase reaper sweep complete: found=%d reaped=%d race_lost=%d errored=%d (threshold %s)",
