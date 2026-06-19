@@ -319,8 +319,8 @@ your fleet:
 - **Pilot rollouts**: enable a new SP plan-type on one account first,
   leave it disabled globally, then promote when proven.
 
-If every account should get the same change, edit the **global** Settings →
-Purchasing card instead — that propagates without per-account work.
+If every account should get the same change, edit the **global** Settings ->
+Purchasing card instead; that propagates without per-account work.
 
 ### How to create an override (web UI)
 
@@ -329,28 +329,25 @@ Purchasing card instead — that propagates without per-account work.
    **Service overrides**.
 3. The override modal opens. Pick the (provider, service) pair you want
    to override and fill in any of `term`, `payment`, `coverage`,
-   `enabled`. Fields you leave blank inherit the global default — see
-   "What 'Inherit' means" below.
+   `enabled`. Fields you leave blank inherit the global default (see
+   "What 'Inherit' means" below).
 4. Click **Save**. The override row appears under the account; the
    recommendation engine reads it on the next refresh.
 
-> **AWS-only V1 boundary**: the override modal currently lists AWS
-> services. Azure and GCP override UIs are tracked in #109. The
-> backend already accepts overrides for any provider via the API, so
-> scripted setups work today; only the UI is gated.
+> **All providers supported**: the override modal lists services for
+> the account's provider (AWS, Azure, GCP). The UI and the backend
+> both accept overrides for any provider.
 
 ### How to edit an existing override
 
-- **AWS overrides support inline edit** of Term, Payment, Coverage, and
-  Enabled directly on the row — each field persists immediately on change.
-- **Non-AWS overrides** (Azure, GCP) display field values as read-only text;
-  per-provider editing is tracked in #109.
+- All override rows support **inline edit** of Term, Payment, Coverage, and
+  Enabled directly on the row. Each field persists immediately on change.
 - **Delete** removes the override entirely; the account falls back to
   the global default for that (provider, service) pair.
 
 ### What "Inherit" means
 
-A blank field on an override is **not stored** as a sentinel value — the
+A blank field on an override is **not stored** as a sentinel value. The
 PUT request omits the field, the row stays sparse, and the recommendation
 engine reads the global default at evaluation time. So if you set the
 global default from `3yr no-upfront` to `1yr no-upfront`, every override
@@ -361,7 +358,7 @@ automatically. Overrides that explicitly set `term: 3yr` keep that.
 
 The override modal targets the same endpoint as scripted setups:
 `PUT /api/accounts/{id}/service-overrides/{provider}/{service}`. Existing
-automation continues to work without change — the UI and the API write to
+automation continues to work without change; the UI and the API write to
 the same `account_service_overrides` row.
 
 ## Safety Features
