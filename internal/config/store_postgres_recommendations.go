@@ -84,7 +84,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	if len(successfulCollects) > 0 {
 		providers, accountKeys, err := successfulCollectArrays(successfulCollects)
 		if err != nil {
-			return fmt.Errorf("failed to materialise successful-collect arrays: %w", err)
+			return fmt.Errorf("failed to materialize successful-collect arrays: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM recommendations
@@ -175,7 +175,8 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 	args := make([]any, 0, len(recs)*colsPerRow)
 	placeholders := make([]string, 0, len(recs))
 
-	for i, rec := range recs {
+	for i := range recs {
+		rec := &recs[i]
 		payload, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("failed to marshal recommendation %d: %w", i, err)
@@ -231,9 +232,8 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 // for ListStoredRecommendations. Extracted to keep the caller below the
 // gocyclo threshold; also makes the SQL builder testable in isolation if
 // needed.
-func buildRecommendationFilter(filter RecommendationFilter) (string, []any) {
+func buildRecommendationFilter(filter *RecommendationFilter) (clause string, args []any) {
 	var conds []string
-	var args []any
 	add := func(cond string, val any) {
 		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
 		args = append(args, val)
@@ -359,8 +359,8 @@ func recOnDemandBaseline(rec *RecommendationRecord) (float64, bool) {
 // MinSavingsUSD) are applied in SQL so Postgres prunes the rows; the
 // MinSavingsPct filter is applied in-process because the on-demand
 // baseline lives inside the JSONB payload (not a native column).
-func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) {
-	whereClause, args := buildRecommendationFilter(filter)
+func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) { //nolint:gocritic // interface method - signature cannot change
+	whereClause, args := buildRecommendationFilter(&filter)
 	rows, err := s.db.Query(ctx, `SELECT payload FROM recommendations`+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query recommendations: %w", err)
@@ -443,7 +443,7 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 //
 // Returns true when this caller won the race (rowsAffected == 1) and should
 // proceed with the async invoke. Returns false when another collection is
-// already in flight (rowsAffected == 0), signalling the handler to return
+// already in flight (rowsAffected == 0), signaling the handler to return
 // 409 Conflict.
 func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
 	tag, err := s.db.Exec(ctx, `

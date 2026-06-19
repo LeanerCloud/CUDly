@@ -379,7 +379,7 @@ var DefaultSettings = []ConfigSetting{
 	},
 }
 
-// GetDefaultValue returns the default value for a given key
+// GetDefaultValue returns the default value for a given key.
 func GetDefaultValue(key string) any {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
@@ -389,7 +389,7 @@ func GetDefaultValue(key string) any {
 	return nil
 }
 
-// GetDefaultSetting returns the complete default setting for a given key
+// GetDefaultSetting returns the complete default setting for a given key.
 func GetDefaultSetting(key string) *ConfigSetting {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
@@ -401,7 +401,7 @@ func GetDefaultSetting(key string) *ConfigSetting {
 	return nil
 }
 
-// GetDefaultsByCategory returns all default settings for a given category
+// GetDefaultsByCategory returns all default settings for a given category.
 func GetDefaultsByCategory(category string) []ConfigSetting {
 	var result []ConfigSetting
 	for _, setting := range DefaultSettings {
@@ -412,7 +412,7 @@ func GetDefaultsByCategory(category string) []ConfigSetting {
 	return result
 }
 
-// GetAllCategories returns a list of all configuration categories
+// GetAllCategories returns a list of all configuration categories.
 func GetAllCategories() []string {
 	categoryMap := make(map[string]bool)
 	for _, setting := range DefaultSettings {

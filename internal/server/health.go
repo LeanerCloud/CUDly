@@ -9,21 +9,21 @@ import (
 	"time"
 )
 
-// HealthStatus represents the overall health of the application
+// HealthStatus represents the overall health of the application.
 type HealthStatus struct {
-	Status    string                 `json:"status"`
-	Version   string                 `json:"version"`
 	Timestamp time.Time              `json:"timestamp"`
 	Checks    map[string]CheckResult `json:"checks"`
+	Status    string                 `json:"status"`
+	Version   string                 `json:"version"`
 }
 
-// CheckResult represents the result of a health check
+// CheckResult represents the result of a health check.
 type CheckResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 }
 
-// handleHealthCheck returns the health status of the application
+// handleHealthCheck returns the health status of the application.
 func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -74,7 +74,7 @@ func (app *Application) handleHealthCheck(w http.ResponseWriter, r *http.Request
 // disabled = AutoMigrate is off; migrations happen elsewhere (e.g. CI)
 // pending  = AutoMigrate is on but ensureDB hasn't completed yet
 // failed   = last attempt returned an error OR timed out
-// healthy  = last attempt completed without error
+// healthy  = last attempt completed without error.
 func (app *Application) checkMigrations() CheckResult {
 	// No dbConfig means the app isn't using PostgreSQL at all (DynamoDB or
 	// test mode). AutoMigrate off means migrations are handled elsewhere
@@ -84,7 +84,7 @@ func (app *Application) checkMigrations() CheckResult {
 	if app.dbConfig == nil || !app.dbConfig.AutoMigrate {
 		return CheckResult{Status: "disabled", Message: "AutoMigrate is off"}
 	}
-	err, finishedAt := app.snapshotMigrationState()
+	finishedAt, err := app.snapshotMigrationState()
 	switch {
 	case finishedAt.IsZero():
 		return CheckResult{Status: "pending", Message: "migrations have not run yet"}
@@ -98,7 +98,7 @@ func (app *Application) checkMigrations() CheckResult {
 	}
 }
 
-// checkConfigStore checks the health of the configuration store
+// checkConfigStore checks the health of the configuration store.
 func (app *Application) checkConfigStore(ctx context.Context) CheckResult {
 	// Check if config store exists
 	if app.Config == nil {
@@ -154,7 +154,7 @@ func setHealthResponseHeaders(w http.ResponseWriter, corsOrigin string) {
 	}
 }
 
-// checkAuthStore checks the health of the auth store
+// checkAuthStore checks the health of the auth store.
 func (app *Application) checkAuthStore(ctx context.Context) CheckResult {
 	if app.Auth == nil {
 		return CheckResult{

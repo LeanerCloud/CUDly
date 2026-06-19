@@ -67,7 +67,7 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 				Duration:           duration,
 			})
 		},
-		accountID: resolveAccountID(ctx, awsCfg),
+		accountID: resolveAccountID(ctx, &awsCfg),
 		region:    awsCfg.Region,
 	}
 
@@ -126,8 +126,8 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 
 // resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
 // since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
-	stsClient := sts.NewFromConfig(awsCfg)
+func resolveAccountID(ctx context.Context, awsCfg *aws.Config) string {
+	stsClient := sts.NewFromConfig(*awsCfg)
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		log.Printf("Warning: failed to get AWS account ID via STS: %v (using 'unknown')", err)
@@ -194,7 +194,8 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	allOutcomes = append(allOutcomes, result.Pending...)
 	allOutcomes = append(allOutcomes, result.Failed...)
 
-	for _, o := range allOutcomes {
+	for i := range allOutcomes {
+		o := &allOutcomes[i]
 		data.Exchanges = append(data.Exchanges, email.RIExchangeItem{
 			RecordID:           o.RecordID,
 			ApprovalToken:      o.ApprovalToken,
@@ -229,7 +230,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri *ec2svc.ConvertibleRI) float64 {
 	if ri.Duration <= 0 {
 		return 0
 	}
@@ -246,7 +247,8 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 	riInfos := make([]exchange.RIInfo, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
 
-	for i, inst := range instances {
+	for i := range instances {
+		inst := &instances[i]
 		riInfos[i] = exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
@@ -300,8 +302,8 @@ func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Con
 		return nil, err
 	}
 	result := make([]exchange.ExchangeRecord, len(cfgRecords))
-	for i, r := range cfgRecords {
-		result[i] = configToExchangeRecord(&r)
+	for i := range cfgRecords {
+		result[i] = configToExchangeRecord(&cfgRecords[i])
 	}
 	return result, nil
 }
@@ -310,11 +312,11 @@ func (a *configExchangeStoreAdapter) GetRIExchangeDailySpend(ctx context.Context
 	return a.store.GetRIExchangeDailySpend(ctx, date)
 }
 
-func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+func (a *configExchangeStoreAdapter) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	return a.store.CompleteRIExchange(ctx, id, exchangeID)
 }
 
-func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	return a.store.FailRIExchange(ctx, id, errorMsg)
 }
 

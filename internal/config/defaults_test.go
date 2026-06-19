@@ -50,14 +50,14 @@ func TestDefaultSettings_ExpectedKeys(t *testing.T) {
 
 func TestDefaultSettings_PurchaseDefaults(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"purchase_defaults.term", "int", 3},
-		{"purchase_defaults.payment_option", "string", "no-upfront"},
-		{"purchase_defaults.coverage", "float", 80.0},
-		{"purchase_defaults.ramp_schedule", "string", "immediate"},
+		{key: "purchase_defaults.term", expectedType: "int", expectedValue: 3},
+		{key: "purchase_defaults.payment_option", expectedType: "string", expectedValue: "no-upfront"},
+		{key: "purchase_defaults.coverage", expectedType: "float", expectedValue: 80.0},
+		{key: "purchase_defaults.ramp_schedule", expectedType: "string", expectedValue: "immediate"},
 	}
 
 	for _, tt := range tests {
@@ -73,14 +73,14 @@ func TestDefaultSettings_PurchaseDefaults(t *testing.T) {
 
 func TestDefaultSettings_Notification(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"notification.days_before", "int", 3},
-		{"notification.email_enabled", "bool", true},
-		{"notification.approval_required", "bool", true},
-		{"notification.email_from", "string", "noreply@cudly.io"},
+		{key: "notification.days_before", expectedType: "int", expectedValue: 3},
+		{key: "notification.email_enabled", expectedType: "bool", expectedValue: true},
+		{key: "notification.approval_required", expectedType: "bool", expectedValue: true},
+		{key: "notification.email_from", expectedType: "string", expectedValue: "noreply@cudly.io"},
 	}
 
 	for _, tt := range tests {
@@ -117,17 +117,17 @@ func TestDefaultSettings_Providers(t *testing.T) {
 
 func TestDefaultSettings_Security(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"security.session_duration_hours", "int", 24},
-		{"security.lockout_attempts", "int", 5},
-		{"security.lockout_duration_minutes", "int", 15},
-		{"security.password_min_length", "int", 12},
-		{"security.password_require_special", "bool", true},
-		{"security.password_require_number", "bool", true},
-		{"security.password_require_uppercase", "bool", true},
+		{key: "security.session_duration_hours", expectedType: "int", expectedValue: 24},
+		{key: "security.lockout_attempts", expectedType: "int", expectedValue: 5},
+		{key: "security.lockout_duration_minutes", expectedType: "int", expectedValue: 15},
+		{key: "security.password_min_length", expectedType: "int", expectedValue: 12},
+		{key: "security.password_require_special", expectedType: "bool", expectedValue: true},
+		{key: "security.password_require_number", expectedType: "bool", expectedValue: true},
+		{key: "security.password_require_uppercase", expectedType: "bool", expectedValue: true},
 	}
 
 	for _, tt := range tests {
@@ -143,14 +143,14 @@ func TestDefaultSettings_Security(t *testing.T) {
 
 func TestDefaultSettings_Scheduling(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"scheduling.auto_collect", "bool", false},
-		{"scheduling.collect_schedule", "string", "rate(1 day)"},
-		{"scheduling.auto_purchase", "bool", false},
-		{"scheduling.purchase_schedule", "string", "rate(1 day)"},
+		{key: "scheduling.auto_collect", expectedType: "bool", expectedValue: false},
+		{key: "scheduling.collect_schedule", expectedType: "string", expectedValue: "rate(1 day)"},
+		{key: "scheduling.auto_purchase", expectedType: "bool", expectedValue: false},
+		{key: "scheduling.purchase_schedule", expectedType: "string", expectedValue: "rate(1 day)"},
 	}
 
 	for _, tt := range tests {
@@ -166,17 +166,17 @@ func TestDefaultSettings_Scheduling(t *testing.T) {
 
 func TestDefaultSettings_AWS(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"aws.rds.min_utilization_percent", "float", 50.0},
-		{"aws.elasticache.min_utilization_percent", "float", 50.0},
-		{"aws.opensearch.min_utilization_percent", "float", 50.0},
-		{"aws.ec2.include_convertible", "bool", true},
-		{"aws.savings_plans.compute_enabled", "bool", true},
-		{"aws.savings_plans.ec2_enabled", "bool", true},
-		{"aws.savings_plans.sagemaker_enabled", "bool", true},
+		{key: "aws.rds.min_utilization_percent", expectedType: "float", expectedValue: 50.0},
+		{key: "aws.elasticache.min_utilization_percent", expectedType: "float", expectedValue: 50.0},
+		{key: "aws.opensearch.min_utilization_percent", expectedType: "float", expectedValue: 50.0},
+		{key: "aws.ec2.include_convertible", expectedType: "bool", expectedValue: true},
+		{key: "aws.savings_plans.compute_enabled", expectedType: "bool", expectedValue: true},
+		{key: "aws.savings_plans.ec2_enabled", expectedType: "bool", expectedValue: true},
+		{key: "aws.savings_plans.sagemaker_enabled", expectedType: "bool", expectedValue: true},
 	}
 
 	for _, tt := range tests {
@@ -192,13 +192,13 @@ func TestDefaultSettings_AWS(t *testing.T) {
 
 func TestDefaultSettings_Thresholds(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"thresholds.min_monthly_savings", "float", 10.0},
-		{"thresholds.min_savings_percentage", "float", 5.0},
-		{"thresholds.max_upfront_cost", "float", 0.0},
+		{key: "thresholds.min_monthly_savings", expectedType: "float", expectedValue: 10.0},
+		{key: "thresholds.min_savings_percentage", expectedType: "float", expectedValue: 5.0},
+		{key: "thresholds.max_upfront_cost", expectedType: "float", expectedValue: 0.0},
 	}
 
 	for _, tt := range tests {
@@ -235,13 +235,13 @@ func TestDefaultSettings_Retention(t *testing.T) {
 
 func TestDefaultSettings_API(t *testing.T) {
 	tests := []struct {
+		expectedValue interface{}
 		key           string
 		expectedType  string
-		expectedValue interface{}
 	}{
-		{"api.rate_limit_requests_per_minute", "int", 100},
-		{"api.rate_limit_enabled", "bool", true},
-		{"api.timeout_seconds", "int", 30},
+		{key: "api.rate_limit_requests_per_minute", expectedType: "int", expectedValue: 100},
+		{key: "api.rate_limit_enabled", expectedType: "bool", expectedValue: true},
+		{key: "api.timeout_seconds", expectedType: "int", expectedValue: 30},
 	}
 
 	for _, tt := range tests {
@@ -257,13 +257,13 @@ func TestDefaultSettings_API(t *testing.T) {
 
 func TestGetDefaultValue(t *testing.T) {
 	tests := []struct {
-		key           string
 		expectedValue interface{}
+		key           string
 	}{
-		{"purchase_defaults.term", 3},
-		{"purchase_defaults.coverage", 80.0},
-		{"notification.email_enabled", true},
-		{"nonexistent.key", nil},
+		{key: "purchase_defaults.term", expectedValue: 3},
+		{key: "purchase_defaults.coverage", expectedValue: 80.0},
+		{key: "notification.email_enabled", expectedValue: true},
+		{key: "nonexistent.key", expectedValue: nil},
 	}
 
 	for _, tt := range tests {

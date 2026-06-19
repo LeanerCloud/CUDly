@@ -151,7 +151,7 @@ func TestPGXMock_IncrementPlanCurrentStep_PlanDeletedMidRace(t *testing.T) {
 	mock.ExpectCommit()
 
 	// A plan deleted between execution and progress update must not error: the
-	// caller cannot control that race and should not be penalised for it.
+	// caller cannot control that race and should not be penalized for it.
 	err := store.IncrementPlanCurrentStep(ctx, "gone")
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

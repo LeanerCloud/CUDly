@@ -56,8 +56,8 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	type tc struct {
-		name           string
 		buildAuth      func(t *testing.T) string
+		name           string
 		wantStatus     int
 		wantHandlerHit bool
 	}
