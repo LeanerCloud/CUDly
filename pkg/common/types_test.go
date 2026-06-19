@@ -127,8 +127,8 @@ func TestComputeDetails_GetDetailDescription(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		details  ComputeDetails
 		expected string
+		details  ComputeDetails
 	}{
 		{
 			name: "Linux default",

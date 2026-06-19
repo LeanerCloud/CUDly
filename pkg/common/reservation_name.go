@@ -23,44 +23,22 @@ const awsReservationNameMaxLen = 60
 // deterministic assertions. Production callers leave randSource nil (the
 // builder then uses crypto/rand) and pass time.Now().
 type ReservationNameFields struct {
-	// Service is the short identifier for the AWS service, e.g. "rds",
-	// "cache", "memdb", "opensearch", "redshift". Set per-call by the
-	// service client; the builder treats it as opaque and sanitizes it.
-	Service string
-
-	// Region is the AWS region string (e.g. "us-east-1", "eu-west-1").
-	Region string
-
-	// ResourceType is the AWS instance/node type (e.g. "db.t4g.medium",
-	// "m5.large"). Dots are converted to hyphens by SanitizeReservationID.
+	Now          time.Time
+	Service      string
+	Region       string
 	ResourceType string
-
-	// Count is the reservation quantity. Always rendered as "{N}x".
-	Count int
-
-	// Term is the commitment term, normalized to "1yr" / "3yr" by upstream
-	// recommendation parsers. The builder collapses it to "1yr"/"3yr" when
-	// possible, and sanitizes otherwise.
-	Term string
-
-	// Payment is the payment-option string from the recommendation
-	// ("all-upfront", "no-upfront", "partial-upfront"). The builder
-	// normalizes to a short form ("allup", "noup", "partup") so the
-	// segment stays under 8 chars.
-	Payment string
-
-	// Now is the timestamp baseline. Must be non-zero for production calls.
-	// Tests inject a fixed value for determinism.
-	Now time.Time
-
-	// randSource is an optional 4-byte source for the random suffix.
-	// When nil (production), the builder reads from crypto/rand. Tests set
-	// it via WithRandSource to make output deterministic.
-	randSource []byte
+	Term         string
+	Payment      string
+	randSource   []byte
+	Count        int
 }
 
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
+// hugeParam: value receiver required to return a modified copy; all callers chain
+// ReservationNameFields{...}.WithRandSource(...) as a value expression.
+//
+//nolint:gocritic
 func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 	f.randSource = b
 	return f
@@ -86,8 +64,14 @@ func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 //
 // fallbackPrefix is the prefix passed to SanitizeReservationID for the
 // unreachable empty-output fallback (e.g. "rds-reserved-"); it preserves
-// the prior call-site behaviour at every service when the builder ever
-// emits an unsanitisable input.
+// the prior call-site behavior at every service when the builder ever
+// emits an unsanitizable input.
+//
+// hugeParam: value semantics are required; WithRandSource chains on a copy and all callers
+// (10+ cross-package sites) use ReservationNameFields{}.WithRandSource(...); a pointer
+// parameter would break every call site outside this package.
+//
+//nolint:gocritic
 func BuildReservationName(f ReservationNameFields, fallbackPrefix string) string {
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)

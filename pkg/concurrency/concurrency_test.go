@@ -118,8 +118,8 @@ func TestSharedSemaphore_BoundsConcurrency(t *testing.T) {
 }
 
 // TestSharedSemaphore_AcquireRespectsCancellation verifies Acquire returns
-// ctx.Err() when the parent ctx is cancelled while waiting for a slot.
-// Without this, a cancelled refresh would leak a goroutine parked
+// ctx.Err() when the parent ctx is canceled while waiting for a slot.
+// Without this, a canceled refresh would leak a goroutine parked
 // indefinitely on Acquire.
 func TestSharedSemaphore_AcquireRespectsCancellation(t *testing.T) {
 	sem := semaphore.NewWeighted(1)

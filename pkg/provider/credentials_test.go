@@ -58,8 +58,8 @@ func TestBaseCredentials_GetType(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		creds    BaseCredentials
 		expected string
+		creds    BaseCredentials
 	}{
 		{
 			name:     "Environment source",
@@ -130,7 +130,7 @@ func TestCredentialDetector_Fields(t *testing.T) {
 	assert.Len(t, detector.providers, 2)
 }
 
-// registerCredTestProvider registers a provider in the global registry for credential testing
+// registerCredTestProvider registers a provider in the global registry for credential testing.
 func registerCredTestProvider(t *testing.T, name string, configured bool, credentialsError error) {
 	t.Helper()
 	GetRegistry().Unregister(name) // Clean up first

@@ -1,3 +1,4 @@
+//nolint:revive // package name intentionally shadows std errors; this is a white-box test for pkg/errors
 package errors
 
 import (

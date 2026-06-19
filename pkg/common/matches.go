@@ -4,7 +4,7 @@ package common
 // Match criteria: Provider, Region, Service, ResourceType, and normalized engine.
 // OfferingClass and Term are not compared because Commitment has no such fields.
 // State filtering (e.g. excluding "retired") is the caller's responsibility.
-func Matches(rec Recommendation, c Commitment) bool {
+func Matches(rec *Recommendation, c *Commitment) bool {
 	if rec.Provider != c.Provider {
 		return false
 	}

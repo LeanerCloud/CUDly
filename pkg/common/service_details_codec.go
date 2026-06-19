@@ -60,7 +60,7 @@ func MarshalServiceDetails(details ServiceDetails) (json.RawMessage, error) {
 // "savingsplans", "savings-plans-compute" and the dash-free spellings —
 // see internal/purchase/execution.go: mapServiceType / mapSavingsPlansSlug).
 //
-// Behaviour:
+// Behavior:
 //   - raw is empty AND service maps to a known *Details type → returns a
 //     zero-valued typed pointer (the legacy / pre-#453 fallback). The
 //     downstream service client's buildOfferingFilters tolerates zero-
@@ -79,7 +79,7 @@ func DecodeServiceDetailsFor(service string, raw json.RawMessage) (ServiceDetail
 	if !ok {
 		// Service has no *Details type — nothing to decode. Empty raw
 		// payload is fine; a non-empty payload on a service we don't
-		// recognise is suspicious but tolerated (writers and readers
+		// recognize is suspicious but tolerated (writers and readers
 		// might be on different versions during a rolling deploy).
 		return nil, nil
 	}
@@ -124,8 +124,8 @@ func newDetailsForService(service string) (ServiceDetails, bool) {
 	// values of ServiceSavingsPlans / ServiceSavingsPlansCompute etc.;
 	// "savings-plans" (with a dash) is the legacy umbrella alias that
 	// internal/purchase/execution.go: mapSavingsPlansSlug still
-	// recognises so purchase_executions JSONB rows persisted before
-	// the rename in PR #94 still resolve. Recognising it here means a
+	// recognizes so purchase_executions JSONB rows persisted before
+	// the rename in PR #94 still resolve. Recognizing it here means a
 	// legacy direct-execute approval still decodes against the right
 	// type.
 	case string(ServiceSavingsPlans),
@@ -138,7 +138,7 @@ func newDetailsForService(service string) (ServiceDetails, bool) {
 
 	// Services that don't currently type-assert Details in
 	// findOfferingID (OpenSearch / Redshift / MemoryDB read rec.ResourceType
-	// directly). We still recognise OpenSearch and Redshift here so a
+	// directly). We still recognize OpenSearch and Redshift here so a
 	// forthcoming refactor that starts asserting can flip the table
 	// value without changing call sites. MemoryDB has no dedicated
 	// *Details type yet, so it's intentionally absent — callers see
