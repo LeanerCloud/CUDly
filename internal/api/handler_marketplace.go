@@ -202,8 +202,8 @@ func (h *Handler) marketplaceList(ctx context.Context, req *events.LambdaFunctio
 		ListingID:     result.ListingID,
 		ListingState:  result.State,
 		PriceSchedule: schedule,
-		AWSFeePercent: 12,
-		Note:          "AWS charges a 12% transaction fee on the listing proceeds. Net proceeds = ListingPrice * 0.88.",
+		AWSFeePercent: awsMarketplaceFeePercent,
+		Note:          fmt.Sprintf("AWS charges a %d%% transaction fee on the listing proceeds. Net proceeds = ListingPrice * %.2f.", awsMarketplaceFeePercent, awsMarketplaceNetFactor),
 	}, nil
 }
 
@@ -354,6 +354,21 @@ func computeRemainingMonths(purchaseTime time.Time, termMonths int) int {
 	return r
 }
 
+// awsMarketplaceFeePercent is the AWS Marketplace transaction fee percentage
+// charged against listing proceeds. Published at
+// https://aws.amazon.com/marketplace/ri-marketplace/faq/
+const awsMarketplaceFeePercent = 12
+
+// awsMarketplaceNetFactor is the fraction of list price the seller keeps
+// after the AWS Marketplace fee: 1 - awsMarketplaceFeePercent/100.
+const awsMarketplaceNetFactor = 0.88
+
+// awsMarketplaceBuyerDiscountFactor is the discount applied to the computed
+// residual RI value when building the default listing price. A 5% discount
+// makes the listing attractive to buyers while still recovering most of the
+// seller's remaining cost basis. Applied before AWS deducts its fee.
+const awsMarketplaceBuyerDiscountFactor = 0.95
+
 // awsMarketplaceClientFaultCodes is the set of AWS error codes that represent
 // client-side faults for Marketplace listing operations. These map to 4xx
 // responses so the caller receives an actionable message. Server-side AWS
@@ -389,8 +404,8 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 // given RI. When the caller supplied an explicit schedule it is validated and
 // returned unchanged. When the caller omitted the schedule (nil / empty), a
 // single-tier default is computed: (upfront_remaining + future_recurring) *
-// 0.95 (5% discount to attract buyers; the 12% AWS fee is applied by the
-// Marketplace on top).
+// awsMarketplaceBuyerDiscountFactor (5% discount to attract buyers; the
+// awsMarketplaceFeePercent% AWS fee is applied by the Marketplace on top).
 //
 // remainingMonths must be the actual remaining months (computed via
 // computeRemainingMonths from purchase timestamp and total term -- NOT the raw
@@ -410,8 +425,8 @@ func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingM
 		return supplied, nil
 	}
 
-	// Default: spread (upfront_remaining + future_recurring) * 0.95 across
-	// remaining term. The upfront cost is prorated by (remaining/original) to
+	// Default: spread (upfront_remaining + future_recurring) * awsMarketplaceBuyerDiscountFactor
+	// across remaining term. The upfront cost is prorated by (remaining/original) to
 	// avoid overpricing older RIs (a 12-month RI at month 6 retains only half
 	// the upfront value; using the full amount would overprice by ~2x).
 	if remainingMonths <= 0 {
@@ -422,7 +437,7 @@ func resolveMarketplacePriceSchedule(supplied []MarketplacePriceTier, remainingM
 		upfrontRemaining = upfrontCost * (float64(remainingMonths) / float64(originalTerm))
 	}
 	totalValue := upfrontRemaining + (monthlyCost * float64(remainingMonths))
-	listPrice := totalValue * 0.95
+	listPrice := totalValue * awsMarketplaceBuyerDiscountFactor
 	if listPrice < 0 {
 		listPrice = 0
 	}
