@@ -1187,14 +1187,25 @@ function cellScoreFor(
   }
   if (column === 'monthly_cost') {
     const period = state.getCostPeriod();
-    const finite: number[] = [];
+    // #494 best-case framing: prefer the smallest NON-ZERO recurring cost so
+    // that all-upfront variants (monthly_cost=0, which is a real value not a
+    // null sentinel) do not tie every cell at 0 and make direction-toggling a
+    // no-op. Tiers:
+    //   1. any non-zero finite value exists  -> Math.min of those
+    //   2. all finite values are 0 (pure all-upfront cell) -> 0
+    //   3. no finite value at all (all null)  -> POSITIVE_INFINITY (sink to bottom)
+    const nonZero: number[] = [];
+    const anyFinite: number[] = [];
     for (const v of variants) {
-      const scaled = scaleCost(v.monthly_cost, period);
-      if (scaled != null) finite.push(scaled);
+      const s = scaleCost(v.monthly_cost, period);
+      if (s != null) {
+        anyFinite.push(s);
+        if (s > 0) nonZero.push(s);
+      }
     }
-    // Best-case framing: lowest recurring cost wins. All-null cells sink to
-    // the bottom via the existing POSITIVE_INFINITY sentinel logic.
-    return finite.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...finite);
+    if (nonZero.length) return Math.min(...nonZero);
+    if (anyFinite.length) return 0;
+    return Number.POSITIVE_INFINITY;
   }
   if (column === 'effective_savings_pct') {
     const finite: number[] = [];
