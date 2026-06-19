@@ -32,8 +32,8 @@ type HTTPClient interface {
 // type in their own package so the JSON decode produces values the caller
 // already knows how to read.
 type Page[T any] struct {
-	Items        []T    `json:"Items"`
 	NextPageLink string `json:"NextPageLink"`
+	Items        []T    `json:"Items"`
 	Count        int    `json:"Count"`
 }
 

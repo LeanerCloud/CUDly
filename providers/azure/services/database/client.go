@@ -127,10 +127,6 @@ func (c *DatabaseClient) GetRegion() string {
 	return c.region
 }
 
-// DatabaseRetailPriceItem is a type alias for pricing.RetailPriceItem kept
-// for backward compatibility within this package.
-type DatabaseRetailPriceItem = pricing.RetailPriceItem
-
 // AzureRetailPrice is the response envelope for the Azure Retail Prices API.
 type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
@@ -555,7 +551,7 @@ func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (
 	params.Add("api-version", "2023-01-01-preview")
 
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
-	items, err := pricing.FetchAll[DatabaseRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return nil, err
 	}
@@ -573,7 +569,7 @@ func azureTermString(termYears int) string {
 }
 
 // extractSQLPricing extracts on-demand and reservation pricing from price items
-func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+func extractSQLPricing(items []pricing.RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 

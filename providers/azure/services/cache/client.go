@@ -134,10 +134,6 @@ func (c *CacheClient) GetRegion() string {
 	return c.region
 }
 
-// CacheRetailPriceItem is a type alias for pricing.RetailPriceItem kept for
-// backward compatibility within this package.
-type CacheRetailPriceItem = pricing.RetailPriceItem
-
 // AzureRetailPrice is the response envelope for the Azure Retail Prices API.
 type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
@@ -576,7 +572,7 @@ func (c *CacheClient) fetchAzurePricing(ctx context.Context, serviceName, sku, r
 	params.Add("api-version", "2023-01-01-preview")
 
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
-	items, err := pricing.FetchAll[CacheRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return nil, err
 	}
@@ -594,7 +590,7 @@ func azureTermString(termYears int) string {
 }
 
 // extractRedisPricing extracts on-demand and reservation pricing from price items
-func extractRedisPricing(items []CacheRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+func extractRedisPricing(items []pricing.RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 
