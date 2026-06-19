@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getMigrationsPath returns the absolute path to migrations directory
+// getMigrationsPath returns the absolute path to migrations directory.
 func getMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")

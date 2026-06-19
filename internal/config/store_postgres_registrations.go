@@ -106,7 +106,6 @@ func (s *PostgresStore) ListAccountRegistrations(ctx context.Context, filter Acc
 			idx, idx, idx,
 		))
 		args = append(args, "%"+escaped+"%")
-		idx++
 	}
 
 	query := `SELECT ` + registrationColumns() + ` FROM account_registrations`
@@ -299,7 +298,7 @@ func (s *PostgresStore) scanRegistration(ctx context.Context, query string, arg 
 	row := s.db.QueryRow(ctx, query, arg)
 	reg, err := scanRegistrationRow(row)
 	if err != nil {
-		if err == sql.ErrNoRows || strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no rows") {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get account registration: %w", err)

@@ -28,7 +28,7 @@ func getMigrationsPath() string {
 // Mirrors the helper of the same name in migrate_security_test.go; the
 // duplication is forced by the package boundary (that file lives in
 // `package migrations`, while integration tests live in `package
-// migrations_test`). Centralising this copy here keeps every integration
+// migrations_test`). Centralizing this copy here keeps every integration
 // test that needs the helper pointed at one definition.
 func captureStdout(t *testing.T) func() string {
 	t.Helper()

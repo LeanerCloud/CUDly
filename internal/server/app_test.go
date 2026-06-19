@@ -90,7 +90,7 @@ func TestGetEnvFloat(t *testing.T) {
 }
 
 func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 	req.Header.Set("User-Agent", "TestAgent/1.0")
 
@@ -101,7 +101,7 @@ func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
 }
 
 func TestHttpToLambdaRequest_NilBody(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Body = nil
 
 	lambdaReq := httpToLambdaRequest(req)
@@ -147,7 +147,7 @@ func TestHandleHTTPRequest(t *testing.T) {
 		API: api.NewHandler(api.HandlerConfig{}),
 	}
 
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/health", nil)
 	w := httptest.NewRecorder()
 
 	app.handleHTTPRequest(w, req)
@@ -162,7 +162,7 @@ func TestHandleHTTPRequest_WithBody(t *testing.T) {
 	}
 
 	body := bytes.NewReader([]byte(`{"test":"data"}`))
-	req := httptest.NewRequest("POST", "/api/test", body)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/test", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -178,7 +178,7 @@ func TestHandleScheduledHTTP_TaskError(t *testing.T) {
 	}
 
 	// Unknown task type causes error
-	req := httptest.NewRequest("POST", "/api/scheduled/invalid_task_type", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/invalid_task_type", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -195,7 +195,7 @@ func TestHandleScheduledHTTP_ProcessPurchases(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/process_scheduled_purchases", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/process_scheduled_purchases", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -212,7 +212,7 @@ func TestHandleScheduledHTTP_SendNotifications(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/send_notifications", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/send_notifications", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -266,7 +266,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 }
 
-// noopEmailSender is a minimal email.SenderInterface for unit tests
+// noopEmailSender is a minimal email.SenderInterface for unit tests.
 var _ email.SenderInterface = (*noopEmailSender)(nil)
 
 type noopEmailSender struct{}
@@ -624,7 +624,7 @@ func TestHandleHTTPRequest_EnsureDBError(t *testing.T) {
 		dbErr:    fmt.Errorf("connection failed"),
 	}
 
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	w := httptest.NewRecorder()
 
 	app.handleHTTPRequest(w, req)
@@ -651,7 +651,7 @@ func TestHandleScheduledHTTP_EnsureDBError(t *testing.T) {
 		dbErr:    fmt.Errorf("db error"),
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/collect_recommendations", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/collect_recommendations", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -806,7 +806,7 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 
 // TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver verifies the
 // dev-only path: when no resolver is available, the plaintext value is
-// used (expected behaviour for local development).
+// used (expected behavior for local development).
 func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 	ctx := context.Background()
 

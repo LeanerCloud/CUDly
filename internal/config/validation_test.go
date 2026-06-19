@@ -10,9 +10,9 @@ import (
 func TestGlobalConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		config  GlobalConfig
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name: "valid empty config",
@@ -281,9 +281,9 @@ func TestGlobalConfig_Validate(t *testing.T) {
 func TestServiceConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		config  ServiceConfig
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name: "valid config",
@@ -560,9 +560,9 @@ func TestServiceConfig_Validate(t *testing.T) {
 func TestRampSchedule_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		sched   RampSchedule
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name:    "valid empty schedule",
@@ -735,9 +735,9 @@ func TestRampSchedule_Validate(t *testing.T) {
 func TestPurchasePlan_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
+		errMsg  string
 		plan    PurchasePlan
 		wantErr bool
-		errMsg  string
 	}{
 		{
 			name: "valid plan",
@@ -978,7 +978,7 @@ func TestIsValidRampScheduleType(t *testing.T) {
 	assert.False(t, isValidRampScheduleType(""))
 }
 
-// Helper function for creating string pointers in tests
+// Helper function for creating string pointers in tests.
 func stringPtr(s string) *string {
 	return &s
 }

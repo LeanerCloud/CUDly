@@ -157,26 +157,14 @@ func TestCloudAccountFilter_WithAllFields(t *testing.T) {
 // ==========================================
 
 func TestCloudAccount_CredentialsConfiguredDefaultsFalse(t *testing.T) {
-	a := CloudAccount{
-		ID:         "id",
-		Name:       "Test",
-		Provider:   "aws",
-		ExternalID: "123456789012",
-		Enabled:    true,
-	}
+	a := CloudAccount{}
 	assert.False(t, a.CredentialsConfigured)
 }
 
 func TestCloudAccount_AWSFieldsOptional(t *testing.T) {
 	a := CloudAccount{
-		ID:           "id",
-		Name:         "Test",
-		Provider:     "aws",
-		ExternalID:   "123456789012",
-		Enabled:      true,
-		AWSAuthMode:  "role_arn",
-		AWSRoleARN:   "arn:aws:iam::123456789012:role/CUDly",
-		AWSIsOrgRoot: false,
+		AWSAuthMode: "role_arn",
+		AWSRoleARN:  "arn:aws:iam::123456789012:role/CUDly",
 	}
 	assert.Equal(t, "role_arn", a.AWSAuthMode)
 	assert.Equal(t, "arn:aws:iam::123456789012:role/CUDly", a.AWSRoleARN)

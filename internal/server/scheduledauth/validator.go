@@ -51,25 +51,25 @@ const GoogleJWKSURL = "https://www.googleapis.com/oauth2/v3/certs"
 // applies defaults and rejects invalid combinations.
 type Config struct {
 	Mode      Mode
-	Issuer    string   // OIDC issuer; defaults to GoogleIssuer in oidc mode
-	JWKSURL   string   // OIDC JWKS endpoint; defaults to GoogleJWKSURL in oidc mode
-	Audiences []string // accepted aud claims (must be non-empty in oidc mode)
-	Subjects  []string // accepted sub claims (REQUIRED non-empty in oidc mode — defence in depth)
+	Issuer    string
+	JWKSURL   string
+	Bearer    string
+	Audiences []string
+	Subjects  []string
 	Skew      time.Duration
-	Bearer    string // shared secret for bearer mode (must be non-empty)
 }
 
 // Validator authenticates inbound requests against the configured mode.
 type Validator struct {
-	mode      Mode
-	verifier  *oidc.IDTokenVerifier // nil unless mode == ModeOIDC
-	keySet    *oidc.RemoteKeySet    // nil unless mode == ModeOIDC; powered by go-oidc's single-flight cache
-	jwksURL   string                // remembered for Warmup; empty unless mode == ModeOIDC
+	verifier  *oidc.IDTokenVerifier
+	keySet    *oidc.RemoteKeySet
 	audiences map[string]struct{}
 	subjects  map[string]struct{}
-	skew      time.Duration
+	now       func() time.Time
+	mode      Mode
+	jwksURL   string
 	bearer    []byte
-	now       func() time.Time // pluggable for tests
+	skew      time.Duration
 }
 
 // claims captures the timestamp claims we need beyond what go-oidc's
@@ -99,7 +99,7 @@ type claims struct {
 // but does not abort startup — Google's CDN sometimes hiccups and we
 // prefer the validator come up with a stale-on-error fetch on the first
 // real request rather than crashloop the container.
-func New(cfg Config) (*Validator, error) {
+func New(cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
 	if cfg.Skew <= 0 {
 		cfg.Skew = DefaultClockSkew
 	}
@@ -128,7 +128,7 @@ func New(cfg Config) (*Validator, error) {
 // configureOIDC validates OIDC config, builds set-lookups, and wires the
 // go-oidc RemoteKeySet + IDTokenVerifier. Split out of New to keep the
 // per-mode setup below the cyclomatic-complexity gate.
-func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
+func configureOIDC(v *Validator, cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
 	if cfg.Issuer == "" {
 		cfg.Issuer = GoogleIssuer
 	}
@@ -148,7 +148,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	// claim for Cloud Scheduler-signed ID tokens. That is what
 	// SCHEDULED_TASK_OIDC_SUBJECTS must contain.
 	if len(cfg.Subjects) == 0 {
-		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_SUBJECTS (defence in depth)", ErrConfigInvalid)
+		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_SUBJECTS (defense in depth)", ErrConfigInvalid)
 	}
 
 	auds, err := cleanSet(cfg.Audiences, "SCHEDULED_TASK_OIDC_AUDIENCE")
@@ -177,7 +177,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	return v, nil
 }
 
-func configureBearer(v *Validator, cfg Config) (*Validator, error) {
+func configureBearer(v *Validator, cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
 	if cfg.Bearer == "" {
 		return nil, fmt.Errorf("%w: bearer mode requires SCHEDULED_TASK_SECRET", ErrConfigInvalid)
 	}
@@ -202,7 +202,7 @@ func cleanSet(in []string, label string) (map[string]struct{}, error) {
 func validateAbsoluteURL(raw, label string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: %s must be an absolute URL: %v", ErrConfigInvalid, label, err)
+		return fmt.Errorf("%w: %s must be an absolute URL: %w", ErrConfigInvalid, label, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("%w: %s must be an absolute URL", ErrConfigInvalid, label)
@@ -245,12 +245,12 @@ func (v *Validator) Warmup(ctx context.Context) {
 		ctx, cancel = context.WithTimeout(ctx, warmupTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, http.NoBody)
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // v.jwksURL is operator-supplied config validated as an absolute URL at startup; SSRF risk is accepted for OIDC JWKS discovery
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup fetch failed for %s: %v "+
 			"(validator will retry on first request)", v.jwksURL, err)
@@ -339,7 +339,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// and skew-tolerant expiry checks below.
 	idToken, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %w", ErrUnauthorized, err)
 	}
 
 	// Re-parse the payload to access iat / nbf — IDToken exposes Expiry
@@ -347,7 +347,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// nbf is not exposed as a typed field.
 	var c claims
 	if err := idToken.Claims(&c); err != nil {
-		return fmt.Errorf("%w: malformed claims: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: malformed claims: %w", ErrUnauthorized, err)
 	}
 
 	if err := v.checkTimestamps(c); err != nil {
@@ -361,7 +361,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: audience %v not in allowlist", ErrUnauthorized, idToken.Audience)
 	}
 
-	// Subject pinning: required defence-in-depth — any GCP SA in the
+	// Subject pinning: required defense-in-depth — any GCP SA in the
 	// org could mint a token with our `aud` value, but only the
 	// scheduler SA has our `sub`.
 	if _, ok := v.subjects[idToken.Subject]; !ok {

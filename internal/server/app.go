@@ -36,109 +36,58 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Application holds all components of the CUDly server
+// Application holds all components of the CUDly server.
 type Application struct {
-	Config      config.StoreInterface
-	API         *api.Handler
-	Scheduler   SchedulerInterface
-	Purchase    PurchaseManagerInterface
-	Email       email.SenderInterface // Multi-cloud email sender (AWS SES, GCP SendGrid, Azure ACS)
-	Auth        *auth.Service
-	RateLimiter api.RateLimiterInterface // Distributed rate limiter (DB-backed for multi-instance)
-	Analytics   AnalyticsStoreInterface  // Analytics store for savings data
-	// AnalyticsCollector aggregates savings into snapshots on a schedule.
-	// Nil until reinitializeAfterConnect wires it; the collect task no-ops
-	// when nil so test builds without a DB stay quiet.
-	AnalyticsCollector AnalyticsCollectorInterface
-	Version            string
-	DB                 *database.Connection // PostgreSQL database connection
-	TaskLocker         TaskLocker           // Advisory lock for scheduled tasks (defaults to DB)
-
-	// Static file serving directory (from STATIC_DIR env var)
-	staticDir string
-
-	// Lazy initialization fields for PostgreSQL (Lambda ENI readiness)
-	dbConfig       *database.Config
-	secretResolver secrets.Resolver
-	dbMu           sync.Mutex
-	dbConnected    bool
-	dbErr          error
-	appConfig      ApplicationConfig
-
-	// encKeySource is the env var name that resolved the credential encryption
-	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
-	// reinitializeAfterConnect; surfaced via /health.
-	encKeySource string
-
-	// State from the most recent migration attempt. Surfaced by /health so
-	// ops can see failures. Protected by its OWN dedicated mutex — NOT
-	// dbMu, because ensureDB holds dbMu for its full duration. If /health
-	// reached into dbMu it would block behind a long-running ensureDB,
-	// which defeats the point of non-fatal migrations.
-	migrationErr        error
 	migrationFinishedAt time.Time
+	AnalyticsCollector  AnalyticsCollectorInterface
+	TaskLocker          TaskLocker
+	Purchase            PurchaseManagerInterface
+	Email               email.SenderInterface
+	dbErr               error
+	RateLimiter         api.RateLimiterInterface
+	Analytics           AnalyticsStoreInterface
+	migrationErr        error
+	Scheduler           SchedulerInterface
+	signer              oidc.Signer
+	secretResolver      secrets.Resolver
+	Config              config.StoreInterface
+	dbConfig            *database.Config
+	DB                  *database.Connection
+	scheduledAuth       *scheduledauth.Validator
+	runMigrationsFunc   func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
+	Auth                *auth.Service
+	API                 *api.Handler
+	staticDir           string
+	encKeySource        string
+	Version             string
+	appConfig           ApplicationConfig
+	migrationsTimeout   time.Duration
 	migrationMu         sync.Mutex
-
-	// OIDC signer (optional, backs /.well-known/* and the Azure
-	// federated credential path). Nil when the deployment has not
-	// opted into the federated flow.
-	signer oidc.Signer
-
-	// scheduledAuth authenticates inbound /api/scheduled/* requests.
-	// Non-nil after NewApplicationFromDeps — disabled mode allows
-	// everything through with a loud WARN log; oidc mode (GCP)
-	// validates the Cloud Scheduler-signed ID token; bearer mode
-	// (Azure) constant-time-compares the shared secret resolved at
-	// startup from Key Vault. May be nil in tests that build
-	// Application directly without the constructor; the
-	// scheduledAuthMiddleware helper passes through unmodified in
-	// that case so handler-only tests stay focused.
-	scheduledAuth *scheduledauth.Validator
-
-	// migrationsTimeout and runMigrationsFunc are per-instance instead of
-	// package-level variables so that tests can set them on a specific
-	// Application instance without serialising parallel tests (04-M3).
-	// NewApplicationFromDeps sets them to the package defaults.
-	migrationsTimeout time.Duration
-	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
+	dbMu                sync.Mutex
+	dbConnected         bool
 }
 
-// ApplicationConfig holds all env-based configuration for the application
+// ApplicationConfig holds all env-based configuration for the application.
 type ApplicationConfig struct {
-	Version                string
-	NotificationDaysBefore int
-	DefaultTerm            int
-	DefaultPaymentOption   string
-	DefaultCoverage        float64
-	DefaultRampSchedule    string
-	APIKeySecretARN        string
-	EnableDashboard        bool
-	DashboardBucket        string
-	DashboardURL           string
-	// IssuerURL is the canonical OIDC issuer URL published under
-	// /.well-known/* and used as the iss claim in JWTs minted by the
-	// KMS-backed signer. Falls back to DashboardURL. Set via the
-	// CUDLY_ISSUER_URL env var; in the AWS Lambda deploy the Terraform
-	// module wires this to the Function URL so the deployment is
-	// self-contained without needing a frontend domain.
-	IssuerURL         string
-	CORSAllowedOrigin string
-	// ScheduledTaskSecret is the shared secret checked on the /scheduled
-	// endpoint. In production (Azure Container Apps, Lambda-with-KV) it is
-	// resolved lazily from SCHEDULED_TASK_SECRET_NAME via the SecretResolver
-	// in NewApplicationFromDeps, so the value never lives in a container
-	// env var. In dev the plaintext SCHEDULED_TASK_SECRET env var is still
-	// accepted as a fallback.
 	ScheduledTaskSecret     string
+	IssuerURL               string
 	ScheduledTaskSecretName string
+	DefaultPaymentOption    string
+	Version                 string
+	DefaultRampSchedule     string
+	CORSAllowedOrigin       string
+	DashboardURL            string
+	DashboardBucket         string
+	APIKeySecretARN         string
+	Analytics               AnalyticsConfig
+	NotificationDaysBefore  int
+	DefaultCoverage         float64
+	DefaultTerm             int
+	EnableDashboard         bool
 	IsLambda                bool
-
-	// Analytics snapshot collector knobs. See analytics_collect.go for
-	// defaults and boundary validation (LoadAnalyticsConfig).
-	Analytics AnalyticsConfig
 }
 
-// ExternalDeps holds pre-built external dependencies that require infrastructure
+// ExternalDeps holds pre-built external dependencies that require infrastructure.
 type ExternalDeps struct {
 	EmailSender    email.SenderInterface
 	ConfigStore    config.StoreInterface
@@ -158,10 +107,10 @@ type ExternalDeps struct {
 const defaultMigrationsTimeout = 120 * time.Second
 
 // resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
-// It is called once in NewApplicationFromDeps to initialise
+// It is called once in NewApplicationFromDeps to initialize
 // Application.migrationsTimeout. Because the timeout lives on the struct
 // (not a package-level var), tests can set it on a specific Application
-// instance without serialising parallel tests (04-M3).
+// instance without serializing parallel tests (04-M3).
 func resolveMigrationsTimeout() time.Duration {
 	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
 	if v == "" {
@@ -188,10 +137,10 @@ func (app *Application) recordMigrationResult(err error) {
 
 // snapshotMigrationState returns a point-in-time copy of the migration
 // state suitable for /health rendering.
-func (app *Application) snapshotMigrationState() (err error, finishedAt time.Time) {
+func (app *Application) snapshotMigrationState() (finishedAt time.Time, err error) {
 	app.migrationMu.Lock()
 	defer app.migrationMu.Unlock()
-	return app.migrationErr, app.migrationFinishedAt
+	return app.migrationFinishedAt, app.migrationErr
 }
 
 // runMigrationsBounded runs app.runMigrationsFunc in a goroutine bounded by
@@ -199,7 +148,7 @@ func (app *Application) snapshotMigrationState() (err error, finishedAt time.Tim
 // a panic wrapped as an error, or a timeout error -- never a
 // nil-with-goroutine-still-alive. The goroutine is guaranteed to have exited
 // before this function returns (the timeout branch waits on <-done after
-// cancelling the ctx), so no orphan goroutine survives past this call --
+// canceling the ctx), so no orphan goroutine survives past this call --
 // critical on Lambda where goroutines freeze between invocations.
 //
 // Using instance fields (not package globals) makes it safe to call
@@ -243,14 +192,14 @@ func runMigrationsBoundedWith(pool *pgxpool.Pool, migrationsPath, adminEmail, ad
 // deployment. CUDLY_ISSUER_URL (set by the infra module to the
 // Function URL / Container App URL / Cloud Run URL) wins; DashboardURL
 // is the backstop.
-func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
+func resolveOIDCIssuerURL(cfg ApplicationConfig) string { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
 	if cfg.IssuerURL != "" {
 		return strings.TrimRight(cfg.IssuerURL, "/")
 	}
 	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
-// LoadApplicationConfig reads all configuration from environment variables
+// LoadApplicationConfig reads all configuration from environment variables.
 func LoadApplicationConfig() ApplicationConfig {
 	version := os.Getenv("VERSION")
 	if version == "" {
@@ -285,7 +234,7 @@ func LoadApplicationConfig() ApplicationConfig {
 // flow into the purchase manager as system-wide defaults; a typo propagates
 // silently into every purchase unless we reject it here (issue #1026).
 // Empty values are always valid (means "use the purchase manager's built-in default").
-func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
+func validateAppConfigEnvDefaults(cfg ApplicationConfig) error { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
 	if err := config.ValidatePaymentOptionEnv(cfg.DefaultPaymentOption); err != nil {
 		return fmt.Errorf("invalid DEFAULT_PAYMENT_OPTION: %w", err)
 	}
@@ -312,7 +261,7 @@ func validateAppConfigEnvDefaults(cfg ApplicationConfig) error {
 // SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
 // because the plaintext value is visible in Lambda env / Terraform state.
 // The secret-store path is always preferred when both are present.
-func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) {
+func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
 	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
 		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
 			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
@@ -342,7 +291,7 @@ func (envSourceOS) Get(key string) string { return os.Getenv(key) }
 // a pre-loaded scheduledauth.Config. The bearer secret is injected from cfg
 // rather than re-read from env — in production cfg.ScheduledTaskSecret was
 // already resolved from Key Vault / Secrets Manager by the caller.
-func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) {
+func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
 	// In bearer mode, override the env-supplied secret with the one
 	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
 	// directly which is fine for local dev where the env carries the
@@ -383,7 +332,7 @@ func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver sec
 
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
-func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) {
+func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) { //nolint:gocritic // exported function; changing ApplicationConfig to pointer would be a breaking API change
 	if deps.DBConfig == nil {
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}
@@ -405,7 +354,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
 	// OIDC-dependent paths (handler_oidc.go, purchase manager Azure
-	// federated credential) fall back to their legacy behaviours.
+	// federated credential) fall back to their legacy behaviors.
 	signer, signerErr := oidc.NewSignerFromEnv(ctx)
 	if signerErr != nil {
 		log.Printf("oidc signer init failed (federated flow disabled): %v", signerErr)
@@ -888,7 +837,7 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 	}
 }
 
-// Close gracefully shuts down the application
+// Close gracefully shuts down the application.
 func (app *Application) Close() error {
 	log.Println("Shutting down CUDly Server...")
 
@@ -903,8 +852,8 @@ func (app *Application) Close() error {
 }
 
 // initConfigStore initializes the configuration store using PostgreSQL
-// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues
-func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Config, secrets.Resolver, error) {
+// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues.
+func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Config, secrets.Resolver, error) { //nolint:unparam // first result reserved for future non-lazy init paths; always nil today by design (lazy init defers store creation to first request)
 	// Require PostgreSQL configuration
 	if os.Getenv("DB_HOST") == "" {
 		return nil, nil, nil, fmt.Errorf("database configuration required: DB_HOST must be set")
@@ -945,7 +894,7 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
-func getEnvFloat(key string, defaultVal float64) float64 {
+func getEnvFloat(key string, defaultVal float64) float64 { //nolint:unparam // defaultVal=80 today; kept for future call sites with different defaults
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.ParseFloat(val, 64)
 		if err != nil {
@@ -957,7 +906,7 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 	return defaultVal
 }
 
-// authServiceAdapter adapts auth.Service to api.AuthServiceInterface
+// authServiceAdapter adapts auth.Service to api.AuthServiceInterface.
 type authServiceAdapter struct {
 	service *auth.Service
 }
@@ -1030,8 +979,8 @@ func (a *authServiceAdapter) CheckAdminExists(ctx context.Context) (bool, error)
 	return a.service.CheckAdminExists(ctx)
 }
 
-func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, email string) error {
-	return a.service.RequestPasswordReset(ctx, email)
+func (a *authServiceAdapter) RequestPasswordReset(ctx context.Context, emailAddr string) error {
+	return a.service.RequestPasswordReset(ctx, emailAddr)
 }
 
 func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.PasswordResetConfirm) error {
@@ -1042,9 +991,9 @@ func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.P
 	return a.service.ConfirmPasswordReset(ctx, authReq)
 }
 
-func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (string, string, error) {
-	state, flow, err := a.service.ResetTokenStatus(ctx, token)
-	return string(state), string(flow), err
+func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (state string, flow string, err error) { //nolint:gocritic // unnamedResult: named for interface clarity; hugeParam: receiver is a pointer
+	s, f, e := a.service.ResetTokenStatus(ctx, token)
+	return string(s), string(f), e
 }
 
 func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.User, error) {
@@ -1063,11 +1012,11 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 	}, nil
 }
 
-func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
-	return a.service.UpdateUserProfile(ctx, userID, email, currentPassword, newPassword)
+func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID, emailAddr, currentPassword, newPassword string) error {
+	return a.service.UpdateUserProfile(ctx, userID, emailAddr, currentPassword, newPassword)
 }
 
-// User management methods - delegate to auth service API methods
+// User management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateUserAPI(ctx, req)
 }
@@ -1089,7 +1038,7 @@ func (a *authServiceAdapter) ChangePasswordAPI(ctx context.Context, userID, curr
 }
 
 // MFA lifecycle (issue #497).
-func (a *authServiceAdapter) MFASetupAPI(ctx context.Context, userID, password string) (string, string, error) {
+func (a *authServiceAdapter) MFASetupAPI(ctx context.Context, userID, password string) (secret, provisioningURI string, err error) {
 	return a.service.MFASetupAPI(ctx, userID, password)
 }
 
@@ -1105,7 +1054,7 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 	return a.service.MFARegenerateRecoveryCodesAPI(ctx, userID, code)
 }
 
-// Group management methods - delegate to auth service API methods
+// Group management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateGroupAPI(ctx, req)
 }
@@ -1126,7 +1075,7 @@ func (a *authServiceAdapter) ListGroupsAPI(ctx context.Context) (any, error) {
 	return a.service.ListGroupsAPI(ctx)
 }
 
-// Permission checking
+// Permission checking.
 func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
@@ -1135,7 +1084,7 @@ func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID s
 	return a.service.GetUserPermissionsAPI(ctx, userID)
 }
 
-// Account access
+// Account access.
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := a.service.BuildAuthContext(ctx, userID)
 	if err != nil {
@@ -1144,12 +1093,12 @@ func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID s
 	return authCtx.AllowedAccounts, nil
 }
 
-// CSRF validation
+// CSRF validation.
 func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken string) error {
 	return a.service.ValidateCSRFToken(ctx, sessionToken, csrfToken)
 }
 
-// API Key management
+// API Key management.
 func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }
@@ -1166,6 +1115,6 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 	return a.service.RevokeAPIKeyAPI(ctx, userID, keyID)
 }
 
-func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) {
+func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) { //nolint:gocritic // interface method has unnamed return types; naming them would require a disproportionate refactor
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
