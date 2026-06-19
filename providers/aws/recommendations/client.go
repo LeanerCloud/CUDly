@@ -242,18 +242,6 @@ var defaultDiscoveryTerms = []string{"1yr", "3yr"}
 // rows and render as distinct UI rows for free.
 var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", "no-upfront"}
 
-// GetRecommendationsForService fetches recommendations for a specific
-// service across the full Cartesian product of defaultDiscoveryTerms ×
-// defaultDiscoveryPaymentOptions (currently 2 × 3 = 6 Cost Explorer
-// calls per service). Each call returns the recs for that single
-// (term, payment) cell and the parser tags them with params.Term /
-// params.PaymentOption so the resulting slice contains every combo
-// for the user to choose from in the UI.
-//
-// A per-call Cost Explorer error is tolerated and skipped so a single
-// throttle on one (term, payment) combo doesn't suppress the others;
-// only an error where every combo fails is propagated. This mirrors
-// the "continue on per-service error" tolerance in GetAllRecommendations.
 // fetchSingleComboRecs fetches recommendations for one (term, payment) pair.
 // If the context is already done before the call, it returns (nil, ctx.Err()).
 // If GetRecommendations returns an error after ctx cancellation, it also
@@ -292,6 +280,18 @@ func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.Servic
 	return recs, nil
 }
 
+// GetRecommendationsForService fetches recommendations for a specific
+// service across the full Cartesian product of defaultDiscoveryTerms x
+// defaultDiscoveryPaymentOptions (currently 2 x 3 = 6 Cost Explorer
+// calls per service). Each call returns the recs for that single
+// (term, payment) cell and the parser tags them with params.Term /
+// params.PaymentOption so the resulting slice contains every combo
+// for the user to choose from in the UI.
+//
+// A per-call Cost Explorer error is tolerated and skipped so a single
+// throttle on one (term, payment) combo doesn't suppress the others;
+// only an error where every combo fails is propagated. This mirrors
+// the "continue on per-service error" tolerance in GetAllRecommendations.
 func (c *Client) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
 	allRecs := make([]common.Recommendation, 0)
 	var lastErr error
