@@ -22,11 +22,11 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
-// MockRecommendationsPager mocks the RecommendationsPager interface
+// MockRecommendationsPager mocks the RecommendationsPager interface.
 type MockRecommendationsPager struct {
+	err   error
 	pages []armconsumption.ReservationRecommendationsClientListResponse
 	index int
-	err   error
 }
 
 func (m *MockRecommendationsPager) More() bool {
@@ -48,11 +48,11 @@ func (m *MockRecommendationsPager) NextPage(ctx context.Context) (armconsumption
 	return page, nil
 }
 
-// MockReservationsDetailsPager mocks the ReservationsDetailsPager interface
+// MockReservationsDetailsPager mocks the ReservationsDetailsPager interface.
 type MockReservationsDetailsPager struct {
+	err   error
 	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
-	err   error
 }
 
 func (m *MockReservationsDetailsPager) More() bool {
@@ -74,11 +74,11 @@ func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsump
 	return page, nil
 }
 
-// MockCosmosAccountsPager mocks the CosmosAccountsPager interface
+// MockCosmosAccountsPager mocks the CosmosAccountsPager interface.
 type MockCosmosAccountsPager struct {
+	err   error
 	pages []armcosmos.DatabaseAccountsClientListResponse
 	index int
-	err   error
 }
 
 func (m *MockCosmosAccountsPager) More() bool {
@@ -100,7 +100,7 @@ func (m *MockCosmosAccountsPager) NextPage(ctx context.Context) (armcosmos.Datab
 	return page, nil
 }
 
-// MockHTTPClient mocks HTTP client for testing
+// MockHTTPClient mocks HTTP client for testing.
 type MockHTTPClient struct {
 	mock.Mock
 }
@@ -113,7 +113,7 @@ func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return args.Get(0).(*http.Response), args.Error(1)
 }
 
-func createMockHTTPResponse(statusCode int, body string) *http.Response {
+func createMockHTTPResponse(statusCode int, body string) *http.Response { //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	return &http.Response{
 		StatusCode: statusCode,
 		Body:       io.NopCloser(bytes.NewBufferString(body)),
@@ -231,7 +231,7 @@ func TestCosmosDBClient_GetOfferingDetails_WithMock(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()),
+		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -255,7 +255,7 @@ func TestCosmosDBClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()),
+		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -278,7 +278,7 @@ func TestCosmosDBClient_GetOfferingDetails_NoUpfront(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()),
+		createMockHTTPResponse(http.StatusOK, createSampleCosmosPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -301,7 +301,7 @@ func TestCosmosDBClient_GetOfferingDetails_APIError(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error"),
+		createMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error"), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -322,7 +322,7 @@ func TestCosmosDBClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, `{"Items": []}`),
+		createMockHTTPResponse(http.StatusOK, `{"Items": []}`), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -362,7 +362,7 @@ func TestCosmosDBClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
 
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
-	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil) //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:  "100RU",
@@ -789,10 +789,10 @@ func TestCosmosDBClient_SetterMethods(t *testing.T) {
 	assert.Equal(t, mockAccountsPager, client.cosmosAccountsPager)
 }
 
-// MockTokenCredential for testing PurchaseCommitment
+// MockTokenCredential for testing PurchaseCommitment.
 type MockTokenCredential struct {
-	token string
 	err   error
+	token string
 }
 
 func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
@@ -818,10 +818,10 @@ func TestCosmosDBClient_PurchaseCommitment_Success(t *testing.T) {
 
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-001")), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-001")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-001/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -846,10 +846,10 @@ func TestCosmosDBClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-3yr")), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-3yr")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-3yr/purchase"
-	})).Return(createMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusCreated, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -873,10 +873,10 @@ func TestCosmosDBClient_PurchaseCommitment_Accepted(t *testing.T) {
 
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-202")), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-202")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-202/purchase"
-	})).Return(createMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
@@ -939,10 +939,10 @@ func TestCosmosDBClient_PurchaseCommitment_BadStatus(t *testing.T) {
 
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-bad")), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("cosmos-order-bad")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/cosmos-order-bad/purchase"
-	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType: "EnableCassandra",
@@ -980,10 +980,10 @@ func TestCosmosDBClient_PurchaseCommitment_TagInjection(t *testing.T) {
 		capturedBody, _ = io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
 		return true
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{ResourceType: "EnableCassandra", Term: "1yr", Count: 1, CommitmentCost: 4000.0}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
@@ -1247,15 +1247,15 @@ func TestDetailsFromCosmosSKU(t *testing.T) {
 	cases := []struct {
 		name       string
 		sku        string
-		wantUnits  int
 		wantEngine string
+		wantUnits  int
 	}{
-		{"bare digits + RU suffix", "100RU", 100, "cosmos"},
-		{"digits + RUperSecond suffix", "1000RUperSecond", 1000, "cosmos"},
-		{"digits only", "5000", 5000, "cosmos"},
-		{"prefix without leading digits", "CosmosDB_RU_1000", 0, "cosmos"},
-		{"empty", "", 0, "cosmos"},
-		{"non-digit prefix", "UnknownSKU", 0, "cosmos"},
+		{"bare digits + RU suffix", "100RU", "cosmos", 100},
+		{"digits + RUperSecond suffix", "1000RUperSecond", "cosmos", 1000},
+		{"digits only", "5000", "cosmos", 5000},
+		{"prefix without leading digits", "CosmosDB_RU_1000", "cosmos", 0},
+		{"empty", "", "cosmos", 0},
+		{"non-digit prefix", "UnknownSKU", "cosmos", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1296,11 +1296,11 @@ func TestCosmosDBClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 			}
 		}
 		return true
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "EnableCassandra",
