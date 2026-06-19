@@ -159,7 +159,7 @@ CodeRabbit:
 ```bash
 # Right after `gh pr create ...` returns the PR URL:
 # Derive PR_NUM from the current branch context (avoids brittle hand-copying).
-PR_NUM=$(gh pr view --repo LeanerCloud/CUDly --json number --jq '.number')
+PR_NUM=$(gh pr view "$(git rev-parse --abbrev-ref HEAD)" --repo LeanerCloud/CUDly --json number --jq '.number')
 ISSUE_NUM=<the issue this PR closes>
 
 LABELS=$(gh issue view "$ISSUE_NUM" --repo LeanerCloud/CUDly --json labels \
