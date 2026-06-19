@@ -462,6 +462,13 @@ export async function loadRecommendations(): Promise<void> {
   // the module default ("savings desc"). Idempotent on subsequent reloads.
   readSortFromUrl();
 
+  // QA 4.13 (expand/collapse desync): clear expand state whenever the data
+  // source is reloaded due to a provider/account Global filter change.
+  // Column-filter and sort re-renders go through rerenderRecommendations()
+  // instead, so they intentionally do NOT reach this path -- preserving the
+  // "expand survives column-filter/sort" behavior documented near line 63.
+  resetExpandedCells();
+
   // Issue #344 T3: skeleton rows for the recommendations table so the
   // panel reads as "loading" instead of staying blank while the
   // (potentially multi-second) Promise.all resolves. 5 rows ≈ above-

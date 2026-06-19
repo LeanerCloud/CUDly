@@ -5170,6 +5170,38 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(2);
     });
+
+    // QA 4.13: expand/collapse state must be reset when the data source
+    // reloads due to a provider/account Global filter change. Before the fix,
+    // stale expandedCells keys from the prior provider desynchronised the
+    // Expand-All button label and left newly-shown groups collapsed.
+    test('QA 4.13: expand state clears on loadRecommendations (provider filter change)', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+
+      // 1. Load and expand all groups.
+      await loadRecommendations();
+      const expandAllBtn = document.querySelector<HTMLButtonElement>('.expand-all-toggle');
+      expect(expandAllBtn).not.toBeNull();
+      expandAllBtn!.click();
+
+      // Confirm we are now in "Collapse all" state.
+      expect(expandAllBtn!.textContent).toMatch(/Collapse all/);
+
+      // 2. Simulate a provider filter change by calling loadRecommendations()
+      //    again (this is exactly what the subscribeProvider callback invokes).
+      await loadRecommendations();
+
+      // 3. Expand state must have been cleared: button label reverts to
+      //    "Expand all" and no variant rows are visible (groups are collapsed).
+      const expandAllBtn2 = document.querySelector<HTMLButtonElement>('.expand-all-toggle');
+      expect(expandAllBtn2).not.toBeNull();
+      expect(expandAllBtn2!.textContent).toMatch(/Expand all/);
+
+      const variantRows = document.querySelectorAll('.rec-variant-row');
+      expect(variantRows.length).toBe(0);
+    });
   });
 });
 
