@@ -699,6 +699,9 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, execs, 1)
 	assert.Equal(t, "idem-key-planned", execs[0].IdempotencyKey)
+	// NULL scheduled_execution_at must deserialise as nil (*time.Time), not a zero
+	// value; applyNullTimesToExecution only sets the pointer when Valid is true.
+	assert.Nil(t, execs[0].ScheduledExecutionAt, "NULL scheduled_execution_at must be nil, not zero time")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
