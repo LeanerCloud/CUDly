@@ -121,7 +121,7 @@ func TestDo_PerAttemptTimeoutFires(t *testing.T) {
 	err := Do(context.Background(), cfg, func(perAttemptCtx context.Context, _ int) error {
 		atomic.AddInt32(&calls, 1)
 		// Simulate a hung op that ignores the per-attempt context
-		// being cancelled — it returns the ctx.Err() once the deadline
+		// being canceled -- it returns the ctx.Err() once the deadline
 		// fires.
 		select {
 		case <-perAttemptCtx.Done():
@@ -166,14 +166,14 @@ func TestConfig_Validate(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		cfg     Config
 		wantErr string
+		cfg     Config
 	}{
-		{"zero attempts", Config{MaxAttempts: 0, BaseDelay: time.Second, MaxDelay: time.Second}, "MaxAttempts"},
-		{"negative attempts", Config{MaxAttempts: -1, BaseDelay: time.Second, MaxDelay: time.Second}, "MaxAttempts"},
-		{"zero base delay", Config{MaxAttempts: 3, BaseDelay: 0, MaxDelay: time.Second}, "BaseDelay"},
-		{"max < base", Config{MaxAttempts: 3, BaseDelay: 5 * time.Second, MaxDelay: time.Second}, "MaxDelay"},
-		{"valid", Config{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: time.Second}, ""},
+		{name: "zero attempts", cfg: Config{MaxAttempts: 0, BaseDelay: time.Second, MaxDelay: time.Second}, wantErr: "MaxAttempts"},
+		{name: "negative attempts", cfg: Config{MaxAttempts: -1, BaseDelay: time.Second, MaxDelay: time.Second}, wantErr: "MaxAttempts"},
+		{name: "zero base delay", cfg: Config{MaxAttempts: 3, BaseDelay: 0, MaxDelay: time.Second}, wantErr: "BaseDelay"},
+		{name: "max < base", cfg: Config{MaxAttempts: 3, BaseDelay: 5 * time.Second, MaxDelay: time.Second}, wantErr: "MaxDelay"},
+		{name: "valid", cfg: Config{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: time.Second}, wantErr: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -35,12 +35,10 @@ func TestMarshalServiceDetails_NilAndPointers(t *testing.T) {
 // not silently default to Linux/UNIX.
 func TestDecodeServiceDetailsFor_RoundTrip(t *testing.T) {
 	cases := []struct {
+		in      ServiceDetails
+		assert  func(t *testing.T, d ServiceDetails)
 		name    string
 		service string
-		in      ServiceDetails
-		// assert inspects the typed pointer returned by decode and verifies
-		// the per-service fields round-tripped.
-		assert func(t *testing.T, d ServiceDetails)
 	}{
 		{
 			name:    "ec2_windows_dedicated",
@@ -135,7 +133,7 @@ func TestDecodeServiceDetailsFor_RoundTrip(t *testing.T) {
 }
 
 // TestDecodeServiceDetailsFor_LegacyEmpty pins the documented fallback
-// behaviour: an empty payload on a service that needs typed Details
+// behavior: an empty payload on a service that needs typed Details
 // yields a zero-valued typed pointer (so the cloud client's type-
 // assertion succeeds and buildOfferingFilters can substitute defaults).
 func TestDecodeServiceDetailsFor_LegacyEmpty(t *testing.T) {

@@ -68,7 +68,7 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	}
 
 	// --- Validation ---
-	if err := validate(cfg); err != nil {
+	if err := validate(&cfg); err != nil {
 		return Config{}, err
 	}
 
@@ -76,8 +76,12 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 }
 
 // resolveFilePath determines which config file to load.
-// Returns (path, explicit, error). explicit=true means missing file is an error.
-func resolveFilePath(argPath string) (string, bool, error) {
+// Returns (path, explicit). explicit=true means a missing file is an error.
+// err is always nil today; the return slot is reserved for future extension
+// (e.g. validating the resolved path).
+//
+//nolint:unparam
+func resolveFilePath(argPath string) (path string, explicit bool, err error) {
 	if argPath != "" {
 		return argPath, true, nil
 	}
@@ -103,17 +107,17 @@ func applyYAML(cfg *Config, path string, explicit bool) error {
 		return fmt.Errorf("parse config file %s: %w", path, err)
 	}
 
-	if err := applyYAMLBase(cfg, yc); err != nil {
+	if err := applyYAMLBase(cfg, &yc); err != nil {
 		return err
 	}
-	applyYAMLScorer(cfg, yc)
-	applyYAMLCloud(cfg, yc)
-	applyYAMLServer(cfg, yc)
+	applyYAMLScorer(cfg, &yc)
+	applyYAMLCloud(cfg, &yc)
+	applyYAMLServer(cfg, &yc)
 	return nil
 }
 
 // applyYAMLBase merges top-level YAML fields into cfg.
-func applyYAMLBase(cfg *Config, yc yamlConfig) error {
+func applyYAMLBase(cfg *Config, yc *yamlConfig) error {
 	if yc.DryRun != cfg.DryRun {
 		cfg.DryRun = yc.DryRun
 	}
@@ -137,7 +141,7 @@ func applyYAMLBase(cfg *Config, yc yamlConfig) error {
 }
 
 // applyYAMLScorer merges scorer YAML fields into cfg.
-func applyYAMLScorer(cfg *Config, yc yamlConfig) {
+func applyYAMLScorer(cfg *Config, yc *yamlConfig) {
 	if yc.Scorer.MinSavingsPct != 0 {
 		cfg.Scorer.MinSavingsPct = yc.Scorer.MinSavingsPct
 	}
@@ -153,7 +157,7 @@ func applyYAMLScorer(cfg *Config, yc yamlConfig) {
 }
 
 // applyYAMLCloud merges cloud-specific YAML fields into cfg.
-func applyYAMLCloud(cfg *Config, yc yamlConfig) {
+func applyYAMLCloud(cfg *Config, yc *yamlConfig) {
 	if yc.AWS.Profile != "" {
 		cfg.AWS.Profile = yc.AWS.Profile
 	}
@@ -175,7 +179,7 @@ func applyYAMLCloud(cfg *Config, yc yamlConfig) {
 }
 
 // applyYAMLServer merges server YAML fields into cfg.
-func applyYAMLServer(cfg *Config, yc yamlConfig) {
+func applyYAMLServer(cfg *Config, yc *yamlConfig) {
 	if yc.Server.Enabled {
 		cfg.Server.Enabled = yc.Server.Enabled
 	}
@@ -342,19 +346,31 @@ func applyFlagsScorer(cfg *Config, flags *pflag.FlagSet) error {
 // applyFlagsOther merges remaining CLI flags into cfg.
 func applyFlagsOther(cfg *Config, flags *pflag.FlagSet) error {
 	if flags.Changed("yes") {
-		v, _ := flags.GetBool("yes")
+		v, err := flags.GetBool("yes")
+		if err != nil {
+			return fmt.Errorf("--yes: %w", err)
+		}
 		cfg.AutoApprove = v
 	}
 	if flags.Changed("audit-log") {
-		v, _ := flags.GetString("audit-log")
+		v, err := flags.GetString("audit-log")
+		if err != nil {
+			return fmt.Errorf("--audit-log: %w", err)
+		}
 		cfg.AuditLog = v
 	}
 	if flags.Changed("profile") {
-		v, _ := flags.GetString("profile")
+		v, err := flags.GetString("profile")
+		if err != nil {
+			return fmt.Errorf("--profile: %w", err)
+		}
 		cfg.AWS.Profile = v
 	}
 	if flags.Changed("idempotency-window") {
-		v, _ := flags.GetString("idempotency-window")
+		v, err := flags.GetString("idempotency-window")
+		if err != nil {
+			return fmt.Errorf("--idempotency-window: %w", err)
+		}
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("--idempotency-window: %w", err)
@@ -365,7 +381,7 @@ func applyFlagsOther(cfg *Config, flags *pflag.FlagSet) error {
 }
 
 // validate checks the resolved config for semantic errors.
-func validate(cfg Config) error {
+func validate(cfg *Config) error {
 	for _, cloud := range cfg.EnabledClouds {
 		if _, ok := validClouds[strings.ToLower(cloud)]; !ok {
 			return fmt.Errorf("unknown cloud provider: %s", cloud)
