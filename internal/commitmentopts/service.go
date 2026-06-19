@@ -2,6 +2,7 @@ package commitmentopts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -141,14 +142,14 @@ func (s *Service) findAWSAccount(ctx context.Context) (*config.CloudAccount, err
 // Validate reports whether (provider, service, term, payment) is a legal
 // combination according to the cached probe data.
 //
-// Fallback behaviour: if no probe data exists (the server has never
+// Fallback behavior: if no probe data exists (the server has never
 // successfully probed) Validate returns true so saves aren't blocked when
 // we can't verify. The frontend's hardcoded rules are the user-facing
 // gate; this check is belt-and-braces.
 func (s *Service) Validate(ctx context.Context, provider, service string, term int, payment string) (bool, error) {
 	opts, err := s.Get(ctx)
 	if err != nil {
-		if err == ErrNoData {
+		if errors.Is(err, ErrNoData) {
 			return true, nil
 		}
 		return false, err

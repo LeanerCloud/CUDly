@@ -16,16 +16,16 @@ import (
 // fakeStore is a memory-backed Store used throughout service_test.go. It
 // tracks call counts so tests can assert the Save-once invariant.
 type fakeStore struct {
-	mu       sync.Mutex
-	opts     Options
-	has      bool
-	saves    int32
 	saveErr  error
 	getErr   error
 	hasErr   error
+	opts     Options
+	saveHook func([]Combo, string)
 	savedID  string
 	savedCnt int
-	saveHook func([]Combo, string)
+	mu       sync.Mutex
+	saves    int32
+	has      bool
 }
 
 func (f *fakeStore) Get(ctx context.Context) (Options, bool, error) {
@@ -68,8 +68,8 @@ func (f *fakeStore) HasData(ctx context.Context) (bool, error) {
 
 // fakeAccounts returns a fixed list.
 type fakeAccounts struct {
-	accounts []config.CloudAccount
 	err      error
+	accounts []config.CloudAccount
 }
 
 func (f *fakeAccounts) ListCloudAccounts(ctx context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -81,9 +81,9 @@ func (f *fakeAccounts) ListCloudAccounts(ctx context.Context, filter config.Clou
 
 // stubProber returns a fixed set of combos (or an error).
 type stubProber struct {
+	err    error
 	name   string
 	combos []Combo
-	err    error
 }
 
 func (s *stubProber) Service() string { return s.name }
@@ -380,8 +380,8 @@ func TestService_Get_ConcurrentCallersProbeOnce(t *testing.T) {
 
 // proberFunc is a tiny adapter letting tests wire a closure as a Prober.
 type proberFunc struct {
-	name string
 	fn   func() ([]Combo, error)
+	name string
 }
 
 func (p proberFunc) Service() string { return p.name }
