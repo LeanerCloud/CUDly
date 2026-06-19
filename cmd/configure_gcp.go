@@ -177,8 +177,11 @@ func getGCPCredentialsFilePath(reader *bufio.Reader) (string, error) {
 
 	if credsFile == "" {
 		fmt.Print("Path to GCP service account JSON key file: ")
-		credsFile, _ = reader.ReadString('\n')
-		credsFile = strings.TrimSpace(credsFile)
+		var rfErr error
+		credsFile, rfErr = readLine(reader)
+		if rfErr != nil {
+			return "", fmt.Errorf("failed to read credentials file path: %w", rfErr)
+		}
 	}
 
 	if credsFile == "" {
@@ -251,6 +254,22 @@ func printGCPConfigurationSuccess(creds GCPCredentials) {
 	fmt.Println("\nCUDly can now manage GCP Committed Use Discounts.")
 }
 
+// getGCPProjectID reads and validates a GCP project ID from the reader.
+func getGCPProjectID(reader *bufio.Reader) (string, error) {
+	projectID, rfErr := readLine(reader)
+	if rfErr != nil {
+		return "", fmt.Errorf("failed to read project ID: %w", rfErr)
+	}
+	if projectID == "" {
+		return "", fmt.Errorf("project ID is required")
+	}
+	// Validate project ID to prevent command injection
+	if err := validateGCPProjectID(projectID); err != nil {
+		return "", err
+	}
+	return projectID, nil
+}
+
 // runGCPSetupCommands runs the GCP CLI commands interactively
 func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	fmt.Println("Step 1: GCP Login")
@@ -274,15 +293,8 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 
 	fmt.Println()
 	fmt.Print("Enter your Project ID from above: ")
-	projectID, _ := reader.ReadString('\n')
-	projectID = strings.TrimSpace(projectID)
-
-	if projectID == "" {
-		return "", fmt.Errorf("project ID is required")
-	}
-
-	// Validate project ID to prevent command injection
-	if err := validateGCPProjectID(projectID); err != nil {
+	projectID, err := getGCPProjectID(reader)
+	if err != nil {
 		return "", err
 	}
 
@@ -365,8 +377,11 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd string, progr
 	fmt.Println()
 	fmt.Printf("[R]un, [S]kip? ")
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.ToLower(strings.TrimSpace(choice))
+	choice, rfErr := readLine(reader)
+	if rfErr != nil {
+		return fmt.Errorf("failed to read choice: %w", rfErr)
+	}
+	choice = strings.ToLower(choice)
 
 	switch choice {
 	case "r", "run", "":
@@ -398,8 +413,11 @@ func executeGCPCommand(displayCmd string, program string, args ...string) error 
 		fmt.Printf("Command failed: %v\n", err)
 		fmt.Print("Continue anyway? [y/N]: ")
 		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-		if strings.ToLower(strings.TrimSpace(response)) != "y" {
+		response, rfErr := readLine(reader)
+		if rfErr != nil {
+			return fmt.Errorf("failed to read response: %w", rfErr)
+		}
+		if strings.ToLower(response) != "y" {
 			return fmt.Errorf("command failed: %w", err)
 		}
 	}

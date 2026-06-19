@@ -155,7 +155,7 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 			}
 		}()
 
-		_, _, _ = c.sf.Do(key, func() (any, error) {
+		_, _, _ = c.sf.Do(key, func() (any, error) { //nolint:errcheck // singleflight propagates the inner fetch error which is already logged inside the callback
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 

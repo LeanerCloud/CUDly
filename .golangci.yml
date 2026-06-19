@@ -82,6 +82,15 @@ linters:
           - gosec
         path: internal/testutil/
       - linters:
+          - errcheck
+        path: internal/mocks/
+      - linters:
+          - errcheck
+        path: internal/auth/test_helpers\.go
+      - linters:
+          - errcheck
+        path: internal/database/postgres/testhelpers/
+      - linters:
           - all
         path: .*_gen\.go
     paths:

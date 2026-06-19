@@ -204,7 +204,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateFlatPayload(credentialType, payload, gcpServiceAccountRequired, gcpServiceAccountOptional); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "service_account" {
+		if !payloadTypeMatches(payload, "service_account") {
 			return NewClientError(400, "gcp_service_account payload must have type=\"service_account\"")
 		}
 		return nil
@@ -212,7 +212,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateGCPWIFPayload(payload); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "external_account" {
+		if !payloadTypeMatches(payload, "external_account") {
 			return NewClientError(400, "gcp_workload_identity_config payload must have type=\"external_account\"")
 		}
 		return nil
@@ -220,6 +220,13 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 	// validCredentialTypes is the gate; if a new type slips past it without a
 	// schema entry here, that is a programming error worth surfacing.
 	return NewClientError(400, fmt.Sprintf("no payload schema defined for credential_type %q", credentialType))
+}
+
+// payloadTypeMatches returns true when payload["type"] is a non-empty string equal to want.
+// A missing or non-string "type" field returns false.
+func payloadTypeMatches(payload map[string]interface{}, want string) bool {
+	t, ok := payload["type"].(string)
+	return ok && t == want
 }
 
 // validateFlatPayload checks that every required key is present as a non-empty

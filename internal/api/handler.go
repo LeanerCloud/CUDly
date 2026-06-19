@@ -286,7 +286,10 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 // HandleRequest processes a Lambda Function URL request
 func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	if req == nil {
-		resp, _ := h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil)
+		resp, err := h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("buildResponse: %w", err)
+		}
 		return resp, nil
 	}
 	corsHeaders := h.buildResponseHeaders()
@@ -332,13 +335,19 @@ func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctio
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
 		logging.Warnf("Request body size exceeded: %d bytes", len(req.Body))
-		resp, _ := h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
+		resp, buildErr := h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
+		if buildErr != nil {
+			logging.Errorf("buildResponse failed: %v", buildErr)
+		}
 		return resp
 	}
 
 	// Validate Content-Type
 	if err := validateContentType(req); err != nil {
-		resp, _ := h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
+		resp, buildErr := h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
+		if buildErr != nil {
+			logging.Errorf("buildResponse failed: %v", buildErr)
+		}
 		return resp
 	}
 
@@ -357,14 +366,20 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	if !h.authenticate(ctx, req) {
-		resp, _ := h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
+		resp, buildErr := h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
+		if buildErr != nil {
+			logging.Errorf("buildResponse failed: %v", buildErr)
+		}
 		return resp
 	}
 
 	if h.requiresCSRFValidation(method, path, req) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)
-			resp, _ := h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
+			resp, buildErr := h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
+			if buildErr != nil {
+				logging.Errorf("buildResponse failed: %v", buildErr)
+			}
 			return resp
 		}
 	}
@@ -559,7 +574,7 @@ func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
 			// check is the security gate for federation rendering.
 			// (Reshape uses resolveAWSAccountID directly which DOES
 			// propagate the error for fail-closed multi-tenant safety.)
-			id.AccountID, id.Partition, _ = h.resolveAWSCallerIdentity(ctx)
+			id.AccountID, id.Partition, _ = h.resolveAWSCallerIdentity(ctx) //nolint:errcheck // best-effort: STS errors are logged inside resolveAWSCallerIdentity; empty AccountID is the security gate
 		case "azure":
 			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
 			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")

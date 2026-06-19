@@ -380,7 +380,10 @@ func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config
 // resolveTargetCoverage returns the configured default coverage or 80% when
 // no global config is set or the configured value is zero.
 func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
-	globalCfg, _ := h.config.GetGlobalConfig(ctx)
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		logging.Warnf("resolveTargetCoverage: failed to get global config, using default 80%%: %v", err)
+	}
 	if globalCfg != nil && globalCfg.DefaultCoverage > 0 {
 		return globalCfg.DefaultCoverage
 	}
@@ -536,7 +539,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 	// is best-effort: non-AWS deployments and STS transient failures
 	// return "" and the frontend falls back to the "Account deleted"
 	// warning label, which is safe.
-	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx)
+	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx) //nolint:errcheck // best-effort: non-AWS deployments and STS failures return empty string; frontend handles it safely
 
 	return &DeploymentInfoResponse{
 		APIKeySecretURL:        apiKeySecretURL,

@@ -2,9 +2,11 @@ package commitmentopts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -95,8 +97,12 @@ func (s *PostgresStore) Save(ctx context.Context, combos []Combo, sourceAccountI
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	// Rollback is a no-op after a successful Commit.
-	defer func() { _ = tx.Rollback(ctx) }()
+	// Rollback is a no-op after a successful Commit (pgx returns ErrTxClosed).
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			logging.Warnf("commitmentopts: rollback failed: %v", rbErr)
+		}
+	}()
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO commitment_options_probe_runs (singleton, probed_at, source_account_id)

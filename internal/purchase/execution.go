@@ -229,7 +229,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	if err != nil {
 		acctExec.Status = "failed"
 		acctExec.Error = err.Error()
-		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
+		m.saveExecWithLog(ctx, &acctExec, account.ID)
 		return false, fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
 	}
 
@@ -737,6 +737,15 @@ func singleCloudAccountIDFromRecs(recs []config.RecommendationRecord) *string {
 // caller can record an audit gap on the execution: a swallowed failure here
 // used to leave the execution silently "completed" with no purchase_history
 // row, making the purchase invisible in the History view (issue #621).
+// saveExecWithLog saves a purchase execution record and logs a non-fatal error if it fails.
+// The caller is responsible for continuing or returning after this call, since persistence
+// failures on the early-error path are logged but should not mask the original error.
+func (m *Manager) saveExecWithLog(ctx context.Context, exec *config.PurchaseExecution, accountID string) {
+	if err := m.config.SavePurchaseExecution(ctx, exec); err != nil {
+		logging.Errorf("execution: failed to persist purchase execution status for account %s: %v", accountID, err)
+	}
+}
+
 func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) error {
 	purchasedAt := time.Now()
 	historyRecord := &config.PurchaseHistoryRecord{

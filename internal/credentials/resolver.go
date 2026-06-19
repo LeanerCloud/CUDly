@@ -408,7 +408,12 @@ func resolveGCPWIFCredential(
 	// federated (secret-free) account.
 	var raw []byte
 	if store != nil {
-		raw, _ = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		var loadErr error
+		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		if loadErr != nil {
+			// Not-found errors are expected; other errors fall back to the federated path.
+			raw = nil
+		}
 	}
 
 	issuer := opts.IssuerURL

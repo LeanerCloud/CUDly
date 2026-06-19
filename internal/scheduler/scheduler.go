@@ -345,11 +345,14 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		})
 	}
 
-	// Wait for all goroutines. g.Wait() always returns nil because every
-	// goroutine returns nil. After Wait, propagate ctx cancellation so
+	// Wait for all goroutines. Each goroutine returns nil to isolate per-provider
+	// failures (stored in outcomes map). After Wait, propagate ctx cancellation so
 	// callers can distinguish "all providers completed" from "the parent
 	// ctx was canceled mid-fan-out".
-	_ = g.Wait()
+	if waitErr := g.Wait(); waitErr != nil {
+		// Goroutines never return non-nil here; this is a defensive check.
+		logging.Errorf("scheduler: unexpected g.Wait error: %v", waitErr)
+	}
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, 0, nil, nil, nil, cerr
 	}
@@ -567,7 +570,10 @@ func fanOutPerAccount(
 			return nil
 		})
 	}
-	_ = g.Wait() // errs are always nil (swallowed above)
+	if waitErr := g.Wait(); waitErr != nil {
+		// Goroutines swallow all errors above; this is a defensive check.
+		logging.Errorf("scheduler: unexpected fanOut g.Wait error: %v", waitErr)
+	}
 	return all, outcome
 }
 
@@ -898,7 +904,11 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 			PaymentOption:  globalCfg.DefaultPayment,
 			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
-		recs, _ = recClient.GetRecommendations(ctx, params)
+		var getErr error
+		recs, getErr = recClient.GetRecommendations(ctx, params)
+		if getErr != nil {
+			logging.Warnf("scheduler: failed to get recommendations for %s (continuing without account-level recs): %v", providerName, getErr)
+		}
 	}
 	result := s.convertRecommendations(recs, providerName)
 	if accountID != nil {

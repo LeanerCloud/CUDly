@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -413,6 +414,16 @@ func autoHealEnabled() bool {
 }
 
 // RollbackMigrations rolls back N migrations
+// logMigrateVersion reads the current migration version and logs it before a rollback.
+// ErrNilVersion (no migrations applied yet) is silently ignored.
+func logMigrateVersion(m *migrate.Migrate, steps int) {
+	currentVersion, _, verErr := m.Version()
+	if verErr != nil && !errors.Is(verErr, migrate.ErrNilVersion) {
+		log.Printf("Warning: failed to read current migration version: %v", verErr)
+	}
+	log.Printf("Rolling back %d migration(s) from version %d...", steps, currentVersion)
+}
+
 func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, steps int) error {
 	if steps <= 0 {
 		return fmt.Errorf("rollback steps must be positive, got %d", steps)
@@ -433,9 +444,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	}
 	defer m.Close()
 
-	// Log current version before rollback
-	currentVersion, _, _ := m.Version()
-	log.Printf("Rolling back %d migration(s) from version %d...", steps, currentVersion)
+	logMigrateVersion(m, steps)
 
 	// Rollback steps
 	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
