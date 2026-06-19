@@ -62,7 +62,7 @@ func TestNewRecommendationsClient(t *testing.T) {
 func TestNewRecommendationsClient_RejectsEmptySubscriptionID(t *testing.T) {
 	client, err := NewRecommendationsClient(nil, "")
 	require.Error(t, err)
-	assert.Nil(t, client, "constructor must not return a partially-initialised adapter on invariant failure")
+	assert.Nil(t, client, "constructor must not return a partially-initialized adapter on invariant failure")
 	assert.Contains(t, err.Error(), "subscriptionID is required")
 }
 
