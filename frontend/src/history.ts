@@ -17,6 +17,14 @@ import { getAccountName } from './recommendations';
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
+// AWS Marketplace fee/pricing constants (must stay in sync with handler_marketplace.go).
+// awsMarketplaceFeePercent: transaction fee deducted from listing proceeds (published by AWS).
+const AWS_MARKETPLACE_FEE_PERCENT = 12;
+// awsMarketplaceNetFactor: fraction of list price the seller receives after the fee.
+const AWS_MARKETPLACE_NET_FACTOR = 1 - AWS_MARKETPLACE_FEE_PERCENT / 100;
+// awsMarketplaceBuyerDiscountFactor: applied to residual RI value to compute the default list price.
+const AWS_MARKETPLACE_BUYER_DISCOUNT = 0.95;
+
 type StatusFilter = 'all' | 'pending' | 'completed' | 'failed' | 'expired' | 'cancelled';
 
 // Cache of the last-rendered purchase list so the status-chip click handler
@@ -1171,8 +1179,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
         // 0 when the original term is unknown (<=0); we do the same here.
         const upfrontRemaining = termMonths > 0 ? upfront * (remainingMonths / termMonths) : 0;
         const totalValue = upfrontRemaining + monthly * remainingMonths;
-        const listPrice = totalValue * 0.95;
-        const netProceeds = listPrice * 0.88;
+        const listPrice = totalValue * AWS_MARKETPLACE_BUYER_DISCOUNT;
+        const netProceeds = listPrice * AWS_MARKETPLACE_NET_FACTOR;
 
         const summaryEl = document.createElement('dl');
         summaryEl.className = 'marketplace-pricing-summary';
@@ -1189,14 +1197,14 @@ function wireRowActionHandlers(container: HTMLElement): void {
         addRow('Resource type', purchase.resource_type || '-');
         addRow('Remaining term', remainingMonths === 1 ? '1 month' : `${remainingMonths} months`);
         addRow('Default list price', formatCurrency(listPrice));
-        addRow('AWS fee (12%)', formatCurrency(listPrice * 0.12));
+        addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency(listPrice * (AWS_MARKETPLACE_FEE_PERCENT / 100)));
         addRow('Estimated net proceeds', formatCurrency(netProceeds));
         bodyEl.appendChild(summaryEl);
       }
 
       const noteEl = document.createElement('p');
       noteEl.className = 'marketplace-pricing-note';
-      noteEl.textContent = 'AWS charges a 12% transaction fee on proceeds. The default schedule prices the listing at 5% below remaining value. You can adjust pricing by contacting your administrator or modifying the schedule via the API. This action cannot be undone without cancelling the listing.';
+      noteEl.textContent = `AWS charges a ${AWS_MARKETPLACE_FEE_PERCENT}% transaction fee on proceeds. The default schedule prices the listing at ${(1 - AWS_MARKETPLACE_BUYER_DISCOUNT) * 100}% below remaining value. You can adjust pricing by contacting your administrator or modifying the schedule via the API. This action cannot be undone without cancelling the listing.`;
       bodyEl.appendChild(noteEl);
 
       const ok = await confirmDialog({
