@@ -18,11 +18,13 @@ or the S3 backend reports the `.tflock` object already exists from a prior run.
 ## When this happens
 
 A lock file is left behind when a CI run is interrupted (runner killed, job
-cancelled mid-apply, network error during apply). The lock is NOT automatically
-cleared on normal failure; the "Release state lock on failure" step handles that
-for clean failures and cancellations within the same run. A lock persisting
-across runs means a previous job exited abnormally before that cleanup step
-ran.
+canceled mid-apply, network error during apply). The workflow does NOT
+auto-delete the lock on failure: a blanket failure-path delete would itself
+risk state corruption, because a run that fails *because* it could not acquire
+the lock would delete the lock another run is still actively holding. Terraform
+releases its own lock on a clean apply error, so a lock that survives a run
+means that run died abnormally; clearing it requires operator confirmation that
+the owning run is dead.
 
 ## Safe recovery steps
 
@@ -63,13 +65,17 @@ aws s3 rm "s3://${BUCKET}/${LOCK_KEY}"   # remove it
 
 Then re-run the deployment workflow normally (without `clear_stale_lock`).
 
-## Why locks are not cleared automatically on every run
+## Why locks are not cleared automatically
 
-Unconditionally deleting the lock before `terraform init` would allow two
-concurrent deploys to race: the second run could remove the first run's active
-lock, enabling parallel state writes and potential state corruption. The lock
-must only be cleared when you know the holder is no longer active.
+Any unconditional lock delete (before `terraform init`, or in a blanket
+failure-path cleanup step) lets two concurrent deploys race: one run could
+remove another run's active lock, enabling parallel state writes and potential
+state corruption. A failure-path delete is especially dangerous because a run
+that fails *because* it lost the race to acquire the lock would then delete the
+winner's live lock. The lock must only be cleared when you know the holder is no
+longer active, which is why clearing is gated behind the operator-triggered
+`clear_stale_lock` input rather than an automatic step.
 
-`deploy-aws-lambda.yml` follows the same pattern: cleanup only runs in the
-`if: failure() || cancelled()` step of the same job, which covers the
-within-run case; cross-run stuck locks require explicit operator action.
+Terraform releases its own lock on a clean apply error within the same run, so
+this gating only affects the rarer case where a run dies abnormally before that
+release happens.
