@@ -100,6 +100,8 @@ paths:
                 $ref: '#/components/schemas/ConfigResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     put:
       operationId: updateConfig
       tags: [Configuration]
@@ -147,6 +149,8 @@ paths:
                 $ref: '#/components/schemas/ServiceConfig'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
     put:
