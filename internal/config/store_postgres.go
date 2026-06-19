@@ -1833,7 +1833,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}
