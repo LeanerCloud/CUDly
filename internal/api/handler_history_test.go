@@ -1710,8 +1710,8 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 		{Status: "pending", UpfrontCost: 999.0, EstimatedSavings: 99.0},
 		// Two canceled rows — the regression case from issue #736.
 		// Neither must appear in the dollar KPIs or TotalCompleted.
-		{Status: "canceled", UpfrontCost: 500.0, EstimatedSavings: 50.0},
-		{Status: "canceled", UpfrontCost: 750.0, EstimatedSavings: 75.0},
+		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 
 	summary := summarizePurchaseHistory(purchases)
@@ -1813,16 +1813,17 @@ func TestHandler_getHistory_LimitParsing(t *testing.T) {
 }
 func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	// Baseline: three approved (completed) rows.
-	baseline := []config.PurchaseHistoryRecord{ //nolint:prealloc // composite literal with fixed elements; append below adds 1 more
-		{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
-		{Status: "completed", UpfrontCost: 200.0, EstimatedSavings: 20.0},
-		{Status: "completed", UpfrontCost: 300.0, EstimatedSavings: 30.0},
-	}
+	baseline := make([]config.PurchaseHistoryRecord, 0, 4)
+	baseline = append(baseline,
+		config.PurchaseHistoryRecord{Status: "completed", UpfrontCost: 100.0, EstimatedSavings: 10.0},
+		config.PurchaseHistoryRecord{Status: "completed", UpfrontCost: 200.0, EstimatedSavings: 20.0},
+		config.PurchaseHistoryRecord{Status: "completed", UpfrontCost: 300.0, EstimatedSavings: 30.0},
+	)
 	before := summarizePurchaseHistory(baseline)
 
 	// After: same rows plus one canceled execution (the pending that got canceled).
-	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
-		Status:           "canceled",
+	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic,misspell
+		Status:           "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 		UpfrontCost:      999.0,
 		EstimatedSavings: 99.0,
 	})
