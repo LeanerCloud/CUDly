@@ -12,8 +12,8 @@ import (
 
 func TestIsPermissionError(t *testing.T) {
 	tests := []struct {
-		name string
 		err  error
+		name string
 		want bool
 	}{
 		{

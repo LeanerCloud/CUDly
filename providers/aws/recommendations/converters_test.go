@@ -88,8 +88,8 @@ func TestGetServiceStringForCostExplorer(t *testing.T) {
 func TestConvertPaymentOption(t *testing.T) {
 	// convertPaymentOption is the legacy wrapper that silently defaults to NoUpfront
 	// for unknown values (used by client.go RI path, owned by #865/#1075).
-	// This test documents that silent-default behaviour; new callers should use
-	// convertPaymentOptionE which returns an error on unrecognised values.
+	// This test documents that silent-default behavior; new callers should use
+	// convertPaymentOptionE which returns an error on unrecognized values.
 	tests := []struct {
 		name     string
 		option   string
@@ -121,8 +121,8 @@ func TestConvertPaymentOption(t *testing.T) {
 }
 
 // TestConvertPaymentOptionE_FailLoud is the regression test for H3:
-// convertPaymentOptionE must return an error on any unrecognised payment option
-// instead of silently substituting NoUpfront (the old behaviour of the
+// convertPaymentOptionE must return an error on any unrecognized payment option
+// instead of silently substituting NoUpfront (the old behavior of the
 // convertPaymentOption default branch). Callers on the SP recommendation path
 // use this erroring variant so a typo or new/renamed option is caught
 // before the wrong recs are queried.
@@ -157,7 +157,7 @@ func TestConvertPaymentOptionE_FailLoud(t *testing.T) {
 }
 
 // TestConvertTermInYearsE_FailLoud is the regression test for L1:
-// convertTermInYearsE must error on unrecognised terms rather than silently
+// convertTermInYearsE must error on unrecognized terms rather than silently
 // defaulting to OneYear.
 func TestConvertTermInYearsE_FailLoud(t *testing.T) {
 	tests := []struct {
@@ -191,7 +191,7 @@ func TestConvertTermInYearsE_FailLoud(t *testing.T) {
 }
 
 // TestConvertLookbackPeriodE_FailLoud is the regression test for L2:
-// convertLookbackPeriodE must error on unrecognised periods rather than
+// convertLookbackPeriodE must error on unrecognized periods rather than
 // silently defaulting to SevenDays.
 func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
 	tests := []struct {
@@ -228,7 +228,7 @@ func TestConvertLookbackPeriodE_FailLoud(t *testing.T) {
 
 func TestConvertTermInYears(t *testing.T) {
 	// convertTermInYears is the legacy wrapper used by client.go (RI path);
-	// it silently returns OneYear for unrecognised values. This test covers the
+	// it silently returns OneYear for unrecognized values. This test covers the
 	// valid cases only; the fail-loud path is tested by TestConvertTermInYearsE_FailLoud.
 	tests := []struct {
 		name     string
@@ -267,7 +267,7 @@ func TestConvertTermInYears(t *testing.T) {
 
 func TestConvertLookbackPeriod(t *testing.T) {
 	// convertLookbackPeriod is the legacy wrapper used by client.go (RI path);
-	// it silently returns SevenDays for unrecognised values. This test covers valid
+	// it silently returns SevenDays for unrecognized values. This test covers valid
 	// cases only; the fail-loud path is tested by TestConvertLookbackPeriodE_FailLoud.
 	tests := []struct {
 		name     string

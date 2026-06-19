@@ -18,8 +18,8 @@ func TestParseRDSDetails(t *testing.T) {
 	tests := []struct {
 		name        string
 		details     *types.ReservationPurchaseRecommendationDetail
-		expectError bool
 		validate    func(t *testing.T, rec *common.Recommendation)
+		expectError bool
 	}{
 		{
 			name: "Complete RDS details with Multi-AZ",
@@ -148,8 +148,8 @@ func TestParseElastiCacheDetails(t *testing.T) {
 	tests := []struct {
 		name        string
 		details     *types.ReservationPurchaseRecommendationDetail
-		expectError bool
 		validate    func(t *testing.T, rec *common.Recommendation)
+		expectError bool
 	}{
 		{
 			name: "Complete ElastiCache details",
@@ -225,8 +225,8 @@ func TestParseEC2Details(t *testing.T) {
 	tests := []struct {
 		name        string
 		details     *types.ReservationPurchaseRecommendationDetail
-		expectError bool
 		validate    func(t *testing.T, rec *common.Recommendation)
+		expectError bool
 	}{
 		{
 			// CE returns Tenancy="shared" for default; parser must normalise to
@@ -456,7 +456,7 @@ func TestParseEC2Details(t *testing.T) {
 			expectError: true,
 		},
 		{
-			// M5: an unrecognised tenancy value should also error.
+			// M5: an unrecognized tenancy value should also error.
 			name: "EC2 unknown tenancy errors (M5)",
 			details: &types.ReservationPurchaseRecommendationDetail{
 				InstanceDetails: &types.InstanceDetails{
@@ -495,8 +495,8 @@ func TestParseOpenSearchDetails(t *testing.T) {
 	tests := []struct {
 		name        string
 		details     *types.ReservationPurchaseRecommendationDetail
-		expectError bool
 		validate    func(t *testing.T, rec *common.Recommendation)
+		expectError bool
 	}{
 		{
 			name: "Complete OpenSearch details",
@@ -569,9 +569,9 @@ func TestParseRedshiftDetails(t *testing.T) {
 	tests := []struct {
 		name        string
 		details     *types.ReservationPurchaseRecommendationDetail
+		validate    func(t *testing.T, rec *common.Recommendation)
 		count       int
 		expectError bool
-		validate    func(t *testing.T, rec *common.Recommendation)
 	}{
 		{
 			name: "Single node Redshift cluster",
