@@ -1,4 +1,4 @@
--- 000076: monthly_savings_summary nested SUM-then-AVG rollup (COR-02).
+-- 000077: monthly_savings_summary nested SUM-then-AVG rollup (COR-02).
 --
 -- Snapshot rows are run-rates written at (account, provider, service, region,
 -- commitment_type, timestamp) grain, so a (month, account, provider, service)
@@ -53,11 +53,10 @@ FROM (
 ) per_ts
 GROUP BY month, account_id, cloud_account_id, provider, service;
 
--- cloud_account_id is nullable, so COALESCE it to the nil UUID inside the
--- unique index to keep the (month, account, provider, service) grain unique
--- under CONCURRENTLY refresh even when cloud_account_id IS NULL.
+-- Use plain columns with NULLS NOT DISTINCT (PostgreSQL 15+), consistent
+-- with 000076 which switched from COALESCE to NULLS NOT DISTINCT so that
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY works (it requires plain-column
+-- indexes with no expressions).
 CREATE UNIQUE INDEX idx_monthly_savings_summary_unique
-    ON monthly_savings_summary(
-        month, account_id,
-        COALESCE(cloud_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
-        provider, service);
+    ON monthly_savings_summary (month, account_id, cloud_account_id, provider, service)
+    NULLS NOT DISTINCT;
