@@ -12,15 +12,15 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// MockProvider implements the Provider interface for testing
+// MockProvider implements the Provider interface for testing.
 type MockProvider struct {
+	credentialsError  error
 	name              string
 	displayName       string
-	configured        bool
-	credentialsValid  bool
-	credentialsError  error
 	defaultRegion     string
 	supportedServices []common.ServiceType
+	configured        bool
+	credentialsValid  bool
 }
 
 func (m *MockProvider) Name() string        { return m.name }

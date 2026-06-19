@@ -199,7 +199,8 @@ func TestValidate_EmptyEnabledClouds_Error(t *testing.T) {
 	t.Parallel()
 	// validate() is called by Load; test it directly since empty clouds
 	// cannot be produced by env/YAML (empty overrides are ignored to protect defaults)
-	err := validate(Config{EnabledClouds: []string{}})
+	cfg := Config{EnabledClouds: []string{}}
+	err := validate(&cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one cloud")
 }

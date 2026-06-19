@@ -1,4 +1,4 @@
-// Package provider provides factory functions for creating providers
+// Package provider provides factory functions for creating providers.
 package provider
 
 import (
@@ -20,7 +20,7 @@ func CreateProvider(name string, config *ProviderConfig) (Provider, error) {
 	return GetRegistry().GetProviderWithConfig(name, config)
 }
 
-// CreateProviders creates multiple provider instances
+// CreateProviders creates multiple provider instances.
 func CreateProviders(names []string) ([]Provider, error) {
 	providers := make([]Provider, 0, len(names))
 
@@ -35,7 +35,7 @@ func CreateProviders(names []string) ([]Provider, error) {
 	return providers, nil
 }
 
-// CreateAndValidateProvider creates and validates a provider
+// CreateAndValidateProvider creates and validates a provider.
 func CreateAndValidateProvider(ctx context.Context, name string, config *ProviderConfig) (Provider, error) {
 	provider, err := CreateProvider(name, config)
 	if err != nil {
@@ -53,7 +53,7 @@ func CreateAndValidateProvider(ctx context.Context, name string, config *Provide
 	return provider, nil
 }
 
-// GetOrDetectProviders gets specified providers or auto-detects available ones
+// GetOrDetectProviders gets specified providers or auto-detects available ones.
 func GetOrDetectProviders(ctx context.Context, names []string) ([]Provider, error) {
 	// If specific providers requested, use those
 	if len(names) > 0 {

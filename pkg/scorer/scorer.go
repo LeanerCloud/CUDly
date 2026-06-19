@@ -13,16 +13,16 @@ import (
 // Config controls which recommendations are allowed through the scorer.
 // Zero values mean "no filter" for numeric thresholds; empty slice means "all services".
 type Config struct {
-	MinSavingsPct      float64  // Minimum savings percentage. 0 = no filter.
-	MaxBreakEvenMonths int      // Maximum break-even months. 0 = no filter.
-	MinCount           int      // Minimum count per recommendation. 0 = no filter.
-	EnabledServices    []string // Empty = all services. E.g. ["ec2", "rds"].
+	EnabledServices    []string
+	MinSavingsPct      float64
+	MaxBreakEvenMonths int
+	MinCount           int
 }
 
 // FilteredRecommendation holds a recommendation that did not pass a filter, with the reason.
 type FilteredRecommendation struct {
-	Recommendation common.Recommendation
 	FilterReason   string
+	Recommendation common.Recommendation
 }
 
 // ScoredResult holds recommendations that passed the scorer (Passed) and those that did not (Filtered).
@@ -42,14 +42,14 @@ func Score(recs []common.Recommendation, cfg Config) ScoredResult {
 
 	enabledSet := buildServiceSet(cfg.EnabledServices)
 
-	for _, rec := range recs {
-		if reason := filterReason(rec, cfg, enabledSet); reason != "" {
+	for i := range recs {
+		if reason := filterReason(&recs[i], cfg, enabledSet); reason != "" {
 			result.Filtered = append(result.Filtered, FilteredRecommendation{
-				Recommendation: rec,
+				Recommendation: recs[i],
 				FilterReason:   reason,
 			})
 		} else {
-			result.Passed = append(result.Passed, rec)
+			result.Passed = append(result.Passed, recs[i])
 		}
 	}
 
@@ -70,7 +70,7 @@ func Score(recs []common.Recommendation, cfg Config) ScoredResult {
 }
 
 // filterReason returns a non-empty string describing why rec was filtered, or "" if it passes.
-func filterReason(rec common.Recommendation, cfg Config, enabledServices map[string]struct{}) string {
+func filterReason(rec *common.Recommendation, cfg Config, enabledServices map[string]struct{}) string {
 	if len(enabledServices) > 0 {
 		if _, ok := enabledServices[strings.ToLower(string(rec.Service))]; !ok {
 			return fmt.Sprintf("service %q not in enabled list", rec.Service)
