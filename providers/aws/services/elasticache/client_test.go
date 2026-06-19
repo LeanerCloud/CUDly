@@ -696,3 +696,28 @@ func TestFindOfferingID_HappyPath(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "offering-ok", id)
 }
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedCacheNodesOfferings call,
+// rather than silently matching (and buying) a 1-year offering. A "0" term is
+// what a 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockEC := &MockElastiCacheClient{}
+	t.Cleanup(func() { mockEC.AssertExpectations(t) })
+	client := &Client{client: mockEC, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "cache.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+		Details:       &common.CacheDetails{Engine: "redis"},
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)") {
+		assert.Contains(t, err.Error(), "unsupported ElastiCache reservation term")
+	}
+	mockEC.AssertNotCalled(t, "DescribeReservedCacheNodesOfferings", mock.Anything, mock.Anything)
+}

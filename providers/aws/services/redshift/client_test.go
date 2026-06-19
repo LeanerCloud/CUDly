@@ -1467,3 +1467,27 @@ func TestDerivePaymentOption(t *testing.T) {
 	assert.Equal(t, "partial-upfront", derivePaymentOption(rsOffering("x", 500, 0.05)))
 	assert.Equal(t, "unknown", derivePaymentOption(rsOffering("x", 0, 0)))
 }
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedNodeOfferings call, rather
+// than silently matching (and buying) a 1-year offering. A "0" term is what a
+// 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockRS := &MockRedshiftClient{}
+	t.Cleanup(func() { mockRS.AssertExpectations(t) })
+	client := &Client{client: mockRS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "dc2.large",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)") {
+		assert.Contains(t, err.Error(), "unsupported Redshift reservation term")
+	}
+	mockRS.AssertNotCalled(t, "DescribeReservedNodeOfferings", mock.Anything, mock.Anything)
+}

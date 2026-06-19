@@ -917,3 +917,27 @@ func TestClient_GetDurationStringForAPI(t *testing.T) {
 		})
 	}
 }
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedNodesOfferings call, rather
+// than silently matching (and buying) a 1-year offering. A "0" term is what a
+// 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockMDB := &MockMemoryDBClient{}
+	t.Cleanup(func() { mockMDB.AssertExpectations(t) })
+	client := &Client{client: mockMDB, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "db.r6g.large",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)") {
+		assert.Contains(t, err.Error(), "unsupported MemoryDB reservation term")
+	}
+	mockMDB.AssertNotCalled(t, "DescribeReservedNodesOfferings", mock.Anything, mock.Anything)
+}

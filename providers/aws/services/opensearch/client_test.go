@@ -984,3 +984,27 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 	assert.Contains(t, capturedName, "2x-3yr", "count and term must be embedded: %q", capturedName)
 	assert.LessOrEqual(t, len(capturedName), 60, "must fit AWS reservation-ID cap")
 }
+
+// TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall is the ARCH-04 (issue
+// #1192) call-path regression test: an unrecognized or empty term must abort
+// the offering lookup before any DescribeReservedInstanceOfferings call, rather
+// than silently matching (and buying) a 1-year offering. A "0" term is what a
+// 0/NULL Term DB row produces on the scheduler purchase path.
+func TestFindOfferingID_InvalidTerm_ErrorsBeforeAPICall(t *testing.T) {
+	mockOS := &MockOpenSearchClient{}
+	t.Cleanup(func() { mockOS.AssertExpectations(t) })
+	client := &Client{client: mockOS, region: "us-east-1"}
+
+	rec := common.Recommendation{
+		ResourceType:  "m5.xlarge.search",
+		PaymentOption: "no-upfront",
+		Term:          "0",
+	}
+
+	_, err := client.findOfferingID(context.Background(), rec, "")
+
+	if assert.Error(t, err, "findOfferingID must error on an unrecognized term (ARCH-04)") {
+		assert.Contains(t, err.Error(), "unsupported OpenSearch reservation term")
+	}
+	mockOS.AssertNotCalled(t, "DescribeReservedInstanceOfferings", mock.Anything, mock.Anything)
+}
