@@ -88,6 +88,10 @@ seed_fixture "$FIX4"
 rm "$FIX4/terraform/modules/compute/aws/fargate/main.tf"
 run_case "missing compared file exits 2" 2 --root "$FIX4"
 
+# Case 5: --root without a path value must fail loud (exit 2), not crash on an
+# unbound variable under set -u.
+run_case "--root without a value exits 2" 2 --root
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]
