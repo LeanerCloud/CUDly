@@ -361,7 +361,7 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
 }
 
-// --- Audit fixtures from docs/exchange-alternatives-audit.md (#152) ----------
+// --- Audit fixtures from exchange-alternatives-audit.md (#152) ----------
 
 // TestAudit_CrossGroupAlternativesSurface pins audit fixture A:
 // a source from one use-case group (m5, general-purpose) must receive
