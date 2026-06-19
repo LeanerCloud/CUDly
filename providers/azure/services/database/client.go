@@ -76,15 +76,15 @@ type SQLManagedInstancesPager interface {
 
 // DatabaseClient handles Azure SQL Database Reserved Capacity
 type DatabaseClient struct {
-	cred                   azcore.TokenCredential
-	subscriptionID         string
-	region                 string
-	httpClient             HTTPClient
-	recommendationsPager   RecommendationsPager
-	reservationsPager      ReservationsDetailsPager
-	capabilitiesClient     CapabilitiesClient
-	serversPager           SQLServersPager
-	managedInstancesPager  SQLManagedInstancesPager
+	cred                  azcore.TokenCredential
+	subscriptionID        string
+	region                string
+	httpClient            HTTPClient
+	recommendationsPager  RecommendationsPager
+	reservationsPager     ReservationsDetailsPager
+	capabilitiesClient    CapabilitiesClient
+	serversPager          SQLServersPager
+	managedInstancesPager SQLManagedInstancesPager
 
 	// Lazy SKU catalogue cache. Populated once on the first
 	// recommendation conversion in this client's GetRecommendations
@@ -830,7 +830,7 @@ func (c *DatabaseClient) fetchServerInfo(ctx context.Context) (azConfig, deploym
 func (c *DatabaseClient) walkManagedInstances(ctx context.Context) (zoneRedundant, nonZoneRedundant, total int) {
 	pager, err := c.createManagedInstancesPager()
 	if err != nil {
-		logging.Warnf("azure database: managed instances pager create failed: %v — AZConfig/Deployment signal unavailable", err)
+		logging.Warnf("azure database: managed instances pager create failed: %v; AZConfig/Deployment signal unavailable", err)
 		return 0, 0, 0
 	}
 	for pager.More() {
@@ -839,7 +839,7 @@ func (c *DatabaseClient) walkManagedInstances(ctx context.Context) (zoneRedundan
 			if ctx.Err() != nil {
 				return zoneRedundant, nonZoneRedundant, total
 			}
-			logging.Warnf("azure database: managed instances page fetch failed: %v — AZConfig/Deployment signal unavailable", err)
+			logging.Warnf("azure database: managed instances page fetch failed: %v; AZConfig/Deployment signal unavailable", err)
 			return zoneRedundant, nonZoneRedundant, total
 		}
 		for _, mi := range page.Value {
@@ -874,7 +874,7 @@ func (c *DatabaseClient) createManagedInstancesPager() (SQLManagedInstancesPager
 func (c *DatabaseClient) hasRegularServers(ctx context.Context) bool {
 	pager, err := c.createServersPager()
 	if err != nil {
-		logging.Warnf("azure database: servers pager create failed: %v — Deployment signal unavailable", err)
+		logging.Warnf("azure database: servers pager create failed: %v; Deployment signal unavailable", err)
 		return false
 	}
 	for pager.More() {
@@ -883,7 +883,7 @@ func (c *DatabaseClient) hasRegularServers(ctx context.Context) bool {
 			if ctx.Err() != nil {
 				return false
 			}
-			logging.Warnf("azure database: servers page fetch failed: %v — Deployment signal unavailable", err)
+			logging.Warnf("azure database: servers page fetch failed: %v; Deployment signal unavailable", err)
 			return false
 		}
 		if len(page.Value) > 0 {
