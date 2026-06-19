@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAWSResolver_DirectMethods tests the actual AWSResolver methods
-// These tests exercise the real code paths but may skip if AWS credentials are unavailable
+// TestAWSResolver_DirectMethods tests the actual AWSResolver methods.
+// These tests exercise the real code paths but may skip if AWS credentials are unavailable.
 func TestAWSResolver_DirectMethods(t *testing.T) {
 	ctx := context.Background()
 
@@ -25,7 +25,7 @@ func TestAWSResolver_DirectMethods(t *testing.T) {
 	assert.NotNil(t, resolver.client)
 }
 
-// TestAWSResolver_GetSecret_NonExistent tests getting a non-existent secret
+// TestAWSResolver_GetSecret_NonExistent tests getting a non-existent secret.
 func TestAWSResolver_GetSecret_NonExistent(t *testing.T) {
 	ctx := context.Background()
 
@@ -43,7 +43,7 @@ func TestAWSResolver_GetSecret_NonExistent(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get secret")
 }
 
-// TestAWSResolver_GetSecretJSON_NonExistent tests getting a non-existent JSON secret
+// TestAWSResolver_GetSecretJSON_NonExistent tests getting a non-existent JSON secret.
 func TestAWSResolver_GetSecretJSON_NonExistent(t *testing.T) {
 	ctx := context.Background()
 
@@ -60,7 +60,7 @@ func TestAWSResolver_GetSecretJSON_NonExistent(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestAWSResolver_ListSecrets_WithFilter_Coverage_Direct tests listing secrets with a filter using direct resolver
+// TestAWSResolver_ListSecrets_WithFilter_Coverage_Direct tests listing secrets with a filter using direct resolver.
 func TestAWSResolver_ListSecrets_WithFilter_Coverage_Direct(t *testing.T) {
 	ctx := context.Background()
 
@@ -83,7 +83,7 @@ func TestAWSResolver_ListSecrets_WithFilter_Coverage_Direct(t *testing.T) {
 	}
 }
 
-// TestAWSResolver_ListSecrets_NoFilter tests listing all secrets
+// TestAWSResolver_ListSecrets_NoFilter tests listing all secrets.
 func TestAWSResolver_ListSecrets_NoFilter(t *testing.T) {
 	ctx := context.Background()
 
@@ -102,7 +102,7 @@ func TestAWSResolver_ListSecrets_NoFilter(t *testing.T) {
 	}
 }
 
-// TestAWSResolver_Close_Idempotent tests that Close can be called multiple times
+// TestAWSResolver_Close_Idempotent tests that Close can be called multiple times.
 func TestAWSResolver_Close_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
@@ -119,7 +119,7 @@ func TestAWSResolver_Close_Idempotent(t *testing.T) {
 	assert.NoError(t, err2)
 }
 
-// TestAWSResolver_DifferentRegions tests creating resolvers for different regions
+// TestAWSResolver_DifferentRegions tests creating resolvers for different regions.
 func TestAWSResolver_DifferentRegions(t *testing.T) {
 	ctx := context.Background()
 
@@ -139,7 +139,7 @@ func TestAWSResolver_DifferentRegions(t *testing.T) {
 	}
 }
 
-// TestAWSResolver_ContextHandling tests context handling in AWS resolver
+// TestAWSResolver_ContextHandling tests context handling in the AWS resolver.
 func TestAWSResolver_ContextHandling(t *testing.T) {
 	ctx := context.Background()
 
@@ -149,17 +149,17 @@ func TestAWSResolver_ContextHandling(t *testing.T) {
 	}
 	defer resolver.Close()
 
-	// Test with cancelled context - should fail
-	cancelledCtx, cancel := context.WithCancel(context.Background())
+	// Test with canceled context - should fail.
+	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// GetSecret with cancelled context
-	_, err = resolver.GetSecret(cancelledCtx, "test-secret")
-	// Should fail due to cancelled context or other error
+	// GetSecret with canceled context.
+	_, err = resolver.GetSecret(canceledCtx, "test-secret")
+	// Should fail due to canceled context or other error.
 	assert.Error(t, err)
 }
 
-// TestNewAWSResolver_InvalidRegion tests creation with unusual region values
+// TestNewAWSResolver_InvalidRegion tests creation with unusual region values.
 func TestNewAWSResolver_InvalidRegion(t *testing.T) {
 	ctx := context.Background()
 
@@ -177,7 +177,7 @@ func TestNewAWSResolver_InvalidRegion(t *testing.T) {
 	resolver.Close()
 }
 
-// TestAWSResolver_SecretWithBinaryData tests getting a secret that might have binary data
+// TestAWSResolver_SecretWithBinaryData tests getting a secret that might have binary data.
 func TestAWSResolver_SecretWithBinaryData(t *testing.T) {
 	ctx := context.Background()
 
@@ -195,7 +195,7 @@ func TestAWSResolver_SecretWithBinaryData(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestAWSResolver_EmptySecretID tests getting a secret with empty ID
+// TestAWSResolver_EmptySecretID tests getting a secret with empty ID.
 func TestAWSResolver_EmptySecretID(t *testing.T) {
 	ctx := context.Background()
 
@@ -210,7 +210,7 @@ func TestAWSResolver_EmptySecretID(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestAWSResolver_SpecialCharactersInSecretID tests secret IDs with special characters
+// TestAWSResolver_SpecialCharactersInSecretID tests secret IDs with special characters.
 func TestAWSResolver_SpecialCharactersInSecretID(t *testing.T) {
 	ctx := context.Background()
 
@@ -237,7 +237,7 @@ func TestAWSResolver_SpecialCharactersInSecretID(t *testing.T) {
 	}
 }
 
-// TestTestableAWSResolver_GetSecretJSON_RealMethod tests the GetSecretJSON error propagation
+// TestTestableAWSResolver_GetSecretJSON_RealMethod tests the GetSecretJSON error propagation.
 func TestTestableAWSResolver_GetSecretJSON_RealMethod(t *testing.T) {
 	ctx := context.Background()
 

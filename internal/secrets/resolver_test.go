@@ -11,9 +11,9 @@ import (
 
 func TestLoadConfigFromEnv(t *testing.T) {
 	tests := []struct {
-		name           string
 		envVars        map[string]string
 		expectedConfig *Config
+		name           string
 	}{
 		{
 			name:    "returns defaults when no env vars set",
@@ -154,8 +154,8 @@ func TestGetEnv(t *testing.T) {
 		key          string
 		defaultValue string
 		envValue     string
-		setEnv       bool
 		expected     string
+		setEnv       bool
 	}{
 		{
 			name:         "returns env value when set",

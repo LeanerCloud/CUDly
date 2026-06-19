@@ -15,13 +15,13 @@ import (
 )
 
 // SecretsManagerAPI defines the interface for AWS Secrets Manager operations
-// that we need to mock
+// that we need to mock.
 type SecretsManagerAPI interface {
 	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
 	ListSecrets(ctx context.Context, params *secretsmanager.ListSecretsInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error)
 }
 
-// MockSecretsManagerClient is a mock implementation of the Secrets Manager client
+// MockSecretsManagerClient is a mock implementation of the Secrets Manager client.
 type MockSecretsManagerClient struct {
 	mock.Mock
 }
@@ -42,7 +42,7 @@ func (m *MockSecretsManagerClient) ListSecrets(ctx context.Context, params *secr
 	return args.Get(0).(*secretsmanager.ListSecretsOutput), args.Error(1)
 }
 
-// testableAWSResolver wraps AWSResolver to allow injecting a mock client
+// testableAWSResolver wraps AWSResolver to allow injecting a mock client.
 type testableAWSResolver struct {
 	mockClient SecretsManagerAPI
 	region     string
