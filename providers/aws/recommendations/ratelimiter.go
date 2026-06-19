@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// throttleErrorCodes contains AWS API error codes that indicate throttling
+// throttleErrorCodes contains AWS API error codes that indicate throttling.
 var throttleErrorCodes = map[string]struct{}{
 	"Throttling":                             {},
 	"ThrottlingException":                    {},
@@ -25,19 +25,19 @@ var throttleErrorCodes = map[string]struct{}{
 	"EC2ThrottledException":                  {},
 }
 
-// RateLimiter provides rate limiting with exponential backoff
+// RateLimiter provides rate limiting with exponential backoff.
 type RateLimiter struct {
-	// Base delay between requests
+	// Base delay between requests.
 	baseDelay time.Duration
-	// Maximum delay for exponential backoff
+	// Maximum delay for exponential backoff.
 	maxDelay time.Duration
-	// Current retry attempt
+	// Current retry attempt.
 	retryCount int
-	// Maximum number of retries
+	// Maximum number of retries.
 	maxRetries int
 }
 
-// NewRateLimiter creates a new rate limiter with default settings
+// NewRateLimiter creates a new rate limiter with default settings.
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
 		baseDelay:  1 * time.Second,
@@ -47,7 +47,7 @@ func NewRateLimiter() *RateLimiter {
 	}
 }
 
-// NewRateLimiterWithOptions creates a rate limiter with custom settings
+// NewRateLimiterWithOptions creates a rate limiter with custom settings.
 func NewRateLimiterWithOptions(baseDelay, maxDelay time.Duration, maxRetries int) *RateLimiter {
 	return &RateLimiter{
 		baseDelay:  baseDelay,
@@ -57,7 +57,7 @@ func NewRateLimiterWithOptions(baseDelay, maxDelay time.Duration, maxRetries int
 	}
 }
 
-// Wait implements exponential backoff delay
+// Wait implements exponential backoff delay.
 func (r *RateLimiter) Wait(ctx context.Context) error {
 	if r.retryCount == 0 {
 		// No delay for first attempt
@@ -133,12 +133,12 @@ func isThrottleError(err error) bool {
 		strings.Contains(errMsg, "TooManyRequests")
 }
 
-// Reset resets the retry counter
+// Reset resets the retry counter.
 func (r *RateLimiter) Reset() {
 	r.retryCount = 0
 }
 
-// GetRetryCount returns the current retry count
+// GetRetryCount returns the current retry count.
 func (r *RateLimiter) GetRetryCount() int {
 	return r.retryCount
 }

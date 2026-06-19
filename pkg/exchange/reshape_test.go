@@ -9,12 +9,12 @@ import (
 func TestAnalyzeReshaping(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
+		checkFirst  func(t *testing.T, rec ReshapeRecommendation)
 		name        string
 		ris         []RIInfo
 		utilization []UtilizationInfo
 		threshold   float64
 		wantCount   int
-		checkFirst  func(t *testing.T, rec ReshapeRecommendation)
 	}{
 		{
 			name: "standard RI skipped (not convertible)",

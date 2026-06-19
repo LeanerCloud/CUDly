@@ -12,11 +12,11 @@ import (
 
 // mockExchangeStore implements RIExchangeStore for testing.
 type mockExchangeStore struct {
-	savedRecords   []*ExchangeRecord
-	cancelledCount int64
-	staleRecords   []ExchangeRecord
-	dailySpend     string
-	dailySpendErr  error
+	dailySpendErr error
+	dailySpend    string
+	savedRecords  []*ExchangeRecord
+	staleRecords  []ExchangeRecord
+	canceledCount int64
 }
 
 func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *ExchangeRecord) error {
@@ -28,7 +28,7 @@ func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *Exch
 }
 
 func (m *mockExchangeStore) CancelAllPendingExchanges(_ context.Context) (int64, error) {
-	return m.cancelledCount, nil
+	return m.canceledCount, nil
 }
 
 func (m *mockExchangeStore) GetStaleProcessingExchanges(_ context.Context, _ time.Duration) ([]ExchangeRecord, error) {
@@ -54,8 +54,8 @@ func (m *mockExchangeStore) FailRIExchange(_ context.Context, _ string, _ string
 type mockExchangeClient struct {
 	quoteResult   *ExchangeQuoteSummary
 	quoteErr      error
-	executeResult string
 	executeErr    error
+	executeResult string
 }
 
 func (m *mockExchangeClient) GetQuote(_ context.Context, _ ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {

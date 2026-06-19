@@ -19,7 +19,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
-// MockProjectsClient mocks the ProjectsClient interface
+// MockProjectsClient mocks the ProjectsClient interface.
 type MockProjectsClient struct {
 	project *resourcemanagerpb.Project
 	err     error
@@ -38,10 +38,10 @@ func (m *MockProjectsClient) Close() error {
 	return nil
 }
 
-// MockRegionsClient mocks the RegionsClient interface
+// MockRegionsClient mocks the RegionsClient interface.
 type MockRegionsClient struct {
-	regions []*computepb.Region
 	err     error
+	regions []*computepb.Region
 	closed  bool
 }
 
@@ -54,11 +54,11 @@ func (m *MockRegionsClient) Close() error {
 	return nil
 }
 
-// MockRegionsIterator mocks the RegionsIterator interface
+// MockRegionsIterator mocks the RegionsIterator interface.
 type MockRegionsIterator struct {
+	err     error
 	regions []*computepb.Region
 	index   int
-	err     error
 }
 
 func (m *MockRegionsIterator) Next() (*computepb.Region, error) {
@@ -73,10 +73,10 @@ func (m *MockRegionsIterator) Next() (*computepb.Region, error) {
 	return r, nil
 }
 
-// MockResourceManagerService mocks the ResourceManagerService interface
+// MockResourceManagerService mocks the ResourceManagerService interface.
 type MockResourceManagerService struct {
-	projects []*cloudresourcemanager.Project
 	err      error
+	projects []*cloudresourcemanager.Project
 }
 
 func (m *MockResourceManagerService) ListProjects(ctx context.Context) ([]*cloudresourcemanager.Project, error) {
@@ -231,7 +231,7 @@ func TestNewProvider_ProjectIDResolution(t *testing.T) {
 			expected: "only-typed",
 		},
 		{
-			name: "Deprecated Profile is honoured when typed field is empty",
+			name: "Deprecated Profile is honored when typed field is empty",
 			config: &provider.ProviderConfig{
 				Profile: "legacy-project",
 			},
@@ -570,8 +570,8 @@ func TestGCPProvider_GetAccounts_WithMock(t *testing.T) {
 }
 
 // TestGCPProvider_GetAccounts_Empty asserts that GetAccounts returns an empty
-// slice (not a synthesised fallback project) when no ACTIVE projects are
-// visible to the credentials (10-M7). A synthesised account would hide
+// slice (not a synthesized fallback project) when no ACTIVE projects are
+// visible to the credentials (10-M7). A synthesized account would hide
 // permission / auth errors from callers.
 func TestGCPProvider_GetAccounts_Empty(t *testing.T) {
 	ctx := context.Background()
