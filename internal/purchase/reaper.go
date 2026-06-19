@@ -130,8 +130,8 @@ func (m *Manager) ReapStuckExecutions(ctx context.Context, reapAfter time.Durati
 	}
 
 	now := time.Now()
-	for _, exec := range stuck {
-		m.reapOne(ctx, &exec, reapAfter, now, result)
+	for i := range stuck {
+		m.reapOne(ctx, &stuck[i], reapAfter, now, result)
 	}
 
 	logging.Infof("purchase reaper sweep complete: found=%d reaped=%d race_lost=%d errored=%d (threshold %s)",

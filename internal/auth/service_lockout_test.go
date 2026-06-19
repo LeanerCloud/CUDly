@@ -378,9 +378,9 @@ func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
 	lockUntil := time.Now().Add(10 * time.Minute)
 
 	type scenario struct {
-		name       string
 		getUser    func(t *testing.T) *User // nil means "user not found (nil return)"
 		storeError error                    // non-nil means GetUserByEmail returns an error
+		name       string
 	}
 
 	scenarios := []scenario{

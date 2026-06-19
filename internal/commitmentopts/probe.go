@@ -104,8 +104,8 @@ func walkPaginated(
 // service (2 terms × 3 payments).
 func collect(service string, raw []rawOffer) []Combo {
 	type key struct {
-		term    int
 		payment string
+		term    int
 	}
 	seen := make(map[key]struct{}, len(raw))
 	out := make([]Combo, 0, len(raw))
@@ -137,8 +137,8 @@ func collect(service string, raw []rawOffer) []Combo {
 // into collect(). Keeping the shape uniform means normalization lives in
 // exactly one place.
 type rawOffer struct {
-	durationSeconds int64
 	payment         string
+	durationSeconds int64
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ func (p *RDSProber) Service() string { return "rds" }
 
 // Probe returns the normalized (term, payment) combos RDS currently sells
 // against db.t3.micro.
-func (p *RDSProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *RDSProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedDBInstancesOfferings(ctx, &rds.DescribeReservedDBInstancesOfferingsInput{
@@ -190,7 +190,7 @@ func (p *RDSProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) 
 	return collect(p.Service(), raw), nil
 }
 
-func (p *RDSProber) client(cfg aws.Config) RDSDescribeOfferings {
+func (p *RDSProber) client(cfg aws.Config) RDSDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -215,7 +215,7 @@ type ElastiCacheProber struct {
 func (p *ElastiCacheProber) Service() string { return "elasticache" }
 
 // Probe returns the combos for cache.t3.micro.
-func (p *ElastiCacheProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *ElastiCacheProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedCacheNodesOfferings(ctx, &elasticache.DescribeReservedCacheNodesOfferingsInput{
@@ -241,7 +241,7 @@ func (p *ElastiCacheProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo,
 	return collect(p.Service(), raw), nil
 }
 
-func (p *ElastiCacheProber) client(cfg aws.Config) ElastiCacheDescribeOfferings {
+func (p *ElastiCacheProber) client(cfg aws.Config) ElastiCacheDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -268,7 +268,7 @@ type OpenSearchProber struct {
 func (p *OpenSearchProber) Service() string { return "opensearch" }
 
 // Probe returns the combos for t3.small.search.
-func (p *OpenSearchProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *OpenSearchProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedInstanceOfferings(ctx, &opensearch.DescribeReservedInstanceOfferingsInput{
@@ -296,7 +296,7 @@ func (p *OpenSearchProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, 
 	return collect(p.Service(), raw), nil
 }
 
-func (p *OpenSearchProber) client(cfg aws.Config) OpenSearchDescribeOfferings {
+func (p *OpenSearchProber) client(cfg aws.Config) OpenSearchDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -323,7 +323,7 @@ type RedshiftProber struct {
 func (p *RedshiftProber) Service() string { return "redshift" }
 
 // Probe returns the combos for dc2.large.
-func (p *RedshiftProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *RedshiftProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedNodeOfferings(ctx, &redshift.DescribeReservedNodeOfferingsInput{
@@ -351,7 +351,7 @@ func (p *RedshiftProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, er
 	return collect(p.Service(), raw), nil
 }
 
-func (p *RedshiftProber) client(cfg aws.Config) RedshiftDescribeOfferings {
+func (p *RedshiftProber) client(cfg aws.Config) RedshiftDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -376,7 +376,7 @@ type MemoryDBProber struct {
 func (p *MemoryDBProber) Service() string { return "memorydb" }
 
 // Probe returns the combos for db.r6g.large.
-func (p *MemoryDBProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *MemoryDBProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedNodesOfferings(ctx, &memorydb.DescribeReservedNodesOfferingsInput{
@@ -402,7 +402,7 @@ func (p *MemoryDBProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, er
 	return collect(p.Service(), raw), nil
 }
 
-func (p *MemoryDBProber) client(cfg aws.Config) MemoryDBDescribeOfferings {
+func (p *MemoryDBProber) client(cfg aws.Config) MemoryDBDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -430,7 +430,7 @@ func (p *EC2Prober) Service() string { return "ec2" }
 // false so we only see AWS-native (standard/convertible) offerings — the
 // Marketplace resale market has arbitrary durations that would pollute
 // normalization.
-func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedInstancesOfferings(ctx, &ec2.DescribeReservedInstancesOfferingsInput{
@@ -443,7 +443,8 @@ func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) 
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.ReservedInstancesOfferings))
-		for _, o := range out.ReservedInstancesOfferings {
+		for i := range out.ReservedInstancesOfferings {
+			o := &out.ReservedInstancesOfferings[i]
 			offers = append(offers, rawOffer{
 				durationSeconds: aws.ToInt64(o.Duration),
 				payment:         string(o.OfferingType),
@@ -457,7 +458,7 @@ func (p *EC2Prober) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) 
 	return collect(p.Service(), raw), nil
 }
 
-func (p *EC2Prober) client(cfg aws.Config) EC2DescribeOfferings {
+func (p *EC2Prober) client(cfg aws.Config) EC2DescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}
@@ -512,7 +513,7 @@ func (p *SavingsPlansProber) Service() string { return "savings-plans" }
 // types and returns combos keyed with the per-product service slug. Empty
 // results for a plan type are silently dropped so the caller never stores
 // a zero-combo entry that would incorrectly suppress the fallback.
-func (p *SavingsPlansProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
+func (p *SavingsPlansProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	client := p.client(cfg)
 	var all []Combo
 	for _, pk := range spPlanKeys {
@@ -544,7 +545,8 @@ func (p *SavingsPlansProber) probeOnePlanType(
 			return nil, nil, err
 		}
 		offers := make([]rawOffer, 0, len(out.SearchResults))
-		for _, o := range out.SearchResults {
+		for i := range out.SearchResults {
+			o := &out.SearchResults[i]
 			offers = append(offers, rawOffer{
 				durationSeconds: o.DurationSeconds,
 				payment:         string(o.PaymentOption),
@@ -567,13 +569,13 @@ func (p *SavingsPlansProber) probeOnePlanType(
 // share the same (duration, payment) matrix — we only need unique combos.
 func dedupeRaw(raw []rawOffer) []rawOffer {
 	type key struct {
-		dur     int64
 		payment string
+		dur     int64
 	}
 	seen := make(map[key]struct{}, len(raw))
 	out := make([]rawOffer, 0, len(raw))
 	for _, r := range raw {
-		k := key{r.durationSeconds, r.payment}
+		k := key{payment: r.payment, dur: r.durationSeconds}
 		if _, dup := seen[k]; dup {
 			continue
 		}
@@ -593,7 +595,7 @@ func collectWithService(service string, raw []rawOffer) []Combo {
 	return collect(service, raw)
 }
 
-func (p *SavingsPlansProber) client(cfg aws.Config) SavingsPlansDescribeOfferings {
+func (p *SavingsPlansProber) client(cfg aws.Config) SavingsPlansDescribeOfferings { //nolint:gocritic // cfg matches Prober interface; pointer would break callers
 	if p.NewClient != nil {
 		return p.NewClient(cfg)
 	}

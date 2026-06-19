@@ -68,8 +68,8 @@ func TestDetermineCSVCoverage(t *testing.T) {
 func TestWriteMultiServiceCSVReport(t *testing.T) {
 	tests := []struct {
 		name     string
-		results  []common.PurchaseResult
 		filename string
+		results  []common.PurchaseResult
 		wantErr  bool
 	}{
 		{
@@ -400,17 +400,17 @@ func TestWriteMultiServiceCSVReport_SortAndTotal(t *testing.T) {
 func TestFormatExistingCoverage(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
 		want string
+		rec  common.Recommendation
 	}{
-		{"unknown (CE no data)", common.Recommendation{}, "n/a"},
-		{"known zero coverage", common.Recommendation{ExistingCoverageKnown: true}, "0.0"},
-		{"known partial coverage", common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 37.74}, "37.7"},
-		{"known full coverage", common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 100.0}, "100.0"},
+		{name: "unknown (CE no data)", rec: common.Recommendation{}, want: "n/a"},
+		{name: "known zero coverage", rec: common.Recommendation{ExistingCoverageKnown: true}, want: "0.0"},
+		{name: "known partial coverage", rec: common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 37.74}, want: "37.7"},
+		{name: "known full coverage", rec: common.Recommendation{ExistingCoverageKnown: true, ExistingCoveragePct: 100.0}, want: "100.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatExistingCoverage(tt.rec))
+			assert.Equal(t, tt.want, formatExistingCoverage(&tt.rec))
 		})
 	}
 }
@@ -444,21 +444,21 @@ func TestFormatRecurringMonthlyOrBlank(t *testing.T) {
 func TestExtractRDSFamily(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
 		want string
+		rec  common.Recommendation
 	}{
-		{"RDS db.r7g.large", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large"}, "db.r7g"},
-		{"RDS db.t4g.medium", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium"}, "db.t4g"},
-		{"RelationalDB alias", common.Recommendation{Service: common.ServiceRelationalDB, ResourceType: "db.m5.xlarge"}, "db.m5"},
+		{name: "RDS db.r7g.large", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large"}, want: "db.r7g"},
+		{name: "RDS db.t4g.medium", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium"}, want: "db.t4g"},
+		{name: "RelationalDB alias", rec: common.Recommendation{Service: common.ServiceRelationalDB, ResourceType: "db.m5.xlarge"}, want: "db.m5"},
 		// Non-RDS services blank even when ResourceType looks RDS-shaped.
-		{"EC2 ignored", common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large"}, ""},
-		{"ElastiCache ignored", common.Recommendation{Service: common.ServiceElastiCache, ResourceType: "cache.t3.micro"}, ""},
+		{name: "EC2 ignored", rec: common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large"}, want: ""},
+		{name: "ElastiCache ignored", rec: common.Recommendation{Service: common.ServiceElastiCache, ResourceType: "cache.t3.micro"}, want: ""},
 		// Malformed RDS type.
-		{"RDS bare type", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g"}, ""},
+		{name: "RDS bare type", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g"}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractRDSFamily(tt.rec))
+			assert.Equal(t, tt.want, extractRDSFamily(&tt.rec))
 		})
 	}
 }
@@ -469,25 +469,25 @@ func TestExtractRDSFamily(t *testing.T) {
 func TestFormatNormalizedUnitsOrBlank(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
 		want string
+		rec  common.Recommendation
 	}{
 		// 15 × db.r7g.large = 15 × 4 NU = 60 NU
-		{"r7g.large × 15", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 15}, "60"},
+		{name: "r7g.large × 15", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 15}, want: "60"},
 		// 3 × db.t4g.medium = 3 × 2 NU = 6 NU
-		{"t4g.medium × 3", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium", Count: 3}, "6"},
+		{name: "t4g.medium × 3", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.medium", Count: 3}, want: "6"},
 		// Fractional NU survives via %g (db.t4g.micro = 0.5 NU)
-		{"t4g.micro × 3", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.micro", Count: 3}, "1.5"},
+		{name: "t4g.micro × 3", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.t4g.micro", Count: 3}, want: "1.5"},
 		// Non-RDS service → blank
-		{"EC2 row blank", common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large", Count: 5}, ""},
+		{name: "EC2 row blank", rec: common.Recommendation{Service: common.ServiceEC2, ResourceType: "m5.large", Count: 5}, want: ""},
 		// Zero count → blank
-		{"zero count blank", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 0}, ""},
+		{name: "zero count blank", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.large", Count: 0}, want: ""},
 		// Unknown size → blank
-		{"unknown size blank", common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.bogus", Count: 5}, ""},
+		{name: "unknown size blank", rec: common.Recommendation{Service: common.ServiceRDS, ResourceType: "db.r7g.bogus", Count: 5}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatNormalizedUnitsOrBlank(tt.rec))
+			assert.Equal(t, tt.want, formatNormalizedUnitsOrBlank(&tt.rec))
 		})
 	}
 }
@@ -500,22 +500,22 @@ func TestFormatNormalizedUnitsOrBlank(t *testing.T) {
 func TestExtractDeployment(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
 		want string
+		rec  common.Recommendation
 	}{
-		{"*DatabaseDetails Single-AZ", common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "single-az"}}, "single-az"},
-		{"*DatabaseDetails Multi-AZ", common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "multi-az"}}, "multi-az"},
-		{"DatabaseDetails (value) Multi-AZ", common.Recommendation{Details: common.DatabaseDetails{AZConfig: "multi-az"}}, "multi-az"},
-		{"DatabaseDetails empty AZConfig", common.Recommendation{Details: &common.DatabaseDetails{Engine: "mysql"}}, ""},
+		{name: "*DatabaseDetails Single-AZ", rec: common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "single-az"}}, want: "single-az"},
+		{name: "*DatabaseDetails Multi-AZ", rec: common.Recommendation{Details: &common.DatabaseDetails{AZConfig: "multi-az"}}, want: "multi-az"},
+		{name: "DatabaseDetails (value) Multi-AZ", rec: common.Recommendation{Details: common.DatabaseDetails{AZConfig: "multi-az"}}, want: "multi-az"},
+		{name: "DatabaseDetails empty AZConfig", rec: common.Recommendation{Details: &common.DatabaseDetails{Engine: "mysql"}}, want: ""},
 		// Non-RDS Details → blank (column is RDS-only data).
-		{"CacheDetails -> empty", common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, ""},
-		{"ComputeDetails -> empty", common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, ""},
-		{"nil Details -> empty", common.Recommendation{}, ""},
-		{"nil *DatabaseDetails -> empty", common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, ""},
+		{name: "CacheDetails -> empty", rec: common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, want: ""},
+		{name: "ComputeDetails -> empty", rec: common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, want: ""},
+		{name: "nil Details -> empty", rec: common.Recommendation{}, want: ""},
+		{name: "nil *DatabaseDetails -> empty", rec: common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractDeployment(tt.rec))
+			assert.Equal(t, tt.want, extractDeployment(&tt.rec))
 		})
 	}
 }
@@ -526,25 +526,25 @@ func TestExtractDeployment(t *testing.T) {
 func TestExtractEngine(t *testing.T) {
 	tests := []struct {
 		name string
-		rec  common.Recommendation
 		want string
+		rec  common.Recommendation
 	}{
 		// Pointer forms — what the live parser actually emits.
-		{"*DatabaseDetails -> Engine", common.Recommendation{Details: &common.DatabaseDetails{Engine: "aurora-postgresql"}}, "aurora-postgresql"},
-		{"*CacheDetails -> Engine", common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, "redis"},
-		{"*ComputeDetails -> Platform", common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, "Linux/UNIX"},
+		{name: "*DatabaseDetails -> Engine", rec: common.Recommendation{Details: &common.DatabaseDetails{Engine: "aurora-postgresql"}}, want: "aurora-postgresql"},
+		{name: "*CacheDetails -> Engine", rec: common.Recommendation{Details: &common.CacheDetails{Engine: "redis"}}, want: "redis"},
+		{name: "*ComputeDetails -> Platform", rec: common.Recommendation{Details: &common.ComputeDetails{Platform: "Linux/UNIX"}}, want: "Linux/UNIX"},
 		// Value forms — what the CSV-loader path constructs.
-		{"DatabaseDetails (value) -> Engine", common.Recommendation{Details: common.DatabaseDetails{Engine: "mysql"}}, "mysql"},
-		{"CacheDetails (value) -> Engine", common.Recommendation{Details: common.CacheDetails{Engine: "memcached"}}, "memcached"},
-		{"ComputeDetails (value) -> Platform", common.Recommendation{Details: common.ComputeDetails{Platform: "Windows"}}, "Windows"},
+		{name: "DatabaseDetails (value) -> Engine", rec: common.Recommendation{Details: common.DatabaseDetails{Engine: "mysql"}}, want: "mysql"},
+		{name: "CacheDetails (value) -> Engine", rec: common.Recommendation{Details: common.CacheDetails{Engine: "memcached"}}, want: "memcached"},
+		{name: "ComputeDetails (value) -> Platform", rec: common.Recommendation{Details: common.ComputeDetails{Platform: "Windows"}}, want: "Windows"},
 		// Fallbacks.
-		{"nil Details -> empty", common.Recommendation{}, ""},
-		{"SavingsPlanDetails -> empty", common.Recommendation{Details: &common.SavingsPlanDetails{HourlyCommitment: 1.0}}, ""},
-		{"nil *DatabaseDetails -> empty", common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, ""},
+		{name: "nil Details -> empty", rec: common.Recommendation{}, want: ""},
+		{name: "SavingsPlanDetails -> empty", rec: common.Recommendation{Details: &common.SavingsPlanDetails{HourlyCommitment: 1.0}}, want: ""},
+		{name: "nil *DatabaseDetails -> empty", rec: common.Recommendation{Details: (*common.DatabaseDetails)(nil)}, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractEngine(tt.rec))
+			assert.Equal(t, tt.want, extractEngine(&tt.rec))
 		})
 	}
 }
@@ -556,12 +556,12 @@ func TestExtractEngine(t *testing.T) {
 func TestFormatCurrencyOrBlank(t *testing.T) {
 	tests := []struct {
 		name string
-		in   float64
 		want string
+		in   float64
 	}{
-		{"non-zero renders with two decimals", 1234.56, "1234.56"},
-		{"integer value gets .00", 700, "700.00"},
-		{"zero blanks the cell", 0, ""},
+		{name: "non-zero renders with two decimals", in: 1234.56, want: "1234.56"},
+		{name: "integer value gets .00", in: 700, want: "700.00"},
+		{name: "zero blanks the cell", in: 0, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -573,11 +573,11 @@ func TestFormatCurrencyOrBlank(t *testing.T) {
 // Tests for loadRecommendationsFromCSV function.
 func TestLoadRecommendationsFromCSV(t *testing.T) {
 	tests := []struct {
+		validate    func(t *testing.T, recs []common.Recommendation)
 		name        string
 		csvContent  string
-		wantErr     bool
 		errContains string
-		validate    func(t *testing.T, recs []common.Recommendation)
+		wantErr     bool
 	}{
 		{
 			name: "Valid CSV with all fields",

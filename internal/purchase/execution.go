@@ -148,8 +148,8 @@ func anyRecPurchased(recs []config.RecommendationRecord) bool {
 // the accounts that already succeeded (which #1012's stable key would otherwise
 // dedupe, but the contract should not depend on that second line of defense).
 type multiAccountPartialError struct {
-	committed int
 	errors    []string
+	committed int
 }
 
 func (e *multiAccountPartialError) Error() string {
@@ -485,9 +485,9 @@ func getMaxAccountParallelism() int {
 // savePurchaseHistory from a single goroutine (no concurrent map / slice
 // mutation). The index field is the position in exec.Recommendations.
 type recPurchaseOutcome struct {
-	index    int
 	purchase common.PurchaseResult
 	err      error
+	index    int
 }
 
 func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {

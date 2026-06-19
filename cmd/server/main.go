@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -22,6 +23,12 @@ var (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	// Parse command line flags
 	mode := flag.String("mode", "auto", "Runtime mode: auto, lambda, http")
 	port := flag.Int("port", 8080, "HTTP server port (ignored in lambda mode)")
@@ -43,7 +50,7 @@ func main() {
 	// ApplicationConfig without going through os.Setenv("VERSION",...).
 	app, err := server.NewApplication(ctx, Version)
 	if err != nil {
-		log.Fatalf("Failed to initialize application: %v", err)
+		return fmt.Errorf("failed to initialize application: %w", err)
 	}
 	defer app.Close()
 
@@ -54,13 +61,13 @@ func main() {
 
 		log.Printf("Running scheduled task: %s (timeout: %v)", *task, timeout)
 		taskType := server.ScheduledTaskType(*task)
-		result, err := app.HandleScheduledTask(taskCtx, taskType)
+		result, taskErr := app.HandleScheduledTask(taskCtx, taskType)
 		cancel()
-		if err != nil {
-			log.Fatalf("Scheduled task %q failed: %v", *task, err)
+		if taskErr != nil {
+			return fmt.Errorf("scheduled task %q failed: %w", *task, taskErr)
 		}
 		log.Printf("Scheduled task %q completed successfully: %v", *task, result)
-		return
+		return nil
 	}
 
 	// Determine runtime mode
@@ -73,11 +80,12 @@ func main() {
 		server.StartLambdaHandler(app)
 	case "http":
 		if err := server.StartHTTPServer(app, *port); err != nil {
-			log.Fatalf("HTTP server failed: %v", err)
+			return fmt.Errorf("HTTP server failed: %w", err)
 		}
 	default:
-		log.Fatalf("Unknown runtime mode: %s", runtimeMode)
+		return fmt.Errorf("unknown runtime mode: %s", runtimeMode)
 	}
+	return nil
 }
 
 // getTaskTimeout returns the task timeout from TASK_TIMEOUT env var or the default of 15 minutes.

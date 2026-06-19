@@ -25,15 +25,15 @@ func calculateServiceStats(service common.ServiceType, recs []common.Recommendat
 	}
 
 	regionSet := make(map[string]bool)
-	for _, rec := range recs {
-		regionSet[rec.Region] = true
-		stats.InstancesProcessed += rec.Count
-		stats.TotalEstimatedSavings += rec.EstimatedSavings
+	for i := range recs {
+		regionSet[recs[i].Region] = true
+		stats.InstancesProcessed += recs[i].Count
+		stats.TotalEstimatedSavings += recs[i].EstimatedSavings
 	}
 	stats.RegionsProcessed = len(regionSet)
 
-	for _, result := range results {
-		if result.Success {
+	for i := range results {
+		if results[i].Success {
 			stats.SuccessfulPurchases++
 		} else {
 			stats.FailedPurchases++
@@ -56,7 +56,7 @@ func printServiceSummary(service common.ServiceType, stats ServiceProcessingStat
 }
 
 // printMultiServiceSummary prints the final summary for all services.
-func printMultiServiceSummary(allRecommendations []common.Recommendation, allResults []common.PurchaseResult, serviceStats map[common.ServiceType]ServiceProcessingStats, isDryRun bool) {
+func printMultiServiceSummary(allRecommendations []common.Recommendation, _ []common.PurchaseResult, serviceStats map[common.ServiceType]ServiceProcessingStats, isDryRun bool) {
 	printSummaryHeader(isDryRun)
 
 	spStats, riStats, riAggregates := separateAndAggregateStats(serviceStats)
@@ -206,7 +206,7 @@ func printArcheraPitch() {
 }
 
 // printSavingsPlansSection prints the Savings Plans summary section.
-func printSavingsPlansSection(allRecommendations []common.Recommendation, spStats ServiceProcessingStats) {
+func printSavingsPlansSection(allRecommendations []common.Recommendation, _ ServiceProcessingStats) {
 	AppLogger.Println("\n📊 SAVINGS PLANS:")
 	AppLogger.Println("--------------------------------------------------")
 
