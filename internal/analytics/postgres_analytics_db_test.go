@@ -31,14 +31,14 @@ func skipIfNoDocker(t *testing.T) {
 		t.Skip("Skipping database tests (SKIP_DB_TESTS is set)")
 	}
 
-	// Skip if running in CI without Docker
+	// In CI without a DOCKER_HOST, we still attempt the connection — the
+	// container setup will return an error and the caller will skip the test.
 	if os.Getenv("CI") != "" && os.Getenv("DOCKER_HOST") == "" {
-		// Try to check if Docker is available
-		// If not, we'll catch the error when setting up the container
+		t.Log("CI environment detected without DOCKER_HOST; test will be skipped if Docker is unavailable")
 	}
 }
 
-// getMigrationsPath returns the absolute path to migrations directory
+// getMigrationsPath returns the absolute path to migrations directory.
 func getMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
@@ -558,8 +558,8 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	}
 
 	for _, snapshot := range testSnapshots {
-		err := store.SaveSnapshot(ctx, snapshot)
-		require.NoError(t, err)
+		saveErr := store.SaveSnapshot(ctx, snapshot)
+		require.NoError(t, saveErr)
 	}
 
 	// Refresh materialized views so data is available

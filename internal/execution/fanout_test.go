@@ -56,9 +56,9 @@ func TestFanOut_Empty(t *testing.T) {
 	assert.Empty(t, results)
 }
 
-func TestFanOut_ContextCancelled(t *testing.T) {
+func TestFanOut_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
 	ids := []string{"x"}
 	results := FanOut(ctx, ids, func(ctx context.Context, id string) (string, error) {
@@ -87,17 +87,17 @@ func TestPartition(t *testing.T) {
 // item's result slot, and does NOT propagate up and crash the whole process
 // (which would strand the surrounding purchase execution at 'approved' and
 // terminate the Lambda invocation abnormally — see #669).
-// TestFanOut_ContextCancelled_BlockedSemaphore asserts that when a context is
-// cancelled while goroutines are already occupying all semaphore slots, the
+// TestFanOut_ContextCanceled_BlockedSemaphore asserts that when a context is
+// canceled while goroutines are already occupying all semaphore slots, the
 // remaining queued items record ctx.Err() immediately rather than blocking
 // indefinitely on the semaphore (05-H3).
 //
-// Pre-fix behaviour: sem <- struct{}{} was unconditional, so a cancelled
+// Pre-fix behavior: sem <- struct{}{} was unconditional, so a canceled
 // context with maxConcurrency=1 and N>1 ids would block the launch loop on
 // the second item until the first goroutine released its slot -- a
 // context-deadline timeout would therefore not be respected at the semaphore
 // boundary.
-func TestFanOut_ContextCancelled_BlockedSemaphore(t *testing.T) {
+func TestFanOut_ContextCanceled_BlockedSemaphore(t *testing.T) {
 	// started (buffered=1) signals when the first goroutine holds the slot.
 	// release (buffered=1) controls when the first goroutine finishes.
 	// Both are buffered so the goroutines never block if the test is already
