@@ -314,8 +314,8 @@ type StoreInterface interface {
 
 	// Notification mutes (issue #297 / migration 000078).
 	// UpsertNotificationMute inserts or updates a mute row for (email, scope).
-	// Idempotent: calling it again for an already-muted address is a no-op on
-	// muted_at but does replace unmute_token if the token changes.
+	// Idempotent for row existence: calling it again for an already-muted
+	// address refreshes muted_at and replaces unmute_token if the token changes.
 	UpsertNotificationMute(ctx context.Context, recipientEmail, scope, unmuteToken string) error
 	// IsNotificationMuted returns true when (email, scope) has a row in
 	// muted_recipients. The email comparison is case-insensitive.

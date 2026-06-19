@@ -529,7 +529,15 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	filteredCC := filterMutedRecipients(ctx, s.muteChecker, data.CCEmails, scope)
 
 	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
-	unsubHdr, postHdr := unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, recipient, scope)
+	// The token in the header is bound to recipient only, but the SMTP envelope
+	// delivers a single shared message to recipient + all CC addresses. Emitting
+	// the header when CC recipients exist would let any of them one-click-mute
+	// the primary recipient (an authorization-boundary violation), so suppress
+	// the header entirely whenever there is a CC list.
+	var unsubHdr, postHdr string
+	if len(filteredCC) == 0 {
+		unsubHdr, postHdr = unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, recipient, scope)
+	}
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
 
@@ -577,9 +585,9 @@ func (s *SMTPSender) sendMultipartWithUnsubscribe(ctx context.Context, toEmail s
 	}
 
 	if len(sanitizedCC) > 0 {
-		logging.Debugf("Sent approval email via SMTP to %s (cc %d): %s", toEmail, len(sanitizedCC), subject)
+		logging.Debugf("Sent approval email via SMTP to %s (cc %d): %s", redactEmail(toEmail), len(sanitizedCC), subject)
 	} else {
-		logging.Debugf("Sent approval email via SMTP to %s: %s", toEmail, subject)
+		logging.Debugf("Sent approval email via SMTP to %s: %s", redactEmail(toEmail), subject)
 	}
 	return nil
 }

@@ -133,6 +133,48 @@ func TestSendPurchaseApprovalRequest_MuteCheckError_FailOpen(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestSendPurchaseApprovalRequest_WithCC_SuppressesListUnsubscribe verifies the
+// List-Unsubscribe header (whose token is bound to the primary recipient) is NOT
+// emitted when the message also goes to CC recipients. A shared-envelope CC
+// recipient could otherwise one-click-mute the primary recipient.
+func TestSendPurchaseApprovalRequest_WithCC_SuppressesListUnsubscribe(t *testing.T) {
+	ctx := context.Background()
+	ses := new(MockSESClient)
+	mc := new(mockMuteChecker)
+
+	mc.On("IsNotificationMuted", mock.Anything, mock.Anything, mock.Anything).
+		Return(false, nil)
+	ses.On("GetAccount", mock.Anything, mock.Anything).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+
+	var captured *sesv2.SendEmailInput
+	ses.On("SendEmail", mock.Anything, mock.MatchedBy(func(in *sesv2.SendEmailInput) bool {
+		captured = in
+		return true
+	})).Return(&sesv2.SendEmailOutput{}, nil)
+	t.Cleanup(func() { mc.AssertExpectations(t) })
+
+	s := newSenderWithMute(ses, mc).WithUnsubscribeBaseURL("https://dash.example.com")
+	data := NotificationData{
+		RecipientEmail: "approver@example.com",
+		CCEmails:       []string{"observer@example.com"},
+		Recommendations: []RecommendationSummary{
+			{Service: "ec2", Region: "us-east-1", Count: 1, MonthlySavings: 100},
+		},
+		DashboardURL:  "https://dashboard.example.com",
+		ApprovalToken: "tok",
+	}
+	require.NoError(t, s.SendPurchaseApprovalRequest(ctx, data))
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.Content.Simple)
+	for _, h := range captured.Content.Simple.Headers {
+		if h.Name != nil {
+			assert.NotEqual(t, "List-Unsubscribe", *h.Name,
+				"List-Unsubscribe must be suppressed when CC recipients are present")
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // List-Unsubscribe header injection
 // ---------------------------------------------------------------------------

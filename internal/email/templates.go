@@ -755,8 +755,16 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	filteredCC := s.filterMutedAddresses(ctx, data.CCEmails, scope)
 
 	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
-	unsubHdr, postHdr := s.listUnsubscribeHeaders(data.RecipientEmail, scope)
-	extraHeaders := addListUnsubscribeHeaders(unsubHdr, postHdr)
+	// The token in the header is bound to RecipientEmail only, but a SES message
+	// with a CC list delivers one shared message to all addresses. Emitting the
+	// header when CC recipients exist would let any of them one-click-mute the
+	// primary recipient (an authorization-boundary violation), so suppress the
+	// header entirely whenever there is a CC list.
+	var extraHeaders []types.MessageHeader
+	if len(filteredCC) == 0 {
+		unsubHdr, postHdr := s.listUnsubscribeHeaders(data.RecipientEmail, scope)
+		extraHeaders = addListUnsubscribeHeaders(unsubHdr, postHdr)
+	}
 
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
 	return sendPurchaseApprovalRequestWithCC(ctx, s, data.RecipientEmail, filteredCC, subject, data, extraHeaders)

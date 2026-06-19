@@ -46,12 +46,17 @@ func filterMutedRecipients(ctx context.Context, mc MuteChecker, addrs []string, 
 }
 
 // unsubscribeURLFor constructs the one-click unsubscribe URL for the given
-// (email, scope) pair. Returns "" when baseURL is empty.
+// (email, scope) pair. Returns "" when baseURL is empty or when no signing key
+// is available (e.g. NOTIFICATION_MUTE_SECRET unset in production), so a
+// tokenless, non-functional unsubscribe link is never emitted.
 func unsubscribeURLFor(baseURL, email, scope string) string {
 	if baseURL == "" {
 		return ""
 	}
 	token := common.DeriveMuteToken(muteKey(), email, scope)
+	if token == "" {
+		return ""
+	}
 	q := url.Values{
 		"token": {token},
 		"email": {email},

@@ -5,9 +5,42 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
+
+// muteSecretEnvVar is the environment variable holding the HMAC key used to
+// sign notification mute / List-Unsubscribe tokens.
+const muteSecretEnvVar = "NOTIFICATION_MUTE_SECRET"
+
+// devMuteSecret is the deterministic fallback key used ONLY in non-production
+// environments so local-dev and tests produce stable tokens without requiring
+// an env var. It is intentionally well-known and MUST NOT be relied on in
+// production: ResolveMuteSecret fails closed there instead of using it.
+const devMuteSecret = "dev-mute-secret-not-for-production"
+
+// ErrMuteSecretMissing is returned by ResolveMuteSecret when running in a
+// production environment with NOTIFICATION_MUTE_SECRET unset. Falling back to a
+// well-known key in production would make unsubscribe tokens forgeable for any
+// (email, scope) tuple, so the caller must fail closed.
+var ErrMuteSecretMissing = errors.New("common: NOTIFICATION_MUTE_SECRET is required in production")
+
+// ResolveMuteSecret returns the HMAC key for notification mute tokens, applying
+// a fail-closed policy: when NOTIFICATION_MUTE_SECRET is set its bytes are
+// returned in every environment; when unset, non-production environments get
+// the deterministic dev fallback while production (ENVIRONMENT=production)
+// returns ErrMuteSecretMissing rather than silently using a forgeable key.
+func ResolveMuteSecret() ([]byte, error) {
+	if v := os.Getenv(muteSecretEnvVar); v != "" {
+		return []byte(v), nil
+	}
+	if os.Getenv("ENVIRONMENT") == "production" {
+		return nil, ErrMuteSecretMissing
+	}
+	return []byte(devMuteSecret), nil
+}
 
 // GenerateApprovalToken returns a 32-byte cryptographically secure random
 // token, hex-encoded (64 chars). Used for purchase + RI exchange + plan
@@ -114,14 +147,14 @@ const (
 // List-Unsubscribe URL; the handler re-derives it from the query params and
 // compares in constant time, so a forged URL cannot mute a different address.
 //
-// key must come from a deployment secret (NOTIFICATION_MUTE_SECRET env var).
-// When key is empty a static fallback is used so local-dev / test environments
-// still produce a deterministic token without crashing; production deployments
-// MUST set the env var.
+// key must be resolved by the caller via ResolveMuteSecret, which applies the
+// fail-closed production policy. An empty key is treated as a configuration
+// error and yields the empty string so the caller emits no usable token (and a
+// later VerifyMuteToken comparison against it fails), rather than silently
+// signing with a well-known fallback.
 func DeriveMuteToken(key []byte, email, scope string) string {
 	if len(key) == 0 {
-		// Fallback for local dev / tests: deterministic but clearly insecure.
-		key = []byte("dev-mute-secret-not-for-production")
+		return ""
 	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(strings.ToLower(email)))
@@ -131,8 +164,12 @@ func DeriveMuteToken(key []byte, email, scope string) string {
 }
 
 // VerifyMuteToken returns true when token equals the HMAC for (email, scope)
-// under key. Comparison is constant-time to prevent timing attacks.
+// under key. Comparison is constant-time to prevent timing attacks. A non-empty
+// token never matches when key is empty, so a missing secret fails closed.
 func VerifyMuteToken(key []byte, email, scope, token string) bool {
 	want := DeriveMuteToken(key, email, scope)
+	if want == "" {
+		return false
+	}
 	return hmac.Equal([]byte(want), []byte(token))
 }
