@@ -162,7 +162,7 @@ func resolveAzureSMTPCredentials(ctx context.Context) (username, password string
 	usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
 	passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
 	if usernameSecret == "" || passwordSecret == "" {
-		return "", "", fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
+		return "", "", fmt.Errorf("azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
 	}
 
 	resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
@@ -205,7 +205,7 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 }
 
 // NewSenderWithConfig creates an email sender with explicit configuration.
-func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) {
+func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) { //nolint:gocritic // cfg is a large struct; a pointer API would require callers to take an address of the value
 	switch cfg.Provider {
 	case ProviderAWS:
 		return NewSender(SenderConfig{

@@ -149,7 +149,7 @@ func TestNewSenderFromEnvironment_Azure_MissingCredentials(t *testing.T) {
 	_, err := NewSenderFromEnvironment(ctx)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Azure SMTP credentials required")
+	assert.Contains(t, err.Error(), "azure SMTP credentials required")
 }
 
 func TestNewSenderFromEnvironment_Azure_WithCredentials(t *testing.T) {

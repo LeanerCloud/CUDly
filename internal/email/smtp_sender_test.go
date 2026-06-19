@@ -305,14 +305,8 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	injectedProvider := "aws\r\nX-Injected: yes"
 
 	data := RegistrationNotificationData{
-		AccountName:    injectedName,
-		Provider:       injectedProvider,
-		RecipientEmail: "", // will fall back to notifyEmail
-	}
-
-	s := &SMTPSender{
-		fromEmail:   "noreply@example.com",
-		notifyEmail: "admin@example.com",
+		AccountName: injectedName,
+		Provider:    injectedProvider,
 	}
 
 	// Build the subject the same way the method does, then verify it is clean.
@@ -328,7 +322,6 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	if strings.ContainsAny(cleaned, "\r\n") {
 		t.Errorf("sanitizeHeader did not remove CR/LF from %q; got %q", injectedName, cleaned)
 	}
-	_ = s
 }
 
 // Regression test for #410: the StartTLS call must use MinVersion: tls.VersionTLS12
@@ -345,7 +338,7 @@ func TestSMTPStartTLS_MinVersionTLS12(t *testing.T) {
 	}
 
 	// Build the config the same way sendMailTLS does and confirm MinVersion.
-	cfg := &tls.Config{ServerName: "smtp.example.com", MinVersion: tls.VersionTLS12}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.MinVersion != tls.VersionTLS12 {
 		t.Errorf("TLS config MinVersion is %d; want tls.VersionTLS12 (%d) (regression of #410)",
 			cfg.MinVersion, tls.VersionTLS12)

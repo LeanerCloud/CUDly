@@ -152,11 +152,11 @@ func TestEnvResolver_GetSecretJSON_VariousJSONTypes(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
+		validate    func(t *testing.T, result map[string]interface{})
 		name        string
 		key         string
 		value       string
 		expectError bool
-		validate    func(t *testing.T, result map[string]interface{})
 	}{
 		{
 			name:        "empty object",

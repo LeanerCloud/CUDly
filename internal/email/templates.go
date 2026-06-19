@@ -157,7 +157,7 @@ This is an automated message from CUDly.
 
 // passwordResetHTMLTemplate renders the same content as the plain-text
 // password reset template with a styled CTA button and CUDly branding.
-// Modeled on purchaseApprovalRequestHTMLTemplate (line 367) — inline styles
+// Modeled on purchaseApprovalRequestHTMLTemplate (line 367) -- inline styles
 // because most email clients (Outlook, mobile Gmail) ignore class-based CSS.
 // Issue #355.
 const passwordResetHTMLTemplate = `<!DOCTYPE html>
@@ -340,7 +340,7 @@ This is an automated message from CUDly.
 `
 
 // SendNewRecommendationsNotification sends an email about new recommendations.
-func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderNewRecommendationsEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render new recommendations email: %w", err)
@@ -357,7 +357,7 @@ func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data No
 //
 // Returns ErrNoRecipient when data.RecipientEmail is empty so the caller can
 // surface a precise reason rather than silently dropping the notification.
-func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
@@ -371,7 +371,7 @@ func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data Not
 }
 
 // SendPurchaseConfirmation sends a confirmation after successful purchases.
-func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderPurchaseConfirmationEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase confirmation email: %w", err)
@@ -382,7 +382,7 @@ func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data Notification
 }
 
 // SendPurchaseFailedNotification sends a notification when purchases fail.
-func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase failed email: %w", err)
@@ -454,7 +454,7 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 // Returns ErrNoRecipient when data.RecipientEmail is empty. Callers must
 // resolve a recipient (e.g. the global notification email from GlobalConfig)
 // before invoking this method.
-func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
+func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
@@ -468,7 +468,7 @@ func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExcha
 }
 
 // SendRIExchangeCompleted sends a notification about completed RI exchanges.
-func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
+func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderRIExchangeCompletedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
@@ -488,7 +488,7 @@ Authorized approver(s):
 {{end}}
 Only the inbox(es) listed above can approve or cancel this purchase.
 Other recipients are CC'd for visibility only — clicking the links
-below from any other account will fail the authorisation check.
+below from any other account will fail the authorization check.
 {{end}}
 Summary:
 --------
@@ -583,7 +583,7 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 <ul style="margin:6px 0 0 18px;padding:0;">
 {{range .AuthorizedApprovers}}<li>{{.}}</li>
 {{end}}</ul>
-<p style="margin:6px 0 0 0;">Only the inbox(es) above can approve or cancel this purchase. Other recipients are CC'd for visibility — clicking from any other account will fail the authorisation check.</p>
+<p style="margin:6px 0 0 0;">Only the inbox(es) above can approve or cancel this purchase. Other recipients are CC'd for visibility — clicking from any other account will fail the authorization check.</p>
 </div>
 </td></tr>
 {{end}}
@@ -673,7 +673,7 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 // failures are non-fatal and degrade to single-part text so a template bug
 // never drops the approval email. Shared by Sender and SMTPSender — see
 // issue #287 / PR #298 dedup follow-up.
-func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error {
+func sendPurchaseApprovalRequestVia(ctx context.Context, s SenderInterface, recipient, subject string, data NotificationData) error { //nolint:gocritic // hugeParam: value type matches template data contract
 	textBody, err := RenderPurchaseApprovalRequestEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
@@ -719,11 +719,11 @@ func sendMultipartVia(
 // SendPurchaseApprovalRequest sends an email asking the user to approve a direct
 // purchase. Routes through SES SendEmail (not the SNS alerts topic) because the
 // approval URL carries a one-time token scoped to the submitter — broadcasting
-// that to every SNS subscriber would leak the authorisation. Returns
+// that to every SNS subscriber would leak the authorization. Returns
 // ErrNoRecipient when data.RecipientEmail is empty and ErrNoFromEmail when
 // FROM_EMAIL is unconfigured, so the caller can surface a precise reason in
 // the API response instead of the prior silent no-op.
-func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
@@ -770,7 +770,7 @@ To view or manage this purchase:
 
 // RenderPurchaseScheduledDelayEmail renders the plain-text scheduled-delay
 // notification email.
-func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
+func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) { //nolint:gocritic // hugeParam: value type matches template data contract
 	return renderTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
 }
 
@@ -786,7 +786,7 @@ func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
 // alert subscriber and break the ownership/RBAC model around revocation).
 // Mirrors SendScheduledPurchaseNotification and the SMTP sender, which both
 // require a resolved recipient for this email.
-func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
+func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
@@ -880,7 +880,7 @@ This is an automated message from CUDly.
 // body. When RecipientEmail is empty the send falls back to the legacy
 // SNS broadcast path so deployments that never configured admin users
 // still get notified.
-func (s *Sender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error {
+func (s *Sender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderRegistrationReceivedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render registration received email: %w", err)
@@ -899,7 +899,7 @@ func (s *Sender) SendRegistrationReceivedNotification(ctx context.Context, data 
 
 // SendRegistrationDecisionNotification sends an email to the registrant when
 // their registration is approved or rejected.
-func (s *Sender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error {
+func (s *Sender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
 	body, err := RenderRegistrationDecisionEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render registration decision email: %w", err)
