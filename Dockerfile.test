@@ -7,9 +7,18 @@
 # keep the digest in sync with the builder stage there.
 FROM golang:1.25.4-alpine3.21@sha256:3289aac2aac769e031d644313d094dbda745f28af81cd7a94137e73eefd58b33
 
+# Run the suite as a non-root user (trivy DS-0002). tests/e2e is a stdlib-only
+# module so no module downloads are needed; GOCACHE lives in the user's home,
+# which it owns and can write to during both the pre-compile below and the
+# runtime CMD.
+RUN adduser -D -u 10001 e2e
+ENV GOCACHE=/home/e2e/.cache/go-build
+
 WORKDIR /e2e
 
-COPY tests/e2e/ ./
+COPY --chown=e2e:e2e tests/e2e/ ./
+
+USER e2e
 
 # Pre-compile the test binary so `docker compose up` failures are runtime
 # failures, not compile errors discovered after the stack is already up.
