@@ -19,6 +19,7 @@ import {
   parseNumericFilter,
   type ColumnFilterKind,
 } from './column-filters';
+import { escapeHtmlAttr } from '../utils';
 
 export interface PopoverConfig<TColumnId extends string> {
   column: TColumnId;
@@ -350,8 +351,11 @@ export function renderHistoryFilterButton<TColumnId extends string>(
   active: boolean,
 ): string {
   const cls = `history-column-filter-btn${active ? ' active' : ''}`;
-  const ariaLabel = active ? `Filter ${label} — currently active` : `Filter ${label}`;
+  const ariaLabel = escapeHtmlAttr(
+    active ? `Filter ${label} - currently active` : `Filter ${label}`,
+  );
+  const safeColumn = escapeHtmlAttr(String(column));
   // Use the same gear-style glyph (⛛) the recommendations popover
   // uses so the two surfaces are visually identical to the user.
-  return `<button type="button" class="${cls}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
+  return `<button type="button" class="${cls}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
 }
