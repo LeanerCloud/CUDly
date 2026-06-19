@@ -2894,6 +2894,44 @@ describe('Bundle B: column header filter triggers', () => {
       // the alwaysInclude set pins values from the column's own active filter.
       expect(values).toContain('ec2');
     });
+
+    test('hostile payload in service value is not interpreted as HTML in the popover (XSS guard)', async () => {
+      // A recommendation whose `service` field contains an HTML injection string
+      // must not be parsed as markup in the filter popover -- the value goes through
+      // textContent and dataset, never innerHTML.
+      const hostileService = '<script>alert(1)</script>';
+      const recsWithHostile = [
+        { id: 'r-aws-ec2', provider: 'aws', cloud_account_id: 'a1', service: hostileService, resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 100, upfront_cost: 500 },
+        { id: 'r-aws-rds', provider: 'aws', cloud_account_id: 'a1', service: 'rds',           resource_type: 'db.t3',    region: 'us-east-1', count: 1, term: 1, savings: 80,  upfront_cost: 400 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: {},
+        recommendations: recsWithHostile,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recsWithHostile);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recsWithHostile);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      const serviceBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]');
+      serviceBtn?.click();
+
+      // The popover must not contain a parsed <script> element.
+      const popover = document.querySelector('.column-filter-popover');
+      expect(popover).not.toBeNull();
+      expect(popover!.querySelector('script')).toBeNull();
+
+      // The raw payload must appear as a literal data-value attribute, not interpreted HTML.
+      const hostileCb = Array.from(
+        document.querySelectorAll<HTMLInputElement>('.column-filter-popover .column-filter-item input[type="checkbox"]'),
+      ).find((cb) => cb.dataset['value'] === hostileService);
+      expect(hostileCb).not.toBeUndefined();
+
+      // The label span renders the payload as literal text, not HTML.
+      const labelSpan = hostileCb!.closest('label')?.querySelector('span');
+      expect(labelSpan?.textContent).toBe(hostileService);
+      expect(labelSpan?.innerHTML).not.toContain('<script>');
+    });
   });
 });
 
