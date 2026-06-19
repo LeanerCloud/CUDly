@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,7 +36,11 @@ func TestNew_BlocksIMDS(t *testing.T) {
 	c := New()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := c.Get(tt.url)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tt.url, nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			resp, err := c.Do(req)
 			if err == nil {
 				resp.Body.Close()
 				t.Fatalf("request to %s must be blocked", tt.url)
@@ -53,7 +58,11 @@ func TestNew_AllowsRegularEndpoints(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	resp, err := New().Get(srv.URL)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := New().Do(req)
 	if err != nil {
 		t.Fatalf("request to non-IMDS endpoint failed: %v", err)
 	}
