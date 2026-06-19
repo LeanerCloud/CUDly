@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -128,14 +128,17 @@ func (s *Sender) WithUnsubscribeBaseURL(u string) *Sender {
 	return &c
 }
 
-// muteKey reads NOTIFICATION_MUTE_SECRET from env for token derivation. Returns
-// nil when unset so DeriveMuteToken uses the dev fallback.
+// muteKey resolves the NOTIFICATION_MUTE_SECRET HMAC key via the shared
+// fail-closed policy (common.ResolveMuteSecret). In production a missing secret
+// yields a nil key (and an error), so the send path emits no List-Unsubscribe
+// header rather than a forgeable one; non-production falls back to the dev key.
 func muteKey() []byte {
-	v := os.Getenv("NOTIFICATION_MUTE_SECRET")
-	if v == "" {
+	key, err := common.ResolveMuteSecret()
+	if err != nil {
+		logging.Warnf("email: %v; List-Unsubscribe header suppressed", err)
 		return nil
 	}
-	return []byte(v)
+	return key
 }
 
 // buildUnsubscribeURL constructs the one-click unsubscribe URL for the given

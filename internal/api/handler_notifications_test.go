@@ -16,15 +16,20 @@ import (
 // GET /api/notifications/unsubscribe
 // ---------------------------------------------------------------------------
 
-func validUnsubToken(email, scope string) string {
-	return common.DeriveMuteToken(nil, email, scope)
+func validUnsubToken(t *testing.T, email, scope string) string {
+	t.Helper()
+	// Resolve the key the same way the handler does so the generated token
+	// verifies. With ENVIRONMENT unset this yields the deterministic dev key.
+	key, err := common.ResolveMuteSecret()
+	require.NoError(t, err)
+	return common.DeriveMuteToken(key, email, scope)
 }
 
 func TestUnsubscribeHandler_Success(t *testing.T) {
 	ctx := context.Background()
 	email := "user@example.com"
 	scope := string(common.ScopePurchaseApprovals)
-	token := validUnsubToken(email, scope)
+	token := validUnsubToken(t, email, scope)
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("UpsertNotificationMute", ctx, email, scope, token).Return(nil)
@@ -68,6 +73,35 @@ func TestUnsubscribeHandler_ForgedToken_Returns401(t *testing.T) {
 	assert.Equal(t, 401, ce.code)
 }
 
+func TestUnsubscribeHandler_ProductionMissingSecret_FailsClosed(t *testing.T) {
+	// With ENVIRONMENT=production and no NOTIFICATION_MUTE_SECRET, the handler
+	// must NOT verify against a well-known dev key (which would accept forged
+	// tokens). It returns a server-side error (500), never a 401/200, and never
+	// reaches the store.
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("NOTIFICATION_MUTE_SECRET", "")
+	ctx := context.Background()
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() {
+		mockStore.AssertNotCalled(t, "UpsertNotificationMute")
+	})
+	h := &Handler{config: mockStore}
+	r := newTestRouter(h)
+
+	req := &events.LambdaFunctionURLRequest{
+		QueryStringParameters: map[string]string{
+			"token": strings.Repeat("a", 64),
+			"email": "user@example.com",
+			"scope": string(common.ScopePurchaseApprovals),
+		},
+	}
+	_, err := r.unsubscribeHandler(ctx, req, nil)
+	require.Error(t, err)
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "missing secret in production is a 500, not a client error")
+}
+
 func TestUnsubscribeHandler_MissingParams_Returns400(t *testing.T) {
 	ctx := context.Background()
 	h := &Handler{config: new(MockConfigStore)}
@@ -90,12 +124,12 @@ func TestUnsubscribeHandler_UnknownScope_Returns400(t *testing.T) {
 	ctx := context.Background()
 	email := "user@example.com"
 	scope := "unknown_scope"
-	// Use the dev-key token so HMAC passes but scope guard fires first.
-	token := common.DeriveMuteToken(nil, email, scope)
 
 	req := &events.LambdaFunctionURLRequest{
 		QueryStringParameters: map[string]string{
-			"token": token,
+			// The scope guard fires before token verification, so any non-empty
+			// token reaches it; the value is irrelevant to this test.
+			"token": strings.Repeat("a", 64),
 			"email": email,
 			"scope": scope,
 		},
@@ -114,7 +148,7 @@ func TestUnsubscribeHandler_StoreError_Returns500(t *testing.T) {
 	ctx := context.Background()
 	email := "user@example.com"
 	scope := string(common.ScopePurchaseApprovals)
-	token := validUnsubToken(email, scope)
+	token := validUnsubToken(t, email, scope)
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("UpsertNotificationMute", mock.Anything, email, scope, token).

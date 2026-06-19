@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"os"
 	"strings"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -52,16 +51,6 @@ func scopeLabel(scope string) string {
 	}
 }
 
-// muteSecretKey loads the NOTIFICATION_MUTE_SECRET env var as bytes. Returns
-// nil when unset, which causes DeriveMuteToken to fall back to its dev key.
-func muteSecretKey() []byte {
-	v := os.Getenv("NOTIFICATION_MUTE_SECRET")
-	if v == "" {
-		return nil
-	}
-	return []byte(v)
-}
-
 // unsubscribeHandler handles GET /api/notifications/unsubscribe.
 // The URL carries a signed token that encodes (email, scope); the handler
 // verifies the HMAC, upserts the mute row, and returns a confirmation page.
@@ -83,7 +72,15 @@ func (h *Handler) unsubscribeHandler(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(400, fmt.Sprintf("unknown notification scope: %s", scope))
 	}
 
-	if !common.VerifyMuteToken(muteSecretKey(), email, scope, token) {
+	// Resolve the HMAC key with the fail-closed production policy: a missing
+	// NOTIFICATION_MUTE_SECRET in production is a server misconfiguration, not a
+	// client error, and must never silently verify against a well-known key.
+	key, err := common.ResolveMuteSecret()
+	if err != nil {
+		logging.Errorf("notifications/unsubscribe: %v", err)
+		return nil, fmt.Errorf("unsubscribe is not configured: %w", err)
+	}
+	if !common.VerifyMuteToken(key, email, scope, token) {
 		logging.Warnf("notifications/unsubscribe: invalid token for scope=%s", scope)
 		return nil, NewClientError(401, "invalid or expired unsubscribe token")
 	}

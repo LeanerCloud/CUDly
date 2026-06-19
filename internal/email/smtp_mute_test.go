@@ -82,6 +82,35 @@ func TestSMTPSender_PurchaseApproval_EmitsListUnsubscribe(t *testing.T) {
 		"SMTP approval send must carry a List-Unsubscribe-Post header")
 }
 
+// TestSMTPSender_PurchaseApproval_WithCC_SuppressesListUnsubscribe verifies the
+// SMTP transport suppresses the primary-recipient-bound List-Unsubscribe header
+// when CC recipients share the envelope, mirroring the SES path.
+func TestSMTPSender_PurchaseApproval_WithCC_SuppressesListUnsubscribe(t *testing.T) {
+	server := newMockSMTPServer(t, false)
+	server.start(t)
+	defer server.stop()
+
+	base := &SMTPSender{
+		host:      "127.0.0.1",
+		port:      server.port,
+		fromEmail: "sender@test.com",
+		useTLS:    false,
+	}
+	mc := &wiringMuteCheckerSMTP{muted: map[string]bool{}}
+	sender := base.WithMuteChecker(mc).WithUnsubscribeBaseURL("https://dash.example.com")
+
+	data := smtpApprovalData("approver@test.com")
+	data.CCEmails = []string{"observer@test.com"}
+	require.NoError(t, sender.SendPurchaseApprovalRequest(context.Background(), data))
+
+	server.stop()
+	server.mu.Lock()
+	got := server.receivedMsg
+	server.mu.Unlock()
+	assert.NotContains(t, got, "List-Unsubscribe:",
+		"List-Unsubscribe must be suppressed when CC recipients are present")
+}
+
 type wiringMuteCheckerSMTP struct {
 	muted map[string]bool
 }
