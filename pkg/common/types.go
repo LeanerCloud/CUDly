@@ -1,4 +1,4 @@
-// Package common provides cloud-agnostic types and interfaces for multi-cloud cost optimization
+// Package common provides cloud-agnostic types and interfaces for multi-cloud cost optimization.
 package common
 
 import (
@@ -17,7 +17,7 @@ import (
 // infrastructure. Callers can detect it with errors.Is(err, ErrCommitmentPurchaseNotSupported).
 var ErrCommitmentPurchaseNotSupported = errors.New("commitment purchase not supported for this service")
 
-// ProviderType identifies the cloud provider
+// ProviderType identifies the cloud provider.
 type ProviderType string
 
 const (
@@ -26,43 +26,43 @@ const (
 	ProviderGCP   ProviderType = "gcp"
 )
 
-// String returns the string representation of the provider type
+// String returns the string representation of the provider type.
 func (p ProviderType) String() string {
 	return string(p)
 }
 
-// ServiceType identifies the service type across clouds
+// ServiceType identifies the service type across clouds.
 type ServiceType string
 
 const (
-	// Compute
+	// Compute.
 	ServiceCompute ServiceType = "compute" // EC2, VM, Compute Engine
 
-	// Database
+	// Database.
 	ServiceRelationalDB ServiceType = "relational-db" // RDS, Azure SQL, Cloud SQL
 	ServiceNoSQL        ServiceType = "nosql"         // DynamoDB, CosmosDB, Firestore
 
-	// Cache
+	// Cache.
 	ServiceCache ServiceType = "cache" // ElastiCache, Azure Cache, Memorystore
 
-	// Search
+	// Search.
 	ServiceSearch ServiceType = "search" // OpenSearch, Azure Search
 
-	// Data Warehouse
+	// Data Warehouse.
 	ServiceDataWarehouse ServiceType = "data-warehouse" // Redshift, Synapse, BigQuery
 
-	// Storage
+	// Storage.
 	ServiceStorage ServiceType = "storage" // S3, Blob Storage, Cloud Storage
 
-	// Savings/Commitments
+	// Savings/Commitments.
 	//
 	// ServiceSavingsPlans is the canonical umbrella identifier for AWS Savings
 	// Plans. The string value "savingsplans" (no hyphen) matches the frontend's
 	// identifier and the value persisted in service_configs.service /
 	// purchase_history.service so that direct comparisons
-	// (rec.Service == ServiceSavingsPlans) work without a normaliser. See
+	// (rec.Service == ServiceSavingsPlans) work without a normalizer. See
 	// issue #85 for the rationale (frontend chosen as canonical to avoid a
-	// SQL data migration). Code that needs to recognise pre-#85 persisted
+	// SQL data migration). Code that needs to recognize pre-#85 persisted
 	// "savings-plans" rows (e.g. purchase_executions JSONB blobs) goes
 	// through the mapper in internal/purchase/execution.go.
 	ServiceSavingsPlans ServiceType = "savingsplans" // AWS Savings Plans (umbrella)
@@ -70,24 +70,24 @@ const (
 	// Per-plan-type Savings Plans slugs. Each maps 1:1 to an AWS
 	// types.SupportedSavingsPlansType so users can configure term/payment
 	// defaults independently per plan type. These were introduced after the
-	// umbrella was normalised; the dash-form slugs intentionally differ from
+	// umbrella was normalized; the dash-form slugs intentionally differ from
 	// the umbrella's "savingsplans" so a generic-vs-specific comparison is
-	// unambiguous (use IsSavingsPlan to recognise the family).
+	// unambiguous (use IsSavingsPlan to recognize the family).
 	ServiceSavingsPlansCompute     ServiceType = "savings-plans-compute"     // ComputeSp: EC2, Fargate, Lambda
 	ServiceSavingsPlansEC2Instance ServiceType = "savings-plans-ec2instance" // Ec2InstanceSp: specific EC2 families
 	ServiceSavingsPlansSageMaker   ServiceType = "savings-plans-sagemaker"   // SagemakerSp
 	ServiceSavingsPlansDatabase    ServiceType = "savings-plans-database"    // DatabaseSp: RDS
 	ServiceCommitments             ServiceType = "commitments"               // Generic commitments
 
-	// Other
+	// Other.
 	ServiceOther ServiceType = "other" // Catch-all for unclassified services
 
-	// Legacy AWS service types (for backward compatibility)
+	// Legacy AWS service types (for backward compatibility).
 	ServiceEC2         ServiceType = "ec2"
 	ServiceRDS         ServiceType = "rds"
 	ServiceElastiCache ServiceType = "elasticache"
 	ServiceOpenSearch  ServiceType = "opensearch"
-	// ServiceElasticsearch is a typed alias of ServiceOpenSearch — a future
+	// ServiceElasticsearch is a typed alias of ServiceOpenSearch -- a future
 	// const declared with the same string value but different intent will
 	// now produce a compile error rather than silently equal.
 	ServiceElasticsearch             = ServiceOpenSearch
@@ -95,16 +95,16 @@ const (
 	ServiceMemoryDB      ServiceType = "memorydb"
 )
 
-// String returns the string representation of the service type
+// String returns the string representation of the service type.
 func (s ServiceType) String() string {
 	return string(s)
 }
 
-// IsSavingsPlan reports whether s is any Savings Plans service slug —
+// IsSavingsPlan reports whether s is any Savings Plans service slug --
 // the legacy umbrella (ServiceSavingsPlans), any of the four per-plan-type
 // constants, or the dash-free frontend spelling "savingsplans" that the API
-// handler stores verbatim without normalisation. Use it when code needs to
-// recognise the Savings Plans family irrespective of plan type (e.g., stats
+// handler stores verbatim without normalization. Use it when code needs to
+// recognize the Savings Plans family irrespective of plan type (e.g., stats
 // aggregation, region-ignoring filters, display-name branching).
 func IsSavingsPlan(s ServiceType) bool {
 	switch s {
@@ -118,7 +118,7 @@ func IsSavingsPlan(s ServiceType) bool {
 	return string(s) == "savingsplans"
 }
 
-// CommitmentType represents different commitment types across clouds
+// CommitmentType represents different commitment types across clouds.
 type CommitmentType string
 
 const (
@@ -128,97 +128,44 @@ const (
 	CommitmentReservedCapacity CommitmentType = "reserved-capacity" // Azure/GCP storage
 )
 
-// String returns the string representation of the commitment type
+// String returns the string representation of the commitment type.
 func (c CommitmentType) String() string {
 	return string(c)
 }
 
-// Recommendation represents a commitment purchase recommendation across any cloud provider
+// Recommendation represents a commitment purchase recommendation across any cloud provider.
 type Recommendation struct {
-	// Provider identification
-	Provider    ProviderType `json:"provider" csv:"Provider"`
-	Account     string       `json:"account" csv:"Account"`
-	AccountName string       `json:"account_name" csv:"AccountName"`
-
-	// Service identification
-	Service ServiceType `json:"service" csv:"Service"`
-	Region  string      `json:"region" csv:"Region"`
-
-	// Resource details
-	ResourceType string `json:"resource_type" csv:"ResourceType"` // Instance type, node type, VM size, etc.
-	Count        int    `json:"count" csv:"Count"`
-
-	// Commitment details
-	CommitmentType CommitmentType `json:"commitment_type" csv:"CommitmentType"` // RI, SP, CUD, etc.
-	Term           string         `json:"term" csv:"Term"`                      // 1yr, 3yr
-	PaymentOption  string         `json:"payment_option" csv:"PaymentOption"`   // all-upfront, partial, no-upfront, monthly
-
-	// Cost information
-	OnDemandCost      float64 `json:"on_demand_cost" csv:"OnDemandCost"`
-	CommitmentCost    float64 `json:"commitment_cost" csv:"CommitmentCost"`
-	EstimatedSavings  float64 `json:"estimated_savings" csv:"EstimatedSavings"`
-	SavingsPercentage float64 `json:"savings_percentage" csv:"SavingsPercentage"`
-	// RecurringMonthlyCost is the recurring monthly charge for this commitment
-	// (i.e. the part the user pays every month after any upfront payment).
-	// nil means the provider API did not return a monthly breakdown — the
-	// frontend renders nil as "—" rather than "$0" to avoid misleading users.
-	// Populated by cloud parsers when the API exposes it; left nil otherwise.
-	RecurringMonthlyCost *float64 `json:"recurring_monthly_cost,omitempty" csv:"RecurringMonthlyCost"`
-
-	// Service-specific details (polymorphic)
-	Details ServiceDetails `json:"details,omitempty" csv:"-"`
-
-	// Metadata
-	SourceRecommendation string    `json:"source_recommendation,omitempty" csv:"SourceRecommendation"`
-	Timestamp            time.Time `json:"timestamp,omitempty" csv:"Timestamp"`
-
-	// Break-even in months (populated by cloud parsers where available; used by scorer filter)
-	BreakEvenMonths float64 `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
-
-	// Utilization signals — populated by cloud parsers when the API exposes them.
-	// Used by --target-coverage sizing (see cmd/helpers.go: ApplyTargetCoverage).
-	// AverageInstancesUsedPerHour is RI-only (zero for SPs and other commitment types).
-	// RecommendedUtilization is "what AWS projects for the full recommendation"
-	// (%). ProjectedUtilization / ProjectedCoverage are populated by the sizing
-	// step after we pick our own quantity.
-	// RecommendedCount is AWS's pre-sizing count (mirrors Count before
-	// ApplyCoverage / ApplyTargetCoverage mutates Count); zero for SPs since
-	// the SP commitment is dollar-denominated rather than count-denominated.
-	// ExistingCoveragePct is the share of demand already covered by existing
-	// commitments in the same pool (from CE GetReservationCoverage /
-	// GetSavingsPlansCoverage). Zero = "no signal" (CE returned nothing for
-	// this pool, or the fetch step wasn't run); sizing then degenerates to
-	// the no-existing-commitments path. See cmd/helpers.go.
-	AverageInstancesUsedPerHour float64 `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
-	RecommendedUtilization      float64 `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
-	RecommendedCount            int     `json:"recommended_count,omitempty" csv:"RecommendedCount"`
-	ExistingCoveragePct         float64 `json:"existing_coverage_pct,omitempty" csv:"ExistingCoveragePct"`
-	// ExistingCoverageKnown distinguishes "CE returned a value for this
-	// pool" (Known=true, Pct possibly 0.0 meaning the pool has running
-	// instances but no RI coverage yet) from "CE has no data for this
-	// pool" (Known=false, Pct=0.0 by default). Set by
-	// ApplyCoverageMapToRecommendations whenever a pool lookup hits, and
-	// by family-NU sizing when a family-level existing% lands on the rec.
-	// CSV writers use this to render "n/a" for unknown vs "0.0" for
-	// genuine zero-coverage pools.
-	ExistingCoverageKnown bool    `json:"existing_coverage_known,omitempty" csv:"-"`
-	ProjectedUtilization  float64 `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
-	ProjectedCoverage     float64 `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
-
-	// RawRecommendation holds the original cloud API response bytes for audit/debugging.
-	// omitempty ensures nil is absent from JSON (not written as null).
-	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
-
-	// UsageHistory is an ordered slice of daily coverage/utilisation
-	// percentages (0-100) for the last N days of the lookback window
-	// (oldest-to-newest). Populated by cloud collectors that can source the
-	// signal from the provider API; nil when not yet wired or when the
-	// provider returned no data (frontend renders "—" in that case).
-	// Not written to CSV (no column heading — enrichment-only field).
-	UsageHistory []float64 `json:"usage_history,omitempty" csv:"-"`
+	Timestamp                   time.Time       `json:"timestamp,omitempty" csv:"Timestamp"`
+	Details                     ServiceDetails  `json:"details,omitempty" csv:"-"`
+	RecurringMonthlyCost        *float64        `json:"recurring_monthly_cost,omitempty" csv:"RecurringMonthlyCost"`
+	CommitmentType              CommitmentType  `json:"commitment_type" csv:"CommitmentType"`
+	AccountName                 string          `json:"account_name" csv:"AccountName"`
+	ResourceType                string          `json:"resource_type" csv:"ResourceType"`
+	Provider                    ProviderType    `json:"provider" csv:"Provider"`
+	Term                        string          `json:"term" csv:"Term"`
+	PaymentOption               string          `json:"payment_option" csv:"PaymentOption"`
+	Region                      string          `json:"region" csv:"Region"`
+	Account                     string          `json:"account" csv:"Account"`
+	SourceRecommendation        string          `json:"source_recommendation,omitempty" csv:"SourceRecommendation"`
+	Service                     ServiceType     `json:"service" csv:"Service"`
+	UsageHistory                []float64       `json:"usage_history,omitempty" csv:"-"`
+	RawRecommendation           json.RawMessage `json:"raw_recommendation,omitempty" csv:"-"`
+	OnDemandCost                float64         `json:"on_demand_cost" csv:"OnDemandCost"`
+	SavingsPercentage           float64         `json:"savings_percentage" csv:"SavingsPercentage"`
+	EstimatedSavings            float64         `json:"estimated_savings" csv:"EstimatedSavings"`
+	BreakEvenMonths             float64         `json:"break_even_months,omitempty" csv:"BreakEvenMonths"`
+	AverageInstancesUsedPerHour float64         `json:"average_instances_used_per_hour,omitempty" csv:"AverageInstancesUsedPerHour"`
+	RecommendedUtilization      float64         `json:"recommended_utilization,omitempty" csv:"RecommendedUtilization"`
+	RecommendedCount            int             `json:"recommended_count,omitempty" csv:"RecommendedCount"`
+	ExistingCoveragePct         float64         `json:"existing_coverage_pct,omitempty" csv:"ExistingCoveragePct"`
+	ProjectedUtilization        float64         `json:"projected_utilization,omitempty" csv:"ProjectedUtilization"`
+	ProjectedCoverage           float64         `json:"projected_coverage,omitempty" csv:"ProjectedCoverage"`
+	CommitmentCost              float64         `json:"commitment_cost" csv:"CommitmentCost"`
+	Count                       int             `json:"count" csv:"Count"`
+	ExistingCoverageKnown       bool            `json:"existing_coverage_known,omitempty" csv:"-"`
 }
 
-// ServiceDetails is an interface for service-specific details
+// ServiceDetails is an interface for service-specific details.
 type ServiceDetails interface {
 	GetServiceType() ServiceType
 	GetDetailDescription() string
@@ -229,8 +176,12 @@ type ServiceDetails interface {
 // new pointer when present so callers don't mutate the upstream rec's
 // pointer target. Used by sizing paths (ApplyCoverage, ApplyTargetCoverage,
 // family-NU) to keep Count and cost in sync when a recommendation is
-// sized down (or up) from AWS's proposal — without this helper the same
+// sized down (or up) from AWS's proposal -- without this helper the same
 // four-field scaling pattern was duplicated at every sizing site.
+// hugeParam: Recommendation (360 bytes) is passed by value here intentionally;
+// the function returns a modified copy so callers can chain without mutation.
+//
+//nolint:gocritic
 func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation {
 	rec.CommitmentCost *= ratio
 	rec.OnDemandCost *= ratio
@@ -242,15 +193,15 @@ func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation 
 	return rec
 }
 
-// PurchaseResult represents the outcome of a commitment purchase
+// PurchaseResult represents the outcome of a commitment purchase.
 type PurchaseResult struct {
-	Recommendation Recommendation `json:"recommendation"`
-	Success        bool           `json:"success"`
-	CommitmentID   string         `json:"commitment_id,omitempty"`
-	Error          error          `json:"error,omitempty"`
-	Cost           float64        `json:"cost"`
-	DryRun         bool           `json:"dry_run"`
 	Timestamp      time.Time      `json:"timestamp"`
+	Error          error          `json:"error,omitempty"`
+	CommitmentID   string         `json:"commitment_id,omitempty"`
+	Recommendation Recommendation `json:"recommendation"`
+	Cost           float64        `json:"cost"`
+	Success        bool           `json:"success"`
+	DryRun         bool           `json:"dry_run"`
 }
 
 // Source values for PurchaseOptions.Source. Kept lowercase so they can be used
@@ -276,7 +227,7 @@ const IdempotencyTagKey = "cudly-idempotency-token"
 // PurchaseOptions carries per-execution metadata threaded through
 // ServiceClient.PurchaseCommitment. Source is the CUDly surface that triggered
 // the purchase (CLI vs web); every provider stamps it onto the commitment it
-// creates (as a tag, label, or — where the cloud API permits nothing else —
+// creates (as a tag, label, or -- where the cloud API permits nothing else --
 // encoded in the commitment description).
 type PurchaseOptions struct {
 	Source string
@@ -292,7 +243,7 @@ type PurchaseOptions struct {
 	// token) check for an existing RI tagged with it before purchasing and tag
 	// the new RI with it afterwards. Empty means no idempotency guard (the CLI
 	// purchase path, which has no owning execution, leaves it empty and keeps
-	// its prior non-idempotent behaviour).
+	// its prior non-idempotent behavior).
 	IdempotencyToken string
 	// ExecutionID, when non-empty, is the purchase_executions row UUID that
 	// owns this purchase attempt. Carried so the purchase-execution flow can
@@ -324,41 +275,41 @@ func NormalizeSource(s string) (string, error) {
 // services that don't have a deployment dimension (EC2, ElastiCache,
 // etc). When populated, it carries the same vocabulary as
 // DatabaseDetails.AZConfig on Recommendation ("single-az" / "multi-az")
-// so pool-key matching can collapse both sides via normaliseDeployment
+// so pool-key matching can collapse both sides via normalizeDeployment
 // in the recommendations package. Without this field, RDS expiry
 // adjustments would silently miss because Recommendation lookup keys
 // are deployment-aware while commitment keys defaulted to empty.
 type Commitment struct {
-	Provider       ProviderType   `json:"provider"`
-	Account        string         `json:"account"`
-	CommitmentID   string         `json:"commitment_id"`
+	StartDate      time.Time      `json:"start_date"`
+	EndDate        time.Time      `json:"end_date"`
+	ResourceType   string         `json:"resource_type"`
 	CommitmentType CommitmentType `json:"commitment_type"`
 	Service        ServiceType    `json:"service"`
 	Region         string         `json:"region"`
-	ResourceType   string         `json:"resource_type"`
-	Engine         string         `json:"engine,omitempty"`     // Database engine for RDS/ElastiCache (e.g., "mysql", "aurora-postgresql")
-	Deployment     string         `json:"deployment,omitempty"` // RDS Multi-AZ vs Single-AZ; empty for non-RDS
-	Count          int            `json:"count"`
-	StartDate      time.Time      `json:"start_date"`
-	EndDate        time.Time      `json:"end_date"`
+	Provider       ProviderType   `json:"provider"`
+	Engine         string         `json:"engine,omitempty"`
+	Deployment     string         `json:"deployment,omitempty"`
+	CommitmentID   string         `json:"commitment_id"`
+	Account        string         `json:"account"`
 	State          string         `json:"state"`
+	Count          int            `json:"count"`
 	Cost           float64        `json:"cost"`
 }
 
-// OfferingDetails represents cloud provider offering details
+// OfferingDetails represents cloud provider offering details.
 type OfferingDetails struct {
 	OfferingID          string  `json:"offering_id"`
 	ResourceType        string  `json:"resource_type"`
 	Term                string  `json:"term"`
 	PaymentOption       string  `json:"payment_option"`
+	Currency            string  `json:"currency"`
 	UpfrontCost         float64 `json:"upfront_cost"`
 	RecurringCost       float64 `json:"recurring_cost"`
 	TotalCost           float64 `json:"total_cost"`
 	EffectiveHourlyRate float64 `json:"effective_hourly_rate"`
-	Currency            string  `json:"currency"`
 }
 
-// RecommendationParams represents parameters for fetching recommendations
+// RecommendationParams represents parameters for fetching recommendations.
 type RecommendationParams struct {
 	Service        ServiceType
 	Region         string
@@ -373,7 +324,7 @@ type RecommendationParams struct {
 	ExcludeSPTypes []string
 }
 
-// Account represents a cloud account/subscription/project
+// Account represents a cloud account/subscription/project.
 type Account struct {
 	Provider    ProviderType `json:"provider"`
 	ID          string       `json:"id"`
@@ -382,7 +333,7 @@ type Account struct {
 	IsDefault   bool         `json:"is_default"`
 }
 
-// Region represents a cloud region/location
+// Region represents a cloud region/location.
 type Region struct {
 	Provider    ProviderType `json:"provider"`
 	ID          string       `json:"id"`
@@ -392,10 +343,10 @@ type Region struct {
 
 // ComputeDetails represents compute-specific details (EC2, VM, Compute Engine).
 //
-// VCPU + MemoryGB are populated by per-provider catalogue lookups when
+// VCPU + MemoryGB are populated by per-provider catalog lookups when
 // available (Azure: armcompute.ResourceSKU.Capabilities; AWS:
-// ec2:DescribeInstanceTypes; GCP: machine-type catalogue). They are
-// optional — converters that don't yet wire a catalogue leave them at the
+// ec2:DescribeInstanceTypes; GCP: machine-type catalog). They are
+// optional -- converters that don't yet wire a catalog leave them at the
 // zero value, and the JSON tag uses omitempty so unknown values don't
 // pollute the API payload.
 type ComputeDetails struct {
@@ -407,6 +358,9 @@ type ComputeDetails struct {
 	MemoryGB     float64 `json:"memory_gb,omitempty"` // 0 = unknown
 }
 
+// hugeParam: value receiver required; ComputeDetails implements ServiceDetails via value methods.
+//
+//nolint:gocritic
 func (d ComputeDetails) GetServiceType() ServiceType {
 	return ServiceCompute
 }
@@ -416,6 +370,9 @@ func (d ComputeDetails) GetServiceType() ServiceType {
 // and MemoryGB are populated (>0) the size is appended as
 // " (<vcpu> vCPU / <memory> GB)" to give the UI a one-line summary
 // without forcing the caller to inspect the struct.
+// hugeParam: value receiver required; ComputeDetails implements ServiceDetails via value methods.
+//
+//nolint:gocritic
 func (d ComputeDetails) GetDetailDescription() string {
 	base := d.Platform + "/" + d.Tenancy
 	if d.VCPU > 0 && d.MemoryGB > 0 {
@@ -426,7 +383,7 @@ func (d ComputeDetails) GetDetailDescription() string {
 	return base
 }
 
-// DatabaseDetails represents database-specific details (RDS, Azure SQL, Cloud SQL)
+// DatabaseDetails represents database-specific details (RDS, Azure SQL, Cloud SQL).
 type DatabaseDetails struct {
 	Engine        string `json:"engine"` // mysql, postgres, sqlserver, etc.
 	EngineVersion string `json:"engine_version,omitempty"`
@@ -435,15 +392,21 @@ type DatabaseDetails struct {
 	Deployment    string `json:"deployment,omitempty"` // Azure: single, pool
 }
 
+// hugeParam: value receiver required; DatabaseDetails implements ServiceDetails via value methods.
+//
+//nolint:gocritic
 func (d DatabaseDetails) GetServiceType() ServiceType {
 	return ServiceRelationalDB
 }
 
+// hugeParam: value receiver required; DatabaseDetails implements ServiceDetails via value methods.
+//
+//nolint:gocritic
 func (d DatabaseDetails) GetDetailDescription() string {
 	return d.Engine + "/" + d.AZConfig
 }
 
-// CacheDetails represents cache-specific details (ElastiCache, Azure Cache, Memorystore)
+// CacheDetails represents cache-specific details (ElastiCache, Azure Cache, Memorystore).
 type CacheDetails struct {
 	Engine   string `json:"engine"` // redis, memcached
 	NodeType string `json:"node_type"`
@@ -458,11 +421,11 @@ func (d CacheDetails) GetDetailDescription() string {
 	return d.Engine + "/" + d.NodeType
 }
 
-// SearchDetails represents search-specific details (OpenSearch, Azure Search)
+// SearchDetails represents search-specific details (OpenSearch, Azure Search).
 type SearchDetails struct {
 	InstanceType    string `json:"instance_type"`
-	MasterNodeCount int    `json:"master_node_count,omitempty"`
 	MasterNodeType  string `json:"master_node_type,omitempty"`
+	MasterNodeCount int    `json:"master_node_count,omitempty"`
 }
 
 func (d SearchDetails) GetServiceType() ServiceType {
@@ -473,11 +436,11 @@ func (d SearchDetails) GetDetailDescription() string {
 	return d.InstanceType
 }
 
-// DataWarehouseDetails represents data warehouse-specific details (Redshift, Synapse, BigQuery)
+// DataWarehouseDetails represents data warehouse-specific details (Redshift, Synapse, BigQuery).
 type DataWarehouseDetails struct {
 	NodeType      string `json:"node_type"`
+	ClusterType   string `json:"cluster_type,omitempty"`
 	NumberOfNodes int    `json:"number_of_nodes"`
-	ClusterType   string `json:"cluster_type,omitempty"` // single-node, multi-node
 }
 
 func (d DataWarehouseDetails) GetServiceType() ServiceType {
@@ -494,7 +457,7 @@ func (d DataWarehouseDetails) GetDetailDescription() string {
 // cassandra, gremlin, table) and stays empty for non-cosmos engines.
 // ThroughputUnits is the reserved-throughput unit (RU/s for cosmos).
 // Zero-value fields indicate the source payload didn't supply the data
-// (e.g. SKU string lacks a throughput tier or API-type hint) — do NOT
+// (e.g. SKU string lacks a throughput tier or API-type hint) -- do NOT
 // treat zero as "definitely zero", only as "unknown".
 type NoSQLDetails struct {
 	Engine          string `json:"engine"`
@@ -513,11 +476,11 @@ func (d NoSQLDetails) GetDetailDescription() string {
 	return d.Engine + "/" + d.APIType
 }
 
-// SavingsPlanDetails represents AWS Savings Plans specific details
+// SavingsPlanDetails represents AWS Savings Plans specific details.
 type SavingsPlanDetails struct {
-	PlanType         string  `json:"plan_type"` // Compute, EC2Instance, SageMaker
-	HourlyCommitment float64 `json:"hourly_commitment"`
+	PlanType         string  `json:"plan_type"`
 	Coverage         string  `json:"coverage,omitempty"`
+	HourlyCommitment float64 `json:"hourly_commitment"`
 }
 
 func (d SavingsPlanDetails) GetServiceType() ServiceType {
@@ -551,41 +514,33 @@ func (d SavingsPlanDetails) GetDetailDescription() string {
 //	SKUName             <- Properties.SKUName (Azure-only; empty string for AWS)
 type RIUtilization struct {
 	ReservedInstanceID string  `json:"reserved_instance_id"`
+	SKUName            string  `json:"sku_name,omitempty"`
 	UtilizationPercent float64 `json:"utilization_percent"`
 	PurchasedHours     float64 `json:"purchased_hours"`
 	TotalActualHours   float64 `json:"total_actual_hours"`
 	UnusedHours        float64 `json:"unused_hours"`
-	// SKUName is the Azure reservation SKU (e.g. "Standard_D2s_v3"). It is
-	// empty for AWS RIs because Cost Explorer does not return the instance
-	// type on the utilization response. Consumers that need it for Azure
-	// can populate downstream display from this field; AWS consumers can
-	// join on ReservedInstanceID via the EC2 DescribeReservedInstances API.
-	SKUName string `json:"sku_name,omitempty"`
 }
 
 // AuditRecord is one line in the JSON-lines audit log.
 // Status values: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
 type AuditRecord struct {
-	RunID             string          `json:"run_id"`
-	Provider          ProviderType    `json:"provider"`
-	AccountID         string          `json:"account_id"`
+	Timestamp         time.Time       `json:"timestamp"`
+	CommitmentID      string          `json:"commitment_id"`
+	ErrorMessage      string          `json:"error_message"`
 	AccountName       string          `json:"account_name"`
 	Region            string          `json:"region"`
 	Service           string          `json:"service"`
 	ResourceType      string          `json:"resource_type"`
 	CommitmentType    CommitmentType  `json:"commitment_type"`
-	Term              int             `json:"term_months"`
-	Count             int             `json:"count"`
-	EstimatedCost     float64         `json:"estimated_cost"`
-	EstimatedSavings  float64         `json:"estimated_savings"`
-	CommitmentID      string          `json:"commitment_id"`
+	Source            string          `json:"source,omitempty"`
+	AccountID         string          `json:"account_id"`
+	Provider          ProviderType    `json:"provider"`
 	Status            string          `json:"status"`
-	ErrorMessage      string          `json:"error_message"`
-	Timestamp         time.Time       `json:"timestamp"`
-	DryRun            bool            `json:"dry_run"`
+	RunID             string          `json:"run_id"`
 	RawRecommendation json.RawMessage `json:"raw_recommendation,omitempty"`
-	// Source identifies the CUDly surface (cudly-cli / cudly-web) that
-	// triggered the purchase. Mirrors the value stamped on the commitment
-	// itself via purchase-automation tag/label.
-	Source string `json:"source,omitempty"`
+	EstimatedCost     float64         `json:"estimated_cost"`
+	Count             int             `json:"count"`
+	EstimatedSavings  float64         `json:"estimated_savings"`
+	Term              int             `json:"term_months"`
+	DryRun            bool            `json:"dry_run"`
 }

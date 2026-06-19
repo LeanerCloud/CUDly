@@ -23,20 +23,20 @@ func TestMatches(t *testing.T) {
 		Engine:       "mysql",
 	}
 
-	assert.True(t, Matches(base, matching), "identical fields should match")
+	assert.True(t, Matches(&base, &matching), "identical fields should match")
 
 	cases := []struct {
-		name      string
 		mutate    func(c *Commitment)
+		name      string
 		wantMatch bool
 	}{
-		{"different provider", func(c *Commitment) { c.Provider = ProviderAzure }, false},
-		{"different region", func(c *Commitment) { c.Region = "eu-west-1" }, false},
-		{"different service", func(c *Commitment) { c.Service = ServiceEC2 }, false},
-		{"different resource type", func(c *Commitment) { c.ResourceType = "db.r6g.large" }, false},
-		{"different engine", func(c *Commitment) { c.Engine = "postgres" }, false},
-		{"engine alias postgres==postgresql", func(c *Commitment) { c.Engine = "postgresql" }, false}, // "mysql" != "postgresql"
-		{"state retired still matches (caller filters state)", func(c *Commitment) { c.State = "retired" }, true},
+		{name: "different provider", mutate: func(c *Commitment) { c.Provider = ProviderAzure }, wantMatch: false},
+		{name: "different region", mutate: func(c *Commitment) { c.Region = "eu-west-1" }, wantMatch: false},
+		{name: "different service", mutate: func(c *Commitment) { c.Service = ServiceEC2 }, wantMatch: false},
+		{name: "different resource type", mutate: func(c *Commitment) { c.ResourceType = "db.r6g.large" }, wantMatch: false},
+		{name: "different engine", mutate: func(c *Commitment) { c.Engine = "postgres" }, wantMatch: false},
+		{name: "engine alias postgres==postgresql", mutate: func(c *Commitment) { c.Engine = "postgresql" }, wantMatch: false}, // "mysql" != "postgresql"
+		{name: "state retired still matches (caller filters state)", mutate: func(c *Commitment) { c.State = "retired" }, wantMatch: true},
 	}
 
 	for _, tc := range cases {
@@ -45,7 +45,7 @@ func TestMatches(t *testing.T) {
 			t.Parallel()
 			c := matching // copy
 			tc.mutate(&c)
-			assert.Equal(t, tc.wantMatch, Matches(base, c))
+			assert.Equal(t, tc.wantMatch, Matches(&base, &c))
 		})
 	}
 }
@@ -67,7 +67,7 @@ func TestMatches_NormalizedEngine(t *testing.T) {
 		ResourceType: "db.r5.large",
 		Engine:       "aurora-postgresql",
 	}
-	assert.True(t, Matches(rec, c))
+	assert.True(t, Matches(&rec, &c))
 }
 
 func TestMatches_NoDetails(t *testing.T) {
@@ -87,5 +87,5 @@ func TestMatches_NoDetails(t *testing.T) {
 		ResourceType: "m5.large",
 		Engine:       "",
 	}
-	assert.True(t, Matches(rec, c))
+	assert.True(t, Matches(&rec, &c))
 }

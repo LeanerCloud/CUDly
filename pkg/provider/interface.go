@@ -1,4 +1,4 @@
-// Package provider defines the core abstractions for multi-cloud support
+// Package provider defines the core abstractions for multi-cloud support.
 package provider
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// Provider represents a cloud provider (AWS, Azure, GCP)
+// Provider represents a cloud provider (AWS, Azure, GCP).
 type Provider interface {
 	// Identity
 	Name() string        // "aws", "azure", "gcp"
@@ -34,7 +34,7 @@ type Provider interface {
 	GetRecommendationsClient(ctx context.Context) (RecommendationsClient, error)
 }
 
-// ServiceClient handles operations for a specific service in a specific region
+// ServiceClient handles operations for a specific service in a specific region.
 type ServiceClient interface {
 	// Service identity
 	GetServiceType() common.ServiceType
@@ -53,7 +53,7 @@ type ServiceClient interface {
 	GetValidResourceTypes(ctx context.Context) ([]string, error)
 }
 
-// RecommendationsClient provides centralized recommendations across all services
+// RecommendationsClient provides centralized recommendations across all services.
 type RecommendationsClient interface {
 	// Get recommendations with filtering
 	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
@@ -65,15 +65,23 @@ type RecommendationsClient interface {
 	GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error)
 }
 
-// Credentials represents cloud provider credentials
+// Credentials represents cloud provider credentials.
 type Credentials interface {
 	IsValid() bool
 	GetType() string // "environment", "file", "iam-role", "msi", "adc", etc.
 }
 
-// ProviderConfig represents configuration for a provider
+// ProviderConfig represents configuration for a provider.
+// revive/stutter: ProviderConfig is intentional; renaming to Config would conflict with
+// pkg/config.Config and break 27+ callers across providers/aws, providers/azure, providers/gcp.
+//
+//nolint:revive
 type ProviderConfig struct {
-	Name string
+	AWSCredentialsProvider aws.CredentialsProvider
+	AzureTokenCredential   any
+	GCPTokenSource         any
+	ProviderOverride       Provider
+	Name                   string
 
 	// Deprecated: Profile is overloaded with provider-specific semantics
 	// (AWS: named profile, Azure: subscription ID, GCP: project ID). Prefer
@@ -99,12 +107,4 @@ type ProviderConfig struct {
 	//   - GCPTokenSource:        golang.org/x/oauth2.TokenSource
 	// When unset (nil), providers fall back to ambient credentials
 	// (DefaultAzureCredential / Application Default Credentials).
-	AWSCredentialsProvider aws.CredentialsProvider // optional: override ambient AWS credentials
-	AzureTokenCredential   any
-	GCPTokenSource         any
-
-	// ProviderOverride, if non-nil, is returned directly by CreateProvider without
-	// going through the registry. Use this to inject a pre-built, pre-authenticated
-	// provider when the typed credential slots above aren't expressive enough.
-	ProviderOverride Provider
 }
