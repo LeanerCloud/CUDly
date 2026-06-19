@@ -1027,7 +1027,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 // canonical hyphenated slugs (compute, relational-db, cache, search,
 // data-warehouse) and the legacy AWS-only slugs (ec2, rds, elasticache,
 // opensearch, redshift, memorydb) are recognized; everything else passes
-// through verbatim. Savings Plans slugs are normalised by mapSavingsPlansSlug.
+// through verbatim. Savings Plans slugs are normalized by mapSavingsPlansSlug.
 func (m *Manager) mapServiceType(service string) common.ServiceType {
 	if svc, ok := mapSavingsPlansSlug(service); ok {
 		return svc
@@ -1077,7 +1077,7 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 	return svc, ok
 }
 
-// mapSavingsPlansSlug normalises both the canonical hyphenated SP slugs and
+// mapSavingsPlansSlug normalizes both the canonical hyphenated SP slugs and
 // the dash-free spellings the frontend has historically sent into the
 // matching common.ServiceType. The map covers the legacy umbrella plus the
 // four per-plan-type slugs in both spellings — pulled out of mapServiceType
