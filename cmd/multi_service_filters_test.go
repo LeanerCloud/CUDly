@@ -459,7 +459,7 @@ func TestApplyFilters_DropMinPoolSize(t *testing.T) {
 	d := common.NewDropSummary()
 	result := applyFilters(
 		[]common.Recommendation{rec},
-		toolCfg,
+		&toolCfg,
 		make(map[string][]InstanceEngineVersion),
 		make(map[string]MajorEngineVersionInfo),
 		"",
@@ -516,7 +516,7 @@ func TestApplyFilters_DropExtendedSupport(t *testing.T) {
 	d := common.NewDropSummary()
 	result := applyFilters(
 		[]common.Recommendation{rec},
-		toolCfg,
+		&toolCfg,
 		instanceVersions,
 		versionInfo,
 		"",
