@@ -63,9 +63,6 @@ type DisplayNameFields struct {
 	// ResourceType is the Azure SKU name (e.g. "Standard_D2a_v4").
 	ResourceType string
 
-	// Count is the reservation quantity. Always rendered as "{N}x".
-	Count int
-
 	// Term is the commitment term, normalized to "1yr" / "3yr" by upstream
 	// recommendation parsers. Pass through as-is; the builder collapses
 	// it to "1yr"/"3yr" when possible, and sanitizes otherwise.
@@ -87,10 +84,16 @@ type DisplayNameFields struct {
 	// When nil (production), the builder reads from crypto/rand. Tests set
 	// it via WithRandSource to make output deterministic.
 	randSource []byte
+
+	// Count is the reservation quantity. Always rendered as "{N}x".
+	// Placed last to minimize GC scan range (no pointer; all pointer fields precede it).
+	Count int
 }
 
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
+//
+//nolint:gocritic // hugeParam: value receiver is intentional -- copy-on-update is the semantic contract for this immutable builder pattern
 func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 	f.randSource = b
 	return f
@@ -108,9 +111,11 @@ func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 // 64 characters. If the composed string would exceed 64, fields are
 // progressively dropped from the tail (random suffix first, then
 // timestamp, then payment-option) until it fits. The service code,
-// region, SKU, count, and term are NEVER dropped — those are the
+// region, SKU, count, and term are NEVER dropped -- those are the
 // high-signal segments operators rely on to identify the reservation in
 // the Azure portal.
+//
+//nolint:gocritic // hugeParam: callers compose DisplayNameFields inline; switching to pointer would require heap allocation at every call site
 func BuildDisplayName(f DisplayNameFields) string {
 	svc := normalizeSegment(f.Service)
 	region := normalizeSegment(f.Region)

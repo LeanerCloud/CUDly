@@ -417,7 +417,7 @@ func TestComputeClient_GetOfferingDetails_WithMock(t *testing.T) {
 
 	// Setup mock HTTP response
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()),
+		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -443,7 +443,7 @@ func TestComputeClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 
 	// Setup mock HTTP response
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()),
+		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -468,7 +468,7 @@ func TestComputeClient_GetOfferingDetails_APIError(t *testing.T) {
 
 	// Setup mock HTTP response with error status
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error"),
+		mocks.CreateMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error"), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -491,7 +491,7 @@ func TestComputeClient_GetOfferingDetails_NoPricing(t *testing.T) {
 
 	// Setup mock HTTP response with empty items
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, `{"Items": []}`),
+		mocks.CreateMockHTTPResponse(http.StatusOK, `{"Items": []}`), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -507,7 +507,7 @@ func TestComputeClient_GetOfferingDetails_NoPricing(t *testing.T) {
 }
 
 // TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption verifies that an
-// unrecognised payment option fails loud rather than being silently billed as
+// unrecognized payment option fails loud rather than being silently billed as
 // all-upfront (owner policy: no silent fallbacks on money-affecting fields).
 // Pricing is fully present, so the failure is solely on the payment-option
 // branch. Pre-fix the default branch set upfrontCost = totalCost and returned a
@@ -518,7 +518,7 @@ func TestComputeClient_GetOfferingDetails_UnsupportedPaymentOption(t *testing.T)
 	mockHTTP := &mocks.MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()),
+		mocks.CreateMockHTTPResponse(http.StatusOK, mocks.CreateSampleVMPricingResponse()), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	)
 
@@ -559,7 +559,7 @@ func TestComputeClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
 	mockHTTP := &mocks.MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 	mockHTTP.On("Do", mock.Anything).Return(
-		mocks.CreateMockHTTPResponse(http.StatusOK, onDemandOnly), nil,
+		mocks.CreateMockHTTPResponse(http.StatusOK, onDemandOnly), nil, //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	)
 
 	rec := common.Recommendation{
@@ -572,10 +572,10 @@ func TestComputeClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
 	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
 
-// MockTokenCredential for testing PurchaseCommitment
+// MockTokenCredential for testing PurchaseCommitment.
 type MockTokenCredential struct {
-	token string
 	err   error
+	token string
 }
 
 func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
@@ -609,7 +609,7 @@ func mockCapacityProviderCheck(m *mocks.MockHTTPClient) {
 			strings.Contains(r.URL.Path, "providers/Microsoft.Capacity") &&
 			!strings.Contains(r.URL.Path, "calculatePrice") &&
 			!strings.Contains(r.URL.Path, "reservationOrders")
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, capacityProviderRegistered), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, capacityProviderRegistered), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 }
 
 func TestComputeClient_PurchaseCommitment_Success(t *testing.T) {
@@ -622,11 +622,11 @@ func TestComputeClient_PurchaseCommitment_Success(t *testing.T) {
 	// Step 1: calculatePrice returns a reservationOrderId.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-001")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-001")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// Step 2: purchase with the Azure-minted order ID.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-001/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "order-vm-001"}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{"id": "order-vm-001"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -652,10 +652,10 @@ func TestComputeClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	mockCapacityProviderCheck(mockHTTP)
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-3yr")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-3yr")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-3yr/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusCreated, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -680,10 +680,10 @@ func TestComputeClient_PurchaseCommitment_Accepted(t *testing.T) {
 	mockCapacityProviderCheck(mockHTTP)
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-202")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-vm-202")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-vm-202/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -750,11 +750,11 @@ func TestComputeClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	// calculatePrice returns 200 with an order ID, but purchase returns 400.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-bad")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-bad")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-bad/purchase"
 	})).Return(
-		mocks.CreateMockHTTPResponse(http.StatusBadRequest, `{"error":{"code":"InvalidScope","message":"invalid request"}}`),
+		mocks.CreateMockHTTPResponse(http.StatusBadRequest, `{"error":{"code":"InvalidScope","message":"invalid request"}}`), //nolint:bodyclose // body closed by production code via resp.Body.Close()
 		nil,
 	).Once()
 
@@ -787,13 +787,13 @@ func TestComputeClient_PurchaseCommitment_TwoStepFlow(t *testing.T) {
 	// Expect exactly one calculatePrice POST.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost && r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(azureMintedOrderID)), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(azureMintedOrderID)), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// Expect exactly one purchase POST to the Azure-minted order path.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+azureMintedOrderID+"/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_B2ats_v2", // The SKU that triggered issue #677.
@@ -827,20 +827,20 @@ func TestComputeClient_PurchaseCommitment_SessionTimeoutRetry(t *testing.T) {
 	// First calculatePrice: mints "order-first".
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-first")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-first")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// First purchase: session timeout.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-first/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusBadRequest, sessionTimeoutBody), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusBadRequest, sessionTimeoutBody), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	// Second calculatePrice: mints "order-second".
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-second")), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON("order-second")), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	// Second purchase: succeeds.
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/order-second/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{ResourceType: "Standard_B2ats_v2", Term: "1yr", Count: 1}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
@@ -875,11 +875,11 @@ func TestComputeClient_PurchaseCommitment_TagInjection(t *testing.T) {
 		capturedBody, _ = io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
 		return true
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{ResourceType: "Standard_D2s_v3", Term: "1yr", Count: 1, CommitmentCost: 2000.0}
 	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
@@ -973,7 +973,7 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesAllFields(t *testin
 // wrapper around pricing.FetchAll — constructs the URL with filter +
 // api-version, passes the compute item type, and re-wraps the returned
 // slice in the service-local *AzureRetailPrice envelope. Exhaustive
-// pagination / self-referential / per-page-timeout behaviour lives in
+// pagination / self-referential / per-page-timeout behavior lives in
 // providers/azure/internal/pricing/retail_prices_test.go and is not
 // duplicated here.
 func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
@@ -981,7 +981,7 @@ func TestFetchAzurePricing_WrapperSmokeTest(t *testing.T) {
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
 	body := `{"Items":[{"armSkuName":"Standard_D2s_v3","reservationTerm":"1 Year","type":"Reservation","retailPrice":100.0,"unitPrice":100.0,"currencyCode":"USD"}],"NextPageLink":""}`
-	mockHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, body), nil).Once()
+	mockHTTP.On("Do", mock.Anything).Return(mocks.CreateMockHTTPResponse(http.StatusOK, body), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	result, err := client.fetchAzurePricing(context.Background(), "anything")
 	require.NoError(t, err)
@@ -1038,26 +1038,26 @@ func TestBuildReservationBody_IncludesIdempotencyTokenTag(t *testing.T) {
 	assert.Equal(t, token, tags[common.IdempotencyTagKey], "idempotency tag must be stamped when token is supplied")
 }
 
-// --- Issue #148: VCPU/MemoryGB enrichment via cached SKU catalogue ---
+// --- Issue #148: VCPU/MemoryGB enrichment via cached SKU catalog ---
 
-// vmSKUCatalogueMockPager is a multi-page-and-error-capable mock used
-// only by the issue-148 SKU-catalogue tests below. The shared
+// vmSKUCatalogMockPager is a multi-page-and-error-capable mock used
+// only by the issue-148 SKU-catalog tests below. The shared
 // mocks.MockResourceSKUsPager doesn't expose its page counter and
 // can't simulate a NextPage error — file-scoped here keeps the shared
 // mock surface untouched (matches the cosmosdb / cache test pattern
-// where each service defines its own catalogue mock).
-type vmSKUCatalogueMockPager struct {
+// where each service defines its own catalog mock).
+type vmSKUCatalogMockPager struct {
+	err      error
 	pages    []armcompute.ResourceSKUsClientListResponse
 	index    int
-	err      error
-	pageHits int // count of NextPage invocations — pinned by FetchedOnce
+	pageHits int // count of NextPage invocations -- pinned by FetchedOnce
 }
 
-func (m *vmSKUCatalogueMockPager) More() bool {
+func (m *vmSKUCatalogMockPager) More() bool {
 	return m.index < len(m.pages)
 }
 
-func (m *vmSKUCatalogueMockPager) NextPage(_ context.Context) (armcompute.ResourceSKUsClientListResponse, error) {
+func (m *vmSKUCatalogMockPager) NextPage(_ context.Context) (armcompute.ResourceSKUsClientListResponse, error) {
 	m.pageHits++
 	if m.err != nil {
 		return armcompute.ResourceSKUsClientListResponse{}, m.err
@@ -1073,7 +1073,7 @@ func (m *vmSKUCatalogueMockPager) NextPage(_ context.Context) (armcompute.Resour
 // buildVMSKU constructs an armcompute.ResourceSKU for "virtualMachines"
 // in the given region with the standard vCPUs / MemoryGB capabilities
 // the converter parses out.
-func buildVMSKU(name, region string, vCPUs int, memoryGB string) *armcompute.ResourceSKU {
+func buildVMSKU(name, region string, vCPUs int, memoryGB string) *armcompute.ResourceSKU { //nolint:unparam // region is parameterised for readability; all current call sites happen to use "eastus"
 	resourceType := "virtualMachines"
 	regionStr := region
 	nameStr := name
@@ -1093,13 +1093,13 @@ func buildVMSKU(name, region string, vCPUs int, memoryGB string) *armcompute.Res
 }
 
 // TestComputeClient_ConvertAzureVMRecommendation_PopulatesVCPUAndMemoryFromSKUCache
-// asserts the cached SKU-catalogue lookup populates ComputeDetails.VCPU
-// and ComputeDetails.MemoryGB when the catalogue contains the SKU named
+// asserts the cached SKU-catalog lookup populates ComputeDetails.VCPU
+// and ComputeDetails.MemoryGB when the catalog contains the SKU named
 // in the recommendation. Pin for issue #148.
 func TestComputeClient_ConvertAzureVMRecommendation_PopulatesVCPUAndMemoryFromSKUCache(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
 
-	mockPager := &vmSKUCatalogueMockPager{
+	mockPager := &vmSKUCatalogMockPager{
 		pages: []armcompute.ResourceSKUsClientListResponse{
 			{
 				ResourceSKUsResult: armcompute.ResourceSKUsResult{
@@ -1122,18 +1122,18 @@ func TestComputeClient_ConvertAzureVMRecommendation_PopulatesVCPUAndMemoryFromSK
 	details, ok := out.Details.(common.ComputeDetails)
 	require.True(t, ok)
 	assert.Equal(t, "Standard_D2s_v3", details.InstanceType)
-	assert.Equal(t, 2, details.VCPU, "VCPU must be enriched from the cached SKU catalogue")
-	assert.Equal(t, 8.0, details.MemoryGB, "MemoryGB must be enriched from the cached SKU catalogue")
+	assert.Equal(t, 2, details.VCPU, "VCPU must be enriched from the cached SKU catalog")
+	assert.Equal(t, 8.0, details.MemoryGB, "MemoryGB must be enriched from the cached SKU catalog")
 }
 
 // TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack
-// asserts that a SKU-catalogue fetch failure does NOT fail the
+// asserts that a SKU-catalog fetch failure does NOT fail the
 // conversion — VCPU/MemoryGB stay at 0 and the rest of Details is
 // populated from the recommendation payload. Graceful-degradation
 // contract from PR #81, now extended to compute.
 func TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
-	mockPager := &vmSKUCatalogueMockPager{
+	mockPager := &vmSKUCatalogMockPager{
 		pages: []armcompute.ResourceSKUsClientListResponse{{}},
 		err:   errors.New("transient Azure API error"),
 	}
@@ -1144,21 +1144,21 @@ func TestComputeClient_ConvertAzureVMRecommendation_PagerErrorFallsBack(t *testi
 		mocks.WithNormalizedSize("Standard_D2s_v3"),
 	)
 	out := client.convertAzureVMRecommendation(context.Background(), rec)
-	require.NotNil(t, out, "conversion must NOT fail on catalogue-fetch error")
+	require.NotNil(t, out, "conversion must NOT fail on catalog-fetch error")
 	details, ok := out.Details.(common.ComputeDetails)
 	require.True(t, ok)
 	assert.Equal(t, "Standard_D2s_v3", details.InstanceType)
-	assert.Equal(t, 0, details.VCPU, "VCPU left at 0 when catalogue fetch fails")
-	assert.Equal(t, 0.0, details.MemoryGB, "MemoryGB left at 0 when catalogue fetch fails")
+	assert.Equal(t, 0, details.VCPU, "VCPU left at 0 when catalog fetch fails")
+	assert.Equal(t, 0.0, details.MemoryGB, "MemoryGB left at 0 when catalog fetch fails")
 }
 
 // TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero
-// asserts that when the recommendation's SKU isn't in the catalogue
+// asserts that when the recommendation's SKU isn't in the catalog
 // (e.g. SKU listed for another region only), VCPU/MemoryGB stay at 0
 // and the conversion still produces a usable recommendation.
 func TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
-	mockPager := &vmSKUCatalogueMockPager{
+	mockPager := &vmSKUCatalogMockPager{
 		pages: []armcompute.ResourceSKUsClientListResponse{
 			{
 				ResourceSKUsResult: armcompute.ResourceSKUsResult{
@@ -1173,7 +1173,7 @@ func TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero(t *t
 
 	rec := mocks.BuildLegacyReservationRecommendation(
 		mocks.WithRegion("eastus"),
-		mocks.WithNormalizedSize("Standard_NC6s_v3"), // not in catalogue
+		mocks.WithNormalizedSize("Standard_NC6s_v3"), // not in catalog
 	)
 	out := client.convertAzureVMRecommendation(context.Background(), rec)
 	require.NotNil(t, out)
@@ -1187,10 +1187,10 @@ func TestComputeClient_ConvertAzureVMRecommendation_NoMatchLeavesFieldsZero(t *t
 // TestComputeClient_CachedSKULookup_FetchedOnce pins the perf
 // invariant from PR #81 (now also enforced for compute, per #148):
 // many converter calls in the same GetRecommendations run trigger
-// exactly ONE catalogue fetch.
+// exactly ONE catalog fetch.
 func TestComputeClient_CachedSKULookup_FetchedOnce(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
-	mockPager := &vmSKUCatalogueMockPager{
+	mockPager := &vmSKUCatalogMockPager{
 		pages: []armcompute.ResourceSKUsClientListResponse{
 			{
 				ResourceSKUsResult: armcompute.ResourceSKUsResult{
@@ -1206,21 +1206,21 @@ func TestComputeClient_CachedSKULookup_FetchedOnce(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		_, _ = client.cachedSKULookup(context.Background(), "Standard_D2s_v3")
 	}
-	assert.Equal(t, 1, mockPager.pageHits, "catalogue must be fetched ONCE regardless of lookup count")
+	assert.Equal(t, 1, mockPager.pageHits, "catalog must be fetched ONCE regardless of lookup count")
 }
 
-// TestComputeClient_FetchSKUCatalogue_CancelledContextFallsBack asserts
-// that a cancelled context is terminal in the SKU catalogue pagination
-// loop — the catalogue returns nil and Details.VCPU/MemoryGB stay at 0,
+// TestComputeClient_FetchSKUCatalogue_CanceledContextFallsBack asserts
+// that a canceled context is terminal in the SKU catalog pagination
+// loop — the catalog returns nil and Details.VCPU/MemoryGB stay at 0,
 // but the conversion itself succeeds (graceful-degradation contract).
 // Pins feedback_ctx_cancel_terminal.md for the compute SKU path.
-func TestComputeClient_FetchSKUCatalogue_CancelledContextFallsBack(t *testing.T) {
+func TestComputeClient_FetchSKUCatalogue_CanceledContextFallsBack(t *testing.T) {
 	client := NewClient(nil, "test-subscription", "eastus")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so ctx.Err() is set on first loop iteration
 
-	mockPager := &vmSKUCatalogueMockPager{
+	mockPager := &vmSKUCatalogMockPager{
 		pages: []armcompute.ResourceSKUsClientListResponse{
 			{
 				ResourceSKUsResult: armcompute.ResourceSKUsResult{
@@ -1234,8 +1234,8 @@ func TestComputeClient_FetchSKUCatalogue_CancelledContextFallsBack(t *testing.T)
 	client.SetResourceSKUsPager(mockPager)
 
 	result := client.fetchSKUCatalogue(ctx)
-	assert.Nil(t, result, "cancelled context must return nil catalogue")
-	assert.Equal(t, 0, mockPager.pageHits, "NextPage must not be called after context is already cancelled")
+	assert.Nil(t, result, "canceled context must return nil catalog")
+	assert.Equal(t, 0, mockPager.pageHits, "NextPage must not be called after context is already canceled")
 }
 
 // TestComputeClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist guards
@@ -1269,11 +1269,11 @@ func TestComputeClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t 
 			}
 		}
 		return true
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusOK, `{}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	rec := common.Recommendation{
 		ResourceType:   "Standard_D2s_v3",
@@ -1309,7 +1309,7 @@ func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
 			strings.Contains(r.URL.Path, "providers/Microsoft.Capacity") &&
 			!strings.Contains(r.URL.Path, "reservationOrders") &&
 			!strings.Contains(r.URL.Path, "calculatePrice")
-	})).Return(mocks.CreateMockHTTPResponse(http.StatusForbidden, `{"error":"AuthorizationFailed"}`), nil).Once()
+	})).Return(mocks.CreateMockHTTPResponse(http.StatusForbidden, `{"error":"AuthorizationFailed"}`), nil).Once() //nolint:bodyclose // body closed by production code via resp.Body.Close()
 
 	err := client.checkAndRegisterCapacityProvider(ctx)
 	require.Error(t, err)
@@ -1317,7 +1317,7 @@ func TestCheckAndRegisterCapacityProvider_NonTwoxx(t *testing.T) {
 }
 
 // TestExtractVMPricing_SingularOneYear verifies that extractVMPricing correctly
-// recognises the "1 Year" singular form returned by the Azure Retail Prices API
+// recognizes the "1 Year" singular form returned by the Azure Retail Prices API
 // for 1-year reservation terms. Before the fix, the extractor used "%d Years"
 // unconditionally, so the 1-year reservation line was silently skipped and
 // reservationPrice remained 0, causing a false "no reservation pricing found"
