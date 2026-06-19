@@ -1,14 +1,71 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestReadLine_EOFHandling is the regression test for the CR finding on
+// PR #1265: readLine must not convert a zero-byte io.EOF into a successful
+// empty line. A closed/non-interactive stdin (no bytes pending) must surface
+// io.EOF so prompt handlers do not fall through to a default action; an EOF
+// that follows a final line without a trailing newline is still success.
+func TestReadLine_EOFHandling(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantText  string
+		wantEOF   bool
+		wantNoErr bool
+	}{
+		{
+			name:      "normal line with newline",
+			input:     "run\n",
+			wantText:  "run",
+			wantNoErr: true,
+		},
+		{
+			name:      "final line without trailing newline (EOF after data)",
+			input:     "skip",
+			wantText:  "skip",
+			wantNoErr: true,
+		},
+		{
+			name:     "closed stream with no data surfaces EOF",
+			input:    "",
+			wantText: "",
+			wantEOF:  true,
+		},
+		{
+			name:      "bare newline is a valid empty line, not a closed stream",
+			input:     "\n",
+			wantText:  "",
+			wantNoErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readLine(bufio.NewReader(strings.NewReader(tt.input)))
+			assert.Equal(t, tt.wantText, got)
+			switch {
+			case tt.wantEOF:
+				require.Error(t, err)
+				assert.ErrorIs(t, err, io.EOF)
+			case tt.wantNoErr:
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
 
 // MockSecretsStore is a mock implementation of SecretsStore for testing
 type MockSecretsStore struct {

@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -400,6 +401,54 @@ func TestResolveGCPCredentials_Success(t *testing.T) {
 	result, err := ResolveGCPCredentials(context.Background(), &config.CloudAccount{ID: "acct1"}, store)
 	require.NoError(t, err)
 	assert.Equal(t, saJSON, result)
+}
+
+// stubSigner is a minimal oidc.Signer used only to populate
+// GCPResolveOptions.Signer so the federated path is reachable. Its methods are
+// never invoked during externalaccount.NewTokenSource construction (token
+// minting is lazy), so they can return sentinel errors.
+type stubSigner struct{}
+
+func (stubSigner) Sign(_ context.Context, _ []byte) ([]byte, error) {
+	return nil, errors.New("stubSigner: Sign not implemented")
+}
+
+func (stubSigner) PublicKey(_ context.Context) (*rsa.PublicKey, error) {
+	return nil, errors.New("stubSigner: PublicKey not implemented")
+}
+
+func (stubSigner) KeyID(_ context.Context) (string, error) {
+	return "stub-kid", nil
+}
+
+// TestResolveGCPWIF_LoadRawError_Surfaces is the regression test for the CR
+// finding on PR #1265: resolveGCPWIFCredential previously swallowed any
+// LoadRaw error by setting raw=nil and falling back to the federated path.
+// Since LoadRaw maps not-found to (nil, nil), a non-nil error is a real store
+// failure (DB connectivity, decrypt) that must be surfaced, not masked.
+//
+// The federated path is fully wired (signer + issuer + audience + email) so
+// that the pre-fix code would route to BuildGCPFederatedCredential and return
+// a non-nil TokenSource with a nil error, hiding the store outage. With the
+// fix, the store error is surfaced before that branch is reached.
+func TestResolveGCPWIF_LoadRawError_Surfaces(t *testing.T) {
+	store := newMockStore()
+	store.err = errors.New("postgres: connection refused")
+
+	acct := &config.CloudAccount{
+		ID:             "acct1",
+		GCPAuthMode:    "workload_identity_federation",
+		GCPWIFAudience: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/pr",
+		GCPClientEmail: "cudly@my-project.iam.gserviceaccount.com",
+	}
+	opts := GCPResolveOptions{
+		Signer:    stubSigner{},
+		IssuerURL: "https://cudly.example.com",
+	}
+
+	_, err := ResolveGCPTokenSourceWithOpts(context.Background(), acct, store, opts)
+	require.Error(t, err, "a real LoadRaw store error must be surfaced, not swallowed into the federated fallback")
+	assert.Contains(t, err.Error(), "connection refused")
 }
 
 func TestAWSCredentials_String_IsRedacted(t *testing.T) {

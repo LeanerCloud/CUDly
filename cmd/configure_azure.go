@@ -256,14 +256,21 @@ func promptForAzureCredentialFields(reader *bufio.Reader, creds *AzureCredential
 	return nil
 }
 
-// readLine reads one line from reader, returning (text, nil) on success or io.EOF,
-// and (text, error) on other errors. The returned text is trimmed of the newline.
+// readLine reads one line from reader, returning the trimmed text. A trailing
+// io.EOF is treated as success only when some bytes were actually read (the
+// final line of a stream that lacks a newline); an EOF with no data means the
+// stream was closed with nothing pending and is surfaced so callers can
+// distinguish "got a line" from "stream closed". All other errors propagate.
 func readLine(reader *bufio.Reader) (string, error) {
 	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return strings.TrimSpace(line), err
+	trimmed := strings.TrimSpace(line)
+	if err != nil {
+		if errors.Is(err, io.EOF) && line != "" {
+			return trimmed, nil
+		}
+		return trimmed, err
 	}
-	return strings.TrimSpace(line), nil
+	return trimmed, nil
 }
 
 // createAzureServicePrincipal prompts the user to run az ad sp create-for-rbac

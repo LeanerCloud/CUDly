@@ -346,12 +346,14 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 	}
 
 	// Wait for all goroutines. Each goroutine returns nil to isolate per-provider
-	// failures (stored in outcomes map). After Wait, propagate ctx cancellation so
-	// callers can distinguish "all providers completed" from "the parent
-	// ctx was canceled mid-fan-out".
+	// failures (stored in outcomes map), so g.Wait() should normally be nil; a
+	// non-nil result means a goroutine returned an unexpected hard error, which
+	// must be surfaced rather than logged-and-merged (a partial/incorrect
+	// aggregate reported as success). g.Wait() does not surface parent ctx
+	// cancellation when every goroutine returns nil, so check ctx.Err()
+	// separately afterwards.
 	if waitErr := g.Wait(); waitErr != nil {
-		// Goroutines never return non-nil here; this is a defensive check.
-		logging.Errorf("scheduler: unexpected g.Wait error: %v", waitErr)
+		return nil, 0, nil, nil, nil, fmt.Errorf("scheduler: collectAllProviders wait failed: %w", waitErr)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, 0, nil, nil, nil, cerr
@@ -571,8 +573,14 @@ func fanOutPerAccount(
 		})
 	}
 	if waitErr := g.Wait(); waitErr != nil {
-		// Goroutines swallow all errors above; this is a defensive check.
+		// Goroutines swallow per-account errors above and return nil, so this
+		// only fires on an unexpected hard error. Surface it through the
+		// outcome (the function has no error return) so the caller's
+		// all-accounts-failed detection treats it as a real failure rather
+		// than silently merging a partial result as success.
 		logging.Errorf("scheduler: unexpected fanOut g.Wait error: %v", waitErr)
+		outcome.FailedCount++
+		outcome.LastErr = fmt.Sprintf("collection wait failed: %v", waitErr)
 	}
 	return all, outcome
 }

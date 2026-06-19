@@ -405,14 +405,17 @@ func resolveGCPWIFCredential(
 	opts GCPResolveOptions,
 ) (oauth2.TokenSource, error) {
 	// Peek at the stored WIF JSON first — absent means this is a
-	// federated (secret-free) account.
+	// federated (secret-free) account. LoadRaw already maps not-found to
+	// (nil, nil), so any non-nil error here is a real store failure (DB
+	// connectivity, decrypt) that must be surfaced rather than silently
+	// collapsed to "no credential": otherwise a transient failure would
+	// silently fall back to the federated path and mask the outage.
 	var raw []byte
 	if store != nil {
 		var loadErr error
 		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
 		if loadErr != nil {
-			// Not-found errors are expected; other errors fall back to the federated path.
-			raw = nil
+			return nil, fmt.Errorf("credentials: load GCP WIF config for account %s: %w", account.ID, loadErr)
 		}
 	}
 
