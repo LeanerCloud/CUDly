@@ -102,24 +102,25 @@ use (
 )
 ```
 
-Then point gopls at it by setting `GOWORK` before launching your editor, or by
-symlinking it over `go.work` temporarily:
+Then point gopls at it by setting `GOWORK` before launching your editor:
 
 ```bash
 # Option A: set GOWORK in your shell profile or editor launcher
 export GOWORK="$PWD/go.work.local"
 
-# Option B: create go.work.local and let gopls auto-discover it
-# (gopls respects GOWORK when set; otherwise it walks up for go.work)
+# Option B: symlink go.work.local over go.work temporarily (restore before committing)
+# gopls walks up for go.work by name; it does NOT auto-discover go.work.local.
+ln -sf go.work.local go.work
 ```
 
 After adding or removing a worktree, update `go.work.local` to match:
 
 ```bash
 # Quick regeneration from git worktree list (space-safe: keeps full paths,
-# adds one -use entry per worktree; skips the main checkout on line 1)
+# adds one -use entry per worktree; skips the main checkout on line 1).
+# GOWORK= is required so go work edit targets go.work.local, not go.work.
 git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 |
-  while IFS= read -r wt; do go work edit -use "$wt"; done
+  while IFS= read -r wt; do GOWORK="$PWD/go.work.local" go work edit -use "$wt"; done
 ```
 
 The committed `go.work` (listing only this repository's own modules) keeps
