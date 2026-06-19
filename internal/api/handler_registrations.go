@@ -263,7 +263,8 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	// Atomically transition to "approved" first — prevents double-approval.
 	reg.Status = "approved"
 	h.setReviewMetadata(ctx, reg, httpReq)
-	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending"); err != nil {
+	// reviewed_by may be "admin-api-key" (not a UUID FK); validate before passing as actor.
+	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy)); err != nil {
 		if errors.Is(err, config.ErrRegistrationConflict) {
 			return nil, NewClientError(409, "registration was already processed by another request")
 		}
@@ -352,7 +353,8 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 	reg.Status = "rejected"
 	reg.RejectionReason = body.Reason
 	h.setReviewMetadata(ctx, reg, httpReq)
-	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending"); err != nil {
+	// reviewed_by may be "admin-api-key" (not a UUID FK); validate before passing as actor.
+	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy)); err != nil {
 		if errors.Is(err, config.ErrRegistrationConflict) {
 			return nil, NewClientError(409, "registration was already processed by another request")
 		}

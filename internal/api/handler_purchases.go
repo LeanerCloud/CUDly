@@ -272,7 +272,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	}
 
 	// Atomically transition to paused
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "running"}, "paused"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "running"}, "paused", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be paused: %v", executionID, err))
 	}
 
@@ -296,7 +296,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	}
 
 	// Atomically transition from paused back to pending
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, err))
 	}
 
@@ -321,7 +321,7 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 
 	// Atomically transition to running — only one concurrent caller can succeed.
 	// TransitionExecutionStatus handles not-found and wrong-status cases.
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "running"); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "running", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be started: %v", executionID, err))
 	}
 
@@ -348,7 +348,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID)
+	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
 	}
@@ -371,8 +371,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
 // can still drive the plan-disable side-effect, keeping the operation
 // idempotent across retries.
-func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
-	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled")
+// actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
+func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
+	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled", actor)
 	if err == nil {
 		return cancelled, nil
 	}
@@ -500,9 +501,11 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 	// Check for Gmail-style pre-fire delay (issue #291 wave-2).
+	// Token/email-link path: no authenticated session UUID is available, so the
+	// scheduled transition is recorded as system-initiated (transitioned_by = NULL).
 	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
 	if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil)
 	}
 	// ApproveExecution now runs the purchase synchronously inside the
 	// same call (issue #372). When it returns nil the AWS API call
@@ -552,15 +555,21 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
+	// Human session approval: stamp the session user's UUID onto
+	// transitioned_by (FK-safe via validUUIDPtrOrNil) so the audit trail
+	// records who flipped the row to "approved" (or to "scheduled" on the
+	// pre-fire delay path).
+	actor := validUUIDPtrOrNil(&session.UserID)
+
 	// Check for Gmail-style pre-fire delay (issue #291 wave-2). When
 	// PurchaseDelayHours > 0 the SDK call is deferred; the user gets a
 	// "scheduled, revoke before X" email and a window to cancel at $0.
 	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
 	if cfgErr == nil && globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor)
 	}
 
-	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, session.Email); err != nil {
+	if err := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, session.Email, actor); err != nil {
 		// ApproveAndExecute returns either a transition error (the row
 		// drifted out of pending/notified between our check and the UPDATE
 		// -- race with cancel/expire) or an execution error (AWS API failed,
@@ -626,8 +635,8 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 // scheduled_execution_at <= NOW() and fires the actual SDK call.
 // Revoking a status=scheduled execution (via the revoke handler or the
 // History "Revoke" button) transitions it to "cancelled" at zero cloud cost.
-func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string) (any, error) {
-	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor)
+func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (any, error) {
+	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy)
 	if err != nil {
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 			// A concurrent Cancel beat the approve: the CAS rejected because the row
@@ -656,13 +665,17 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 // ScheduledExecutionAt = now+delay and ApprovedBy. No SDK call is made.
 // Returns the updated execution on success.
 //
+// actor is the human-readable approver identity (email) recorded in
+// ApprovedBy. transitionedBy is the approver's user UUID stamped onto the
+// audit trail by the CAS (nil for token/scheduler paths with no session UUID).
+//
 // The atomic CAS (TransitionExecutionStatus WHERE status IN (pending,notified))
 // prevents a silent revoke loss: if a concurrent Cancel flipped the row to
 // "cancelled" between the caller's SELECT and this write, TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
 // blindly overwriting the cancelled state.
-func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string) (*config.PurchaseExecution, error) {
-	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled")
+func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (*config.PurchaseExecution, error) {
+	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled", transitionedBy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition execution %s to scheduled: %w", execution.ExecutionID, err)
 	}
@@ -1994,7 +2007,10 @@ func (h *Handler) directExecutePurchase(ctx context.Context, execution *config.P
 		logging.Errorf("AUDIT GAP: failed to stamp direct-execute audit fields on %s: %v", executionID, err)
 	}
 
-	if err := h.purchase.ApproveAndExecute(ctx, executionID, session.Email); err != nil {
+	// Human session direct-execute: stamp the session user's UUID onto
+	// transitioned_by (FK-safe via validUUIDPtrOrNil) so the audit trail
+	// records who flipped the row to "approved".
+	if err := h.purchase.ApproveAndExecute(ctx, executionID, session.Email, validUUIDPtrOrNil(&session.UserID)); err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)
 		return nil, NewClientError(409, fmt.Sprintf("execution %s could not be direct-executed: %v", executionID, err))

@@ -785,7 +785,7 @@ func TestHandler_rejectRIExchange_ValidTokenAndRecord(t *testing.T) {
 			Status:        "pending",
 		}, nil)
 	// rejectRIExchange transitions to "cancelled", not "rejected"
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled").
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
 		Return(&config.RIExchangeRecord{
 			ID:     "11111111-1111-1111-1111-111111111111",
 			Status: "cancelled",

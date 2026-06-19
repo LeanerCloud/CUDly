@@ -67,7 +67,7 @@ func TestManager_ApproveExecution_Success(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -94,7 +94,7 @@ func TestManager_ApproveExecution_StampsApprovedBy(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "operator@example.com")
@@ -127,7 +127,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -155,7 +155,7 @@ func TestManager_ApproveExecution_InvalidToken(t *testing.T) {
 	// Critically: TransitionExecutionStatus and SavePurchaseExecution must
 	// NOT have been called. A token-validation bypass is exactly what the
 	// constant-time comparison guards against.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
@@ -174,7 +174,7 @@ func TestManager_ApproveExecution_EmptyToken(t *testing.T) {
 	err := manager.ApproveExecution(ctx, "exec-123", "", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestManager_ApproveExecution_NotFound(t *testing.T) {
@@ -216,7 +216,7 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 		ApprovalToken: "valid-token",
 	}
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved").
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).
 		Return(nil, errors.New(`execution exec-123 cannot transition from "cancelled" to "approved"`))
 
 	err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -245,12 +245,12 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 		Status:        "approved",
 		ApprovalToken: "tok",
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	// No GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan calls — see AssertNotCalled below.
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
-	err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com")
+	err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil)
 	require.NoError(t, err)
 
 	// Crucially, the empty PlanID must never reach the UUID-typed store columns.
@@ -273,19 +273,26 @@ func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 	// Session-authed path: ApproveAndExecute is called directly without a
 	// token, after the caller has run RBAC. Verifies the entry point works
 	// independently of the token branch.
+	//
+	// Also the manager-level regression guard for issue #1009: a non-nil
+	// transitionedBy (the session user's UUID) must be threaded into
+	// TransitionExecutionStatus so transitioned_by is stamped for human
+	// session approvals. Pre-fix ApproveAndExecute always passed nil here.
 	ctx := context.Background()
 	manager, store, sender := newApproveManager(t)
 
+	actorUUID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	updated := &config.PurchaseExecution{
 		ExecutionID:   "exec-456",
 		PlanID:        "plan-789",
 		Status:        "approved",
 		ApprovalToken: "tok",
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved",
+		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-789")
 
-	err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com")
+	err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com", &actorUUID)
 	require.NoError(t, err)
 	require.NotNil(t, updated.ApprovedBy)
 	assert.Equal(t, "session-user@example.com", *updated.ApprovedBy)
@@ -526,7 +533,7 @@ func TestManager_ApproveExecution_ExpiredToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "expired")
 	// Token validation passes but the expiry check fires — TransitionExecutionStatus
 	// must never be called on an expired token.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
 
@@ -551,7 +558,7 @@ func TestManager_ApproveExecution_ValidTokenWithinTTL(t *testing.T) {
 		ApprovalToken: "valid-token",
 	}
 	store.On("GetExecutionByID", ctx, "exec-live").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-live")
 
 	err := manager.ApproveExecution(ctx, "exec-live", "valid-token", "")
@@ -580,7 +587,7 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 		Status:      "approved",
 	}
 	store.On("GetExecutionByID", ctx, "exec-legacy").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-legacy")
 
 	err := manager.ApproveExecution(ctx, "exec-legacy", "valid-token", "")
@@ -614,7 +621,7 @@ func TestManager_ApproveExecution_NonAWSOrphanReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no longer exists")
 	assert.Contains(t, err.Error(), "azure")
 	// Execute chain must not run after the orphan guard fires.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
 
@@ -640,7 +647,7 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 		ApprovalToken: "valid-token",
 	}
 	store.On("GetExecutionByID", ctx, "exec-aws-ambient").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "approved").Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-aws")
 
 	err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "")

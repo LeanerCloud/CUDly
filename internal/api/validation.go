@@ -387,6 +387,17 @@ func validateUUID(id string) error {
 	return nil
 }
 
+// validUUIDPtrOrNil returns p when *p is a valid UUID, or nil otherwise.
+// Used to convert reviewer/creator strings (which may be "admin-api-key"
+// for API-key sessions — not a real UUID) to a nullable FK-safe actor pointer
+// before stamping transitioned_by on state-transition rows.
+func validUUIDPtrOrNil(p *string) *string {
+	if p == nil || validateUUID(*p) != nil {
+		return nil
+	}
+	return p
+}
+
 // validateContentType checks if the Content-Type header is acceptable for the request
 func validateContentType(req *events.LambdaFunctionURLRequest) error {
 	method := req.RequestContext.HTTP.Method

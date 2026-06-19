@@ -208,7 +208,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	runningExec := *exec
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-approved",
-		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -290,7 +290,7 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	runningExec := *exec
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-save-err",
-		[]string{"approved", "pending", "notified"}, "running").Return(&runningExec, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-save-err").Return(plan, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -359,7 +359,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// Atomic approve transition (issue #372 fix).
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved").Return(approved, nil)
+	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "approved", (*string)(nil)).Return(approved, nil)
 	// Synchronous execute chain: GetPurchasePlan is called with the
 	// approved execution's PlanID — pinning the non-empty id here means a
 	// regression that drops it (e.g. passes "" or exec.ExecutionID by

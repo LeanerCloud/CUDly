@@ -56,7 +56,9 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		return err
 	}
 
-	err = m.ApproveAndExecute(ctx, executionID, actor)
+	// Token/SQS path: no authenticated session UUID is available, so the
+	// transition is recorded as system-initiated (transitioned_by = NULL).
+	err = m.ApproveAndExecute(ctx, executionID, actor, nil)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution (token path) failed after %s: %v",
 			executionID, time.Since(t0), err)
@@ -140,11 +142,15 @@ func OrphanExecutionError(execution *config.PurchaseExecution) error {
 // transition" error. Cross-execution concurrency is unaffected: each
 // approval drives its own executeAndFinalize, which already fans out
 // per-account in parallel via executeMultiAccount.
-func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string) error {
+func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string) error {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveAndExecute starting (actor=%q)", executionID, maskActor(actor))
 
-	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "approved")
+	// transitionedBy carries the session user's UUID for human-initiated
+	// approvals (stamped onto transitioned_by); it is nil for token/SQS/system
+	// flows so transitioned_by = NULL on those hops. The human-readable actor
+	// email is recorded separately onto approved_by (below).
+	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "approved", transitionedBy)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveAndExecute status transition failed after %s: %v",
 			executionID, time.Since(t0), err)

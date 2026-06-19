@@ -26,7 +26,7 @@ type PurchaseManagerInterface interface {
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessage(ctx context.Context, body string) error
 	ApproveExecution(ctx context.Context, execID, token, actor string) error
-	ApproveAndExecute(ctx context.Context, execID, actor string) error
+	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) error
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 	// ReapStuckExecutions sweeps purchase_executions stuck in
 	// approved/running longer than reapAfter and flips them to "failed"

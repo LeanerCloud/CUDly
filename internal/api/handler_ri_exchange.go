@@ -1038,7 +1038,8 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token strin
 		return nil, err
 	}
 
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
+	// Token-based approval: no session user, so transitioned_by = NULL.
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
@@ -1070,7 +1071,8 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 		return nil, err
 	}
 
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing")
+	// Session-authed approval: stamp the session user as the actor.
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", resolveCreatorUserID(session))
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
@@ -1326,7 +1328,8 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 		return nil, NewClientError(403, "invalid rejection token")
 	}
 
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled")
+	// Token-based rejection: no session user, so transitioned_by = NULL.
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}

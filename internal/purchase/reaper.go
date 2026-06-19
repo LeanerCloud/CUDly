@@ -170,7 +170,8 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	logging.Warnf("purchase reaper: reaping execution %s (status=%s, age>=%dm sweep_at=%s)",
 		exec.ExecutionID, prevStatus, ageMinutes, now.UTC().Format(time.RFC3339))
 
-	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, stuckStatuses, failedStatus)
+	// System-initiated: reaper passes nil so transitioned_by = NULL.
+	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, stuckStatuses, failedStatus, nil)
 	if err != nil {
 		// Distinguish CAS race-loss (the real executor finished between
 		// our SELECT and CAS, so the row is no longer in

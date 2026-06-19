@@ -895,10 +895,13 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 // TransitionExecutionStatus atomically transitions an execution from one of the
 // allowed statuses to a new status. Returns the updated record, or an error if
 // the execution was not found or not in an allowed status.
-func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string) (*PurchaseExecution, error) {
+// actor is the UUID of the user performing the transition (nil for system-initiated paths);
+// it is stamped onto transitioned_by and transitioned_at is always set to NOW().
+func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
 	query := `
 		UPDATE purchase_executions
-		SET status = $2, updated_at = NOW()
+		SET status = $2, updated_at = NOW(),
+		    transitioned_by = $4, transitioned_at = NOW()
 		WHERE execution_id = $1 AND status = ANY($3)
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token, recommendations,
@@ -910,7 +913,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses)
+	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor)
 	if err != nil {
 		return nil, err
 	}
@@ -2229,10 +2232,12 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.
-func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string) (*RIExchangeRecord, error) {
+// actor is the UUID of the user performing the transition (nil for system-initiated paths).
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
 		UPDATE ri_exchange_history
-		SET status = $3, updated_at = NOW()
+		SET status = $3, updated_at = NOW(),
+		    transitioned_by = $4, transitioned_at = NOW()
 		WHERE id = $1 AND status = $2 AND (expires_at IS NULL OR expires_at > NOW())
 		RETURNING id, account_id, exchange_id, region, source_ri_ids,
 		          source_instance_type, source_count, target_offering_id,
@@ -2242,7 +2247,7 @@ func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id strin
 		          created_by_user_id, approved_by
 	`
 
-	records, err := s.queryRIExchangeRecords(ctx, query, id, fromStatus, toStatus)
+	records, err := s.queryRIExchangeRecords(ctx, query, id, fromStatus, toStatus, actor)
 	if err != nil {
 		return nil, err
 	}

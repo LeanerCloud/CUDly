@@ -99,7 +99,7 @@ func TestPostgresStore_TransitionRIExchangeStatus_NilDB(t *testing.T) {
 	ctx := context.Background()
 
 	panicked := callWithRecover(func() {
-		_, _ = store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing")
+		_, _ = store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	})
 
 	assert.True(t, panicked, "expected panic with nil db connection")

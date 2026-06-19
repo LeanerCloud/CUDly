@@ -170,7 +170,8 @@ func (s *PostgresStore) UpdateAccountRegistration(ctx context.Context, reg *Acco
 // TransitionRegistrationStatus atomically updates a registration's workflow fields
 // only if the current status matches fromStatus. Returns ErrRegistrationConflict
 // when 0 rows are affected (another request already changed the status).
-func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string) error {
+// actor is the UUID of the reviewer (nil for system-initiated transitions).
+func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error {
 	reg.UpdatedAt = time.Now()
 
 	query := `
@@ -180,7 +181,9 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 			cloud_account_id = $4,
 			reviewed_by      = $5,
 			reviewed_at      = $6,
-			updated_at       = $7
+			updated_at       = $7,
+			transitioned_by  = $9,
+			transitioned_at  = NOW()
 		WHERE id = $1 AND status = $8
 	`
 
@@ -198,6 +201,7 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 		reviewedAt,
 		reg.UpdatedAt,
 		fromStatus,
+		actor,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to transition account registration status: %w", err)

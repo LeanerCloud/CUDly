@@ -239,9 +239,9 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	running := newPending()
 	running.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-dup",
-		[]string{"approved", "pending", "notified"}, "running").Return(running, nil).Once()
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(running, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-dup",
-		[]string{"approved", "pending", "notified"}, "running").
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: row already running", config.ErrExecutionNotInExpectedStatus)).Once()
 
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
@@ -309,7 +309,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	running := *exec
 	running.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "root-partial",
-		[]string{"approved", "pending", "notified"}, "running").Return(&running, nil)
+		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&running, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-x").Return(plan, nil)
 	// GetPlanAccounts is served by the Fn hook, not a testify expectation.
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {

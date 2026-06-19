@@ -184,7 +184,8 @@ func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr erro
 //
 // On a won claim it runs executeAndFinalize and returns (true, execErr).
 func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExecution) (claimed bool, err error) {
-	updated, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved", "pending", "notified"}, "running")
+	// System-initiated: SQS/cron executor passes nil so transitioned_by = NULL.
+	updated, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved", "pending", "notified"}, "running", nil)
 	if claimErr != nil {
 		if errors.Is(claimErr, config.ErrNotFound) || errors.Is(claimErr, config.ErrExecutionNotInExpectedStatus) {
 			// Benign CAS race-loss: another worker/redelivery already owns this
@@ -330,7 +331,8 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 	// sweeps (or a late original completion) from both calling executeAndFinalize
 	// on the same approved row. The CAS transitions "approved" -> "running";
 	// only the winner proceeds.
-	claimed, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "running")
+	// System-initiated: recovery sweep passes nil so transitioned_by = NULL.
+	claimed, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "running", nil)
 	if claimErr != nil {
 		// ErrNotFound: row vanished between SELECT and CAS - benign race.
 		// ErrExecutionNotInExpectedStatus: another sweep or the original run
@@ -375,7 +377,8 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
 	logging.Errorf("Recovering stranded approved execution %s (approved but never finalized; failing it for visibility)", exec.ExecutionID)
 
-	updated, txErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "failed")
+	// System-initiated: stranded-execution recovery passes nil so transitioned_by = NULL.
+	updated, txErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "failed", nil)
 	if txErr != nil {
 		// ErrNotFound means the row vanished between the stale SELECT and
 		// this CAS attempt (e.g. deleted by an operator or a concurrent

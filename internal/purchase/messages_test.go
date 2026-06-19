@@ -124,7 +124,7 @@ func TestManager_ProcessMessage(t *testing.T) {
 		// and returns ErrExecutionNotInExpectedStatus — a benign skip that the
 		// handler acks without error.
 		mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
-			[]string{"approved", "pending", "notified"}, "running").
+			[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).
 			Return(nil, fmt.Errorf("%w: cancelled", config.ErrExecutionNotInExpectedStatus))
 
 		err := manager.ProcessMessage(ctx, `{"type": "execute_purchase", "execution_id": "exec-123"}`)
