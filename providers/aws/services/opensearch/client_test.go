@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockOpenSearchClient implements OpenSearchAPI for testing
+// MockOpenSearchClient implements API for testing.
 type MockOpenSearchClient struct {
 	mock.Mock
 }
@@ -99,8 +99,8 @@ func TestClient_GetRecommendations(t *testing.T) {
 
 func TestClient_GetExistingCommitments(t *testing.T) {
 	tests := []struct {
-		name        string
 		setupMocks  func(*MockOpenSearchClient)
+		name        string
 		expectedLen int
 		expectError bool
 	}{
@@ -258,15 +258,15 @@ func TestClient_MatchesDuration(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		offeringDuration int32
 		term             string
+		offeringDuration int32
 		expected         bool
 	}{
-		{"1 year match", 31536000, "1yr", true},
-		{"3 years match", 94608000, "3yr", true},
-		{"3 numeric term", 94608000, "3", true},
-		{"no match", 31536000, "3yr", false},
-		{"zero duration", 0, "1yr", false},
+		{"1 year match", "1yr", 31536000, true},
+		{"3 years match", "3yr", 94608000, true},
+		{"3 numeric term", "3", 94608000, true},
+		{"no match", "3yr", 31536000, false},
+		{"zero duration", "1yr", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -994,7 +994,7 @@ func TestPurchaseCommitment_TagFailure_StructuredLog(t *testing.T) {
 		Return(&sts.GetCallerIdentityOutput{Account: aws.String("000000000000")}, nil)
 
 	mockOS.On("AddTags", mock.Anything, mock.Anything).
-		Return(nil, fmt.Errorf("ValidationException: invalid resource type"))
+		Return(nil, fmt.Errorf("ValidationException: invalid resource type")).Once()
 
 	// Redirect log output to capture the structured line.
 	var buf bytes.Buffer

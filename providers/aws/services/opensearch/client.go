@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/aws/internal/purchasecfg"
 )
 
-// OpenSearchAPI defines the interface for OpenSearch operations (enables mocking)
-type OpenSearchAPI interface {
+// API defines the interface for OpenSearch operations (enables mocking).
+type API interface {
 	PurchaseReservedInstanceOffering(ctx context.Context, params *opensearch.PurchaseReservedInstanceOfferingInput, optFns ...func(*opensearch.Options)) (*opensearch.PurchaseReservedInstanceOfferingOutput, error)
 	DescribeReservedInstanceOfferings(ctx context.Context, params *opensearch.DescribeReservedInstanceOfferingsInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstanceOfferingsOutput, error)
 	DescribeReservedInstances(ctx context.Context, params *opensearch.DescribeReservedInstancesInput, optFns ...func(*opensearch.Options)) (*opensearch.DescribeReservedInstancesOutput, error)
@@ -33,15 +34,14 @@ type STSAPI interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// Client handles AWS OpenSearch Reserved Instances
+// Client handles AWS OpenSearch Reserved Instances.
 type Client struct {
-	client    OpenSearchAPI
-	stsClient STSAPI
-	region    string
-
-	accountOnce sync.Once
-	accountID   string
+	client      API
+	stsClient   STSAPI
 	accountErr  error
+	accountID   string
+	region      string
+	accountOnce sync.Once
 }
 
 // NewClient creates a new OpenSearch client with purchase-path retry/timeout
@@ -55,32 +55,32 @@ func NewClient(cfg aws.Config) *Client {
 	}
 }
 
-// SetOpenSearchAPI sets a custom OpenSearch API client (for testing)
-func (c *Client) SetOpenSearchAPI(api OpenSearchAPI) {
+// SetOpenSearchAPI sets a custom OpenSearch API client (for testing).
+func (c *Client) SetOpenSearchAPI(api API) {
 	c.client = api
 }
 
-// SetSTSAPI sets a custom STS client (for testing)
+// SetSTSAPI sets a custom STS client (for testing).
 func (c *Client) SetSTSAPI(api STSAPI) {
 	c.stsClient = api
 }
 
-// GetServiceType returns the service type
+// GetServiceType returns the service type.
 func (c *Client) GetServiceType() common.ServiceType {
 	return common.ServiceSearch
 }
 
-// GetRegion returns the region
+// GetRegion returns the region.
 func (c *Client) GetRegion() string {
 	return c.region
 }
 
-// GetRecommendations returns empty as OpenSearch uses centralized Cost Explorer recommendations
+// GetRecommendations returns empty as OpenSearch uses centralized Cost Explorer recommendations.
 func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 
-// GetExistingCommitments retrieves existing OpenSearch Reserved Instances
+// GetExistingCommitments retrieves existing OpenSearch Reserved Instances.
 func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 	var nextToken *string
@@ -188,10 +188,15 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, nil
 	}
 
+	instanceCount, countErr := safeInt32Count(rec.Count)
+	if countErr != nil {
+		result.Error = countErr
+		return result, result.Error
+	}
 	input := &opensearch.PurchaseReservedInstanceOfferingInput{
 		ReservedInstanceOfferingId: aws.String(offeringID),
 		ReservationName:            aws.String(reservationName),
-		InstanceCount:              aws.Int32(int32(rec.Count)),
+		InstanceCount:              aws.Int32(instanceCount),
 	}
 
 	response, err := c.client.PurchaseReservedInstanceOffering(ctx, input)
@@ -467,7 +472,7 @@ func normalizeOpenSearchPaymentOption(option string) string {
 	}
 }
 
-// matchesPaymentOption checks if the offering payment option matches
+// matchesPaymentOption checks if the offering payment option matches.
 func (c *Client) matchesPaymentOption(offeringOption types.ReservedInstancePaymentOption, required string) bool {
 	switch required {
 	case "all-upfront":
@@ -481,7 +486,7 @@ func (c *Client) matchesPaymentOption(offeringOption types.ReservedInstancePayme
 	}
 }
 
-// matchesDuration checks if the offering duration matches
+// matchesDuration checks if the offering duration matches.
 func (c *Client) matchesDuration(offeringDuration int32, term string) bool {
 	offeringMonths := offeringDuration / 2592000 // 30 days in seconds
 	requiredMonths := 12
@@ -491,13 +496,13 @@ func (c *Client) matchesDuration(offeringDuration int32, term string) bool {
 	return int(offeringMonths) >= requiredMonths-1 && int(offeringMonths) <= requiredMonths+1
 }
 
-// ValidateOffering checks if an offering exists without purchasing
+// ValidateOffering checks if an offering exists without purchasing.
 func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
 	_, err := c.findOfferingID(ctx, rec, "")
 	return err
 }
 
-// GetOfferingDetails retrieves offering details
+// GetOfferingDetails retrieves offering details.
 func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
 	offeringID, err := c.findOfferingID(ctx, rec, "")
 	if err != nil {
@@ -533,7 +538,7 @@ func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendati
 	return details, nil
 }
 
-// GetValidResourceTypes returns valid OpenSearch instance types (static list)
+// GetValidResourceTypes returns valid OpenSearch instance types (static list).
 func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	return []string{
 		"t2.small.search",
@@ -589,11 +594,21 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	}, nil
 }
 
-// getTermMonthsFromDuration converts duration in seconds to months
+// getTermMonthsFromDuration converts duration in seconds to months.
 func getTermMonthsFromDuration(duration int32) int {
 	offeringMonths := duration / 2592000
 	if offeringMonths >= 30 {
 		return 36
 	}
 	return 12
+}
+
+// safeInt32Count validates that n is a positive value that fits in int32 and
+// returns it as int32. This prevents a gosec G115 integer-overflow conversion
+// on the PurchaseReservedInstanceOffering InstanceCount field.
+func safeInt32Count(n int) (int32, error) {
+	if uint(n)-1 > math.MaxInt32 {
+		return 0, fmt.Errorf("instance count %d is out of valid range [1, %d]", n, math.MaxInt32)
+	}
+	return int32(n), nil //nolint:gosec // bounds-checked by safeInt32Count
 }
