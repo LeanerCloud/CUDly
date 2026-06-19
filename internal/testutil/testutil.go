@@ -1,4 +1,4 @@
-// Package testutil provides common utilities for testing
+// Package testutil provides common utilities for testing.
 package testutil
 
 import (
@@ -116,7 +116,7 @@ func AssertNotContains(t *testing.T, str, substr string) {
 }
 
 func contains(str, substr string) bool {
-	return len(str) >= len(substr) && (str == substr || len(substr) == 0 || indexSubstring(str, substr) >= 0)
+	return len(str) >= len(substr) && (str == substr || substr == "" || indexSubstring(str, substr) >= 0)
 }
 
 func indexSubstring(str, substr string) int {

@@ -18,9 +18,8 @@ import (
 // TestSaveSnapshotMarshalError verifies metadata marshaling error handling.
 func TestSaveSnapshotMarshalError(t *testing.T) {
 	t.Run("invalid metadata causes marshal error", func(t *testing.T) {
-		// Create snapshot with unmarshallable metadata
+		// Create snapshot with unmarshallable metadata.
 		snapshot := &SavingsSnapshot{
-			ID:       "test-id",
 			Metadata: map[string]interface{}{"channel": make(chan int)},
 		}
 
@@ -116,14 +115,9 @@ func TestPartitionDateCalculation(t *testing.T) {
 // TestMetadataHandling verifies metadata JSON handling.
 func TestMetadataHandling(t *testing.T) {
 	t.Run("nil metadata produces nil bytes", func(t *testing.T) {
-		var metadata map[string]interface{} = nil
+		// Same logic as SaveSnapshot: when metadata is nil the marshal branch
+		// is not taken, so metadataJSON stays nil.
 		var metadataJSON []byte
-
-		// Same logic as SaveSnapshot
-		if metadata != nil {
-			metadataJSON, _ = json.Marshal(metadata)
-		}
-
 		assert.Nil(t, metadataJSON)
 	})
 

@@ -1,7 +1,7 @@
 // Package runtime holds small helpers that inspect the process's
 // runtime environment. Kept deliberately minimal — this is a shared
 // surface, not a grab-bag for utility code.
-package runtime
+package runtime //nolint:revive // package name matches the directory; conflict with stdlib runtime is intentional and required by existing importers
 
 import "os"
 

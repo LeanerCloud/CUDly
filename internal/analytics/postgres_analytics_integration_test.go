@@ -256,8 +256,8 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals(t *testing.T) {
 	}
 
 	for _, snapshot := range testSnapshots {
-		err := store.SaveSnapshot(ctx, snapshot)
-		require.NoError(t, err)
+		saveErr := store.SaveSnapshot(ctx, snapshot)
+		require.NoError(t, saveErr)
 	}
 
 	// Refresh materialized views so data is available
