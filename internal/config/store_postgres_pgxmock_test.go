@@ -571,8 +571,11 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"idem-key-planned",
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
 	)
-	// Regexp matcher: only matches if the issued SELECT projects idempotency_key.
-	mock.ExpectQuery("idempotency_key").
+	// Regexp matcher: only matches if the issued SELECT projects both
+	// idempotency_key and scheduled_execution_at. The alternation forces both
+	// names to appear; a projection missing either column fails to match, the
+	// mock returns no rows, and the test catches the column-count drift.
+	mock.ExpectQuery(`idempotency_key.*scheduled_execution_at|scheduled_execution_at.*idempotency_key`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 

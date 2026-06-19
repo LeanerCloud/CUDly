@@ -1122,7 +1122,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key
+		       idempotency_key, scheduled_execution_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date ASC NULLS LAST, id ASC
