@@ -119,8 +119,7 @@ Source: m5.xlarge, 1y, $25/mo, NF=8. CE rec: m8g.large (NF=4, $52/mo, 1y). Dolla
 4*52=208 >= 200. Must appear. Confirms new-generation families route through without an
 allowlist entry.
 
-### Fixture C: dollar-units false positive at CE layer is caught at exchange time, not
-recommendation time
+### Fixture C: dollar-units false positive at CE layer is caught at exchange time, not recommendation time
 
 Source: m5.xlarge, 1y, $25/mo, NF=8. CE rec: c5.medium (NF=2, $60/mo, 1y). Dollar-units =
 2*60=120 < 200. Must NOT appear (pre-filter blocks it).
