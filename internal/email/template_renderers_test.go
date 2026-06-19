@@ -734,3 +734,59 @@ func TestRenderRIExchangePendingApprovalEmailHTML_SkippedBlock(t *testing.T) {
 	assert.Contains(t, html, "no matching target available")
 	assert.Contains(t, html, "Skipped")
 }
+
+// Issue #296 / XSS guard: html/template must escape hostile payloads in the
+// RIExchange HTML renderer. Tests RequestedByName, CancellationWindowNote, and
+// Skipped.Reason -- the three free-text fields most likely to carry attacker
+// input. Mirrors the analogous sub-test in TestPlainTextTemplates_NoHTMLEscaping.
+func TestRenderRIExchangePendingApprovalEmailHTML_EscapesHostilePayload(t *testing.T) {
+	const xssPayload = `<script>alert('xss')</script>`
+	data := RIExchangeNotificationData{
+		DashboardURL:           "https://dashboard.example.com",
+		TotalPayment:           "0.00",
+		RequestedByName:        xssPayload,
+		RequestedByEmail:       "attacker@evil.example",
+		CancellationWindowNote: xssPayload,
+		Exchanges:              []RIExchangeItem{},
+		Skipped: []SkippedExchange{{
+			SourceRIID:         "ri-skip-xss",
+			SourceInstanceType: "m5.large",
+			Reason:             xssPayload,
+		}},
+	}
+
+	html, err := RenderRIExchangePendingApprovalEmailHTML(data)
+	require.NoError(t, err)
+
+	// The literal script tag must not appear verbatim in the HTML output.
+	assert.NotContains(t, html, xssPayload, "html/template must escape <script> tags in RequestedByName/CancellationWindowNote/Reason")
+	// The content must still appear (escaped), confirming the field is rendered at all.
+	assert.Contains(t, html, "alert(", "escaped payload content should still appear in output")
+}
+
+// Issue #296 / plain-text guard: text/template must emit special characters
+// verbatim in the RIExchange plain-text renderer (no HTML entity encoding).
+func TestRenderRIExchangePendingApprovalEmail_PlainTextVerbatim(t *testing.T) {
+	name := "O'Brien & Co"
+	emailAddr := "o.brien+tag@acme.com"
+	data := RIExchangeNotificationData{
+		DashboardURL:     "https://dashboard.example.com",
+		TotalPayment:     "0.00",
+		RequestedByName:  name,
+		RequestedByEmail: emailAddr,
+		Exchanges: []RIExchangeItem{{
+			RecordID: "rec-plain", ApprovalToken: "tok-plain",
+			SourceRIID: "ri-ccc", SourceInstanceType: "r5.large",
+			TargetInstanceType: "r6i.large", TargetCount: 1,
+			PaymentDue: "0.00", UtilizationPct: 55.0,
+		}},
+	}
+
+	body, err := RenderRIExchangePendingApprovalEmail(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, body, name, "apostrophe+ampersand in RequestedByName must be verbatim in plain-text")
+	assert.Contains(t, body, emailAddr, "plus-addressed email must be verbatim in plain-text")
+	assert.NotContains(t, body, "&#39;", "plain-text must not HTML-encode apostrophe")
+	assert.NotContains(t, body, "&amp;", "plain-text must not HTML-encode ampersand")
+}
