@@ -18,7 +18,7 @@ import (
 
 // sequentialFakeEC2 returns successive quoteOutputs for each GetQuote call
 // so we can simulate pricing increasing between the first and second quote.
-type sequentialFakeEC2 struct {
+type sequentialFakeEC2 struct { //nolint:govet // fieldalignment: test helper struct; layout reflects logical grouping of input vs output fields
 	quoteOutputs []*ec2.GetReservedInstancesExchangeQuoteOutput
 	quoteErrors  []error
 	quoteCall    int

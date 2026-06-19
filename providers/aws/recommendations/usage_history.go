@@ -54,7 +54,7 @@ func (c *Client) GetDailyUsagePcts(ctx context.Context, serviceFilter, resourceT
 	return orderedDaySlice(start2, dayPct), nil
 }
 
-// newDayWindow initialises a zeroed day map for the lookback window starting at
+// newDayWindow initializes a zeroed day map for the lookback window starting at
 // start and returns both the map and start unchanged (to keep the call site
 // readable).
 func newDayWindow(start time.Time) (map[string]float64, time.Time) {
@@ -143,16 +143,16 @@ type tupleKey struct{ service, region, resourceType string }
 
 // groupRecsByTuple builds an ordered unique list of tuples and an index map
 // from each tuple to the recommendation indices that share it.
-func groupRecsByTuple(recs []common.Recommendation) ([]tupleKey, map[tupleKey][]int) {
-	order := make([]tupleKey, 0)
+func groupRecsByTuple(recs []common.Recommendation) (order []tupleKey, recsByTuple map[tupleKey][]int) {
+	order = make([]tupleKey, 0)
 	seen := make(map[tupleKey]struct{})
-	recsByTuple := make(map[tupleKey][]int)
-	for i, r := range recs {
-		sf := getServiceStringForCostExplorer(r.Service)
-		if sf == "" || r.Region == "" || r.ResourceType == "" {
+	recsByTuple = make(map[tupleKey][]int)
+	for i := range recs {
+		sf := getServiceStringForCostExplorer(recs[i].Service)
+		if sf == "" || recs[i].Region == "" || recs[i].ResourceType == "" {
 			continue
 		}
-		k := tupleKey{sf, r.Region, r.ResourceType}
+		k := tupleKey{sf, recs[i].Region, recs[i].ResourceType}
 		if _, ok := seen[k]; !ok {
 			seen[k] = struct{}{}
 			order = append(order, k)

@@ -16,9 +16,9 @@ func TestGetFilteredPlanTypes(t *testing.T) {
 		name           string
 		includeSPTypes []string
 		excludeSPTypes []string
-		expectedLen    int
 		shouldContain  []types.SupportedSavingsPlansType
 		shouldExclude  []types.SupportedSavingsPlansType
+		expectedLen    int
 	}{
 		{
 			name:           "No filters - returns all types",
@@ -163,8 +163,8 @@ func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
 	}
 
 	tests := []struct {
-		name               string
 		utilizationStr     *string
+		name               string
 		wantUtilization    float64
 		wantAvgInstancesIs float64
 	}{

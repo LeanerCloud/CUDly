@@ -14,10 +14,8 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/aws/recommendations"
 )
 
-// mockCostExplorerClient implements recommendations.CostExplorerAPI for testing
-type mockCostExplorerClient struct {
-	getRecommendationsFunc func() []common.Recommendation
-}
+// mockCostExplorerClient implements recommendations.CostExplorerAPI for testing.
+type mockCostExplorerClient struct{}
 
 func (m *mockCostExplorerClient) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
 	// Return empty recommendations - the mock focuses on the adapter's filtering logic
@@ -36,7 +34,7 @@ func (m *mockCostExplorerClient) GetReservationCoverage(ctx context.Context, par
 	return &costexplorer.GetReservationCoverageOutput{}, nil
 }
 
-// newTestRecommendationsClient creates a recommendations client with a mock CE client
+// newTestRecommendationsClient creates a recommendations client with a mock CE client.
 func newTestRecommendationsClient(ce *mockCostExplorerClient) *recommendations.Client {
 	return recommendations.NewClientWithAPI(ce, "us-east-1")
 }
@@ -132,7 +130,7 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 }
 
 // testRecommendationsClientAdapter is a test-only version of RecommendationsClientAdapter
-// that uses an interface for easier mocking
+// that uses an interface for easier mocking.
 type testRecommendationsClientAdapter struct {
 	getRecommendationsFunc           func(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
 	getRecommendationsForServiceFunc func(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)
@@ -205,7 +203,6 @@ func TestRecommendationsClientAdapter_GetRecommendations_Integration(t *testing.
 		// Should not error (may return empty list)
 		require.NoError(t, err)
 	})
-
 }
 
 func TestRecommendationsClientAdapter_GetRecommendationsForService_WithMock(t *testing.T) {

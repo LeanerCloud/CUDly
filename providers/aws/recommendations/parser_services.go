@@ -11,7 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// parseRDSDetails extracts RDS-specific details
+// parseRDSDetails extracts RDS-specific details.
 func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RDSInstanceDetails == nil {
 		return fmt.Errorf("RDS instance details not found")
@@ -53,7 +53,7 @@ func (c *Client) parseRDSDetails(_ context.Context, rec *common.Recommendation, 
 	return nil
 }
 
-// parseElastiCacheDetails extracts ElastiCache-specific details
+// parseElastiCacheDetails extracts ElastiCache-specific details.
 func (c *Client) parseElastiCacheDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ElastiCacheInstanceDetails == nil {
 		return fmt.Errorf("ElastiCache instance details not found")
@@ -104,7 +104,7 @@ func resolveEC2Tenancy(tenancy *string) (string, error) {
 		return string(ec2types.TenancyDedicated), nil
 	default:
 		return "", fmt.Errorf(
-			"unrecognised EC2 tenancy %q from Cost Explorer: "+
+			"unrecognized EC2 tenancy %q from Cost Explorer: "+
 				"must be shared (default) or dedicated; "+
 				"host tenancy has no corresponding RI product",
 			*tenancy,
@@ -122,7 +122,7 @@ func resolveEC2Scope(az *string) string {
 }
 
 // enrichFromCatalogue populates VCPU and MemoryGB on ec2Info from the
-// lazily-cached DescribeInstanceTypes catalogue. Non-fatal on cache miss.
+// lazily-cached DescribeInstanceTypes catalog. Non-fatal on cache miss.
 func (c *Client) enrichFromCatalogue(ctx context.Context, ec2Info *common.ComputeDetails) {
 	if ec2Info.InstanceType == "" {
 		return
@@ -140,8 +140,8 @@ func (c *Client) enrichFromCatalogue(ctx context.Context, ec2Info *common.Comput
 }
 
 // parseEC2Details extracts EC2-specific details and enriches the rec with
-// vCPU and memory from the lazily-cached DescribeInstanceTypes catalogue.
-// If the catalogue fetch failed or the instance type is not found, VCPU
+// vCPU and memory from the lazily-cached DescribeInstanceTypes catalog.
+// If the catalog fetch failed or the instance type is not found, VCPU
 // and MemoryGB remain 0 (the omitempty JSON tags hide them from payloads).
 func (c *Client) parseEC2Details(ctx context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.EC2InstanceDetails == nil {
@@ -173,7 +173,7 @@ func (c *Client) parseEC2Details(ctx context.Context, rec *common.Recommendation
 	return nil
 }
 
-// parseOpenSearchDetails extracts OpenSearch-specific details
+// parseOpenSearchDetails extracts OpenSearch-specific details.
 func (c *Client) parseOpenSearchDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.ESInstanceDetails == nil {
 		return fmt.Errorf("OpenSearch/Elasticsearch instance details not found")
@@ -200,10 +200,10 @@ func (c *Client) parseOpenSearchDetails(_ context.Context, rec *common.Recommend
 	return nil
 }
 
-// parseRedshiftDetails extracts Redshift-specific details
+// parseRedshiftDetails extracts Redshift-specific details.
 func (c *Client) parseRedshiftDetails(_ context.Context, rec *common.Recommendation, details *types.ReservationPurchaseRecommendationDetail) error {
 	if details.InstanceDetails == nil || details.InstanceDetails.RedshiftInstanceDetails == nil {
-		return fmt.Errorf("Redshift instance details not found")
+		return fmt.Errorf("redshift instance details not found")
 	}
 
 	rsDetails := details.InstanceDetails.RedshiftInstanceDetails
