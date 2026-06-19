@@ -11,6 +11,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	var (
 		subID          = flag.String("subscription-id", "", "Azure subscription ID (or set AZURE_SUBSCRIPTION_ID)")
 		expectedTenant = flag.String("expected-tenant", "", "Expected Azure tenant ID (optional)")
@@ -31,18 +35,19 @@ func main() {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "azure sanity run failed: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	if err := rep.WriteJSON(*outPath); err != nil {
 		fmt.Fprintf(os.Stderr, "write report failed: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	if rep.HasFailures() {
 		fmt.Fprintf(os.Stderr, "azure sanity: FAIL (see %s)\n", *outPath)
-		os.Exit(1)
+		return 1
 	}
 
 	fmt.Printf("azure sanity: PASS (see %s)\n", *outPath)
+	return 0
 }
