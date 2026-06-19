@@ -1088,9 +1088,12 @@ func TestHandler_calculateCommitmentMetrics_NoTruncationBeyond1000(t *testing.T)
 	}
 
 	mockStore := new(MockConfigStore)
-	// Old capped read: ORDER BY timestamp DESC LIMIT 1000 keeps only the 1000
-	// newer (expired) rows; the still-active oldest row is truncated away.
-	mockStore.On("GetAllPurchaseHistory", ctx, 1000).Return(newestFirst, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	// Old capped read (documentation-only): ORDER BY timestamp DESC LIMIT 1000
+	// keeps only the 1000 newer (expired) rows; the still-active oldest row is
+	// truncated away. Marked Maybe() so AssertExpectations does not require it
+	// to be called — the whole point of the test is that it must NOT be called.
+	mockStore.On("GetAllPurchaseHistory", ctx, 1000).Return(newestFirst, nil).Maybe()
 	// SQL active-only read: no cap, returns exactly the live commitments.
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{oldActive}, nil)
