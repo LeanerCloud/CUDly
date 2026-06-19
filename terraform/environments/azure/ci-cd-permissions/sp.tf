@@ -47,4 +47,3 @@ resource "azuread_application_federated_identity_credential" "github_pr" {
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:${var.github_repo}:pull_request"
 }
-

@@ -181,7 +181,16 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 		// failure (expired credential, subscription-wide throttle), so it is
 		// excluded from the guard until it makes real API calls.
 		serviceResult{"savingsplans", spRecs, spErr, false},
-		serviceResult{"advisor", advisorRecs, advisorErr, true})
+		// The Advisor client is excluded from the all-attempted-failed guard
+		// for the same reason: getAdvisorRecommendations swallows pagination
+		// errors (the auth failure from an expired credential surfaces as a
+		// 401 during pager.NextPage, not during client construction) and
+		// always returns (recs, nil). Counting its unconditional success as
+		// an attempted service would keep the guard from firing on a total
+		// credential failure -- the same hazard the savingsplans exclusion
+		// prevents. When getAdvisorRecommendations is changed to propagate
+		// hard errors, flip this flag back to true.
+		serviceResult{"advisor", advisorRecs, advisorErr, false})
 }
 
 // serviceResult bundles a per-service collection outcome for the deterministic
