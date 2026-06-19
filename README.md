@@ -292,7 +292,7 @@ Only process specific regions with instance limits:
 
 ```bash
 # `savingsplans` (and `savings-plans`, `sp`) is shorthand that fans out to every SP
-# plan type — equivalent to listing all four per-plan-type slugs.
+# plan type -- equivalent to listing all four per-plan-type slugs.
 ./cudly --services savingsplans \
   --term 3 \
   --coverage 80
