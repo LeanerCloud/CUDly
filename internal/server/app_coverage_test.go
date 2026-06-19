@@ -146,11 +146,11 @@ func TestEnsureDB_PresetError(t *testing.T) {
 // ----- mock helpers -----
 
 type mockSecretResolver struct {
-	getResult string
 	getErr    error
+	putErr    error
+	getResult string
 	putKey    string
 	putValue  string
-	putErr    error
 }
 
 func (m *mockSecretResolver) GetSecret(ctx context.Context, secretID string) (string, error) {

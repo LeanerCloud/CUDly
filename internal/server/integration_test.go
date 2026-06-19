@@ -45,7 +45,7 @@ func TestServerIntegration(t *testing.T) {
 	t.Logf("PostgreSQL container running at: %s", pgContainer.ConnectionString())
 }
 
-// TestHealthCheckIntegration tests the health check endpoint
+// TestHealthCheckIntegration tests the health check endpoint.
 func TestHealthCheckIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -57,7 +57,7 @@ func TestHealthCheckIntegration(t *testing.T) {
 	}
 
 	// Create HTTP test server
-	req := httptest.NewRequest("GET", "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/health", nil)
 	w := httptest.NewRecorder()
 
 	// Call health check handler
@@ -73,7 +73,7 @@ func TestHealthCheckIntegration(t *testing.T) {
 	t.Logf("Health check response: %s", w.Body.String())
 }
 
-// TestScheduledTaskIntegration tests scheduled task execution
+// TestScheduledTaskIntegration tests scheduled task execution.
 func TestScheduledTaskIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -102,7 +102,7 @@ func TestScheduledTaskIntegration(t *testing.T) {
 	t.Logf("Scheduled task completed successfully")
 }
 
-// TestApplicationLifecycle tests full application startup and shutdown
+// TestApplicationLifecycle tests full application startup and shutdown.
 func TestApplicationLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

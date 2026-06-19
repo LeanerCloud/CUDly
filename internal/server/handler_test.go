@@ -11,12 +11,12 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 )
 
-// mockTaskLocker implements TaskLocker for testing
+// mockTaskLocker implements TaskLocker for testing.
 type mockTaskLocker struct {
-	acquired    bool
 	err         error
 	lockCalls   int
 	unlockCalls int
+	acquired    bool
 }
 
 func (m *mockTaskLocker) TryAdvisoryLock(_ context.Context, _ int64) (bool, error) {
@@ -30,9 +30,9 @@ func (m *mockTaskLocker) ReleaseAdvisoryLock(_ context.Context, _ int64) {
 
 func TestHandleScheduledTask(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockScheduler, *testutil.MockPurchaseManager)
 		name        string
 		taskType    ScheduledTaskType
-		setupMocks  func(*testutil.MockScheduler, *testutil.MockPurchaseManager)
 		expectError bool
 	}{
 		{
@@ -305,9 +305,9 @@ func TestHandleScheduledTaskAdvisoryLock(t *testing.T) {
 
 func TestHandleSQSMessage(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockPurchaseManager)
 		name        string
 		messageBody string
-		setupMocks  func(*testutil.MockPurchaseManager)
 		expectError bool
 	}{
 		{

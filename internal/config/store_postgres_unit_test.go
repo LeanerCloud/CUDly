@@ -9,15 +9,15 @@ import (
 )
 
 // pf returns a pointer to the given float64 value. Used in test struct
-// literals where a *float64 field must be initialised from a constant.
+// literals where a *float64 field must be initialized from a constant.
 func pf(v float64) *float64 { return &v }
 
-// TestTimeFromTTL tests the timeFromTTL helper function
+// TestTimeFromTTL tests the timeFromTTL helper function.
 func TestTimeFromTTL(t *testing.T) {
 	tests := []struct {
+		expected interface{}
 		name     string
 		ttl      int64
-		expected interface{}
 	}{
 		{
 			name:     "zero TTL returns nil",
@@ -49,11 +49,11 @@ func TestTimeFromTTL(t *testing.T) {
 	}
 }
 
-// TestTtlFromTime tests the ttlFromTime helper function
+// TestTtlFromTime tests the ttlFromTime helper function.
 func TestTtlFromTime(t *testing.T) {
 	tests := []struct {
-		name     string
 		time     time.Time
+		name     string
 		expected int64
 	}{
 		{
@@ -86,7 +86,7 @@ func TestTtlFromTime(t *testing.T) {
 	}
 }
 
-// TestNullStringFromString tests the nullStringFromString helper function
+// TestNullStringFromString tests the nullStringFromString helper function.
 func TestNullStringFromString(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -124,14 +124,14 @@ func TestNullStringFromString(t *testing.T) {
 	}
 }
 
-// TestNewPostgresStore tests creating a new PostgresStore
+// TestNewPostgresStore tests creating a new PostgresStore.
 func TestNewPostgresStore(t *testing.T) {
 	// Test that NewPostgresStore returns a non-nil store even with nil db
 	store := NewPostgresStore(nil)
 	assert.NotNil(t, store)
 }
 
-// TestTimeFromTTLRoundTrip tests that timeFromTTL and ttlFromTime are consistent
+// TestTimeFromTTLRoundTrip tests that timeFromTTL and ttlFromTime are consistent.
 func TestTimeFromTTLRoundTrip(t *testing.T) {
 	// Test round trip conversion
 	originalTime := time.Date(2024, 6, 15, 12, 30, 0, 0, time.UTC)
@@ -146,7 +146,7 @@ func TestTimeFromTTLRoundTrip(t *testing.T) {
 	assert.Equal(t, originalTime.Unix(), timePtr.Unix())
 }
 
-// TestValidProvidersConstant tests that ValidProviders is properly defined
+// TestValidProvidersConstant tests that ValidProviders is properly defined.
 func TestValidProvidersConstant(t *testing.T) {
 	assert.Contains(t, ValidProviders, "aws")
 	assert.Contains(t, ValidProviders, "azure")
@@ -154,7 +154,7 @@ func TestValidProvidersConstant(t *testing.T) {
 	assert.Len(t, ValidProviders, 3)
 }
 
-// TestValidPaymentOptionsConstant tests that ValidPaymentOptions is properly defined
+// TestValidPaymentOptionsConstant tests that ValidPaymentOptions is properly defined.
 func TestValidPaymentOptionsConstant(t *testing.T) {
 	assert.Contains(t, ValidPaymentOptions, "no-upfront")
 	assert.Contains(t, ValidPaymentOptions, "partial-upfront")
@@ -162,7 +162,7 @@ func TestValidPaymentOptionsConstant(t *testing.T) {
 	assert.Len(t, ValidPaymentOptions, 3)
 }
 
-// TestValidRampScheduleTypesConstant tests that ValidRampScheduleTypes is properly defined
+// TestValidRampScheduleTypesConstant tests that ValidRampScheduleTypes is properly defined.
 func TestValidRampScheduleTypesConstant(t *testing.T) {
 	assert.Contains(t, ValidRampScheduleTypes, "immediate")
 	assert.Contains(t, ValidRampScheduleTypes, "weekly")
