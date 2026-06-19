@@ -66,7 +66,7 @@ type Principal struct {
 	Kind    PrincipalKind
 	UserID  string   // empty for PrincipalAdminAPIKey
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
-	Role    string   // "admin" for admin-api-key; user's role otherwise
+	Role    string   // "admin" for PrincipalAdminAPIKey; empty for session/user-api-key (role system removed in #907)
 	Session *Session // non-nil only for PrincipalSession
 }
 
@@ -126,26 +126,19 @@ func (h *Handler) principalFromUserAPIKey(ctx context.Context, apiKey string) *P
 	if userRaw == nil {
 		return nil
 	}
-	// userRaw is returned as any from the interface. Extract fields
-	// via a locally-scoped interface to avoid an import cycle.
-	// If the assertion fails (unexpected concrete type) we deny rather than
-	// returning a partially-populated Principal: fail closed.
-	uf, ok := userRaw.(interface {
-		GetID() string
-		GetEmail() string
-		GetRole() string
-	})
+	// ValidateUserAPIKeyAPI returns *auth.User as any via the AuthServiceInterface.
+	// Assert to the concrete type; if validation succeeded but the concrete type is
+	// unexpected we deny rather than returning a partially-populated Principal: fail closed.
+	user, ok := userRaw.(*auth.User)
 	if !ok {
-		logging.Debugf("User API key: userRaw does not implement expected interface (%T); denying", userRaw)
+		logging.Debugf("User API key: userRaw has unexpected type (%T); denying", userRaw)
 		return nil
 	}
-	p := &Principal{
+	return &Principal{
 		Kind:   PrincipalUserAPIKey,
-		UserID: uf.GetID(),
-		Email:  uf.GetEmail(),
-		Role:   uf.GetRole(),
+		UserID: user.ID,
+		Email:  user.Email,
 	}
-	return p
 }
 
 // principalFromBearerToken resolves a Principal from a session bearer token.

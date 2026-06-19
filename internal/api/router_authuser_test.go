@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -147,28 +148,17 @@ func TestRequireAuth_NoCredential_Rejects(t *testing.T) {
 	assert.Equal(t, 401, ce.code)
 }
 
-// testUserRecord is a minimal local type that satisfies the GetID/GetEmail/GetRole
-// interface checked inside principalFromUserAPIKey. It represents a concrete
-// user value returned by ValidateUserAPIKeyAPI on the happy path.
-type testUserRecord struct {
-	id    string
-	email string
-	role  string
-}
-
-func (u *testUserRecord) GetID() string    { return u.id }
-func (u *testUserRecord) GetEmail() string { return u.email }
-func (u *testUserRecord) GetRole() string  { return u.role }
-
 // TestRequireAuth_UserAPIKey verifies that a valid user API key yields a
-// Principal with Kind == PrincipalUserAPIKey and populated UserID/Email/Role.
-// This covers the #178 regression hot-spot that previously had zero coverage.
+// Principal with Kind == PrincipalUserAPIKey and populated UserID/Email.
+// The mock returns the real *auth.User concrete type — the same type that
+// auth.Service.ValidateUserAPIKeyAPI returns in production — so this test
+// exercises the same type assertion that principalFromUserAPIKey performs.
 func TestRequireAuth_UserAPIKey(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	userRec := &testUserRecord{id: "uid-123", email: "alice@example.com", role: "user"}
+	userRec := &auth.User{ID: "uid-123", Email: "alice@example.com"}
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "valid-user-key").
 		Return(nil, userRec, nil)
 
@@ -182,20 +172,18 @@ func TestRequireAuth_UserAPIKey(t *testing.T) {
 	assert.Equal(t, PrincipalUserAPIKey, p.Kind)
 	assert.Equal(t, "uid-123", p.UserID)
 	assert.Equal(t, "alice@example.com", p.Email)
-	assert.Equal(t, "user", p.Role)
 }
 
 // TestRequireAuth_UserAPIKey_BadRecord verifies that principalFromUserAPIKey
 // fails closed when ValidateUserAPIKeyAPI succeeds but returns a userRaw
-// value that does NOT satisfy the GetID/GetEmail/GetRole interface (unexpected
-// concrete type). Pre-fix this returned a Role:"user" Principal; post-fix it
+// value that is not *auth.User (unexpected concrete type). Post-fix it
 // must return nil and the overall requireAuth must return a 401 ClientError.
 func TestRequireAuth_UserAPIKey_BadRecord(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	// Return a value that does NOT implement GetID/GetEmail/GetRole.
+	// Return a value that is NOT *auth.User — the concrete type principalFromUserAPIKey asserts.
 	type unexpectedType struct{ Name string }
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "bad-record-key").
 		Return(nil, &unexpectedType{Name: "oops"}, nil)
