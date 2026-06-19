@@ -43,8 +43,8 @@ func (s *mockSecretManagerServer) ListSecrets(ctx context.Context, req *secretma
 func newTestGCPResolver(t *testing.T, mock *mockSecretManagerServer) (*GCPResolver, func()) {
 	t.Helper()
 
-	// Start a gRPC server on a random port
-	lis, err := net.Listen("tcp", "localhost:0")
+	// Start a gRPC server on a random port.
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "localhost:0")
 	require.NoError(t, err)
 
 	grpcServer := grpc.NewServer()

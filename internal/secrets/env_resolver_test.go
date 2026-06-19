@@ -23,9 +23,9 @@ func TestEnvResolver_GetSecret(t *testing.T) {
 		name        string
 		secretID    string
 		envValue    string
+		errContains string
 		setEnv      bool
 		wantErr     bool
-		errContains string
 	}{
 		{
 			name:     "successfully retrieves existing env var",
@@ -85,10 +85,10 @@ func TestEnvResolver_GetSecretJSON(t *testing.T) {
 		name        string
 		secretID    string
 		envValue    string
-		setEnv      bool
-		wantKeys    []string
-		wantErr     bool
 		errContains string
+		wantKeys    []string
+		setEnv      bool
+		wantErr     bool
 	}{
 		{
 			name:     "successfully parses valid JSON",
@@ -185,9 +185,9 @@ func TestEnvResolver_ListSecrets(t *testing.T) {
 	tests := []struct {
 		name             string
 		filter           string
-		expectMinCount   int
 		expectContains   []string
 		expectNotContain []string
+		expectMinCount   int
 	}{
 		{
 			name:           "lists all env vars without filter",
