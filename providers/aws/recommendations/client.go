@@ -22,7 +22,7 @@ import (
 // payer org we have seen. Exceeding the cap returns a diagnostic error (issue #692).
 const maxRecommendationPages = 20
 
-// CostExplorerAPI defines the interface for Cost Explorer operations
+// CostExplorerAPI defines the interface for Cost Explorer operations.
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
 	GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error)
@@ -30,29 +30,31 @@ type CostExplorerAPI interface {
 	GetReservationCoverage(ctx context.Context, params *costexplorer.GetReservationCoverageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationCoverageOutput, error)
 }
 
-// Client wraps the AWS Cost Explorer client for RI recommendations
+// Client wraps the AWS Cost Explorer client for RI recommendations.
 type Client struct {
 	costExplorerClient CostExplorerAPI
-	region             string
-	rateLimiter        *RateLimiter
 
 	// ec2API is the EC2 client used to build the DescribeInstanceTypes paginator.
 	// Populated by NewClient from aws.Config; nil when created via NewClientWithAPI.
 	ec2API DescribeInstanceTypesAPI
+
+	rateLimiter *RateLimiter
 
 	// instanceTypePagerFactory creates a new InstanceTypePager on demand.
 	// Set by NewClient to wrap ec2API; overridable via SetInstanceTypePagerFactory
 	// for hermetic tests. When nil, instanceTypeLookup returns (0,0).
 	instanceTypePagerFactory func() InstanceTypePager
 
-	// skuCatalog caches the per-instance-type vCPU/memory catalogue, fetched
+	region string
+
+	// skuCatalog caches the per-instance-type vCPU/memory catalog, fetched
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
 	// fan-out per scheduler tick).
 	skuCatalog skuCatalog
 }
 
-// NewClient creates a new recommendations client
-func NewClient(cfg aws.Config) *Client {
+// NewClient creates a new recommendations client.
+func NewClient(cfg aws.Config) *Client { //nolint:gocritic // aws.Config is the SDK's value-type convention; pointer form is not idiomatic here.
 	// Force Cost Explorer to use us-east-1 with explicit endpoint
 	ceConfig := cfg.Copy()
 	ceConfig.Region = "us-east-1"
@@ -72,7 +74,7 @@ func NewClient(cfg aws.Config) *Client {
 	}
 }
 
-// NewClientWithAPI creates a new recommendations client with a custom Cost Explorer API (for testing)
+// NewClientWithAPI creates a new recommendations client with a custom Cost Explorer API (for testing).
 func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 	return &Client{
 		costExplorerClient: api,
@@ -84,7 +86,7 @@ func NewClientWithAPI(api CostExplorerAPI, region string) *Client {
 }
 
 // SetInstanceTypePagerFactory injects a pager factory for the instance-type
-// SKU catalogue. Must be called before the first GetRecommendations call.
+// SKU catalog. Must be called before the first GetRecommendations call.
 // Intended for tests that need to verify the one-fetch-per-lifetime invariant
 // without hitting AWS.
 func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
@@ -92,9 +94,9 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 }
 
 // instanceTypeLookup returns the cached SKU entry for instanceType.
-// On the first call the catalogue is built by calling the pager factory.
-// ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue -- the caller falls back to
+// On the first call the catalog is built by calling the pager factory.
+// ok=false when no factory is configured, the catalog fetch failed, or
+// the instance type was not in the catalog -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
@@ -103,8 +105,8 @@ func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (i
 	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
 }
 
-// GetRecommendations fetches Reserved Instance recommendations for any service
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+// GetRecommendations fetches Reserved Instance recommendations for any service.
+func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) { //nolint:gocritic // RecommendationParams is a value type by convention; pointer form would widen the public API surface
 	// Handle Savings Plans separately — they use a different Cost Explorer API
 	// (GetSavingsPlansPurchaseRecommendation, not GetReservationPurchaseRecommendation).
 	// Match any SP slug — the legacy umbrella plus the four per-plan-type slugs —
@@ -297,7 +299,7 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 // the canonical order EC2 → RDS → ElastiCache → OpenSearch → Redshift after
 // all goroutines finish so order-sensitive consumers stay stable.
 //
-// Behaviour change vs the previous sequential loop: per-service errors are
+// Behavior change vs the previous sequential loop: per-service errors are
 // now logged at WARN via mergeServiceResults — the previous loop swallowed
 // them silently with a bare `continue`, leaving operators no signal when a
 // single service was misbehaving. Mirrors the Azure parallelisation in
@@ -373,9 +375,9 @@ func (c *Client) GetAllRecommendations(ctx context.Context) ([]common.Recommenda
 // stays under the gocyclo gate (.golangci.yml min-complexity: 15) after the
 // post-Wait ctx.Err() block was added.
 type serviceResult struct {
+	err  error
 	name string
 	recs []common.Recommendation
-	err  error
 }
 
 // mergeServiceResults logs per-service errors at WARN and appends successful
@@ -396,20 +398,20 @@ func mergeServiceResults(results ...serviceResult) ([]common.Recommendation, err
 	total := 0
 	failures := 0
 	var lastErr error
-	for _, r := range results {
-		total += len(r.recs)
-		if r.err != nil {
+	for i := range results {
+		total += len(results[i].recs)
+		if results[i].err != nil {
 			failures++
-			lastErr = r.err
+			lastErr = results[i].err
 		}
 	}
 	out := make([]common.Recommendation, 0, total)
-	for _, r := range results {
-		if r.err != nil {
-			logging.Warnf("AWS %s recommendations: %v", r.name, r.err)
+	for i := range results {
+		if results[i].err != nil {
+			logging.Warnf("AWS %s recommendations: %v", results[i].name, results[i].err)
 			continue
 		}
-		out = append(out, r.recs...)
+		out = append(out, results[i].recs...)
 	}
 	if failures == len(results) && failures > 0 {
 		return nil, fmt.Errorf("all %d AWS recommendation services failed: %w", failures, lastErr)
