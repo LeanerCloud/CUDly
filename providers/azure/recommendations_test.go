@@ -463,6 +463,13 @@ func TestMergeServiceResults_OrderIsStable(t *testing.T) {
 // empty successful collection: the scheduler counted the account in
 // SucceededAccountIDs, UpsertRecommendations evicted all previously collected
 // rows for it, and last_collection_error was cleared.
+//
+// savingsplans and advisor are both attempted=false because GetRecommendations
+// excludes them from the guard: savingsplans is a stub that makes no API call
+// and always returns ([], nil); advisor's getAdvisorRecommendations swallows
+// pagination errors and therefore also always returns (recs, nil). Counting
+// either as an attempted service would keep the guard from firing on a real
+// total credential failure.
 func TestMergeServiceResults_AllAttemptedFailed(t *testing.T) {
 	authErr := errors.New("DefaultAzureCredential: federated token expired")
 
@@ -471,13 +478,13 @@ func TestMergeServiceResults_AllAttemptedFailed(t *testing.T) {
 		serviceResult{"database", nil, authErr, true},
 		serviceResult{"cache", nil, authErr, true},
 		serviceResult{"cosmosdb", nil, authErr, true},
-		serviceResult{"savingsplans", nil, authErr, true},
-		serviceResult{"advisor", nil, authErr, true},
+		serviceResult{"savingsplans", nil, nil, false},
+		serviceResult{"advisor", nil, nil, false},
 	)
 
 	require.Error(t, err, "all-attempted-failed merge must fail loud, not return (empty, nil)")
 	assert.ErrorIs(t, err, authErr, "the underlying service error must be wrapped")
-	assert.Contains(t, err.Error(), "all 6 Azure recommendation services failed")
+	assert.Contains(t, err.Error(), "all 4 Azure recommendation services failed")
 	assert.Nil(t, recs)
 }
 
@@ -485,6 +492,9 @@ func TestMergeServiceResults_AllAttemptedFailed(t *testing.T) {
 // services skipped by the params filter (attempted == false, nil err) are not
 // counted as successes: when every ATTEMPTED service failed, the merge must
 // still error even though skipped entries carry a nil err.
+// savingsplans and advisor are always attempted=false in production (see
+// TestMergeServiceResults_AllAttemptedFailed), so the scenario here models
+// a service-filter run where only compute is requested and it fails.
 func TestMergeServiceResults_SkippedServicesDoNotMaskTotalFailure(t *testing.T) {
 	throttleErr := errors.New("429 too many requests")
 
@@ -494,7 +504,7 @@ func TestMergeServiceResults_SkippedServicesDoNotMaskTotalFailure(t *testing.T) 
 		serviceResult{"cache", nil, nil, false},
 		serviceResult{"cosmosdb", nil, nil, false},
 		serviceResult{"savingsplans", nil, nil, false},
-		serviceResult{"advisor", nil, throttleErr, true},
+		serviceResult{"advisor", nil, nil, false},
 	)
 
 	require.Error(t, err, "skipped services must not count as successes in the all-failed guard")
@@ -513,8 +523,8 @@ func TestMergeServiceResults_PartialFailureStillSucceeds(t *testing.T) {
 		serviceResult{"database", nil, svcErr, true},
 		serviceResult{"cache", nil, svcErr, true},
 		serviceResult{"cosmosdb", nil, svcErr, true},
-		serviceResult{"savingsplans", nil, svcErr, true},
-		serviceResult{"advisor", nil, svcErr, true},
+		serviceResult{"savingsplans", nil, nil, false},
+		serviceResult{"advisor", nil, nil, false},
 	)
 
 	require.NoError(t, err, "partial failure must still return the successful services' recs")
@@ -522,14 +532,15 @@ func TestMergeServiceResults_PartialFailureStillSucceeds(t *testing.T) {
 	assert.Equal(t, common.ServiceCompute, recs[0].Service)
 }
 
-// TestMergeServiceResults_SavingsPlansStubDoesNotMaskTotalFailure replicates
-// the exact production shape of a total Azure provider failure (e.g. an
-// expired federated credential): every real service AND advisor errors, while
-// the savingsplans stub "succeeds" with ([], nil) because it makes no API
-// call. GetRecommendations therefore passes attempted=false for savingsplans;
-// the merge must still fail loud rather than counting the stub's unconditional
-// success and returning (empty, nil).
-func TestMergeServiceResults_SavingsPlansStubDoesNotMaskTotalFailure(t *testing.T) {
+// TestMergeServiceResults_StubsDoNotMaskTotalFailure replicates the exact
+// production shape of a total Azure provider failure (e.g. an expired
+// federated credential): the four real services all error, while both
+// non-API-making entries -- the savingsplans stub (always ([], nil)) and
+// advisor (getAdvisorRecommendations swallows pagination auth errors and
+// always returns (recs, nil)) -- succeed. GetRecommendations passes
+// attempted=false for both; the merge must still fail loud rather than
+// counting either stub's unconditional success and returning (empty, nil).
+func TestMergeServiceResults_StubsDoNotMaskTotalFailure(t *testing.T) {
 	authErr := errors.New("DefaultAzureCredential: federated token expired")
 
 	recs, err := mergeServiceResults(
@@ -538,11 +549,11 @@ func TestMergeServiceResults_SavingsPlansStubDoesNotMaskTotalFailure(t *testing.
 		serviceResult{"cache", nil, authErr, true},
 		serviceResult{"cosmosdb", nil, authErr, true},
 		serviceResult{"savingsplans", []common.Recommendation{}, nil, false},
-		serviceResult{"advisor", nil, authErr, true},
+		serviceResult{"advisor", []common.Recommendation{}, nil, false},
 	)
 
-	require.Error(t, err, "the always-successful savingsplans stub must not mask a total provider failure")
+	require.Error(t, err, "stubs that swallow errors must not mask a total provider failure")
 	assert.ErrorIs(t, err, authErr)
-	assert.Contains(t, err.Error(), "all 5 Azure recommendation services failed")
+	assert.Contains(t, err.Error(), "all 4 Azure recommendation services failed")
 	assert.Nil(t, recs)
 }
