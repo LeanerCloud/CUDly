@@ -9,20 +9,20 @@ import (
 // Drop reason keys used by all filter and sizing stages. Using typed constants
 // avoids typos at call sites and lets tests assert on the exact key.
 const (
-	DropMinPoolSize         = "--min-pool-size"
-	DropExtendedSupport     = "--include-extended-support"
-	DropTargetAlreadyMet    = "target-already-met"
-	DropTargetSizedToZero   = "target-sized-to-zero"
+	DropMinPoolSize           = "--min-pool-size"
+	DropExtendedSupport       = "--include-extended-support"
+	DropTargetAlreadyMet      = "target-already-met"
+	DropTargetSizedToZero     = "target-sized-to-zero"
 	DropFamilyAlreadyAtTarget = "family-nu-already-at-target"
-	DropFamilyNoNUSignal     = "family-nu-no-nu-signal"
-	DropFamilySizedToZero    = "family-nu-sized-to-zero"
-	DropDuplicateDedup      = "duplicate-dedup"
+	DropFamilyNoNUSignal      = "family-nu-no-nu-signal"
+	DropFamilySizedToZero     = "family-nu-sized-to-zero"
+	DropDuplicateDedup        = "duplicate-dedup"
 )
 
 // DropSummary accumulates the count of recommendations dropped per reason
 // across the full fetch-filter-size pipeline. It is not safe for concurrent
 // use from multiple goroutines; the main pipeline is sequential per service
-// and region so no synchronisation is needed.
+// and region so no synchronization is needed.
 type DropSummary struct {
 	counts map[string]int
 }
