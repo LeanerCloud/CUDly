@@ -123,7 +123,7 @@ func TestReapStuckExecutions_YoungerThanThresholdNotTouched(t *testing.T) {
 
 func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 	// The store filters out terminal statuses via the WHERE clause; the
-	// reaper never sees completed/failed/cancelled rows. Verify the
+	// reaper never sees completed/failed/canceled rows. Verify the
 	// reaper passes only stuckStatuses (approved/running) to the store
 	// — never the terminal set. This regression-guards a future change
 	// that accidentally widens stuckStatuses.
@@ -139,7 +139,7 @@ func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 			seen[s] = true
 		}
 		return seen["approved"] && seen["running"] &&
-			!seen["completed"] && !seen["failed"] && !seen["cancelled"] && !seen["pending"] && !seen["notified"]
+			!seen["completed"] && !seen["failed"] && !seen["cancelled"] && !seen["pending"] && !seen["notified"] //nolint:misspell // "cancelled" is the DB status string used throughout the codebase
 	}), reapAfter).
 		Return([]config.PurchaseExecution{}, nil)
 
@@ -153,7 +153,7 @@ func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 	// CAS race: the SELECT returns a stuck row, but between SELECT and
 	// CAS, the real executor flips the row to completed. The store wraps
 	// the rejection in ErrExecutionNotInExpectedStatus so the reaper can
-	// use errors.Is to recognise the race outcome and move on without
+	// use errors.Is to recognize the race outcome and move on without
 	// erroring the sweep — this regression-guards the A1 CR finding
 	// (must not classify all CAS errors as race-lost).
 	ctx := context.Background()

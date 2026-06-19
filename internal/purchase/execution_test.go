@@ -1283,9 +1283,9 @@ func TestSingleCloudAccountIDFromRecs(t *testing.T) {
 	aid2 := "acct-2"
 
 	tests := []struct {
+		want *string
 		name string
 		recs []config.RecommendationRecord
-		want *string
 	}{
 		{
 			name: "empty slice returns nil",

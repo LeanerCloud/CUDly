@@ -63,7 +63,7 @@ func deriveCSRFToken(csrfKey []byte, rawSessionToken string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// createSession creates a new session for a user
+// createSession creates a new session for a user.
 func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAddress string) (*Session, error) {
 	// Generate a cryptographically random session token
 	rawToken, err := generateToken()
@@ -126,7 +126,7 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// containsAny checks if any element from requested is in allowed
+// containsAny checks if any element from requested is in allowed.
 func containsAny(allowed, requested []string) bool {
 	allowedSet := make(map[string]bool)
 	for _, a := range allowed {
