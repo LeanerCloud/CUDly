@@ -1,7 +1,7 @@
 // Package runtime holds small helpers that inspect the process's
 // runtime environment. Kept deliberately minimal — this is a shared
 // surface, not a grab-bag for utility code.
-package runtime
+package runtime //nolint:revive // package name matches the directory; conflict with stdlib runtime is intentional and required by existing importers
 
 import "os"
 
@@ -11,7 +11,7 @@ import "os"
 // absent on container images, local dev runs, and the long-running
 // server deploys (Cloud Run / Container Apps).
 //
-// Callers that need to gate non-Lambda-only behaviour (e.g.
+// Callers that need to gate non-Lambda-only behavior (e.g.
 // background goroutines for stale-while-revalidate) should use this
 // helper rather than reading the env var directly so the detection
 // rule stays consistent across call sites.

@@ -17,7 +17,7 @@ import (
 // returns its value when it's a positive integer, otherwise
 // DefaultMaxConcurrency. Shared between the purchase manager (which drives
 // live cloud API calls) and the scheduler (per-account recommendations
-// collection) so both honour the same operator-level override.
+// collection) so both honor the same operator-level override.
 func ConcurrencyFromEnv() int {
 	if v := os.Getenv("CUDLY_MAX_ACCOUNT_PARALLELISM"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -29,9 +29,9 @@ func ConcurrencyFromEnv() int {
 
 // Result holds the outcome of running an operation against a single account.
 type Result[T any] struct {
-	AccountID string
 	Value     T
 	Err       error
+	AccountID string
 }
 
 // DefaultMaxConcurrency is the default cap on parallel account goroutines.
@@ -40,7 +40,7 @@ const DefaultMaxConcurrency = 20
 
 // FanOut runs fn concurrently for each accountID in the supplied slice and
 // collects all results. Cancellation of ctx is respected: inflight goroutines
-// see the cancelled context but all launched goroutines are still awaited so
+// see the canceled context but all launched goroutines are still awaited so
 // the caller receives a full result slice (some entries may carry ctx.Err()).
 //
 // Concurrency is capped at DefaultMaxConcurrency to avoid overwhelming AWS
@@ -70,10 +70,10 @@ func FanOutWithConcurrency[T any](
 
 	for i, id := range accountIDs {
 		// Acquire a semaphore slot before launching the goroutine.
-		// Use select so a cancelled/expired context is not held up by a
+		// Use select so a canceled/expired context is not held up by a
 		// full semaphore: if ctx is done while waiting for a slot, record
 		// ctx.Err() on the result slot and skip launching the goroutine.
-		// Without this, a large fan-out on an already-cancelled context
+		// Without this, a large fan-out on an already-canceled context
 		// (e.g. Lambda deadline exceeded partway through) would block
 		// indefinitely here rather than draining quickly.
 		wg.Add(1)
@@ -126,7 +126,7 @@ func FanOutWithConcurrency[T any](
 }
 
 // Partition splits a Result slice into successes and failures.
-func Partition[T any](results []Result[T]) (successes []Result[T], failures []Result[T]) {
+func Partition[T any](results []Result[T]) (successes, failures []Result[T]) {
 	for _, r := range results {
 		if r.Err != nil {
 			failures = append(failures, r)

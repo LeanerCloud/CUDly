@@ -11,18 +11,18 @@ import (
 // TestDiscoverOrgAccounts_DelegatesToDiscoverWithClient validates the public
 // wrapper by constructing a real aws.Config that lacks valid credentials.
 // The wrapper simply calls discoverWithClient, so when we reach the
-// organisations.NewFromConfig step and then try to list accounts, it will
+// organizations.NewFromConfig step and then try to list accounts, it will
 // attempt the call with no credentials.
 //
 // Because the test environment has no AWS credentials (and -short is set)
 // we only verify that the function signature compiles and returns a non-nil
-// error (or result) — the actual behaviour is tested in discoverWithClient
+// error (or result) -- the actual behavior is tested in discoverWithClient
 // unit tests above.  We do this without a network call by passing an empty
 // aws.Config so the SDK creates a client that will fail immediately on use.
 //
-// We call DiscoverOrgAccounts with a cancelled context so the network dial
+// We call DiscoverOrgAccounts with a canceled context so the network dial
 // is suppressed and the error is deterministic.
-func TestDiscoverOrgAccounts_CancelledContext(t *testing.T) {
+func TestDiscoverOrgAccounts_CanceledContext(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -33,7 +33,7 @@ func TestDiscoverOrgAccounts_CancelledContext(t *testing.T) {
 	cfg := aws.Config{Region: "us-east-1"} // no credentials
 	result, err := DiscoverOrgAccounts(ctx, cfg)
 
-	// With a cancelled context the SDK should return an error via the
+	// With a canceled context the SDK should return an error via the
 	// paginator's first NextPage call; DiscoverOrgAccounts should wrap it.
 	if err == nil && result != nil {
 		// Acceptable if the SDK returns early-empty rather than an error
