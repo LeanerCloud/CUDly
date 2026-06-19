@@ -236,8 +236,10 @@ func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subj
 // buildSMTPMessageMultipartWithHeaders is buildSMTPMessageMultipart with extra
 // pre-sanitized header lines (e.g. List-Unsubscribe) inserted before the
 // header-terminating blank line. extraHeaders must already be CRLF-terminated.
+// A per-message random boundary is generated via mimeRandBoundary to avoid
+// the body-collision risk of a fixed literal (07-N2).
 func (s *SMTPSender) buildSMTPMessageMultipartWithHeaders(toEmail string, cc []string, subject, textBody, htmlBody, extraHeaders string) []byte {
-	const boundary = "cudly-mp-7e3b1c89af04d2"
+	boundary := mimeRandBoundary()
 	from := s.fromEmail
 	if s.fromName != "" {
 		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
