@@ -9,8 +9,8 @@ import (
 	"encoding/pem"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 )
 
 // These tests assert that every signer backend produces an RFC 7518
@@ -81,15 +81,14 @@ func (f *fakeAzureKVClient) Sign(_ context.Context, _, _ string, params azkeys.S
 	// Real Azure Key Vault ES256 returns the raw R||S (IEEE P1363) form,
 	// NOT DER. Mirror that here so the test fails if the signer wrongly
 	// DER-converts it. Sign over the digest the caller passed in Value.
-	r, s, err := ecdsa.Sign(rand.Reader, f.key, params.Value)
+	der, err := ecdsa.SignASN1(rand.Reader, f.key, params.Value)
 	if err != nil {
 		return azkeys.SignResponse{}, err
 	}
-	raw := make([]byte, 64)
-	rb := r.Bytes()
-	sb := s.Bytes()
-	copy(raw[32-len(rb):32], rb)
-	copy(raw[64-len(sb):], sb)
+	raw, err := derToRawECDSASignature(der)
+	if err != nil {
+		return azkeys.SignResponse{}, err
+	}
 	return azkeys.SignResponse{KeyOperationResult: azkeys.KeyOperationResult{Result: raw}}, nil
 }
 
@@ -99,8 +98,8 @@ func (f *fakeAzureKVClient) GetKey(_ context.Context, _, _ string, _ *azkeys.Get
 	jwk := &azkeys.JSONWebKey{
 		Kty: &kty,
 		Crv: &crv,
-		X:   f.key.PublicKey.X.Bytes(),
-		Y:   f.key.PublicKey.Y.Bytes(),
+		X:   f.key.X.Bytes(),
+		Y:   f.key.Y.Bytes(),
 	}
 	return azkeys.GetKeyResponse{KeyBundle: azkeys.KeyBundle{Key: jwk}}, nil
 }

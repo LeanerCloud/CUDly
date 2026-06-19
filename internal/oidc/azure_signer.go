@@ -24,13 +24,12 @@ type AzureKeyVaultClient interface {
 // private half never leaves the vault.
 type AzureKeyVaultSigner struct {
 	client     AzureKeyVaultClient
+	err        error
+	pubKey     *ecdsa.PublicKey
 	keyName    string
-	keyVersion string // may be empty = latest
-
-	once   sync.Once
-	pubKey *ecdsa.PublicKey
-	kid    string
-	err    error
+	keyVersion string
+	kid        string
+	once       sync.Once
 }
 
 // NewAzureKeyVaultSigner constructs a signer against a Key Vault using

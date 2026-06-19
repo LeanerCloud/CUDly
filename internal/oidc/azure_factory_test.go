@@ -2,9 +2,9 @@ package oidc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
-	"math/big"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
@@ -13,11 +13,15 @@ import (
 )
 
 // fakeAzureKeyVaultClient is a minimal AzureKeyVaultClient backed by an
-// in-process RSA key. Used to exercise resolveOnce without a real Key Vault.
+// in-process EC key. Used to exercise resolveOnce without a real Key Vault.
 type fakeAzureKeyVaultClient struct {
 	signErr error
-	key     *rsa.PublicKey
-	eBytes  []byte
+	key     *ecdsa.PublicKey
+	// xBytes and yBytes allow callers to inject nil to simulate incomplete
+	// responses from the Key Vault API.
+	xBytes []byte
+	yBytes []byte
+	nilKey bool // if true, return a KeyBundle with Key==nil
 }
 
 func (f *fakeAzureKeyVaultClient) Sign(_ context.Context, _, _ string, _ azkeys.SignParameters, _ *azkeys.SignOptions) (azkeys.SignResponse, error) {
@@ -25,15 +29,31 @@ func (f *fakeAzureKeyVaultClient) Sign(_ context.Context, _, _ string, _ azkeys.
 }
 
 func (f *fakeAzureKeyVaultClient) GetKey(_ context.Context, _, _ string, _ *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error) {
-	eBytes := f.eBytes
-	if eBytes == nil {
-		// Normal path: real exponent from the RSA key.
-		e := big.NewInt(int64(f.key.E))
-		eBytes = e.Bytes()
+	if f.nilKey {
+		return azkeys.GetKeyResponse{
+			KeyBundle: azkeys.KeyBundle{Key: nil},
+		}, nil
+	}
+	xBytes := f.xBytes
+	if xBytes == nil {
+		xBytes = f.key.X.Bytes()
+	}
+	yBytes := f.yBytes
+	if yBytes == nil {
+		yBytes = f.key.Y.Bytes()
+	}
+	// Use sentinel value to represent "caller explicitly passed nil" vs
+	// "caller didn't override" -- an empty slice signals nil field.
+	var jwkX, jwkY []byte
+	if f.xBytes != nil || xBytes != nil {
+		jwkX = xBytes
+	}
+	if f.yBytes != nil || yBytes != nil {
+		jwkY = yBytes
 	}
 	keyBundle := azkeys.JSONWebKey{
-		N: f.key.N.Bytes(),
-		E: eBytes,
+		X: jwkX,
+		Y: jwkY,
 	}
 	return azkeys.GetKeyResponse{
 		KeyBundle: azkeys.KeyBundle{Key: &keyBundle},
@@ -41,45 +61,45 @@ func (f *fakeAzureKeyVaultClient) GetKey(_ context.Context, _, _ string, _ *azke
 }
 
 // ---------------------------------------------------------------------------
-// M6 — Azure public-exponent overflow guard
+// M6 -- Azure EC key completeness guard (replaces RSA exponent-range check)
 // ---------------------------------------------------------------------------
 
-// TestAzureSigner_ExponentRange verifies that resolveOnce rejects oversized or
-// non-positive exponents before constructing the rsa.PublicKey (03-M6).
-func TestAzureSigner_ExponentRange(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+// TestAzureSigner_ECKeyCompleteness verifies that resolveOnce rejects Key
+// Vault responses that are missing the EC public-key coordinates, which
+// would otherwise produce a zero-valued *ecdsa.PublicKey and sign invalid
+// tokens. A valid response with both X and Y must be accepted.
+func TestAzureSigner_ECKeyCompleteness(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	cases := []struct {
+		client    *fakeAzureKeyVaultClient
 		name      string
 		errSubstr string
-		eBytes    []byte
 		wantErr   bool
 	}{
 		{
-			name:    "normal exponent 65537 accepted",
-			eBytes:  big.NewInt(65537).Bytes(),
+			name: "valid EC key accepted",
+			client: &fakeAzureKeyVaultClient{
+				key: &key.PublicKey,
+			},
 			wantErr: false,
 		},
 		{
-			name:      "exponent 0 rejected",
-			eBytes:    big.NewInt(0).Bytes(),
+			name: "key bundle with Key=nil rejected",
+			client: &fakeAzureKeyVaultClient{
+				key:    &key.PublicKey,
+				nilKey: true,
+			},
 			wantErr:   true,
-			errSubstr: "exponent",
-		},
-		{
-			name:      "exponent too large (> MaxInt32) rejected",
-			eBytes:    new(big.Int).Add(big.NewInt(0x7fffffff), big.NewInt(1)).Bytes(),
-			wantErr:   true,
-			errSubstr: "exponent",
+			errSubstr: "missing X or Y",
 		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			client := &fakeAzureKeyVaultClient{key: &key.PublicKey, eBytes: tc.eBytes}
-			signer := NewAzureKeyVaultSignerFromClient(client, "test-key", "")
+			signer := NewAzureKeyVaultSignerFromClient(tc.client, "test-key", "")
 			ctx := context.Background()
 
 			_, err := signer.PublicKey(ctx)
@@ -94,7 +114,7 @@ func TestAzureSigner_ExponentRange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// M7 — factory precise error for half-configured Azure
+// M7 -- factory precise error for half-configured Azure
 // ---------------------------------------------------------------------------
 
 // TestNewSignerFromEnv_AzureHalfConfigured verifies that exactly one of the

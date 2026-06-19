@@ -84,9 +84,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode header: %v", err)
 	}
 	var header map[string]any
-	err = json.Unmarshal(headerBytes, &header)
-	if err != nil {
-		t.Fatalf("unmarshal header: %v", err)
+	if umErr := json.Unmarshal(headerBytes, &header); umErr != nil {
+		t.Fatalf("unmarshal header: %v", umErr)
 	}
 	// Positively assert ES256 -- this is the invariant the fix-422 change guards.
 	if header["alg"] != "ES256" {
@@ -105,9 +104,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode claims: %v", err)
 	}
 	var decoded map[string]any
-	err = json.Unmarshal(claimsBytes, &decoded)
-	if err != nil {
-		t.Fatalf("unmarshal claims: %v", err)
+	if umErr := json.Unmarshal(claimsBytes, &decoded); umErr != nil {
+		t.Fatalf("unmarshal claims: %v", umErr)
 	}
 	if decoded["iss"] != claims["iss"] {
 		t.Errorf("iss mismatch: %v vs %v", decoded["iss"], claims["iss"])
