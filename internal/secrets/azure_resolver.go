@@ -4,11 +4,60 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
+	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
+
+// imdsAddresses are the well-known metadata service endpoints that must never
+// be reachable from application-level HTTP clients. A request that reaches
+// these addresses from user-supplied input is an SSRF attack that can leak
+// managed-identity credentials.
+var imdsAddresses = map[string]bool{
+	"169.254.169.254": true, // Azure/AWS/GCP link-local IMDS (IPv4)
+	"fd00:ec2::254":   true, // AWS IMDS (IPv6)
+}
+
+// blockIMDSDialer wraps net.Dialer and rejects outbound connections to IMDS
+// addresses before a TCP handshake is attempted.
+type blockIMDSDialer struct {
+	inner net.Dialer
+}
+
+func (d *blockIMDSDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if imdsAddresses[host] {
+		return nil, fmt.Errorf("connection to metadata endpoint %s is blocked", host)
+	}
+	return d.inner.DialContext(ctx, network, addr)
+}
+
+// imdsBlockingTransport returns an *http.Client whose transport rejects
+// connections to Azure/AWS/GCP IMDS link-local addresses, mitigating SSRF
+// attacks that could exfiltrate managed-identity credentials.
+func imdsBlockingTransport() *http.Client {
+	dialer := &blockIMDSDialer{
+		inner: net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		},
+	}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
+}
 
 // AzureResolver implements Resolver for Azure Key Vault.
 type AzureResolver struct {
@@ -17,6 +66,8 @@ type AzureResolver struct {
 }
 
 // NewAzureResolver creates a new Azure Key Vault resolver.
+// The underlying HTTP client blocks connections to IMDS link-local addresses
+// (169.254.169.254, fd00:ec2::254) to mitigate SSRF attacks.
 func NewAzureResolver(ctx context.Context, vaultURL string) (*AzureResolver, error) {
 	// Create a credential using DefaultAzureCredential.
 	// Note: azidentity.NewDefaultAzureCredential does not accept a context parameter,
@@ -27,8 +78,15 @@ func NewAzureResolver(ctx context.Context, vaultURL string) (*AzureResolver, err
 		return nil, fmt.Errorf("failed to create Azure credential: %w", err)
 	}
 
-	// Create Key Vault client
-	client, err := azsecrets.NewClient(vaultURL, cred, nil)
+	// Wire the IMDS-blocking transport so that SSRF via a redirected URL
+	// cannot reach the metadata endpoint and leak managed-identity tokens.
+	opts := &azsecrets.ClientOptions{
+		ClientOptions: policy.ClientOptions{
+			Transport: imdsBlockingTransport(),
+		},
+	}
+
+	client, err := azsecrets.NewClient(vaultURL, cred, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure Key Vault client: %w", err)
 	}
