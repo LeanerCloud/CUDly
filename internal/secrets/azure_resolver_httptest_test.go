@@ -288,3 +288,20 @@ func TestAzureResolverReal_Close(t *testing.T) {
 	err = resolver.Close()
 	assert.NoError(t, err)
 }
+
+// TestAzureResolver_IMDSBlocked verifies that the IMDS-blocking transport
+// installed by NewAzureResolver prevents outbound connections to the Azure/AWS
+// link-local metadata endpoint (169.254.169.254). Without this guard an
+// attacker-controlled redirect could leak managed-identity credentials.
+func TestAzureResolver_IMDSBlocked(t *testing.T) {
+	client := imdsBlockingTransport()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+
+	_, err = client.Do(req)
+	require.Error(t, err, "expected IMDS connection to be blocked")
+	assert.Contains(t, err.Error(), "blocked",
+		"error message should indicate the connection was blocked")
+}
