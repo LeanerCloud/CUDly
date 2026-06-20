@@ -1,4 +1,4 @@
-// Package testutil provides common utilities for testing
+// Package testutil provides common utilities for testing.
 package testutil
 
 import (
@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// TestContext creates a context with a reasonable timeout for tests
+// TestContext creates a context with a reasonable timeout for tests.
 func TestContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	return ctx
 }
 
-// SetEnv sets an environment variable for the duration of the test
+// SetEnv sets an environment variable for the duration of the test.
 func SetEnv(t *testing.T, key, value string) {
 	old := os.Getenv(key)
 	os.Setenv(key, value)
@@ -28,7 +28,7 @@ func SetEnv(t *testing.T, key, value string) {
 	})
 }
 
-// RequireEnv skips the test if the environment variable is not set
+// RequireEnv skips the test if the environment variable is not set.
 func RequireEnv(t *testing.T, key string) string {
 	value := os.Getenv(key)
 	if value == "" {
@@ -37,21 +37,21 @@ func RequireEnv(t *testing.T, key string) string {
 	return value
 }
 
-// SkipIfShort skips the test if running in short mode
+// SkipIfShort skips the test if running in short mode.
 func SkipIfShort(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping test in short mode")
 	}
 }
 
-// SkipCI skips the test if running in CI environment
+// SkipCI skips the test if running in CI environment.
 func SkipCI(t *testing.T) {
 	if os.Getenv("CI") == "true" {
 		t.Skip("Skipping test in CI environment")
 	}
 }
 
-// AssertNoError fails the test if err is not nil
+// AssertNoError fails the test if err is not nil.
 func AssertNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -59,7 +59,7 @@ func AssertNoError(t *testing.T, err error) {
 	}
 }
 
-// AssertError fails the test if err is nil
+// AssertError fails the test if err is nil.
 func AssertError(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -67,7 +67,7 @@ func AssertError(t *testing.T, err error) {
 	}
 }
 
-// AssertEqual fails the test if expected != actual
+// AssertEqual fails the test if expected != actual.
 func AssertEqual(t *testing.T, expected, actual any) {
 	t.Helper()
 	if expected != actual {
@@ -75,7 +75,7 @@ func AssertEqual(t *testing.T, expected, actual any) {
 	}
 }
 
-// AssertNotEqual fails the test if expected == actual
+// AssertNotEqual fails the test if expected == actual.
 func AssertNotEqual(t *testing.T, expected, actual any) {
 	t.Helper()
 	if expected == actual {
@@ -83,7 +83,7 @@ func AssertNotEqual(t *testing.T, expected, actual any) {
 	}
 }
 
-// AssertTrue fails the test if condition is false
+// AssertTrue fails the test if condition is false.
 func AssertTrue(t *testing.T, condition bool, message string) {
 	t.Helper()
 	if !condition {
@@ -91,7 +91,7 @@ func AssertTrue(t *testing.T, condition bool, message string) {
 	}
 }
 
-// AssertFalse fails the test if condition is true
+// AssertFalse fails the test if condition is true.
 func AssertFalse(t *testing.T, condition bool, message string) {
 	t.Helper()
 	if condition {
@@ -99,7 +99,7 @@ func AssertFalse(t *testing.T, condition bool, message string) {
 	}
 }
 
-// AssertContains fails the test if substr is not in str
+// AssertContains fails the test if substr is not in str.
 func AssertContains(t *testing.T, str, substr string) {
 	t.Helper()
 	if !contains(str, substr) {
@@ -107,7 +107,7 @@ func AssertContains(t *testing.T, str, substr string) {
 	}
 }
 
-// AssertNotContains fails the test if substr is in str
+// AssertNotContains fails the test if substr is in str.
 func AssertNotContains(t *testing.T, str, substr string) {
 	t.Helper()
 	if contains(str, substr) {
@@ -116,7 +116,7 @@ func AssertNotContains(t *testing.T, str, substr string) {
 }
 
 func contains(str, substr string) bool {
-	return len(str) >= len(substr) && (str == substr || len(substr) == 0 || indexSubstring(str, substr) >= 0)
+	return len(str) >= len(substr) && (str == substr || substr == "" || indexSubstring(str, substr) >= 0)
 }
 
 func indexSubstring(str, substr string) int {
@@ -128,7 +128,7 @@ func indexSubstring(str, substr string) int {
 	return -1
 }
 
-// WaitFor waits for a condition to be true, checking every interval
+// WaitFor waits for a condition to be true, checking every interval.
 func WaitFor(t *testing.T, condition func() bool, timeout time.Duration, message string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

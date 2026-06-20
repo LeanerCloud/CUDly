@@ -13,7 +13,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// PostgresContainer holds the testcontainer for PostgreSQL
+// PostgresContainer holds the testcontainer for PostgreSQL.
 type PostgresContainer struct {
 	Container testcontainers.Container
 	Host      string
@@ -23,7 +23,7 @@ type PostgresContainer struct {
 	Password  string
 }
 
-// SetupPostgresContainer creates and starts a PostgreSQL testcontainer
+// SetupPostgresContainer creates and starts a PostgreSQL testcontainer.
 func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContainer, error) {
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:16-alpine",
@@ -47,10 +47,10 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 		return nil, fmt.Errorf("failed to start postgres container: %w", err)
 	}
 
-	// Clean up container when test ends
+	// Clean up container when test ends.
 	t.Cleanup(func() {
-		if err := container.Terminate(ctx); err != nil {
-			t.Errorf("failed to terminate container: %v", err)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			t.Errorf("failed to terminate container: %v", termErr)
 		}
 	})
 
@@ -74,13 +74,13 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	}, nil
 }
 
-// ConnectionString returns a PostgreSQL connection string
+// ConnectionString returns a PostgreSQL connection string.
 func (pc *PostgresContainer) ConnectionString() string {
 	return fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable",
 		pc.Username, pc.Password, pc.Host, pc.Port, pc.Database)
 }
 
-// Config returns a database configuration for the test container
+// Config returns a database configuration for the test container.
 func (pc *PostgresContainer) Config() map[string]string {
 	return map[string]string{
 		"DB_HOST":     pc.Host,
