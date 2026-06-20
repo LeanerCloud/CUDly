@@ -10,9 +10,9 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// User management handlers
+// User management handlers.
 
-// listUsers handles GET /api/users
+// listUsers handles GET /api/users.
 func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "users"); err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func (h *Handler) listUsers(ctx context.Context, req *events.LambdaFunctionURLRe
 	return map[string]any{"users": users}, nil
 }
 
-// createUser handles POST /api/users
+// createUser handles POST /api/users.
 func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "create", "users")
 	if err != nil {
@@ -35,7 +35,8 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 	// Rate limiting: 30 admin operations per user per minute
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		var allowed bool
+		allowed, err = h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
@@ -44,23 +45,24 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	var createReq auth.APICreateUserRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &createReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Authorization is group-membership-only: a user must belong to at least
-	// one group (issue #907). The service layer re-validates as defence in
+	// one group (issue #907). The service layer re-validates as defense in
 	// depth and the DB enforces it via a CHECK constraint.
 	if len(createReq.Groups) == 0 {
 		return nil, NewClientError(400, "at least one group is required")
 	}
 
 	// Decode base64-encoded password
-	if decoded, err := decodeBase64Password(createReq.Password); err != nil {
-		return nil, err
-	} else {
-		createReq.Password = decoded
+	decoded, decErr := decodeBase64Password(createReq.Password)
+	if decErr != nil {
+		return nil, decErr
 	}
+	createReq.Password = decoded
 
 	user, err := h.auth.CreateUserAPI(ctx, createReq)
 	if err != nil {
@@ -72,7 +74,7 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 
 // mapAuthError maps internal/auth sentinel errors to the appropriate
 // ClientError status code so validation failures surface to the user
-// as a 4xx with the real message instead of a generic 500. Unrecognised
+// as a 4xx with the real message instead of a generic 500. Unrecognized
 // errors are returned unchanged for handleRequestError to render as 500.
 // Used by both /api/users (createUser) and the bootstrap setupAdmin
 // endpoint — they share the sentinel set. Issue #349.
@@ -92,7 +94,7 @@ func mapAuthError(err error) error {
 	return err
 }
 
-// getUser handles GET /api/users/{id}
+// getUser handles GET /api/users/{id}.
 func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {
@@ -111,7 +113,7 @@ func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequ
 	return user, nil
 }
 
-// updateUser handles PUT /api/users/{id}
+// updateUser handles PUT /api/users/{id}.
 func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {
@@ -124,7 +126,8 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	var updateReq auth.APIUpdateUserRequest
-	if err := json.Unmarshal([]byte(req.Body), &updateReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &updateReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -139,7 +142,7 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 	return user, nil
 }
 
-// deleteUser handles DELETE /api/users/{id}
+// deleteUser handles DELETE /api/users/{id}.
 func (h *Handler) deleteUser(ctx context.Context, req *events.LambdaFunctionURLRequest, userID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(userID); err != nil {

@@ -14,8 +14,8 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
-// RateLimiterInterface defines the interface for rate limiting implementations
-// This allows for both in-memory and database-backed rate limiters
+// RateLimiterInterface defines the interface for rate limiting implementations.
+// This allows for both in-memory and database-backed rate limiters.
 type RateLimiterInterface interface {
 	// Allow checks if a request should be allowed based on rate limits
 	// Returns (allowed bool, error)
@@ -31,45 +31,27 @@ type RateLimiterInterface interface {
 	AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error)
 }
 
-// HandlerConfig holds configuration for the API handler
+// HandlerConfig holds configuration for the API handler.
 type HandlerConfig struct {
-	ConfigStore       config.StoreInterface
-	CredentialStore   credentials.CredentialStore
-	PurchaseManager   PurchaseManagerInterface
-	Scheduler         SchedulerInterface
-	AuthService       AuthServiceInterface
-	APIKeySecretARN   string
-	EnableDashboard   bool
-	DashboardBucket   string
-	CORSAllowedOrigin string // CORS allowed origin (default "*")
-	RateLimiter       RateLimiterInterface
-	EmailNotifier     email.SenderInterface // Optional: used to send purchase approval emails
-	DashboardURL      string                // Base URL for approval/cancel links in emails
-	// Analytics configuration (optional)
-	AnalyticsClient    AnalyticsClientInterface
-	AnalyticsCollector AnalyticsCollectorInterface
-	// AnalyticsSnapshots serves the savings-snapshot time-series (coverage %,
-	// utilization, committed spend, realized savings over time) backed by the
-	// savings_snapshots store. Optional; nil disables /api/analytics/trends.
-	AnalyticsSnapshots AnalyticsSnapshotStoreInterface
-	// OIDCSigner is the cloud-agnostic signer that backs
-	// /.well-known/openid-configuration and /.well-known/jwks.json.
-	// Nil disables the OIDC issuer endpoints (they return 404).
-	OIDCSigner oidc.Signer
-	// OIDCIssuerURL is the canonical issuer URL the OIDC handlers
-	// publish in the Discovery document. Must match what Azure AD
-	// federated credentials are registered with.
-	OIDCIssuerURL string
-	// CommitmentOpts discovers which (term, payment) combinations each
-	// AWS service actually sells and validates saves against that data.
-	// Nil disables both the /api/commitment-options endpoint (returns
-	// unavailable) and save-side validation in updateServiceConfig.
-	CommitmentOpts CommitmentOptsInterface
-	// EncryptionKeySource is the env var name that resolved the credential
-	// encryption key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Empty
-	// when no credStore is configured. Used by the /health endpoint to
-	// surface which key source is in use and detect dev-key state.
+	AnalyticsClient     AnalyticsClientInterface
+	AnalyticsCollector  AnalyticsCollectorInterface
+	PurchaseManager     PurchaseManagerInterface
+	RateLimiter         RateLimiterInterface
+	AuthService         AuthServiceInterface
+	CommitmentOpts      CommitmentOptsInterface
+	OIDCSigner          oidc.Signer
+	AnalyticsSnapshots  AnalyticsSnapshotStoreInterface
+	CredentialStore     credentials.CredentialStore
+	EmailNotifier       email.SenderInterface
+	Scheduler           SchedulerInterface
+	ConfigStore         config.StoreInterface
+	DashboardURL        string
+	CORSAllowedOrigin   string
+	DashboardBucket     string
+	OIDCIssuerURL       string
+	APIKeySecretARN     string
 	EncryptionKeySource string
+	EnableDashboard     bool
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
@@ -95,7 +77,7 @@ type AnalyticsClientInterface interface {
 	QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, dimension string) (map[string]BreakdownValue, error)
 }
 
-// AnalyticsCollectorInterface defines the interface for analytics collection
+// AnalyticsCollectorInterface defines the interface for analytics collection.
 type AnalyticsCollectorInterface interface {
 	Collect(ctx context.Context) error
 }
@@ -114,18 +96,18 @@ type AnalyticsSnapshotStoreInterface interface {
 	QueryByService(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, startDate, endDate time.Time) ([]analytics.ServiceBreakdown, error)
 }
 
-// HistoryDataPoint represents aggregated historical data
+// HistoryDataPoint represents aggregated historical data.
 type HistoryDataPoint struct {
 	Timestamp         time.Time          `json:"timestamp"`
+	ByService         map[string]float64 `json:"by_service,omitempty"`
+	ByProvider        map[string]float64 `json:"by_provider,omitempty"`
 	TotalSavings      float64            `json:"total_savings"`
 	TotalUpfront      float64            `json:"total_upfront"`
 	PurchaseCount     int                `json:"purchase_count"`
 	CumulativeSavings float64            `json:"cumulative_savings"`
-	ByService         map[string]float64 `json:"by_service,omitempty"`
-	ByProvider        map[string]float64 `json:"by_provider,omitempty"`
 }
 
-// HistorySummaryAnalytics contains aggregated statistics for analytics
+// HistorySummaryAnalytics contains aggregated statistics for analytics.
 type HistorySummaryAnalytics struct {
 	TotalPeriodSavings      float64 `json:"total_period_savings"`
 	TotalUpfrontSpent       float64 `json:"total_upfront_spent"`
@@ -134,7 +116,7 @@ type HistorySummaryAnalytics struct {
 	PeakSavings             float64 `json:"peak_savings"`
 }
 
-// BreakdownValue represents savings breakdown by dimension
+// BreakdownValue represents savings breakdown by dimension.
 type BreakdownValue struct {
 	TotalSavings  float64 `json:"total_savings"`
 	TotalUpfront  float64 `json:"total_upfront"`
@@ -157,7 +139,7 @@ type PurchaseManagerInterface interface {
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 
-// SchedulerInterface defines scheduler methods used by handler
+// SchedulerInterface defines scheduler methods used by handler.
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
@@ -169,8 +151,8 @@ type SchedulerInterface interface {
 	GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error)
 }
 
-// AuthServiceInterface defines auth service methods used by handler
-// Note: This interface uses API-specific types that are converted from auth package types
+// AuthServiceInterface defines auth service methods used by handler.
+// Note: This interface uses API-specific types that are converted from auth package types.
 type AuthServiceInterface interface {
 	Login(ctx context.Context, req LoginRequest) (*LoginResponse, error)
 	Logout(ctx context.Context, token string) error
@@ -224,7 +206,7 @@ type AuthServiceInterface interface {
 	ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error)
 }
 
-// Auth request/response types (to avoid import cycle with auth package)
+// Auth request/response types (to avoid import cycle with auth package).
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -267,10 +249,10 @@ type Session struct {
 type User struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
-	Groups     []string `json:"groups,omitempty"`
-	MFAEnabled bool     `json:"mfa_enabled"`
 	CreatedAt  string   `json:"created_at,omitempty"`
 	UpdatedAt  string   `json:"updated_at,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
+	MFAEnabled bool     `json:"mfa_enabled"`
 }
 
 // CreateUserRequest represents a request to create a new user. Groups must be
@@ -281,31 +263,31 @@ type CreateUserRequest struct {
 	Groups   []string `json:"groups,omitempty"`
 }
 
-// UpdateUserRequest represents a request to update a user
+// UpdateUserRequest represents a request to update a user.
 type UpdateUserRequest struct {
 	Email  string   `json:"email,omitempty"`
 	Groups []string `json:"groups,omitempty"`
 }
 
-// Group represents a user group with permissions
+// Group represents a user group with permissions.
 type Group struct {
 	ID              string       `json:"id"`
 	Name            string       `json:"name"`
 	Description     string       `json:"description,omitempty"`
-	Permissions     []Permission `json:"permissions"`
-	AllowedAccounts []string     `json:"allowed_accounts,omitempty"`
 	CreatedAt       string       `json:"created_at,omitempty"`
 	UpdatedAt       string       `json:"updated_at,omitempty"`
+	Permissions     []Permission `json:"permissions"`
+	AllowedAccounts []string     `json:"allowed_accounts,omitempty"`
 }
 
-// Permission represents an action that can be performed on a resource
+// Permission represents an action that can be performed on a resource.
 type Permission struct {
+	Constraints *PermissionConstraint `json:"constraints,omitempty"`
 	Action      string                `json:"action"`
 	Resource    string                `json:"resource"`
-	Constraints *PermissionConstraint `json:"constraints,omitempty"`
 }
 
-// PermissionConstraint limits where a permission applies
+// PermissionConstraint limits where a permission applies.
 type PermissionConstraint struct {
 	Accounts  []string `json:"accounts,omitempty"`
 	Providers []string `json:"providers,omitempty"`
@@ -314,7 +296,7 @@ type PermissionConstraint struct {
 	MaxAmount float64  `json:"max_amount,omitempty"`
 }
 
-// CreateGroupRequest represents a request to create a new group
+// CreateGroupRequest represents a request to create a new group.
 type CreateGroupRequest struct {
 	Name            string       `json:"name"`
 	Description     string       `json:"description,omitempty"`
@@ -322,7 +304,7 @@ type CreateGroupRequest struct {
 	AllowedAccounts []string     `json:"allowed_accounts,omitempty"`
 }
 
-// UpdateGroupRequest represents a request to update a group
+// UpdateGroupRequest represents a request to update a group.
 type UpdateGroupRequest struct {
 	Name            string       `json:"name,omitempty"`
 	Description     string       `json:"description,omitempty"`
@@ -330,13 +312,13 @@ type UpdateGroupRequest struct {
 	AllowedAccounts []string     `json:"allowed_accounts,omitempty"`
 }
 
-// ChangePasswordRequest represents a request to change password
+// ChangePasswordRequest represents a request to change password.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
 
-// ProfileUpdateRequest represents a profile update request
+// ProfileUpdateRequest represents a profile update request.
 type ProfileUpdateRequest struct {
 	Email           string `json:"email"`
 	CurrentPassword string `json:"current_password"`
@@ -345,20 +327,20 @@ type ProfileUpdateRequest struct {
 
 // API Response types for type safety
 
-// ConfigResponse holds the configuration response
+// ConfigResponse holds the configuration response.
 type ConfigResponse struct {
 	Global         *config.GlobalConfig   `json:"global"`
-	Services       []config.ServiceConfig `json:"services"`
-	SourceCloud    string                 `json:"source_cloud,omitempty"`
 	SourceIdentity *sourceIdentity        `json:"source_identity,omitempty"`
+	SourceCloud    string                 `json:"source_cloud,omitempty"`
+	Services       []config.ServiceConfig `json:"services"`
 }
 
-// StatusResponse holds a simple status response
+// StatusResponse holds a simple status response.
 type StatusResponse struct {
 	Status string `json:"status"`
 }
 
-// RecommendationsSummary holds aggregate statistics for recommendations
+// RecommendationsSummary holds aggregate statistics for recommendations.
 type RecommendationsSummary struct {
 	TotalCount          int     `json:"total_count"`
 	TotalMonthlySavings float64 `json:"total_monthly_savings"`
@@ -366,11 +348,11 @@ type RecommendationsSummary struct {
 	AvgPaybackMonths    float64 `json:"avg_payback_months"`
 }
 
-// RecommendationsResponse holds the recommendations response
+// RecommendationsResponse holds the recommendations response.
 type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
-	Summary         RecommendationsSummary        `json:"summary"`
 	Regions         []string                      `json:"regions"`
+	Summary         RecommendationsSummary        `json:"summary"`
 }
 
 // UsagePoint is a single sample in the per-recommendation usage time
@@ -378,7 +360,7 @@ type RecommendationsResponse struct {
 // always ordered by Timestamp ascending. CPUPct/MemPct are 0..100.
 //
 // Empty in the current implementation: the collector pipeline does not
-// yet persist time-series utilisation per recommendation. The endpoint
+// yet persist time-series utilization per recommendation. The endpoint
 // returns the empty slice with a non-error status so the frontend can
 // render a "Usage history not yet available" placeholder rather than a
 // broken empty chart. See known_issues/28_recommendations_detail_endpoint.md
@@ -394,7 +376,7 @@ type UsagePoint struct {
 //
 // ConfidenceBucket is "low" | "medium" | "high" — server-side mirror of
 // the client-side heuristic that previously lived in
-// frontend/src/recommendations.ts:confidenceBucketFor. Centralising it
+// frontend/src/recommendations.ts:confidenceBucketFor. Centralizing it
 // server-side lets future provider-specific tuning happen in one place.
 //
 // ProvenanceNote is a short human-readable string naming the collector
@@ -412,12 +394,12 @@ type RecommendationDetailResponse struct {
 	HiddenBy []string `json:"hidden_by,omitempty"`
 }
 
-// PlansResponse holds the purchase plans response
+// PlansResponse holds the purchase plans response.
 type PlansResponse struct {
 	Plans []config.PurchasePlan `json:"plans"`
 }
 
-// CurrentUserResponse holds the current user response
+// CurrentUserResponse holds the current user response.
 type CurrentUserResponse struct {
 	ID         string   `json:"id"`
 	Email      string   `json:"email"`
@@ -425,7 +407,7 @@ type CurrentUserResponse struct {
 	MFAEnabled bool     `json:"mfa_enabled"`
 }
 
-// AdminExistsResponse holds the admin exists check response
+// AdminExistsResponse holds the admin exists check response.
 type AdminExistsResponse struct {
 	AdminExists bool `json:"admin_exists"`
 }
@@ -452,7 +434,7 @@ type UserPermissionsResponse struct {
 // before handing to the auth service.
 
 // MFASetupRequest begins an MFA enrollment. Current password is
-// required as defence-in-depth — a stolen session alone shouldn't
+// required as defense-in-depth — a stolen session alone shouldn't
 // be enough to swap a user's MFA secret.
 type MFASetupRequest struct {
 	Password string `json:"password"`
@@ -500,7 +482,7 @@ type MFARegenerateResponse struct {
 	RecoveryCodes []string `json:"recovery_codes"`
 }
 
-// EmptyServiceConfigResponse represents an empty service config
+// EmptyServiceConfigResponse represents an empty service config.
 type EmptyServiceConfigResponse struct{}
 
 // PublicInfoResponse holds public information about the CUDly instance.
@@ -526,8 +508,9 @@ type DeploymentInfoResponse struct {
 	DeploymentAWSAccountID string `json:"deployment_aws_account_id,omitempty"`
 }
 
-// DashboardSummaryResponse holds the dashboard summary data
+// DashboardSummaryResponse holds the dashboard summary data.
 type DashboardSummaryResponse struct {
+	ByService               map[string]ServiceSavings `json:"by_service"`
 	PotentialMonthlySavings float64                   `json:"potential_monthly_savings"`
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
@@ -535,10 +518,9 @@ type DashboardSummaryResponse struct {
 	CurrentCoverage         float64                   `json:"current_coverage"`
 	TargetCoverage          float64                   `json:"target_coverage"`
 	YTDSavings              float64                   `json:"ytd_savings"`
-	ByService               map[string]ServiceSavings `json:"by_service"`
 }
 
-// ServiceSavings holds savings data for a service
+// ServiceSavings holds savings data for a service.
 type ServiceSavings struct {
 	PotentialSavings float64 `json:"potential_savings"`
 	CurrentSavings   float64 `json:"current_savings"`
@@ -558,25 +540,22 @@ type ServiceSavings struct {
 // The field stays in the response shape so a future "expiring soon"
 // sub-state has a slot without a breaking API change.
 type InventoryCommitment struct {
-	ID            string    `json:"id"`
-	Provider      string    `json:"provider"`
-	AccountID     string    `json:"account_id"`
-	AccountName   string    `json:"account_name,omitempty"`
-	Service       string    `json:"service"`
-	ResourceType  string    `json:"resource_type,omitempty"`
-	Region        string    `json:"region"`
-	Count         int       `json:"count"`
-	TermYears     int       `json:"term_years"`
-	PaymentOption string    `json:"payment_option,omitempty"`
-	StartDate     time.Time `json:"start_date"`
-	EndDate       time.Time `json:"end_date"`
-	UpfrontCost   float64   `json:"upfront_cost"`
-	// MonthlyCost is nil when the source purchase_history row has a NULL
-	// monthly_cost (provider did not return a monthly breakdown). The
-	// frontend renders "—" for nil and "$X.XX" when non-nil.
-	MonthlyCost      *float64 `json:"monthly_cost"`
-	EstimatedSavings float64  `json:"estimated_savings"`
-	Status           string   `json:"status"`
+	StartDate        time.Time `json:"start_date"`
+	EndDate          time.Time `json:"end_date"`
+	MonthlyCost      *float64  `json:"monthly_cost"`
+	Provider         string    `json:"provider"`
+	AccountID        string    `json:"account_id"`
+	AccountName      string    `json:"account_name,omitempty"`
+	Service          string    `json:"service"`
+	ResourceType     string    `json:"resource_type,omitempty"`
+	Region           string    `json:"region"`
+	Status           string    `json:"status"`
+	ID               string    `json:"id"`
+	PaymentOption    string    `json:"payment_option,omitempty"`
+	TermYears        int       `json:"term_years"`
+	UpfrontCost      float64   `json:"upfront_cost"`
+	EstimatedSavings float64   `json:"estimated_savings"`
+	Count            int       `json:"count"`
 }
 
 // InventoryCommitmentsResponse is the envelope returned by
@@ -595,10 +574,10 @@ type InventoryCommitmentsResponse struct {
 // are zero (no usage detected), not 0, to preserve the "absent"
 // semantic per feedback_nullable_not_zero.
 type CoverageServiceRow struct {
+	CoveragePct     *float64 `json:"coverage_pct"`
 	Service         string   `json:"service"`
 	CoveredMonthly  float64  `json:"covered_monthly"`
 	OnDemandMonthly float64  `json:"on_demand_monthly"`
-	CoveragePct     *float64 `json:"coverage_pct"`
 }
 
 // ProviderCoverageSection is the per-provider block returned by
@@ -608,9 +587,9 @@ type CoverageServiceRow struct {
 // OverallCoveragePct follows the same null-vs-zero contract as
 // CoverageServiceRow.CoveragePct.
 type ProviderCoverageSection struct {
+	OverallCoveragePct *float64             `json:"overall_coverage_pct"`
 	Provider           string               `json:"provider"`
 	Services           []CoverageServiceRow `json:"services"`
-	OverallCoveragePct *float64             `json:"overall_coverage_pct"`
 }
 
 // CoverageBreakdownResponse is the envelope returned by
@@ -639,6 +618,7 @@ type UpcomingPurchaseResponse struct {
 // aggressive — operators usually want "skip this scheduled run", not
 // "nuke the recurring template".
 type UpcomingPurchase struct {
+	CreatedByUserID  *string `json:"created_by_user_id,omitempty"`
 	ExecutionID      string  `json:"execution_id"`
 	PlanID           string  `json:"plan_id"`
 	PlanName         string  `json:"plan_name"`
@@ -648,25 +628,17 @@ type UpcomingPurchase struct {
 	StepNumber       int     `json:"step_number"`
 	TotalSteps       int     `json:"total_steps"`
 	EstimatedSavings float64 `json:"estimated_savings"`
-	// CreatedByUserID propagates the underlying execution's
-	// created_by_user_id so the dashboard widget can apply the same
-	// creator-scope ownership gate the Plans page uses (issue #950).
-	// Without it the widget renders a "Cancel" button on every row
-	// while the backend now 403s for non-owners -- a UX hole that
-	// surfaces as a confusing toast on click. Mirrors the field on
-	// PlannedPurchase / PurchaseHistoryEntry. omitempty so legacy
-	// NULL-creator rows keep the JSON shape they had pre-fix.
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 }
 
-// PlannedPurchasesResponse holds the list of planned purchases
+// PlannedPurchasesResponse holds the list of planned purchases.
 type PlannedPurchasesResponse struct {
 	Purchases []PlannedPurchase `json:"purchases"`
 }
 
-// PlannedPurchase represents a scheduled purchase from a plan
+// PlannedPurchase represents a scheduled purchase from a plan.
 type PlannedPurchase struct {
-	ID               string  `json:"id"`
+	CreatedByUserID  *string `json:"created_by_user_id,omitempty"`
+	Status           string  `json:"status"`
 	PlanID           string  `json:"plan_id"`
 	PlanName         string  `json:"plan_name"`
 	ScheduledDate    string  `json:"scheduled_date"`
@@ -674,50 +646,36 @@ type PlannedPurchase struct {
 	Service          string  `json:"service"`
 	ResourceType     string  `json:"resource_type"`
 	Region           string  `json:"region"`
-	Count            int     `json:"count"`
-	Term             int     `json:"term"`
+	ID               string  `json:"id"`
 	Payment          string  `json:"payment"`
-	EstimatedSavings float64 `json:"estimated_savings"`
+	Count            int     `json:"count"`
 	UpfrontCost      float64 `json:"upfront_cost"`
-	Status           string  `json:"status"`
+	EstimatedSavings float64 `json:"estimated_savings"`
 	StepNumber       int     `json:"step_number"`
 	TotalSteps       int     `json:"total_steps"`
-	// CreatedByUserID is the UUID of the user who created the scheduled
-	// purchase, mirroring PurchaseHistoryRecord.CreatedByUserID. The
-	// frontend gates the row action buttons on creator-scope ownership
-	// (issue #950); omitted for legacy rows with a NULL creator.
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
+	Term             int     `json:"term"`
 }
 
-// PlanRequest represents the API request format for creating/updating plans
-// The frontend sends ramp_schedule as a string, which we convert to the proper struct
+// PlanRequest represents the API request format for creating/updating plans.
+// The frontend sends ramp_schedule as a string, which we convert to the proper struct.
 type PlanRequest struct {
-	Name                   string `json:"name"`
-	Description            string `json:"description,omitempty"`
-	Enabled                bool   `json:"enabled"`
-	AutoPurchase           bool   `json:"auto_purchase"`
-	NotificationDaysBefore int    `json:"notification_days_before"`
-	// Frontend sends these as top-level fields
-	Provider       string `json:"provider,omitempty"`
-	Service        string `json:"service,omitempty"`
-	Term           int    `json:"term,omitempty"`
-	Payment        string `json:"payment,omitempty"`
-	TargetCoverage int    `json:"target_coverage,omitempty"`
-	// Ramp schedule as string from frontend (immediate, weekly-25pct, monthly-10pct, custom)
-	RampSchedule       string `json:"ramp_schedule,omitempty"`
-	CustomStepPercent  int    `json:"custom_step_percent,omitempty"`
-	CustomIntervalDays int    `json:"custom_interval_days,omitempty"`
-
-	// TargetAccounts is the list of cloud_account UUIDs the plan will purchase
-	// for. Required (non-empty) on POST /plans -- a plan with no rows in
-	// plan_accounts is a "universal plan", which the design no longer allows:
-	// every plan must be tied to at least one explicit account. The handler
-	// inserts the plan_accounts rows immediately after CreatePurchasePlan so
-	// the two writes are observed together by downstream consumers.
-	TargetAccounts []string `json:"target_accounts,omitempty"`
+	Payment                string   `json:"payment,omitempty"`
+	Description            string   `json:"description,omitempty"`
+	RampSchedule           string   `json:"ramp_schedule,omitempty"`
+	Name                   string   `json:"name"`
+	Provider               string   `json:"provider,omitempty"`
+	Service                string   `json:"service,omitempty"`
+	TargetAccounts         []string `json:"target_accounts,omitempty"`
+	TargetCoverage         int      `json:"target_coverage,omitempty"`
+	Term                   int      `json:"term,omitempty"`
+	NotificationDaysBefore int      `json:"notification_days_before"`
+	CustomStepPercent      int      `json:"custom_step_percent,omitempty"`
+	CustomIntervalDays     int      `json:"custom_interval_days,omitempty"`
+	AutoPurchase           bool     `json:"auto_purchase"`
+	Enabled                bool     `json:"enabled"`
 }
 
-// toPurchasePlan converts a PlanRequest to a config.PurchasePlan
+// toPurchasePlan converts a PlanRequest to a config.PurchasePlan.
 func (r *PlanRequest) toPurchasePlan() *config.PurchasePlan {
 	now := time.Now()
 	plan := &config.PurchasePlan{
@@ -736,7 +694,7 @@ func (r *PlanRequest) toPurchasePlan() *config.PurchasePlan {
 	return plan
 }
 
-// buildRampSchedule builds the ramp schedule from request parameters
+// buildRampSchedule builds the ramp schedule from request parameters.
 func (r *PlanRequest) buildRampSchedule(now time.Time) config.RampSchedule {
 	if preset, ok := config.PresetRampSchedules[r.RampSchedule]; ok {
 		preset.StartDate = now
@@ -753,7 +711,7 @@ func (r *PlanRequest) buildRampSchedule(now time.Time) config.RampSchedule {
 	return schedule
 }
 
-// buildCustomRampSchedule builds a custom ramp schedule with validated parameters
+// buildCustomRampSchedule builds a custom ramp schedule with validated parameters.
 func (r *PlanRequest) buildCustomRampSchedule(now time.Time) config.RampSchedule {
 	stepPercent := float64(r.CustomStepPercent)
 	if stepPercent <= 0 {
@@ -779,7 +737,7 @@ func (r *PlanRequest) buildCustomRampSchedule(now time.Time) config.RampSchedule
 	}
 }
 
-// buildServiceConfig creates service configuration from request fields
+// buildServiceConfig creates service configuration from request fields.
 func (r *PlanRequest) buildServiceConfig() map[string]config.ServiceConfig {
 	if r.Provider == "" || r.Service == "" {
 		return nil
@@ -812,7 +770,7 @@ func (r *PlanRequest) buildServiceConfig() map[string]config.ServiceConfig {
 	}
 }
 
-// calculateNextExecutionDate determines the next execution date based on ramp schedule
+// calculateNextExecutionDate determines the next execution date based on ramp schedule.
 func (r *PlanRequest) calculateNextExecutionDate(now time.Time, schedule config.RampSchedule) *time.Time {
 	var nextDate time.Time
 
@@ -827,35 +785,35 @@ func (r *PlanRequest) calculateNextExecutionDate(now time.Time, schedule config.
 	return &nextDate
 }
 
-// CreatePlannedPurchasesRequest represents a request to create planned purchases
+// CreatePlannedPurchasesRequest represents a request to create planned purchases.
 type CreatePlannedPurchasesRequest struct {
-	Count     int    `json:"count"`
 	StartDate string `json:"start_date"`
+	Count     int    `json:"count"`
 }
 
-// CreatePlannedPurchasesResponse represents the response after creating planned purchases
+// CreatePlannedPurchasesResponse represents the response after creating planned purchases.
 type CreatePlannedPurchasesResponse struct {
 	Created int `json:"created"`
 }
 
-// HistoryResponse represents the response from the history API
+// HistoryResponse represents the response from the history API.
 type HistoryResponse struct {
-	Summary   HistorySummary                 `json:"summary"`
 	Purchases []config.PurchaseHistoryRecord `json:"purchases"`
+	Summary   HistorySummary                 `json:"summary"`
 }
 
 // HistorySummary provides aggregate statistics for purchase history.
 // TotalPurchases is the total count of rows (completed + all non-completed
 // states); the per-state counters break it down so the UI can render
 // meaningful totals. Dollar totals count completed rows only: pending,
-// in-progress, failed, expired, and cancelled rows are all excluded because
+// in-progress, failed, expired, and canceled rows are all excluded because
 // no money was committed for any of those states.
 type HistorySummary struct {
 	TotalPurchases int `json:"total_purchases"`
 	TotalCompleted int `json:"total_completed"`
 	TotalPending   int `json:"total_pending"`
 	// TotalInProgress counts executions that have been approved but whose
-	// synchronous purchase has not finalised (status approved/running/paused).
+	// synchronous purchase has not finalized (status approved/running/paused).
 	// Tracked separately from pending and excluded from the dollar totals so an
 	// interrupted approval (issue #621) stays visible without inflating
 	// committed spend/savings.

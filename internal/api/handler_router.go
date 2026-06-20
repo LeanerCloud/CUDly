@@ -7,15 +7,15 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// routeRequest routes the request to the appropriate handler based on path and method
-// This function now delegates to the table-driven router for improved maintainability
+// routeRequest routes the request to the appropriate handler based on path and method.
+// This function now delegates to the table-driven router for improved maintainability.
 func (h *Handler) routeRequest(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest) (any, error) {
 	// Create a new router for each handler to avoid shared state in tests
 	r := NewRouter(h)
 	return r.Route(ctx, method, path, req)
 }
 
-// errNotFound is a sentinel error for 404 responses
+// errNotFound is a sentinel error for 404 responses.
 var errNotFound = &notFoundError{}
 
 type notFoundError struct{}
@@ -24,22 +24,17 @@ func (e *notFoundError) Error() string {
 	return "not found"
 }
 
-// IsNotFoundError checks if the error is a not found error
+// IsNotFoundError checks if the error is a not found error.
 func IsNotFoundError(err error) bool {
-	_, ok := err.(*notFoundError)
-	return ok
+	var nfe *notFoundError
+	return errors.As(err, &nfe)
 }
 
 // clientError represents an error that should be returned to the client with a specific HTTP status code.
 type clientError struct {
+	details map[string]any
 	message string
 	code    int
-	// details carries optional structured fields (e.g. ops_hint,
-	// retry_attempt_n) that the response writer surfaces alongside the
-	// human message. Used by retry-soft-block responses (issue #47) so
-	// the frontend can render a confirm-with-warning UX without parsing
-	// the message string.
-	details map[string]any
 }
 
 func (e *clientError) Error() string { return e.message }

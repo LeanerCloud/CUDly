@@ -1,4 +1,4 @@
-package api
+package api //nolint:revive // package name matches the directory and is consistent across all files in this package
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func TestHandler_resolveRegistrationRecipients_AdminsBecomeApprovers(t *testing.
 	assert.Equal(t, []string{"admin-b@example.com", globalNotify}, cc,
 		"other admins + global notify go on Cc")
 	assert.Equal(t, []string{"admin-a@example.com", "admin-b@example.com"}, approvers,
-		"admin role users are the authorised reviewers; non-admins stripped")
+		"admin role users are the authorized reviewers; non-admins stripped")
 }
 
 func TestHandler_resolveRegistrationRecipients_NoAdminsTriggersBroadcastFallback(t *testing.T) {

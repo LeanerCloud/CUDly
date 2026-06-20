@@ -72,7 +72,7 @@ const docsPageCSP = "default-src 'none'; " +
 // serveDocsUI returns a self-contained HTML page with Swagger UI loaded from CDN.
 // The response carries a relaxed Content-Security-Policy (docsPageCSP) so the
 // CDN assets and bootstrap script actually run; without it the page is blank.
-func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+func (h *Handler) serveDocsUI() *rawResponse {
 	html := `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -95,38 +95,32 @@ func (h *Handler) serveDocsUI(_ context.Context, _ *events.LambdaFunctionURLRequ
 		contentType: "text/html; charset=utf-8",
 		body:        html,
 		csp:         docsPageCSP,
-	}, nil
+	}
 }
 
 // serveOpenAPISpec returns the raw OpenAPI YAML specification.
-func (h *Handler) serveOpenAPISpec(_ context.Context, _ *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+func (h *Handler) serveOpenAPISpec() *rawResponse {
 	return &rawResponse{
 		contentType: "application/yaml; charset=utf-8",
 		body:        string(openapiSpec),
-	}, nil
+	}
 }
 
 // docsHandler dispatches /docs and /api/docs requests.
 // Requests ending in /openapi.yaml serve the raw spec; everything else serves the UI.
-func (h *Handler) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+func (h *Handler) docsHandler(_ context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
 	path := req.RequestContext.HTTP.Path
-	var (
-		response any
-		err      error
-	)
+	var raw *rawResponse
 	if strings.HasSuffix(path, "/openapi.yaml") {
-		response, err = h.serveOpenAPISpec(ctx, req, params)
+		raw = h.serveOpenAPISpec()
 	} else {
-		response, err = h.serveDocsUI(ctx, req, params)
+		raw = h.serveDocsUI()
 	}
-	if err != nil || req.RequestContext.HTTP.Method != "HEAD" {
-		return response, err
+	if req.RequestContext.HTTP.Method != "HEAD" {
+		return raw, nil
 	}
-	if raw, ok := response.(*rawResponse); ok {
-		// rawResponse currently contains only strings, so a shallow copy is safe.
-		head := *raw
-		head.body = ""
-		return &head, nil
-	}
-	return response, nil
+	// rawResponse currently contains only strings, so a shallow copy is safe.
+	head := *raw
+	head.body = ""
+	return &head, nil
 }

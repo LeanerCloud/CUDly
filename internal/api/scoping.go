@@ -44,21 +44,6 @@ func (h *Handler) requireAccountAccess(ctx context.Context, session *Session, ac
 	return account, nil
 }
 
-// canAccessAccountID is the lightweight, no-DB variant of requireAccountAccess
-// for callers that already have the account's ID AND name (e.g. when iterating
-// a list that was already fetched). Returns true when the session is
-// unrestricted or the allowed_accounts list matches.
-func (h *Handler) canAccessAccountID(ctx context.Context, session *Session, accountID, accountName string) (bool, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
-	if err != nil {
-		return false, fmt.Errorf("failed to get allowed accounts: %w", err)
-	}
-	if auth.IsUnrestrictedAccess(allowed) {
-		return true, nil
-	}
-	return auth.MatchesAccount(allowed, accountID, accountName), nil
-}
-
 // requirePlanAccess fetches the plan's associated accounts and rejects with
 // errNotFound when the session's allowed_accounts list doesn't intersect
 // with any of them. Admin / unrestricted sessions pass through unchanged.
@@ -66,7 +51,7 @@ func (h *Handler) canAccessAccountID(ctx context.Context, session *Session, acco
 // default when we can't attribute the plan to a specific account.
 //
 // requirePermission must fire first; the session it returns is what the
-// caller passes here. This is the plan-level analogue of requireAccountAccess
+// caller passes here. This is the plan-level analog of requireAccountAccess
 // and is used by the plans/purchases/ri-exchange per-record scoping.
 func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planID string) error {
 	allowed, err := h.getAllowedAccounts(ctx, session)
@@ -80,8 +65,8 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 	if err != nil {
 		return fmt.Errorf("failed to get plan accounts: %w", err)
 	}
-	for _, acct := range accounts {
-		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
+	for i := range accounts {
+		if auth.MatchesAccount(allowed, accounts[i].ID, accounts[i].Name) {
 			return nil
 		}
 	}
@@ -102,11 +87,11 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 		return nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	for i, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for i := range recs {
+		if recs[i].CloudAccountID == nil {
 			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
 		}
-		id := *rec.CloudAccountID
+		id := *recs[i].CloudAccountID
 		if !auth.MatchesAccount(allowed, id, nameByID[id]) {
 			return NewClientError(403, fmt.Sprintf("recommendation %d targets account %s which is outside your allowed_accounts", i, id))
 		}
@@ -165,7 +150,7 @@ func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, 
 //
 // Returns (uuids, nil) when uuids is empty or the account load fails — the
 // dual-column predicate then degrades to UUID-only matching, no worse than the
-// pre-fix behaviour.
+// pre-fix behavior.
 func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (resolvedUUIDs []string, externalIDsByProvider map[string][]string) {
 	if len(uuids) == 0 {
 		return uuids, nil
@@ -176,9 +161,9 @@ func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (
 	}
 	type provExt struct{ provider, externalID string }
 	byUUID := make(map[string]provExt, len(accounts))
-	for _, a := range accounts {
-		if a.ExternalID != "" {
-			byUUID[a.ID] = provExt{provider: a.Provider, externalID: a.ExternalID}
+	for i := range accounts {
+		if accounts[i].ExternalID != "" {
+			byUUID[accounts[i].ID] = provExt{provider: accounts[i].Provider, externalID: accounts[i].ExternalID}
 		}
 	}
 	for _, u := range uuids {
@@ -219,11 +204,11 @@ func addExternalIDForProvider(m map[string][]string, provider, externalID string
 //     callers keep working; it is NOT placed in the uuid set so a raw external
 //     number is never compared against cloud_account_id UUIDs. Its provider is
 //     unknown, so it is grouped under the "" key, which the predicate treats as
-//     an unconstrained-provider match (legacy behaviour preserved).
+//     an unconstrained-provider match (legacy behavior preserved).
 //
 // Empty input returns nil maps (no account filter). A cloud_accounts load
 // failure falls back to treating the value as an external id (no worse than the
-// pre-fix behaviour); per-record allowed_accounts scoping still applies
+// pre-fix behavior); per-record allowed_accounts scoping still applies
 // downstream.
 func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID string) (uuids []string, externalIDsByProvider map[string][]string) {
 	if accountID == "" {
@@ -233,12 +218,12 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 	if err != nil {
 		return nil, map[string][]string{"": {accountID}}
 	}
-	for _, a := range accounts {
-		if a.ID == accountID {
+	for i := range accounts {
+		if accounts[i].ID == accountID {
 			// Known UUID: match cloud_account_id by UUID and, when present,
 			// account_id by the resolved external number scoped to its provider.
-			if a.ExternalID != "" {
-				return []string{accountID}, map[string][]string{a.Provider: {a.ExternalID}}
+			if accounts[i].ExternalID != "" {
+				return []string{accountID}, map[string][]string{accounts[i].Provider: {accounts[i].ExternalID}}
 			}
 			return []string{accountID}, nil
 		}
@@ -265,10 +250,10 @@ func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string
 	}
 	// Allocate 2x capacity since each account contributes up to two keys.
 	nameByID := make(map[string]string, len(accounts)*2)
-	for _, a := range accounts {
-		nameByID[a.ID] = a.Name
-		if a.ExternalID != "" {
-			nameByID[a.ExternalID] = a.Name
+	for i := range accounts {
+		nameByID[accounts[i].ID] = accounts[i].Name
+		if accounts[i].ExternalID != "" {
+			nameByID[accounts[i].ExternalID] = accounts[i].Name
 		}
 	}
 	return nameByID
