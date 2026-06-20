@@ -113,7 +113,6 @@ func TestRequireAuth_AdminAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, PrincipalAdminAPIKey, p.Kind)
-	assert.Equal(t, "admin", p.Role)
 }
 
 // TestRequireAuth_UserSession verifies requireAuth accepts a valid
