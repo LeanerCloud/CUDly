@@ -63,7 +63,11 @@ func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalCo
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.GlobalConfig), args.Error(1)
+	val, ok := args.Get(0).(*config.GlobalConfig)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SaveGlobalConfig mocks the SaveGlobalConfig operation
@@ -78,7 +82,11 @@ func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, servic
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.ServiceConfig), args.Error(1)
+	val, ok := args.Get(0).(*config.ServiceConfig)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SaveServiceConfig mocks the SaveServiceConfig operation
@@ -93,7 +101,11 @@ func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.Serv
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.ServiceConfig), args.Error(1)
+	val, ok := args.Get(0).([]config.ServiceConfig)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CreatePurchasePlan mocks the CreatePurchasePlan operation
@@ -117,7 +129,11 @@ func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.PurchasePlan), args.Error(1)
+	val, ok := args.Get(0).(*config.PurchasePlan)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // UpdatePurchasePlan mocks the UpdatePurchasePlan operation
@@ -156,7 +172,11 @@ func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.P
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchasePlan), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchasePlan)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SavePurchaseExecution mocks the SavePurchaseExecution operation.
@@ -175,7 +195,11 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
@@ -212,7 +236,11 @@ func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetExecutionByID mocks the GetExecutionByID operation
@@ -221,7 +249,11 @@ func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID stri
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetExecutionByPlanAndDate mocks the GetExecutionByPlanAndDate operation
@@ -230,7 +262,11 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CountPendingExecutionsForAccount mocks the CountPendingExecutionsForAccount operation.
@@ -259,7 +295,11 @@ func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context,
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]string), args.Error(1)
+	val, ok := args.Get(0).([]string)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SavePurchaseHistory mocks the SavePurchaseHistory operation
@@ -274,7 +314,11 @@ func (m *MockConfigStore) GetPurchaseHistory(ctx context.Context, accountID stri
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetAllPurchaseHistory mocks the GetAllPurchaseHistory operation
@@ -283,7 +327,11 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetActivePurchaseHistory mocks the GetActivePurchaseHistory operation
@@ -292,7 +340,11 @@ func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf tim
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetPurchaseHistoryFiltered mocks the GetPurchaseHistoryFiltered operation (issue #701).
@@ -301,7 +353,11 @@ func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetPurchaseHistoryByPurchaseID mocks the GetPurchaseHistoryByPurchaseID operation (issue #290).
@@ -310,7 +366,11 @@ func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, pu
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).(*config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // MarkPurchaseRevoked mocks the MarkPurchaseRevoked operation (issue #290).
@@ -347,7 +407,11 @@ func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*co
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*config.PurchaseHistoryRecord), args.Error(1)
+	val, ok := args.Get(0).([]*config.PurchaseHistoryRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) SaveRIExchangeRecord(ctx context.Context, record *config.RIExchangeRecord) error {
@@ -360,7 +424,11 @@ func (m *MockConfigStore) GetRIExchangeRecord(ctx context.Context, id string) (*
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+	val, ok := args.Get(0).(*config.RIExchangeRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*config.RIExchangeRecord, error) {
@@ -368,7 +436,11 @@ func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+	val, ok := args.Get(0).(*config.RIExchangeRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
@@ -376,7 +448,11 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
@@ -384,7 +460,11 @@ func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id str
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.RIExchangeRecord), args.Error(1)
+	val, ok := args.Get(0).(*config.RIExchangeRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
@@ -404,7 +484,11 @@ func (m *MockConfigStore) GetRIExchangeDailySpend(ctx context.Context, date time
 
 func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(int64), args.Error(1)
+	val, ok := args.Get(0).(int64)
+	if !ok {
+		return 0, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
@@ -412,7 +496,11 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.RIExchangeRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // MockAuthStore is a mock implementation of auth.Store
@@ -426,7 +514,11 @@ func (m *MockAuthStore) GetUserByID(ctx context.Context, userID string) (*auth.U
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.User), args.Error(1)
+	val, ok := args.Get(0).(*auth.User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetUserByEmail mocks the GetUserByEmail operation
@@ -435,7 +527,11 @@ func (m *MockAuthStore) GetUserByEmail(ctx context.Context, email string) (*auth
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.User), args.Error(1)
+	val, ok := args.Get(0).(*auth.User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CreateUser mocks the CreateUser operation
@@ -462,7 +558,11 @@ func (m *MockAuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]auth.User), args.Error(1)
+	val, ok := args.Get(0).([]auth.User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetUserByResetToken mocks the GetUserByResetToken operation
@@ -471,7 +571,11 @@ func (m *MockAuthStore) GetUserByResetToken(ctx context.Context, token string) (
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.User), args.Error(1)
+	val, ok := args.Get(0).(*auth.User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // AdminExists mocks the AdminExists operation
@@ -492,7 +596,11 @@ func (m *MockAuthStore) GetGroup(ctx context.Context, groupID string) (*auth.Gro
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.Group), args.Error(1)
+	val, ok := args.Get(0).(*auth.Group)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CreateGroup mocks the CreateGroup operation
@@ -519,7 +627,11 @@ func (m *MockAuthStore) ListGroups(ctx context.Context) ([]auth.Group, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]auth.Group), args.Error(1)
+	val, ok := args.Get(0).([]auth.Group)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CountGroupMembers mocks the CountGroupMembers operation
@@ -540,7 +652,11 @@ func (m *MockAuthStore) GetSession(ctx context.Context, token string) (*auth.Ses
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.Session), args.Error(1)
+	val, ok := args.Get(0).(*auth.Session)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // DeleteSession mocks the DeleteSession operation
@@ -575,7 +691,11 @@ func (m *MockAuthStore) GetAPIKeyByID(ctx context.Context, keyID string) (*auth.
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.UserAPIKey), args.Error(1)
+	val, ok := args.Get(0).(*auth.UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetAPIKeyByHash mocks the GetAPIKeyByHash operation
@@ -584,7 +704,11 @@ func (m *MockAuthStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*a
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.UserAPIKey), args.Error(1)
+	val, ok := args.Get(0).(*auth.UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // ListAPIKeysByUser mocks the ListAPIKeysByUser operation
@@ -593,7 +717,11 @@ func (m *MockAuthStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*auth.UserAPIKey), args.Error(1)
+	val, ok := args.Get(0).([]*auth.UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // UpdateAPIKey mocks the UpdateAPIKey operation
@@ -647,7 +775,11 @@ func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*conf
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.CloudAccount), args.Error(1)
+	val, ok := args.Get(0).(*config.CloudAccount)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provider, externalID string) (*config.CloudAccount, error) {
@@ -661,7 +793,11 @@ func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provi
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.CloudAccount), args.Error(1)
+	val, ok := args.Get(0).(*config.CloudAccount)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) UpdateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
@@ -694,7 +830,11 @@ func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.C
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.CloudAccount), args.Error(1)
+	val, ok := args.Get(0).([]config.CloudAccount)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // Account credentials
@@ -741,7 +881,11 @@ func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, account
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.AccountServiceOverride), args.Error(1)
+	val, ok := args.Get(0).(*config.AccountServiceOverride)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, override *config.AccountServiceOverride) error {
@@ -771,7 +915,11 @@ func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accou
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.AccountServiceOverride), args.Error(1)
+	val, ok := args.Get(0).([]config.AccountServiceOverride)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // Plan ↔ account association
@@ -798,13 +946,21 @@ func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.CloudAccount), args.Error(1)
+	val, ok := args.Get(0).([]config.CloudAccount)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // CleanupOldExecutions mocks the CleanupOldExecutions operation
 func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
 	args := m.Called(ctx, retentionDays)
-	return args.Get(0).(int64), args.Error(1)
+	val, ok := args.Get(0).(int64)
+	if !ok {
+		return 0, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // Recommendations cache
@@ -837,7 +993,11 @@ func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter 
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
+	val, ok := args.Get(0).([]config.RecommendationRecord)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
@@ -848,7 +1008,11 @@ func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*con
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.RecommendationsFreshness), args.Error(1)
+	val, ok := args.Get(0).(*config.RecommendationsFreshness)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context, errMsg string) error {
@@ -867,7 +1031,11 @@ func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region stri
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.RIUtilizationCacheEntry), args.Error(1)
+	val, ok := args.Get(0).(*config.RIUtilizationCacheEntry)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
@@ -888,7 +1056,11 @@ func (m *MockConfigStore) GetAccountRegistration(ctx context.Context, id string)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+	val, ok := args.Get(0).(*config.AccountRegistration)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) GetAccountRegistrationByToken(ctx context.Context, token string) (*config.AccountRegistration, error) {
@@ -896,7 +1068,11 @@ func (m *MockConfigStore) GetAccountRegistrationByToken(ctx context.Context, tok
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*config.AccountRegistration), args.Error(1)
+	val, ok := args.Get(0).(*config.AccountRegistration)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) ListAccountRegistrations(ctx context.Context, filter config.AccountRegistrationFilter) ([]config.AccountRegistration, error) {
@@ -904,7 +1080,11 @@ func (m *MockConfigStore) ListAccountRegistrations(ctx context.Context, filter c
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.AccountRegistration), args.Error(1)
+	val, ok := args.Get(0).([]config.AccountRegistration)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *config.AccountRegistration) error {
@@ -966,7 +1146,11 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseSuppression), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseSuppression)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetPendingExecutionsTx mocks the GetPendingExecutionsTx operation.
@@ -981,7 +1165,11 @@ func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 func (m *MockConfigStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *config.PurchaseExecution) error {
@@ -1009,7 +1197,11 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetPlannedExecutions mocks the GetPlannedExecutions operation.
@@ -1018,7 +1210,11 @@ func (m *MockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []s
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetStaleApprovedExecutions mocks the GetStaleApprovedExecutions operation.
@@ -1027,7 +1223,11 @@ func (m *MockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderT
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // ListStuckExecutions mocks the ListStuckExecutions operation.
@@ -1036,7 +1236,11 @@ func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []st
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // GetScheduledExecutionsDue mocks the GetScheduledExecutionsDue operation.
@@ -1050,7 +1254,11 @@ func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]conf
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]config.PurchaseExecution), args.Error(1)
+	val, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // MarkCollectionStarted mocks the MarkCollectionStarted operation.

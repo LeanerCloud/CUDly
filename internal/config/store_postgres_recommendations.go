@@ -3,11 +3,13 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -28,7 +30,12 @@ func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt 
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	// Rollback is a no-op after a successful Commit (pgx returns ErrTxClosed).
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			logging.Warnf("config: ReplaceRecommendations rollback failed: %v", rbErr)
+		}
+	}()
 
 	if _, err := tx.Exec(ctx, `DELETE FROM recommendations`); err != nil {
 		return fmt.Errorf("failed to wipe recommendations: %w", err)
@@ -75,7 +82,12 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	// Rollback is a no-op after a successful Commit (pgx returns ErrTxClosed).
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			logging.Warnf("config: UpsertRecommendations rollback failed: %v", rbErr)
+		}
+	}()
 
 	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
 		return err

@@ -569,12 +569,17 @@ func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
 			// resolveSourceIdentity is best-effort and is consumed by
 			// populateSourceAccountID, which fails loud on an empty
 			// AccountID for the AWS-source case. STS errors are already
-			// logged WARN inside resolveAWSCallerIdentity, so we drop
-			// the error here explicitly — the consumer's empty-string
-			// check is the security gate for federation rendering.
-			// (Reshape uses resolveAWSAccountID directly which DOES
-			// propagate the error for fail-closed multi-tenant safety.)
-			id.AccountID, id.Partition, _ = h.resolveAWSCallerIdentity(ctx) //nolint:errcheck // best-effort: STS errors are logged inside resolveAWSCallerIdentity; empty AccountID is the security gate
+			// logged WARN inside resolveAWSCallerIdentity; we log again
+			// here for traceability and leave AccountID empty so the
+			// consumer's empty-string check stays the security gate for
+			// federation rendering. (Reshape uses resolveAWSAccountID
+			// directly which DOES propagate the error for fail-closed
+			// multi-tenant safety.)
+			accountID, partition, err := h.resolveAWSCallerIdentity(ctx)
+			if err != nil {
+				logging.Warnf("resolveSourceIdentity: AWS caller identity lookup failed; leaving source AccountID empty (security gate): %v", err)
+			}
+			id.AccountID, id.Partition = accountID, partition
 		case "azure":
 			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
 			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")

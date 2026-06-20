@@ -155,18 +155,24 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 			}
 		}()
 
-		_, _, _ = c.sf.Do(key, func() (any, error) { //nolint:errcheck // singleflight propagates the inner fetch error which is already logged inside the callback
+		// The callback logs and swallows its own errors (returning nil), so
+		// the singleflight result carries no actionable error. Capture the
+		// outer error anyway and log defensively rather than blank-discarding
+		// it, so a future callback change that returns an error is not lost.
+		if _, err, _ := c.sf.Do(key, func() (any, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
 			data, err := fetch(ctx, lookbackDays)
 			if err != nil {
 				logging.Warnf("ri_utilization_cache: background refresh failed (key=%s): %v", key, err)
-				return nil, err
+				return nil, nil
 			}
 			c.storePayload(ctx, region, lookbackDays, data)
 			return nil, nil
-		})
+		}); err != nil {
+			logging.Warnf("ri_utilization_cache: background refresh singleflight error (key=%s): %v", key, err)
+		}
 	}()
 }
 

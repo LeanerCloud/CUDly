@@ -18,7 +18,11 @@ func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, op
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sns.PublishOutput), args.Error(1)
+	val, ok := args.Get(0).(*sns.PublishOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SNSAPI defines the interface for SNS operations used by our code

@@ -281,14 +281,19 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	// unbounded number of goroutines (DoS amplifier on a revoked key).
 	keyID := key.ID
 	go func() {
-		_, _, _ = s.lastUsedSFG.Do(keyID, func() (any, error) { //nolint:errcheck // singleflight result is discarded; UpdateLastUsed errors are already logged inside the callback
+		// The callback logs and swallows its own error (returning nil), so the
+		// singleflight result carries no actionable error. Capture the outer
+		// error anyway and log defensively rather than blank-discarding it.
+		if _, err, _ := s.lastUsedSFG.Do(keyID, func() (any, error) {
 			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.UpdateLastUsed(updateCtx, keyID); err != nil {
 				logging.Debugf("Failed to update API key last used timestamp for key %s: %v", keyID, err)
 			}
 			return nil, nil
-		})
+		}); err != nil {
+			logging.Debugf("API key last-used singleflight error for key %s: %v", keyID, err)
+		}
 	}()
 
 	return key, user, nil

@@ -538,8 +538,12 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 	// orphan execution whose account was deleted (issue #608). The call
 	// is best-effort: non-AWS deployments and STS transient failures
 	// return "" and the frontend falls back to the "Account deleted"
-	// warning label, which is safe.
-	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx) //nolint:errcheck // best-effort: non-AWS deployments and STS failures return empty string; frontend handles it safely
+	// warning label, which is safe. We log the error for traceability and
+	// keep the empty-string-safe downstream behavior.
+	deploymentAWSAccountID, err := h.resolveAWSAccountID(ctx)
+	if err != nil {
+		logging.Warnf("deploymentInfo: AWS account ID lookup failed; returning empty DeploymentAWSAccountID (frontend handles it safely): %v", err)
+	}
 
 	return &DeploymentInfoResponse{
 		APIKeySecretURL:        apiKeySecretURL,

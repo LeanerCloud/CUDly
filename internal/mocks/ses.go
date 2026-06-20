@@ -18,7 +18,11 @@ func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInp
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sesv2.SendEmailOutput), args.Error(1)
+	val, ok := args.Get(0).(*sesv2.SendEmailOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return val, args.Error(1)
 }
 
 // SESAPI defines the interface for SES operations used by our code

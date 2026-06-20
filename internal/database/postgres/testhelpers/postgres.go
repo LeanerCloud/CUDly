@@ -72,7 +72,9 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Create database connection
 	db, err := database.NewConnection(ctx, config, nil)
 	if err != nil {
-		postgresContainer.Terminate(ctx)
+		if termErr := postgresContainer.Terminate(ctx); termErr != nil {
+			t.Logf("failed to terminate postgres container after connection error: %v", termErr)
+		}
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
