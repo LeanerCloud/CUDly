@@ -45,19 +45,19 @@ func main() {
 type runArgs struct {
 	region          string
 	expectedAccount string
-	ids             []string
 	targetOffering  string
-	targetCount32   int32
-	execute         bool
 	ack             string
 	maxPaymentDue   string
 	outPath         string
+	ids             []string
 	timeoutSec      int
+	targetCount32   int32
+	execute         bool
 }
 
 // parseArgs parses CLI flags and validates required inputs.
 // Returns (args, exit code) where exit code 0 means success.
-func parseArgs() (runArgs, int) {
+func parseArgs() (args runArgs, code int) {
 	region := flag.String("region", "us-east-1", "AWS region")
 	expectedAccount := flag.String("expected-account", "", "Safety check: expected AWS account ID (optional)")
 	riIDsCSV := flag.String("ri-ids", "", "Comma-separated Convertible Reserved Instance IDs to exchange (required)")
@@ -99,7 +99,7 @@ func parseArgs() (runArgs, int) {
 }
 
 // runQuote handles the dry-run (quote-only) path.
-func runQuote(ctx context.Context, a runArgs, o *Output) int {
+func runQuote(ctx context.Context, a *runArgs, o *Output) int {
 	o.Mode = "dry-run"
 	q, err := exchange.GetExchangeQuote(ctx, &exchange.QuoteRequest{
 		Region:           a.region,
@@ -144,7 +144,7 @@ func run() int {
 	}
 
 	if !a.execute {
-		return runQuote(ctx, a, &o)
+		return runQuote(ctx, &a, &o)
 	}
 
 	// Execute path
