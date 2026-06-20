@@ -787,10 +787,10 @@ func TestHandler_sendPurchaseApprovalEmail_NoNotificationEmail(t *testing.T) {
 // SendPurchaseApprovalRequest so tests can assert on recipient fields.
 type recordingEmailNotifier struct {
 	stubEmailNotifier
-	captured email.NotificationData
+	captured *email.NotificationData
 }
 
-func (r *recordingEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, data email.NotificationData) error {
+func (r *recordingEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, data *email.NotificationData) error {
 	r.captured = data
 	return nil
 }
@@ -902,37 +902,37 @@ func (s *stubEmailNotifier) SendToEmail(_ context.Context, _, _, _ string) error
 func (s *stubEmailNotifier) SendToEmailWithCCMultipart(_ context.Context, _ string, _ []string, _, _, _ string) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendNewRecommendationsNotification(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendNewRecommendationsNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendScheduledPurchaseNotification(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendScheduledPurchaseNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendPurchaseConfirmation(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendPurchaseConfirmation(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendPurchaseFailedNotification(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendPurchaseFailedNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
 func (s *stubEmailNotifier) SendPasswordResetEmail(_ context.Context, _, _ string) error { return nil }
 func (s *stubEmailNotifier) SendWelcomeEmail(_ context.Context, _, _, _ string) error    { return nil }
 func (s *stubEmailNotifier) SendUserInviteEmail(_ context.Context, _, _ string) error    { return nil }
-func (s *stubEmailNotifier) SendRIExchangePendingApproval(_ context.Context, _ email.RIExchangeNotificationData) error {
+func (s *stubEmailNotifier) SendRIExchangePendingApproval(_ context.Context, _ *email.RIExchangeNotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendRIExchangeCompleted(_ context.Context, _ email.RIExchangeNotificationData) error {
+func (s *stubEmailNotifier) SendRIExchangeCompleted(_ context.Context, _ *email.RIExchangeNotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendPurchaseApprovalRequest(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+func (s *stubEmailNotifier) SendPurchaseScheduledNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+func (s *stubEmailNotifier) SendRegistrationReceivedNotification(_ context.Context, _ *email.RegistrationNotificationData) error {
 	return nil
 }
-func (s *stubEmailNotifier) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+func (s *stubEmailNotifier) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *email.RegistrationDecisionData) error {
 	return nil
 }
 

@@ -107,7 +107,7 @@ func TestPostgresAnalyticsStore_QuerySavings_Empty(t *testing.T) {
 		WithArgs(anyArgs(3)...).
 		WillReturnRows(rows)
 
-	result, err := store.QuerySavings(ctx, QueryRequest{
+	result, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		StartDate:    time.Now().Add(-24 * time.Hour),
 		EndDate:      time.Now(),
@@ -132,7 +132,7 @@ func TestPostgresAnalyticsStore_QuerySavings_WithFilters(t *testing.T) {
 		WithArgs(anyArgs(6)...).
 		WillReturnRows(rows)
 
-	result, err := store.QuerySavings(ctx, QueryRequest{
+	result, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		Provider:     "aws",
 		Service:      "ec2",
@@ -160,7 +160,7 @@ func TestPostgresAnalyticsStore_QuerySavings_WithMetadata(t *testing.T) {
 		WithArgs(anyArgs(3)...).
 		WillReturnRows(rows)
 
-	result, err := store.QuerySavings(ctx, QueryRequest{
+	result, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		StartDate:    time.Now().Add(-24 * time.Hour),
 		EndDate:      time.Now(),
@@ -178,7 +178,7 @@ func TestPostgresAnalyticsStore_QuerySavings_QueryError(t *testing.T) {
 		WithArgs(anyArgs(3)...).
 		WillReturnError(errors.New("db error"))
 
-	_, err := store.QuerySavings(ctx, QueryRequest{
+	_, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		StartDate:    time.Now().Add(-24 * time.Hour),
 		EndDate:      time.Now(),
@@ -201,7 +201,7 @@ func TestPostgresAnalyticsStore_QuerySavings_MetadataUnmarshalError(t *testing.T
 		WithArgs(anyArgs(3)...).
 		WillReturnRows(rows)
 
-	_, err := store.QuerySavings(ctx, QueryRequest{
+	_, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		StartDate:    time.Now().Add(-time.Hour),
 		EndDate:      time.Now(),
@@ -218,7 +218,7 @@ func TestPostgresAnalyticsStore_QuerySavings_ScanError(t *testing.T) {
 		WithArgs(anyArgs(3)...).
 		WillReturnRows(rows)
 
-	_, err := store.QuerySavings(ctx, QueryRequest{
+	_, err := store.QuerySavings(ctx, &QueryRequest{
 		AccountUUIDs: []string{"acct1"},
 		StartDate:    time.Now().Add(-time.Hour),
 		EndDate:      time.Now(),

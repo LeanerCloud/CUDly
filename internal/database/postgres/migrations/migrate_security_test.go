@@ -122,7 +122,7 @@ func TestBuildMigrateDSN_PasswordNotInLogs(t *testing.T) {
 	require.NoError(t, err, "pgxpool.ParseConfig must accept the sentinel DSN")
 
 	// Call the function under test.
-	result := buildMigrateDSN(poolCfg, "")
+	result := buildMigrateDSN(poolCfg)
 
 	// The sentinel must appear in the returned DSN (proves the function embeds it).
 	assert.Contains(t, result, sentinelPassword,

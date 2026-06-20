@@ -18,7 +18,7 @@ import (
 type SMTPConfig struct {
 	Host          string
 	Username      string
-	Password      string
+	Password      string // #nosec G117 -- SMTP credential field, intentional
 	FromEmail     string
 	FromName      string
 	NotifyEmail   string
@@ -41,7 +41,7 @@ type SMTPSender struct {
 }
 
 // NewSMTPSender creates a new SMTP email sender.
-func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) { //nolint:gocritic // hugeParam: SMTPConfig is consumed by value per constructor convention
+func NewSMTPSender(cfg *SMTPConfig) (*SMTPSender, error) {
 	if cfg.Host == "" {
 		return nil, fmt.Errorf("SMTP host is required")
 	}
@@ -365,7 +365,7 @@ func (s *SMTPSender) SendUserInviteEmail(ctx context.Context, email, setupURL st
 }
 
 // SendNewRecommendationsNotification sends a notification about new recommendations.
-func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, data *NotificationData) error {
 	subject := "New CUDly Recommendations Available"
 	body, err := RenderNewRecommendationsEmail(data)
 	if err != nil {
@@ -375,7 +375,7 @@ func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, dat
 }
 
 // SendScheduledPurchaseNotification sends a notification about scheduled purchase.
-func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data *NotificationData) error {
 	subject := fmt.Sprintf("CUDly Purchase Scheduled: %s", data.PlanName)
 	body, err := RenderScheduledPurchaseEmail(data)
 	if err != nil {
@@ -385,7 +385,7 @@ func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data
 }
 
 // SendPurchaseConfirmation sends a confirmation email after successful purchase.
-func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data *NotificationData) error {
 	subject := "CUDly Purchase Confirmation"
 	body, err := RenderPurchaseConfirmationEmail(data)
 	if err != nil {
@@ -395,7 +395,7 @@ func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data Notifica
 }
 
 // SendPurchaseFailedNotification sends a notification when a purchase fails.
-func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data *NotificationData) error {
 	subject := "CUDly Purchase Failed"
 	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
@@ -405,7 +405,7 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 }
 
 // SendRIExchangePendingApproval sends an RI exchange approval email via SMTP.
-func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data *RIExchangeNotificationData) error {
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
 	body, err := RenderRIExchangePendingApprovalEmail(data)
 	if err != nil {
@@ -415,7 +415,7 @@ func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIE
 }
 
 // SendRIExchangeCompleted sends an RI exchange completion email via SMTP.
-func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data *RIExchangeNotificationData) error {
 	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
 	body, err := RenderRIExchangeCompletedEmail(data)
 	if err != nil {
@@ -428,7 +428,7 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 // Prefers data.RecipientEmail (the submitter's notification email from app
 // settings) over the static SMTP-configured s.notifyEmail so the approval token
 // lands in the right inbox per submitter.
-func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data *NotificationData) error {
 	recipient := data.RecipientEmail
 	if recipient == "" {
 		recipient = s.notifyEmail
@@ -442,7 +442,7 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
 // notification email via SMTP. Mirrors the Sender implementation's behavior.
-func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data *NotificationData) error {
 	body, err := RenderPurchaseScheduledDelayEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase scheduled delay email: %w", err)
@@ -464,7 +464,7 @@ func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data
 // Cc semantics match the "authorized reviewers" block in the body; falls
 // back to the legacy static s.notifyEmail when the caller didn't resolve
 // recipients (e.g. no admin users configured yet).
-func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data *RegistrationNotificationData) error {
 	// Sanitize user-controlled fields before interpolating into the Subject header
 	// to prevent SMTP header injection (issue #401).
 	subject := fmt.Sprintf("CUDly - New Account Registration: %s (%s)",
@@ -481,7 +481,7 @@ func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, d
 }
 
 // SendRegistrationDecisionNotification sends approval/rejection to the registrant via SMTP.
-func (s *SMTPSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error { //nolint:gocritic // hugeParam: value type satisfies SenderInterface contract
+func (s *SMTPSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data *RegistrationDecisionData) error {
 	subject := fmt.Sprintf("CUDly - Account Registration %s", data.Decision)
 	body, err := RenderRegistrationDecisionEmail(data)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -26,10 +27,15 @@ func run() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	maxListVal := *maxList
+	if maxListVal < 0 || maxListVal > math.MaxInt32 {
+		fmt.Fprintf(os.Stderr, "-max-list value %d out of range [0, %d]\n", maxListVal, math.MaxInt32)
+		return 2
+	}
 	rep, err := aws.Run(ctx, aws.Options{
 		Region:          *region,
 		ExpectedAccount: *expectedAccount,
-		MaxList:         int32(*maxList), //nolint:gosec // G115: user-supplied flag; downstream clamps to valid range
+		MaxList:         int32(maxListVal),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sanity run failed: %v\n", err)

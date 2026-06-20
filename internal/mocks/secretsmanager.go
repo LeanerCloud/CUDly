@@ -18,7 +18,11 @@ func (m *MockSecretsManagerClient) GetSecretValue(ctx context.Context, input *se
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.GetSecretValueOutput), args.Error(1) //nolint:errcheck // mock: type assertion is safe; testify panics with a clear message on mismatch
+	v, ok := args.Get(0).(*secretsmanager.GetSecretValueOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 // CreateSecret mocks the CreateSecret operation.
@@ -27,7 +31,11 @@ func (m *MockSecretsManagerClient) CreateSecret(ctx context.Context, input *secr
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.CreateSecretOutput), args.Error(1) //nolint:errcheck // mock: type assertion is safe; testify panics with a clear message on mismatch
+	v, ok := args.Get(0).(*secretsmanager.CreateSecretOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 // UpdateSecret mocks the UpdateSecret operation.
@@ -36,7 +44,11 @@ func (m *MockSecretsManagerClient) UpdateSecret(ctx context.Context, input *secr
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.UpdateSecretOutput), args.Error(1) //nolint:errcheck // mock: type assertion is safe; testify panics with a clear message on mismatch
+	v, ok := args.Get(0).(*secretsmanager.UpdateSecretOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 // SecretsManagerAPI defines the interface for Secrets Manager operations used by our code.

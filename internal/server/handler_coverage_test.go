@@ -28,8 +28,7 @@ func TestHandleCleanupExpiredRecords_WithAuthAndConfig(t *testing.T) {
 		Auth:   authService,
 	}
 
-	result, err := app.handleCleanupExpiredRecords(ctx)
-	testutil.AssertNoError(t, err)
+	result := app.handleCleanupExpiredRecords(ctx)
 	testutil.AssertTrue(t, result != nil, "expected non-nil result map")
 	_, hasSessionsKey := result["sessions_deleted"]
 	testutil.AssertTrue(t, hasSessionsKey, "expected sessions_deleted key")
@@ -40,8 +39,7 @@ func TestHandleCleanupExpiredRecords_NilAuthAndConfig(t *testing.T) {
 
 	app := &Application{Auth: nil, Config: nil}
 
-	result, err := app.handleCleanupExpiredRecords(ctx)
-	testutil.AssertNoError(t, err)
+	result := app.handleCleanupExpiredRecords(ctx)
 	testutil.AssertTrue(t, result != nil, "expected non-nil result map")
 }
 
@@ -83,8 +81,7 @@ func TestHandleRefreshAnalytics_Success(t *testing.T) {
 		Analytics: &mockAnalyticsStore{},
 	}
 
-	result, err := app.handleRefreshAnalytics(ctx)
-	testutil.AssertNoError(t, err)
+	result := app.handleRefreshAnalytics(ctx)
 	testutil.AssertEqual(t, "success", result["status"])
 }
 
@@ -94,8 +91,7 @@ func TestHandleRefreshAnalytics_RefreshError(t *testing.T) {
 		Analytics: &mockAnalyticsStore{refreshErr: errors.New("views locked")},
 	}
 
-	result, err := app.handleRefreshAnalytics(ctx)
-	testutil.AssertNoError(t, err) // error is logged but not propagated
+	result := app.handleRefreshAnalytics(ctx)
 	testutil.AssertEqual(t, "partial", result["status"])
 }
 
@@ -103,8 +99,7 @@ func TestHandleRefreshAnalytics_NilAnalytics(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	app := &Application{Analytics: nil}
 
-	result, err := app.handleRefreshAnalytics(ctx)
-	testutil.AssertNoError(t, err)
+	result := app.handleRefreshAnalytics(ctx)
 	testutil.AssertTrue(t, result != nil, "expected non-nil result")
 }
 

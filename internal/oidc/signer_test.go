@@ -40,7 +40,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode header: %v", err)
 	}
 	var header map[string]any
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	err = json.Unmarshal(headerBytes, &header)
+	if err != nil {
 		t.Fatalf("unmarshal header: %v", err)
 	}
 	if header["alg"] != "RS256" {
@@ -59,7 +60,8 @@ func TestLocalSignerMintAndVerify(t *testing.T) {
 		t.Fatalf("decode claims: %v", err)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(claimsBytes, &decoded); err != nil {
+	err = json.Unmarshal(claimsBytes, &decoded)
+	if err != nil {
 		t.Fatalf("unmarshal claims: %v", err)
 	}
 	if decoded["iss"] != claims["iss"] {
@@ -125,13 +127,13 @@ func TestBuildDiscovery(t *testing.T) {
 
 func TestBigEndianExponent(t *testing.T) {
 	cases := []struct {
-		in   int
 		want []byte
+		in   int
 	}{
-		{65537, []byte{0x01, 0x00, 0x01}},
-		{3, []byte{0x03}},
-		{0, []byte{0x00}},
-		{256, []byte{0x01, 0x00}},
+		{in: 65537, want: []byte{0x01, 0x00, 0x01}},
+		{in: 3, want: []byte{0x03}},
+		{in: 0, want: []byte{0x00}},
+		{in: 256, want: []byte{0x01, 0x00}},
 	}
 	for _, c := range cases {
 		got := bigEndianExponent(c.in)

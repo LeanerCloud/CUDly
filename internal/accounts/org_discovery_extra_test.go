@@ -31,7 +31,7 @@ func TestDiscoverOrgAccounts_CanceledContext(t *testing.T) {
 	cancel() // cancel immediately — no actual AWS call
 
 	cfg := aws.Config{Region: "us-east-1"} // no credentials
-	result, err := DiscoverOrgAccounts(ctx, cfg)
+	result, err := DiscoverOrgAccounts(ctx, &cfg)
 
 	// With a canceled context the SDK should return an error via the
 	// paginator's first NextPage call; DiscoverOrgAccounts should wrap it.

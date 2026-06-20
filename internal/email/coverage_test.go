@@ -112,16 +112,16 @@ func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 	}
 
 	// All these should render templates successfully but return early due to empty fromEmail
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 	require.NoError(t, err)
 
-	err = sender.SendScheduledPurchaseNotification(ctx, data)
+	err = sender.SendScheduledPurchaseNotification(ctx, &data)
 	require.NoError(t, err)
 
-	err = sender.SendPurchaseConfirmation(ctx, data)
+	err = sender.SendPurchaseConfirmation(ctx, &data)
 	require.NoError(t, err)
 
-	err = sender.SendPurchaseFailedNotification(ctx, data)
+	err = sender.SendPurchaseFailedNotification(ctx, &data)
 	require.NoError(t, err)
 }
 
@@ -182,7 +182,7 @@ func TestSMTPSender_ConfigVariations(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sender, err := NewSMTPSender(tc.cfg)
+			sender, err := NewSMTPSender(&tc.cfg)
 
 			if tc.expectError {
 				require.Error(t, err)
@@ -215,7 +215,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 			TotalSavings:    0,
 			Recommendations: nil,
 		}
-		result, err := RenderNewRecommendationsEmail(data)
+		result, err := RenderNewRecommendationsEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "New Commitment Recommendations")
 	})
@@ -231,7 +231,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 			PlanName:          "",
 			Recommendations:   nil,
 		}
-		result, err := RenderScheduledPurchaseEmail(data)
+		result, err := RenderScheduledPurchaseEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "Scheduled Purchase")
 	})
@@ -242,7 +242,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 			TotalSavings:     500.00,
 			TotalUpfrontCost: 0, // No upfront cost
 		}
-		result, err := RenderPurchaseConfirmationEmail(data)
+		result, err := RenderPurchaseConfirmationEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "Purchases Completed")
 	})
@@ -252,7 +252,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 			DashboardURL:    "https://example.com",
 			Recommendations: []RecommendationSummary{},
 		}
-		result, err := RenderPurchaseFailedEmail(data)
+		result, err := RenderPurchaseFailedEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "Purchase Failed")
 	})
@@ -282,7 +282,7 @@ func TestRecommendationSummary_AllFields(t *testing.T) {
 
 	// Test each render function with comprehensive data
 	t.Run("NewRecommendationsEmail", func(t *testing.T) {
-		result, err := RenderNewRecommendationsEmail(data)
+		result, err := RenderNewRecommendationsEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "db.r5.2xlarge")
 		assert.Contains(t, result, "mysql")
@@ -291,7 +291,7 @@ func TestRecommendationSummary_AllFields(t *testing.T) {
 	})
 
 	t.Run("ScheduledPurchaseEmail", func(t *testing.T) {
-		result, err := RenderScheduledPurchaseEmail(data)
+		result, err := RenderScheduledPurchaseEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "Enterprise RDS Plan")
 		assert.Contains(t, result, "March 15, 2024")
@@ -299,14 +299,14 @@ func TestRecommendationSummary_AllFields(t *testing.T) {
 	})
 
 	t.Run("PurchaseConfirmationEmail", func(t *testing.T) {
-		result, err := RenderPurchaseConfirmationEmail(data)
+		result, err := RenderPurchaseConfirmationEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "1500.75")
 		assert.Contains(t, result, "6000.00")
 	})
 
 	t.Run("PurchaseFailedEmail", func(t *testing.T) {
-		result, err := RenderPurchaseFailedEmail(data)
+		result, err := RenderPurchaseFailedEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "db.r5.2xlarge")
 	})
@@ -330,7 +330,7 @@ func TestSMTPSender_FieldAccess(t *testing.T) {
 		UseTLS:    true,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 	require.NoError(t, err)
 
 	assert.Equal(t, "smtp.test.com", sender.host)
@@ -463,7 +463,7 @@ func TestSMTPSender_TLSBehavior(t *testing.T) {
 			FromEmail: "test@example.com",
 			UseTLS:    false, // Even when false
 		}
-		sender, err := NewSMTPSender(cfg)
+		sender, err := NewSMTPSender(&cfg)
 		require.NoError(t, err)
 		assert.True(t, sender.useTLS) // Should still be true
 	})
@@ -474,7 +474,7 @@ func TestSMTPSender_TLSBehavior(t *testing.T) {
 			Port:      0, // Not set
 			FromEmail: "test@example.com",
 		}
-		sender, err := NewSMTPSender(cfg)
+		sender, err := NewSMTPSender(&cfg)
 		require.NoError(t, err)
 		assert.Equal(t, 587, sender.port)
 	})
@@ -486,7 +486,7 @@ func TestSMTPSender_TLSBehavior(t *testing.T) {
 			FromEmail: "test@example.com",
 			UseTLS:    false,
 		}
-		sender, err := NewSMTPSender(cfg)
+		sender, err := NewSMTPSender(&cfg)
 		require.NoError(t, err)
 		assert.False(t, sender.useTLS)
 	})
@@ -567,19 +567,19 @@ func TestRenderFunctions_MultipleRecommendations(t *testing.T) {
 	}
 
 	// All render functions should handle multiple recommendations
-	result, err := RenderNewRecommendationsEmail(data)
+	result, err := RenderNewRecommendationsEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "ec2")
 	assert.Contains(t, result, "rds")
 	assert.Contains(t, result, "elasticache")
 	assert.Contains(t, result, "opensearch")
 
-	result, err = RenderPurchaseConfirmationEmail(data)
+	result, err = RenderPurchaseConfirmationEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "m5.2xlarge")
 	assert.Contains(t, result, "db.r5.xlarge")
 
-	result, err = RenderPurchaseFailedEmail(data)
+	result, err = RenderPurchaseFailedEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "cache.m5.large")
 	assert.Contains(t, result, "r5.large.search")
@@ -606,10 +606,10 @@ func TestSMTPSender_MethodsWithNoNetwork(t *testing.T) {
 	assert.NoError(t, sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "user"))
 
 	data := NotificationData{DashboardURL: "https://example.com"}
-	assert.NoError(t, sender.SendNewRecommendationsNotification(ctx, data))
-	assert.NoError(t, sender.SendScheduledPurchaseNotification(ctx, data))
-	assert.NoError(t, sender.SendPurchaseConfirmation(ctx, data))
-	assert.NoError(t, sender.SendPurchaseFailedNotification(ctx, data))
+	assert.NoError(t, sender.SendNewRecommendationsNotification(ctx, &data))
+	assert.NoError(t, sender.SendScheduledPurchaseNotification(ctx, &data))
+	assert.NoError(t, sender.SendPurchaseConfirmation(ctx, &data))
+	assert.NoError(t, sender.SendPurchaseFailedNotification(ctx, &data))
 }
 
 // TestSMTPSender_SendToEmail_ConnectionFails tests that SendToEmail returns error when connection fails.
@@ -715,25 +715,25 @@ func TestSMTPSender_AllMethods_ConnectionFails(t *testing.T) {
 	})
 
 	t.Run("SendNewRecommendationsNotification fails", func(t *testing.T) {
-		err := sender.SendNewRecommendationsNotification(ctx, data)
+		err := sender.SendNewRecommendationsNotification(ctx, &data)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send email via SMTP")
 	})
 
 	t.Run("SendScheduledPurchaseNotification fails", func(t *testing.T) {
-		err := sender.SendScheduledPurchaseNotification(ctx, data)
+		err := sender.SendScheduledPurchaseNotification(ctx, &data)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send email via SMTP")
 	})
 
 	t.Run("SendPurchaseConfirmation fails", func(t *testing.T) {
-		err := sender.SendPurchaseConfirmation(ctx, data)
+		err := sender.SendPurchaseConfirmation(ctx, &data)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send email via SMTP")
 	})
 
 	t.Run("SendPurchaseFailedNotification fails", func(t *testing.T) {
-		err := sender.SendPurchaseFailedNotification(ctx, data)
+		err := sender.SendPurchaseFailedNotification(ctx, &data)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send email via SMTP")
 	})
@@ -909,7 +909,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 				{Service: "rds", ResourceType: "db.r5.large", Engine: "postgres", Region: "us-east-1", Count: 5, MonthlySavings: 500.0},
 			},
 		}
-		err := sender.SendNewRecommendationsNotification(ctx, data)
+		err := sender.SendNewRecommendationsNotification(ctx, &data)
 		require.Error(t, err) // Connection will fail
 	})
 
@@ -921,7 +921,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 				{Service: "ec2", ResourceType: "m5.xlarge", Engine: "", Region: "us-west-2", Count: 10, MonthlySavings: 789.12},
 			},
 		}
-		err := sender.SendNewRecommendationsNotification(ctx, data)
+		err := sender.SendNewRecommendationsNotification(ctx, &data)
 		require.Error(t, err)
 	})
 
@@ -938,7 +938,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 				{Service: "rds", ResourceType: "db.m5.large", Engine: "mysql", Region: "eu-west-1", Count: 3, MonthlySavings: 300.0},
 			},
 		}
-		err := sender.SendScheduledPurchaseNotification(ctx, data)
+		err := sender.SendScheduledPurchaseNotification(ctx, &data)
 		require.Error(t, err)
 	})
 
@@ -953,7 +953,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 			PlanName:          "Dev Plan",
 			Recommendations:   nil,
 		}
-		err := sender.SendScheduledPurchaseNotification(ctx, data)
+		err := sender.SendScheduledPurchaseNotification(ctx, &data)
 		require.Error(t, err)
 	})
 }
@@ -1149,7 +1149,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 				{Service: "rds", ResourceType: "db.m5.large", Engine: "mysql", Region: "us-east-1", Count: 1, MonthlySavings: 100.0},
 			},
 		}
-		result, err := RenderNewRecommendationsEmail(data)
+		result, err := RenderNewRecommendationsEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "mysql")
 	})
@@ -1162,7 +1162,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 				{Service: "ec2", ResourceType: "m5.xlarge", Engine: "", Region: "us-west-2", Count: 5, MonthlySavings: 100.0},
 			},
 		}
-		result, err := RenderNewRecommendationsEmail(data)
+		result, err := RenderNewRecommendationsEmail(&data)
 		require.NoError(t, err)
 		assert.NotContains(t, result, "()")
 	})
@@ -1180,7 +1180,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 				{Service: "rds", ResourceType: "db.r5.xlarge", Engine: "postgres", Region: "eu-west-1", Count: 3, MonthlySavings: 600.0},
 			},
 		}
-		result, err := RenderScheduledPurchaseEmail(data)
+		result, err := RenderScheduledPurchaseEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "token123")
 		assert.Contains(t, result, "Production Plan")
@@ -1195,7 +1195,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 				{Service: "elasticache", ResourceType: "cache.m5.large", Engine: "redis", Region: "ap-southeast-1", Count: 2, MonthlySavings: 300.0},
 			},
 		}
-		result, err := RenderPurchaseConfirmationEmail(data)
+		result, err := RenderPurchaseConfirmationEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "6000.00")
 	})
@@ -1208,7 +1208,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 				{Service: "opensearch", ResourceType: "r5.large.search", Engine: "", Region: "us-west-2", Count: 2},
 			},
 		}
-		result, err := RenderPurchaseFailedEmail(data)
+		result, err := RenderPurchaseFailedEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, result, "opensearch")
 	})
@@ -1239,7 +1239,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 				{Service: "ec2", ResourceType: "m5.4xlarge", Engine: "", Region: "us-west-2", Count: 10, MonthlySavings: 5000.75},
 			},
 		}
-		err := sender.SendNewRecommendationsNotification(ctx, data)
+		err := sender.SendNewRecommendationsNotification(ctx, &data)
 		require.Error(t, err)
 	})
 
@@ -1257,7 +1257,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 				{Service: "rds", ResourceType: "db.m5.large", Engine: "postgresql", Region: "eu-west-1", Count: 6, MonthlySavings: 1500.0},
 			},
 		}
-		err := sender.SendScheduledPurchaseNotification(ctx, data)
+		err := sender.SendScheduledPurchaseNotification(ctx, &data)
 		require.Error(t, err)
 	})
 
@@ -1271,7 +1271,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 				{Service: "opensearch", ResourceType: "r5.xlarge.search", Engine: "", Region: "us-east-1", Count: 2, MonthlySavings: 4500.0},
 			},
 		}
-		err := sender.SendPurchaseConfirmation(ctx, data)
+		err := sender.SendPurchaseConfirmation(ctx, &data)
 		require.Error(t, err)
 	})
 
@@ -1282,7 +1282,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 				{Service: "rds", ResourceType: "db.r5.2xlarge", Engine: "oracle-se2", Region: "eu-central-1", Count: 1},
 			},
 		}
-		err := sender.SendPurchaseFailedNotification(ctx, data)
+		err := sender.SendPurchaseFailedNotification(ctx, &data)
 		require.Error(t, err)
 	})
 }
@@ -1300,7 +1300,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 
 	// Test that each notification method propagates SNS errors
 	t.Run("NewRecommendations_propagates_error", func(t *testing.T) {
-		err := sender.SendNewRecommendationsNotification(ctx, NotificationData{
+		err := sender.SendNewRecommendationsNotification(ctx, &NotificationData{
 			DashboardURL: "https://test.com",
 			TotalSavings: 100.0,
 		})
@@ -1310,7 +1310,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 
 	t.Run("ScheduledPurchase_no_recipient", func(t *testing.T) {
 		// RecipientEmail is empty: must return ErrNoRecipient, not broadcast via SNS.
-		err := sender.SendScheduledPurchaseNotification(ctx, NotificationData{
+		err := sender.SendScheduledPurchaseNotification(ctx, &NotificationData{
 			DashboardURL:  "https://test.com",
 			PlanName:      "Test",
 			ApprovalToken: "tok",
@@ -1324,7 +1324,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 		// With an empty RecipientEmail it must return ErrNoRecipient, NOT fall
 		// back to the broadcast SendNotification path (which would leak the
 		// revoke link to every alert subscriber -- issue #290 CR).
-		err := sender.SendPurchaseScheduledNotification(ctx, NotificationData{
+		err := sender.SendPurchaseScheduledNotification(ctx, &NotificationData{
 			DashboardURL: "https://test.com",
 			ExecutionID:  "exec-1",
 			RevokeURL:    "https://test.com/purchases#history?execution=exec-1",
@@ -1334,7 +1334,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("PurchaseConfirmation_propagates_error", func(t *testing.T) {
-		err := sender.SendPurchaseConfirmation(ctx, NotificationData{
+		err := sender.SendPurchaseConfirmation(ctx, &NotificationData{
 			DashboardURL: "https://test.com",
 		})
 		require.Error(t, err)
@@ -1342,7 +1342,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("PurchaseFailed_propagates_error", func(t *testing.T) {
-		err := sender.SendPurchaseFailedNotification(ctx, NotificationData{
+		err := sender.SendPurchaseFailedNotification(ctx, &NotificationData{
 			DashboardURL: "https://test.com",
 		})
 		require.Error(t, err)
@@ -1480,17 +1480,17 @@ func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 	}
 
 	t.Run("recommendations_with_engine", func(t *testing.T) {
-		err := sender.SendNewRecommendationsNotification(ctx, dataWithEngine)
+		err := sender.SendNewRecommendationsNotification(ctx, &dataWithEngine)
 		require.Error(t, err)
 	})
 
 	t.Run("recommendations_without_engine", func(t *testing.T) {
-		err := sender.SendNewRecommendationsNotification(ctx, dataWithoutEngine)
+		err := sender.SendNewRecommendationsNotification(ctx, &dataWithoutEngine)
 		require.Error(t, err)
 	})
 
 	t.Run("scheduled_with_upfront", func(t *testing.T) {
-		err := sender.SendScheduledPurchaseNotification(ctx, dataWithEngine)
+		err := sender.SendScheduledPurchaseNotification(ctx, &dataWithEngine)
 		require.Error(t, err)
 	})
 
@@ -1504,17 +1504,17 @@ func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 			DaysUntilPurchase: 5,
 			PlanName:          "No Upfront Plan",
 		}
-		err := sender.SendScheduledPurchaseNotification(ctx, data)
+		err := sender.SendScheduledPurchaseNotification(ctx, &data)
 		require.Error(t, err)
 	})
 
 	t.Run("confirmation_with_multiple", func(t *testing.T) {
-		err := sender.SendPurchaseConfirmation(ctx, dataWithEngine)
+		err := sender.SendPurchaseConfirmation(ctx, &dataWithEngine)
 		require.Error(t, err)
 	})
 
 	t.Run("failed_with_multiple", func(t *testing.T) {
-		err := sender.SendPurchaseFailedNotification(ctx, dataWithEngine)
+		err := sender.SendPurchaseFailedNotification(ctx, &dataWithEngine)
 		require.Error(t, err)
 	})
 }

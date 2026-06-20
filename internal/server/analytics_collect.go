@@ -107,7 +107,7 @@ func getEnvBool(key string, defaultVal bool) bool {
 // app.go footprint is one localized call (eases the in-flight app.go rebase).
 func newAnalyticsCollector(dbConn *database.Connection, configStore config.StoreInterface) (AnalyticsCollectorInterface, error) {
 	store := analytics.NewPostgresAnalyticsStore(dbConn)
-	return analytics.NewCollector(analytics.CollectorConfig{AnalyticsStore: store}, configStore)
+	return analytics.NewCollector(analytics.CollectorConfig{Store: store}, configStore)
 }
 
 // handleCollectAnalytics runs the scheduled analytics pipeline end to end:

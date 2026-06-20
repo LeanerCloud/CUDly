@@ -87,7 +87,7 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 
 	// Send notification
 	data := m.buildNotificationData(plan, execution, daysUntil, notifyEmail)
-	if err := m.email.SendScheduledPurchaseNotification(ctx, data); err != nil {
+	if err := m.email.SendScheduledPurchaseNotification(ctx, &data); err != nil {
 		logging.Errorf("Failed to send notification: %v", err)
 		return false
 	}

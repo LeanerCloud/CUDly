@@ -14,7 +14,7 @@ import (
 // reshape lookup needs. Scoped here so the closure stays unit-testable
 // against a tiny fake instead of the full StoreInterface mock.
 type recsLister interface {
-	ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListStoredRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 // purchaseRecLookupFromStore builds an exchange.PurchaseRecLookup that
@@ -40,7 +40,7 @@ type recsLister interface {
 // caller couldn't (or chose not to) resolve the source account.
 func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.PurchaseRecLookup {
 	return func(ctx context.Context, region, currencyCode string) ([]exchange.OfferingOption, error) {
-		filter := config.RecommendationFilter{
+		filter := &config.RecommendationFilter{
 			Provider: "aws",
 			Service:  "ec2",
 			Region:   region,

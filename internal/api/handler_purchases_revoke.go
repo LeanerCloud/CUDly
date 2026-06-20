@@ -840,9 +840,9 @@ func isAzureWindowEdgeError(err error) bool {
 // revocation call-site to construct ARM struct fields without temp variables.
 func toPtr[T any](v T) *T { return &v }
 
-// safeInt32 converts an int to int32 after verifying it is within range.
-// Returns a ClientError (422) when n is out of int32 bounds so the caller can
-// surface a clear error rather than silently truncating the value.
+// safeInt32 converts n to int32, returning a ClientError when n exceeds the
+// int32 range. Azure reservation quantities are always small non-negative
+// integers, so this guard is purely defensive against malformed DB values.
 func safeInt32(n int) (int32, error) {
 	if n < math.MinInt32 || n > math.MaxInt32 {
 		return 0, NewClientError(422, fmt.Sprintf("reservation quantity %d is out of int32 range", n))

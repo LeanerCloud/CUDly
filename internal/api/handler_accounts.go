@@ -1472,7 +1472,7 @@ func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*account
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts
 	}
-	disco, err := discoverFn(ctx, cfg)
+	disco, err := discoverFn(ctx, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: org discovery failed: %w", err)
 	}

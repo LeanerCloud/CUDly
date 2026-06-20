@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockAnalyticsStore implements AnalyticsStore for testing
+// mockAnalyticsStore implements AnalyticsStore for testing.
 type mockAnalyticsStore struct {
 	saveSnapshotFunc             func(ctx context.Context, snapshot *SavingsSnapshot) error
 	bulkInsertSnapshotsFunc      func(ctx context.Context, snapshots []SavingsSnapshot) error
@@ -47,9 +47,9 @@ func (m *mockAnalyticsStore) BulkInsertSnapshots(ctx context.Context, snapshots 
 	return nil
 }
 
-func (m *mockAnalyticsStore) QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error) {
+func (m *mockAnalyticsStore) QuerySavings(ctx context.Context, req *QueryRequest) ([]SavingsSnapshot, error) {
 	if m.querySavingsFunc != nil {
-		return m.querySavingsFunc(ctx, req)
+		return m.querySavingsFunc(ctx, *req)
 	}
 	return nil, nil
 }
@@ -117,7 +117,7 @@ func (m *mockAnalyticsStore) Close() error {
 	return nil
 }
 
-// mockConfigStore implements config.StoreInterface for testing
+// mockConfigStore implements config.StoreInterface for testing.
 type mockConfigStore struct {
 	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
 	getAllPurchaseHistoryFunc          func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
@@ -398,7 +398,7 @@ func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time,
 func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
-func (m *mockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *mockConfigStore) ListStoredRecommendations(_ context.Context, _ *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
@@ -441,35 +441,35 @@ func activeRecord(provider, service, region string, term int, savings, upfront f
 
 func newTestCollector(t *testing.T, store *mockAnalyticsStore, cfgStore *mockConfigStore) *Collector {
 	t.Helper()
-	collector, err := NewCollector(CollectorConfig{AnalyticsStore: store}, cfgStore)
+	collector, err := NewCollector(CollectorConfig{Store: store}, cfgStore)
 	require.NoError(t, err)
 	return collector
 }
 
-// TestNewCollector tests the NewCollector function
+// TestNewCollector tests the NewCollector function.
 func TestNewCollector(t *testing.T) {
 	t.Run("returns error when analytics store is nil", func(t *testing.T) {
-		collector, err := NewCollector(CollectorConfig{AnalyticsStore: nil}, &mockConfigStore{})
+		collector, err := NewCollector(CollectorConfig{Store: nil}, &mockConfigStore{})
 		assert.Nil(t, collector)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "analytics store is required")
 	})
 
 	t.Run("returns error when config store is nil", func(t *testing.T) {
-		collector, err := NewCollector(CollectorConfig{AnalyticsStore: &mockAnalyticsStore{}}, nil)
+		collector, err := NewCollector(CollectorConfig{Store: &mockAnalyticsStore{}}, nil)
 		assert.Nil(t, collector)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "config store is required")
 	})
 
 	t.Run("creates collector successfully with valid inputs", func(t *testing.T) {
-		collector, err := NewCollector(CollectorConfig{AnalyticsStore: &mockAnalyticsStore{}}, &mockConfigStore{})
+		collector, err := NewCollector(CollectorConfig{Store: &mockAnalyticsStore{}}, &mockConfigStore{})
 		require.NoError(t, err)
 		assert.NotNil(t, collector)
 	})
 }
 
-// TestCollectorCollect tests the Collect method
+// TestCollectorCollect tests the Collect method.
 func TestCollectorCollect(t *testing.T) {
 	t.Run("returns error when GetAllPurchaseHistory fails", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
@@ -698,11 +698,11 @@ func TestCollectorCollect(t *testing.T) {
 		err := newTestCollector(t, store, cfgStore).Collect(ctx)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
-		assert.Empty(t, store.savedSnapshots, "no snapshots written on a cancelled run")
+		assert.Empty(t, store.savedSnapshots, "no snapshots written on a canceled run")
 	})
 }
 
-// TestConstants tests the exported constants
+// TestConstants tests the exported constants.
 func TestConstants(t *testing.T) {
 	t.Run("HoursPerYear is correct", func(t *testing.T) {
 		assert.Equal(t, 365*24, HoursPerYear)
@@ -714,7 +714,7 @@ func TestConstants(t *testing.T) {
 	})
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStore) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

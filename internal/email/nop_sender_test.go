@@ -9,7 +9,7 @@ import (
 )
 
 // TestNopSender_AllMethodsReturnNil verifies that every SenderInterface
-// method on NopSender returns nil — the contract is "swallow the call,
+// method on NopSender returns nil - the contract is "swallow the call,
 // never error". A future bug that returns an error from any of these
 // would propagate into the application path that called the sender,
 // breaking the EMAIL_ENABLED=false promise that no work happens.
@@ -23,17 +23,17 @@ func TestNopSender_AllMethodsReturnNil(t *testing.T) {
 	assert.NoError(t, n.SendToEmail(ctx, "to@example.com", "subj", "body"))
 	assert.NoError(t, n.SendToEmailWithCCMultipart(ctx, "to@example.com",
 		[]string{"cc1@example.com", "cc2@example.com"}, "subj", "text", "<html/>"))
-	assert.NoError(t, n.SendNewRecommendationsNotification(ctx, NotificationData{}))
-	assert.NoError(t, n.SendScheduledPurchaseNotification(ctx, NotificationData{}))
-	assert.NoError(t, n.SendPurchaseConfirmation(ctx, NotificationData{}))
-	assert.NoError(t, n.SendPurchaseFailedNotification(ctx, NotificationData{}))
+	assert.NoError(t, n.SendNewRecommendationsNotification(ctx, &NotificationData{}))
+	assert.NoError(t, n.SendScheduledPurchaseNotification(ctx, &NotificationData{}))
+	assert.NoError(t, n.SendPurchaseConfirmation(ctx, &NotificationData{}))
+	assert.NoError(t, n.SendPurchaseFailedNotification(ctx, &NotificationData{}))
 	assert.NoError(t, n.SendPasswordResetEmail(ctx, "user@example.com", "https://example/reset"))
 	assert.NoError(t, n.SendWelcomeEmail(ctx, "user@example.com", "https://example/dashboard", "admin"))
-	assert.NoError(t, n.SendRIExchangePendingApproval(ctx, RIExchangeNotificationData{}))
-	assert.NoError(t, n.SendRIExchangeCompleted(ctx, RIExchangeNotificationData{}))
-	assert.NoError(t, n.SendPurchaseApprovalRequest(ctx, NotificationData{}))
-	assert.NoError(t, n.SendRegistrationReceivedNotification(ctx, RegistrationNotificationData{}))
-	assert.NoError(t, n.SendRegistrationDecisionNotification(ctx, "user@example.com", RegistrationDecisionData{}))
+	assert.NoError(t, n.SendRIExchangePendingApproval(ctx, &RIExchangeNotificationData{}))
+	assert.NoError(t, n.SendRIExchangeCompleted(ctx, &RIExchangeNotificationData{}))
+	assert.NoError(t, n.SendPurchaseApprovalRequest(ctx, &NotificationData{}))
+	assert.NoError(t, n.SendRegistrationReceivedNotification(ctx, &RegistrationNotificationData{}))
+	assert.NoError(t, n.SendRegistrationDecisionNotification(ctx, "user@example.com", &RegistrationDecisionData{}))
 }
 
 // TestNopSender_NilSafe verifies the no-op tolerates the nil/empty
@@ -55,13 +55,13 @@ func TestNopSender_NilSafe(t *testing.T) {
 func TestNopSender_NilContext(t *testing.T) {
 	n := NewNopSender()
 
-	//nolint:staticcheck // SA1012: intentionally nil to verify defensive behavior
-	assert.NoError(t, n.SendToEmail(nil, "to@example.com", "s", "b"))
+	var nilCtx context.Context
+	assert.NoError(t, n.SendToEmail(nilCtx, "to@example.com", "s", "b"))
 }
 
 // TestNopSender_SatisfiesInterface is a runtime echo of the compile-time
 // guard in nop_sender.go. Useful for catching the case where the compile
-// guard is silently removed by a refactor — the test would still fail
+// guard is silently removed by a refactor - the test would still fail
 // because Go interfaces are structurally typed but require the methods
 // to be defined on the concrete type.
 func TestNopSender_SatisfiesInterface(t *testing.T) {

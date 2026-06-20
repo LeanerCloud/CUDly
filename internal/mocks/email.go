@@ -7,87 +7,106 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockEmailSender is a mock implementation of email.Sender
+// MockEmailSender is a mock implementation of email.SenderInterface.
 type MockEmailSender struct {
 	mock.Mock
 }
 
-// SendNotification mocks the SendNotification operation
+// SendNotification mocks the SendNotification operation.
 func (m *MockEmailSender) SendNotification(ctx context.Context, subject, message string) error {
 	args := m.Called(ctx, subject, message)
 	return args.Error(0)
 }
 
-// SendToEmail mocks the SendToEmail operation
+// SendToEmail mocks the SendToEmail operation.
 func (m *MockEmailSender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
 	args := m.Called(ctx, toEmail, subject, body)
 	return args.Error(0)
 }
 
-// SendNewRecommendationsNotification mocks the SendNewRecommendationsNotification operation
-func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
+// SendToEmailWithCCMultipart mocks the SendToEmailWithCCMultipart operation.
+func (m *MockEmailSender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody string) error {
+	args := m.Called(ctx, toEmail, ccEmails, subject, textBody, htmlBody)
+	return args.Error(0)
+}
+
+// SendNewRecommendationsNotification mocks the SendNewRecommendationsNotification operation.
+func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-// SendScheduledPurchaseNotification mocks the SendScheduledPurchaseNotification operation
-func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error {
+// SendScheduledPurchaseNotification mocks the SendScheduledPurchaseNotification operation.
+func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-// SendPurchaseConfirmation mocks the SendPurchaseConfirmation operation
-func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error {
+// SendPurchaseConfirmation mocks the SendPurchaseConfirmation operation.
+func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-// SendPurchaseFailedNotification mocks the SendPurchaseFailedNotification operation
-func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error {
+// SendPurchaseFailedNotification mocks the SendPurchaseFailedNotification operation.
+func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-// SendPasswordResetEmail mocks the SendPasswordResetEmail operation
-func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
-	args := m.Called(ctx, email, resetURL)
+// SendPasswordResetEmail mocks the SendPasswordResetEmail operation.
+func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
+	args := m.Called(ctx, emailAddr, resetURL)
 	return args.Error(0)
 }
 
-// SendWelcomeEmail mocks the SendWelcomeEmail operation
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	args := m.Called(ctx, email, dashboardURL, role)
+// SendWelcomeEmail mocks the SendWelcomeEmail operation.
+func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
+	args := m.Called(ctx, emailAddr, dashboardURL, role)
 	return args.Error(0)
 }
 
-// SendPurchaseApprovalRequest mocks the SendPurchaseApprovalRequest operation
-func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+// SendUserInviteEmail mocks the SendUserInviteEmail operation.
+func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
+	args := m.Called(ctx, emailAddr, setupURL)
+	return args.Error(0)
+}
+
+// SendRIExchangePendingApproval mocks the SendRIExchangePendingApproval operation.
+func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data email.RegistrationNotificationData) error {
+// SendRIExchangeCompleted mocks the SendRIExchangeCompleted operation.
+func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data email.RegistrationDecisionData) error {
+// SendPurchaseApprovalRequest mocks the SendPurchaseApprovalRequest operation.
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data *email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+// SendPurchaseScheduledNotification mocks the SendPurchaseScheduledNotification operation.
+func (m *MockEmailSender) SendPurchaseScheduledNotification(ctx context.Context, data *email.NotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+// SendRegistrationReceivedNotification mocks the SendRegistrationReceivedNotification operation.
+func (m *MockEmailSender) SendRegistrationReceivedNotification(ctx context.Context, data *email.RegistrationNotificationData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+// SendRegistrationDecisionNotification mocks the SendRegistrationDecisionNotification operation.
+func (m *MockEmailSender) SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data *email.RegistrationDecisionData) error {
 	args := m.Called(ctx, toEmail, data)
 	return args.Error(0)
 }
 
-// EmailSenderAPI defines the interface for email sender operations
-type EmailSenderAPI interface {
-	SendNotification(ctx context.Context, subject, message string) error
-	SendToEmail(ctx context.Context, toEmail, subject, body string) error
-	SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error
-	SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error
-	SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error
-	SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error
-	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
-	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
-	SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error
-}
-
-// Ensure MockEmailSender implements EmailSenderAPI
-var _ EmailSenderAPI = (*MockEmailSender)(nil)
+// Ensure MockEmailSender implements the full SenderInterface.
+var _ email.SenderInterface = (*MockEmailSender)(nil)

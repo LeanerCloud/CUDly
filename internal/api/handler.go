@@ -14,7 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
-	"github.com/LeanerCloud/CUDly/internal/runtime"
+	runtime "github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -41,7 +41,7 @@ type Handler struct {
 	analyticsSnapshots         AnalyticsSnapshotStoreInterface
 	reshapeRecsFactory         func(aws.Config) reshapeRecsClient
 	reshapeAccountResolver     func(context.Context) (string, error)
-	discoverOrgFn              func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
+	discoverOrgFn              func(context.Context, *aws.Config) (*accounts.OrgDiscoveryResult, error)
 	riInstancesAccountResolver func(context.Context) (string, error)
 	azureExchangeFactory       func(subscriptionID string) azureExchangeClient
 	targetOfferingsEC2Factory  func(aws.Config) targetOfferingsEC2Client
