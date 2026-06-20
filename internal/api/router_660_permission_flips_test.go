@@ -292,9 +292,9 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
-		//nolint:misspell // DB value: purchase_executions status column uses cancelled
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything). //nolint:misspell // DB value
-																	Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil) //nolint:misspell // DB value
+		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything). //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+																	Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)

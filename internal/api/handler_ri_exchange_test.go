@@ -263,7 +263,7 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 	}, nil)
 
 	// Transition from pending→cancelled fails (record is not pending).
-	//nolint:misspell // DB value: ri_exchange_history status column uses 'cancelled'
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
@@ -1450,10 +1450,10 @@ func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
 		ID: id, Status: "pending", ApprovalToken: "tok",
 	}, nil)
 	// Token path: actor must be nil.
-	//nolint:misspell // DB value: ri_exchange_history status column uses 'cancelled'
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled",
 		(*string)(nil),
-	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil) //nolint:misspell // DB value
+	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 
 	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
 	require.NoError(t, err)

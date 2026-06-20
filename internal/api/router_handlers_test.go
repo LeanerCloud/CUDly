@@ -785,19 +785,19 @@ func TestHandler_rejectRIExchange_ValidTokenAndRecord(t *testing.T) {
 			Status:        "pending",
 		}, nil)
 	// rejectRIExchange transitions to "cancelled" (DB canonical), not "rejected"
-	//nolint:misspell // DB value: ri_exchange_history status column uses cancelled
-	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything). //nolint:misspell // DB value
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
+	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything). //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 																	Return(&config.RIExchangeRecord{
 			ID:     "11111111-1111-1111-1111-111111111111",
-			Status: "cancelled", //nolint:misspell // DB value
+			Status: "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 		}, nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.rejectRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
 	require.NoError(t, err)
 	m := result.(map[string]string)
-	//nolint:misspell // DB value: response status reflects DB canonical value
-	assert.Equal(t, "cancelled", m["status"]) //nolint:misspell // DB value
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
+	assert.Equal(t, "cancelled", m["status"]) //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 }
 
 // ---------------------------------------------------------------------------
