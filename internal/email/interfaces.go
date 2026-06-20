@@ -12,23 +12,23 @@ type SenderInterface interface {
 	SendNotification(ctx context.Context, subject, message string) error
 	SendToEmail(ctx context.Context, toEmail, subject, body string) error
 	SendToEmailWithCCMultipart(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody string) error
-	SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error
-	SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error
-	SendPurchaseConfirmation(ctx context.Context, data NotificationData) error
-	SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error
+	SendNewRecommendationsNotification(ctx context.Context, data *NotificationData) error
+	SendScheduledPurchaseNotification(ctx context.Context, data *NotificationData) error
+	SendPurchaseConfirmation(ctx context.Context, data *NotificationData) error
+	SendPurchaseFailedNotification(ctx context.Context, data *NotificationData) error
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
 	SendUserInviteEmail(ctx context.Context, email, setupURL string) error
-	SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error
-	SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error
-	SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error
+	SendRIExchangePendingApproval(ctx context.Context, data *RIExchangeNotificationData) error
+	SendRIExchangeCompleted(ctx context.Context, data *RIExchangeNotificationData) error
+	SendPurchaseApprovalRequest(ctx context.Context, data *NotificationData) error
 	// SendPurchaseScheduledNotification sends the "approved with delay" email
 	// immediately after an approval when Gmail-style pre-fire delay is configured
 	// (issue #291 wave-2). Notifies the user that the purchase will execute at
 	// RevocationWindowClosesAt and includes a one-click revoke link.
-	SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error
-	SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error
-	SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data RegistrationDecisionData) error
+	SendPurchaseScheduledNotification(ctx context.Context, data *NotificationData) error
+	SendRegistrationReceivedNotification(ctx context.Context, data *RegistrationNotificationData) error
+	SendRegistrationDecisionNotification(ctx context.Context, toEmail string, data *RegistrationDecisionData) error
 }
 
 // Verify that Sender implements SenderInterface.

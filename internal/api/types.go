@@ -108,7 +108,7 @@ type AnalyticsCollectorInterface interface {
 // carrying only one identifier are still matched. Both empty means "all" — the
 // handler MUST enforce allowed_accounts scope before passing empty filters.
 type AnalyticsSnapshotStoreInterface interface {
-	QuerySavings(ctx context.Context, req analytics.QueryRequest) ([]analytics.SavingsSnapshot, error)
+	QuerySavings(ctx context.Context, req *analytics.QueryRequest) ([]analytics.SavingsSnapshot, error)
 	QueryMonthlyTotals(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, months int) ([]analytics.MonthlySummary, error)
 	QueryByProvider(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, startDate, endDate time.Time) ([]analytics.ProviderBreakdown, error)
 	QueryByService(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, startDate, endDate time.Time) ([]analytics.ServiceBreakdown, error)
@@ -160,7 +160,7 @@ type PurchaseManagerInterface interface {
 // SchedulerInterface defines scheduler methods used by handler.
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
-	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by

@@ -99,7 +99,7 @@ type claims struct {
 // but does not abort startup — Google's CDN sometimes hiccups and we
 // prefer the validator come up with a stale-on-error fetch on the first
 // real request rather than crashloop the container.
-func New(cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
+func New(cfg *Config) (*Validator, error) {
 	if cfg.Skew <= 0 {
 		cfg.Skew = DefaultClockSkew
 	}
@@ -128,7 +128,7 @@ func New(cfg Config) (*Validator, error) { //nolint:gocritic // Config is an est
 // configureOIDC validates OIDC config, builds set-lookups, and wires the
 // go-oidc RemoteKeySet + IDTokenVerifier. Split out of New to keep the
 // per-mode setup below the cyclomatic-complexity gate.
-func configureOIDC(v *Validator, cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
+func configureOIDC(v *Validator, cfg *Config) (*Validator, error) {
 	if cfg.Issuer == "" {
 		cfg.Issuer = GoogleIssuer
 	}
@@ -177,7 +177,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) { //nolint:gocr
 	return v, nil
 }
 
-func configureBearer(v *Validator, cfg Config) (*Validator, error) { //nolint:gocritic // Config is an established value type; pointer change would require updating all test callers
+func configureBearer(v *Validator, cfg *Config) (*Validator, error) {
 	if cfg.Bearer == "" {
 		return nil, fmt.Errorf("%w: bearer mode requires SCHEDULED_TASK_SECRET", ErrConfigInvalid)
 	}
@@ -250,7 +250,7 @@ func (v *Validator) Warmup(ctx context.Context) {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
 	}
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // v.jwksURL is operator-supplied config validated as an absolute URL at startup; SSRF risk is accepted for OIDC JWKS discovery
+	resp, err := http.DefaultClient.Do(req) // #nosec G107 G704 -- jwksURL is operator-supplied config validated as an absolute URL at startup
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup fetch failed for %s: %v "+
 			"(validator will retry on first request)", v.jwksURL, err)

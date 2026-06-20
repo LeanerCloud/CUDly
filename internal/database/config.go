@@ -13,7 +13,7 @@ type Config struct {
 	LogLevel          string
 	Database          string
 	User              string
-	Password          string //nolint:gosec // G117: field is never JSON-marshaled; DSN() uses a separate method that masks it
+	Password          string `json:"-"` // excluded from JSON serialization to prevent accidental secret exposure
 	PasswordSecret    string
 	SSLMode           string
 	MigrationsPath    string

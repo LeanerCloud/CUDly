@@ -166,7 +166,7 @@ func baseClaims(now time.Time, sub, aud, iss string) map[string]interface{} {
 
 func newOIDCValidator(t *testing.T, jwksURL string) *Validator {
 	t.Helper()
-	v, err := New(Config{
+	v, err := New(&Config{
 		Mode:      ModeOIDC,
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   jwksURL,
@@ -495,7 +495,7 @@ func TestValidate_OIDC_SingleFlight_StampedeProtection(t *testing.T) {
 }
 
 func TestValidate_Bearer_OK(t *testing.T) {
-	v, err := New(Config{Mode: ModeBearer, Bearer: "topsecret"})
+	v, err := New(&Config{Mode: ModeBearer, Bearer: "topsecret"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestValidate_Bearer_OK(t *testing.T) {
 }
 
 func TestValidate_Bearer_Mismatch(t *testing.T) {
-	v, err := New(Config{Mode: ModeBearer, Bearer: "topsecret"})
+	v, err := New(&Config{Mode: ModeBearer, Bearer: "topsecret"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestValidate_Bearer_Mismatch(t *testing.T) {
 }
 
 func TestValidate_Bearer_MissingHeader(t *testing.T) {
-	v, err := New(Config{Mode: ModeBearer, Bearer: "topsecret"})
+	v, err := New(&Config{Mode: ModeBearer, Bearer: "topsecret"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestValidate_Bearer_MissingHeader(t *testing.T) {
 }
 
 func TestValidate_Disabled_AlwaysAllows(t *testing.T) {
-	v, err := New(Config{Mode: ModeDisabled})
+	v, err := New(&Config{Mode: ModeDisabled})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestValidate_Disabled_AlwaysAllows(t *testing.T) {
 }
 
 func TestNew_Rejects_OIDCWithoutSubjects(t *testing.T) {
-	_, err := New(Config{
+	_, err := New(&Config{
 		Mode:      ModeOIDC,
 		Audiences: []string{"https://api.example.com"},
 		// Subjects intentionally empty.
@@ -546,7 +546,7 @@ func TestNew_Rejects_OIDCWithoutSubjects(t *testing.T) {
 }
 
 func TestNew_Rejects_OIDCWithoutAudiences(t *testing.T) {
-	_, err := New(Config{
+	_, err := New(&Config{
 		Mode:     ModeOIDC,
 		Subjects: []string{testSchedulerSubject},
 	})
@@ -558,7 +558,7 @@ func TestNew_Rejects_OIDCWithoutAudiences(t *testing.T) {
 func TestNew_RejectsOIDCMalformedJWKSURL(t *testing.T) {
 	for _, jwksURL := range []string{"://bad", "/relative/path", "https://"} {
 		t.Run(jwksURL, func(t *testing.T) {
-			_, err := New(Config{
+			_, err := New(&Config{
 				Mode:      ModeOIDC,
 				JWKSURL:   jwksURL,
 				Audiences: []string{"https://api.example.com"},
@@ -572,14 +572,14 @@ func TestNew_RejectsOIDCMalformedJWKSURL(t *testing.T) {
 }
 
 func TestNew_Rejects_BearerWithoutSecret(t *testing.T) {
-	_, err := New(Config{Mode: ModeBearer})
+	_, err := New(&Config{Mode: ModeBearer})
 	if !errors.Is(err, ErrConfigInvalid) {
 		t.Fatalf("expected ErrConfigInvalid, got: %v", err)
 	}
 }
 
 func TestNew_Rejects_UnknownMode(t *testing.T) {
-	_, err := New(Config{Mode: Mode("bogus")})
+	_, err := New(&Config{Mode: Mode("bogus")})
 	if !errors.Is(err, ErrConfigInvalid) {
 		t.Fatalf("expected ErrConfigInvalid, got: %v", err)
 	}
@@ -694,7 +694,7 @@ func TestMiddleware_OIDC_AllowsAndCallsNextOnSuccess(t *testing.T) {
 }
 
 func TestMiddleware_Disabled_PassesThroughWithWarn(t *testing.T) {
-	v, err := New(Config{Mode: ModeDisabled})
+	v, err := New(&Config{Mode: ModeDisabled})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestWarmup_LoggedAndNonFatal_OnDeadEndpoint(t *testing.T) {
 	log.SetOutput(&logBuf)
 	t.Cleanup(func() { log.SetOutput(origOut) })
 
-	v, err := New(Config{
+	v, err := New(&Config{
 		Mode:      ModeOIDC,
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   "http://127.0.0.1:1/this-port-is-closed", // ECONNREFUSED
@@ -803,16 +803,16 @@ func TestMode(t *testing.T) {
 		var err error
 		switch m {
 		case ModeOIDC:
-			v, err = New(Config{
+			v, err = New(&Config{
 				Mode:      ModeOIDC,
 				JWKSURL:   "http://127.0.0.1:1",
 				Audiences: []string{"a"},
 				Subjects:  []string{"s"},
 			})
 		case ModeBearer:
-			v, err = New(Config{Mode: ModeBearer, Bearer: "x"})
+			v, err = New(&Config{Mode: ModeBearer, Bearer: "x"})
 		case ModeDisabled:
-			v, err = New(Config{Mode: ModeDisabled})
+			v, err = New(&Config{Mode: ModeDisabled})
 		}
 		if err != nil {
 			t.Fatalf("New(%s): %v", m, err)

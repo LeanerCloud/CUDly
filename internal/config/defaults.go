@@ -5,7 +5,7 @@ import "time"
 // DefaultSettings defines the default configuration values for CUDly.
 // UpdatedAt is the zero time.Time{} for every entry: these are static
 // compile-time defaults and have never been "updated" by a user.
-var DefaultSettings = []ConfigSetting{
+var DefaultSettings = []Setting{
 	// Purchase Defaults
 	{
 		Key:         "purchase_defaults.term",
@@ -390,7 +390,7 @@ func GetDefaultValue(key string) any {
 }
 
 // GetDefaultSetting returns the complete default setting for a given key.
-func GetDefaultSetting(key string) *ConfigSetting {
+func GetDefaultSetting(key string) *Setting {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
 			// Return a copy
@@ -402,8 +402,8 @@ func GetDefaultSetting(key string) *ConfigSetting {
 }
 
 // GetDefaultsByCategory returns all default settings for a given category.
-func GetDefaultsByCategory(category string) []ConfigSetting {
-	var result []ConfigSetting
+func GetDefaultsByCategory(category string) []Setting {
+	var result []Setting
 	for _, setting := range DefaultSettings {
 		if setting.Category == category {
 			result = append(result, setting)

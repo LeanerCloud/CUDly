@@ -57,22 +57,22 @@ func (m *MockEmailSender) SendToEmailWithCCMultipart(_ context.Context, _ string
 	return nil
 }
 
-func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
@@ -92,27 +92,27 @@ func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupU
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
-func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ *email.RegistrationNotificationData) error {
 	return nil
 }
-func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *email.RegistrationDecisionData) error {
 	return nil
 }
 
@@ -176,11 +176,9 @@ func TestSchedulerConfig(t *testing.T) {
 	mockPurchase := new(MockPurchaseManager)
 	mockEmail := new(MockEmailSender)
 
-	cfg := SchedulerConfig{
-		ConfigStore:     mockStore,
-		PurchaseManager: nil, // We'd use mockPurchase but types don't match in test
-		EmailSender:     nil, // We'd use mockEmail but types don't match in test
-		DashboardURL:    "https://dashboard.example.com",
+	cfg := Config{
+		ConfigStore:  mockStore,
+		DashboardURL: "https://dashboard.example.com",
 	}
 
 	assert.NotNil(t, cfg.ConfigStore)
@@ -194,12 +192,12 @@ func TestSchedulerConfig(t *testing.T) {
 func TestNewScheduler(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://dashboard.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	assert.NotNil(t, scheduler)
 	assert.Equal(t, "https://dashboard.example.com", scheduler.dashboardURL)
@@ -565,12 +563,12 @@ func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 func TestScheduler_Interface(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://test.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	// Verify scheduler has required fields
 	assert.NotNil(t, scheduler.config)
@@ -747,7 +745,7 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -776,7 +774,7 @@ func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 
@@ -800,7 +798,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
-	expected := config.RecommendationFilter{
+	expected := &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -815,7 +813,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -833,7 +831,7 @@ func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
 	scheduler := &Scheduler{config: mockStore}
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -857,7 +855,7 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		cacheTTL: time.Nanosecond,
 	}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Give any (wrongly-spawned) goroutine time to hit the store; none
@@ -914,7 +912,7 @@ func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Assert the cold-start path ran: GetGlobalConfig is only called by
@@ -948,7 +946,7 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
 		// Small sleep so concurrent workers genuinely overlap.
@@ -976,7 +974,7 @@ func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
 		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
 		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return nil, fmt.Errorf("cred error for %s", acct.ID)
 	}
 
@@ -1000,7 +998,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
 		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		if acct.ID == "acct-bad" {
 			return nil, fmt.Errorf("transient")
 		}
@@ -1020,7 +1018,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 // correctly skips the all-failed error path.
 func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
-		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 			t.Fatalf("fn must not be called for zero-accounts input")
 			return nil, nil
 		})
@@ -1276,8 +1274,8 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 	// "only Details.Engine differs" property holds at every level
 	// (Service / ResourceType already match across the pair).
 	cases := []struct {
-		name string
 		recs func() (common.Recommendation, common.Recommendation)
+		name string
 	}{
 		{
 			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
@@ -1543,7 +1541,7 @@ func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 	// after ctx has been wrapped via concurrency.WithSharedSemaphore — the
 	// wrapped ctx is what reaches the email sender. mock.Anything keeps the
 	// assertion resilient to that wrap.
-	mockEmail.On("SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 
 	scheduler := &Scheduler{
 		config:          mockStore,
@@ -1558,7 +1556,7 @@ func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 	assert.Equal(t, 1, result.Recommendations)
 	assert.Equal(t, 500.0, result.TotalSavings)
 
-	mockEmail.AssertCalled(t, "SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("email.NotificationData"))
+	mockEmail.AssertCalled(t, "SendNewRecommendationsNotification", mock.Anything, mock.AnythingOfType("*email.NotificationData"))
 }
 
 // Test AWS recommendations fallback to GetRecommendations when GetAllRecommendations returns empty.
@@ -1606,8 +1604,8 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 // fields are set by each test case to drive the GetCallerIdentity response
 // shape (success with an account ID, or an error).
 type fakeSTSClient struct {
-	accountID string
 	err       error
+	accountID string
 }
 
 func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {

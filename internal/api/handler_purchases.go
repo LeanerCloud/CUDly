@@ -773,7 +773,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 
 	data := buildScheduledEmailData(h.dashboardURL, execution, globalCfg, actor)
 
-	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, data); sendErr != nil {
+	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, &data); sendErr != nil {
 		logging.Errorf("sendPurchaseScheduledEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
 }
@@ -2086,7 +2086,7 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		AuthorizedApprovers: approvers,
 	}
 	data.ArcheraEducationURL = archeraEducationURL(dashboardBase)
-	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
+	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, &data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
 		switch {
 		case errors.Is(err, email.ErrNoRecipient):

@@ -222,7 +222,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 	// failures stay scoped to the offending case.
 	newBearerValidator := func(t *testing.T, secret string) *scheduledauth.Validator {
 		t.Helper()
-		v, err := scheduledauth.New(scheduledauth.Config{
+		v, err := scheduledauth.New(&scheduledauth.Config{
 			Mode:   scheduledauth.ModeBearer,
 			Bearer: secret,
 		})

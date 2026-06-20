@@ -42,7 +42,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		}
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {

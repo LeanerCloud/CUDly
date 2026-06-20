@@ -40,8 +40,8 @@ func (s *testablePostgresAnalyticsStore) SaveSnapshot(ctx context.Context, snaps
 	return s.PostgresAnalyticsStore.SaveSnapshot(ctx, snapshot)
 }
 
-// Verify the wrapper still satisfies AnalyticsStore.
-var _ AnalyticsStore = (*testablePostgresAnalyticsStore)(nil)
+// Verify the wrapper still satisfies Store.
+var _ Store = (*testablePostgresAnalyticsStore)(nil)
 
 // =====================
 // Tests
@@ -293,7 +293,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.Len(t, snapshots, 1)
 		assert.Equal(t, "snapshot-1", snapshots[0].ID)
@@ -330,7 +330,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -362,7 +362,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -394,7 +394,7 @@ func TestQuerySavings(t *testing.T) {
 			Limit:        10,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -425,7 +425,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NotNil(t, snapshots)
 		assert.Empty(t, snapshots)
@@ -452,7 +452,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -487,7 +487,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -924,12 +924,17 @@ func TestQueryRequest(t *testing.T) {
 	})
 
 	t.Run("handles optional fields", func(t *testing.T) {
+		start := time.Now().Add(-24 * time.Hour)
+		end := time.Now()
 		req := QueryRequest{
 			AccountUUIDs: []string{"account-123"},
-			StartDate:    time.Now().Add(-24 * time.Hour),
-			EndDate:      time.Now(),
+			StartDate:    start,
+			EndDate:      end,
 		}
 
+		assert.Equal(t, []string{"account-123"}, req.AccountUUIDs)
+		assert.Equal(t, start, req.StartDate)
+		assert.Equal(t, end, req.EndDate)
 		assert.Equal(t, "", req.Provider) // Optional, can be empty
 		assert.Equal(t, "", req.Service)  // Optional, can be empty
 		assert.Equal(t, 0, req.Limit)     // Optional, 0 means no limit
@@ -1064,7 +1069,7 @@ func TestAnalyticsStoreInterface(t *testing.T) {
 	t.Run("PostgresAnalyticsStore implements AnalyticsStore interface", func(t *testing.T) {
 		// This is a compile-time check that's already in the code,
 		// but we can test it explicitly
-		var _ AnalyticsStore = (*PostgresAnalyticsStore)(nil)
+		var _ Store = (*PostgresAnalyticsStore)(nil)
 	})
 }
 
@@ -1095,7 +1100,7 @@ func TestQuerySavingsRowScanError(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1208,7 +1213,7 @@ func TestRowsErr(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.Len(t, snapshots, 1)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1323,7 +1328,7 @@ func TestErrNoRowsHandling(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NotNil(t, snapshots)
 		assert.Empty(t, snapshots)
@@ -1338,7 +1343,7 @@ func TestTestableStoreImplementsInterface(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 
-		var store AnalyticsStore = newTestableStore(mock)
+		var store Store = newTestableStore(mock)
 		assert.NotNil(t, store)
 	})
 }

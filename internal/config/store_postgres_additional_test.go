@@ -114,8 +114,18 @@ func (s *additionalMockStore) GetExecutionByPlanAndDate(ctx context.Context, pla
 	return &executions[0], nil
 }
 
-func (s *additionalMockStore) queryPurchaseHistory(ctx context.Context, query string, args ...interface{}) ([]PurchaseHistoryRecord, error) { //nolint:unparam // test helper; callers happen to pass the same SQL but the parameter enables reuse
-	rows, err := s.mock.Query(ctx, query, args...)
+const purchaseHistoryQuery = `
+		SELECT account_id, purchase_id, timestamp, provider, service, region,
+		       resource_type, count, term, payment, upfront_cost, monthly_cost,
+		       estimated_savings, plan_id, plan_name, ramp_step
+		FROM purchase_history
+		WHERE account_id = $1
+		ORDER BY timestamp DESC
+		LIMIT $2
+	`
+
+func (s *additionalMockStore) queryPurchaseHistory(ctx context.Context, args ...interface{}) ([]PurchaseHistoryRecord, error) {
+	rows, err := s.mock.Query(ctx, purchaseHistoryQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -361,16 +371,7 @@ func TestQueryPurchaseHistory_ScanError(t *testing.T) {
 		WithArgs("scan-error-account", 10).
 		WillReturnRows(rows)
 
-	query := `
-		SELECT account_id, purchase_id, timestamp, provider, service, region,
-		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
-		FROM purchase_history
-		WHERE account_id = $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`
-	_, err = store.queryPurchaseHistory(context.Background(), query, "scan-error-account", 10)
+	_, err = store.queryPurchaseHistory(context.Background(), "scan-error-account", 10)
 	assert.Error(t, err)
 
 	mock.ExpectationsWereMet()
@@ -398,16 +399,7 @@ func TestQueryPurchaseHistory_RowsError(t *testing.T) {
 		WithArgs("rows-error-account", 10).
 		WillReturnRows(rows)
 
-	query := `
-		SELECT account_id, purchase_id, timestamp, provider, service, region,
-		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
-		FROM purchase_history
-		WHERE account_id = $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`
-	_, err = store.queryPurchaseHistory(context.Background(), query, "rows-error-account", 10)
+	_, err = store.queryPurchaseHistory(context.Background(), "rows-error-account", 10)
 	assert.Error(t, err)
 
 	mock.ExpectationsWereMet()
@@ -424,16 +416,7 @@ func TestQueryPurchaseHistory_QueryError(t *testing.T) {
 		WithArgs("query-error-account", 10).
 		WillReturnError(errors.New("database unavailable"))
 
-	query := `
-		SELECT account_id, purchase_id, timestamp, provider, service, region,
-		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
-		FROM purchase_history
-		WHERE account_id = $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`
-	_, err = store.queryPurchaseHistory(context.Background(), query, "query-error-account", 10)
+	_, err = store.queryPurchaseHistory(context.Background(), "query-error-account", 10)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database unavailable")
 
@@ -461,16 +444,7 @@ func TestQueryPurchaseHistory_NullPlanFields(t *testing.T) {
 		WithArgs("null-fields", 10).
 		WillReturnRows(rows)
 
-	query := `
-		SELECT account_id, purchase_id, timestamp, provider, service, region,
-		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step
-		FROM purchase_history
-		WHERE account_id = $1
-		ORDER BY timestamp DESC
-		LIMIT $2
-	`
-	records, err := store.queryPurchaseHistory(context.Background(), query, "null-fields", 10)
+	records, err := store.queryPurchaseHistory(context.Background(), "null-fields", 10)
 	require.NoError(t, err)
 	assert.Len(t, records, 1)
 	assert.Empty(t, records[0].PlanID)
@@ -788,18 +762,18 @@ func TestPresetRampSchedules_Monthly10PctCoverage(t *testing.T) {
 // CONFIG SETTING TYPE TESTS
 // ==========================================
 
-func TestConfigSetting_AllTypes(t *testing.T) {
+func TestSetting_AllTypes(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
 		name        string
-		setting     ConfigSetting
+		setting     Setting
 		checkType   func(interface{}) bool
 		description string
 	}{
 		{
 			name: "int type",
-			setting: ConfigSetting{
+			setting: Setting{
 				Key:       "test.int",
 				Value:     42,
 				Type:      "int",
@@ -814,7 +788,7 @@ func TestConfigSetting_AllTypes(t *testing.T) {
 		},
 		{
 			name: "float type",
-			setting: ConfigSetting{
+			setting: Setting{
 				Key:       "test.float",
 				Value:     3.14159,
 				Type:      "float",
@@ -829,7 +803,7 @@ func TestConfigSetting_AllTypes(t *testing.T) {
 		},
 		{
 			name: "bool type",
-			setting: ConfigSetting{
+			setting: Setting{
 				Key:       "test.bool",
 				Value:     true,
 				Type:      "bool",
@@ -844,7 +818,7 @@ func TestConfigSetting_AllTypes(t *testing.T) {
 		},
 		{
 			name: "string type",
-			setting: ConfigSetting{
+			setting: Setting{
 				Key:       "test.string",
 				Value:     "hello world",
 				Type:      "string",

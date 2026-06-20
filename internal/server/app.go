@@ -25,7 +25,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
-	"github.com/LeanerCloud/CUDly/internal/runtime"
+	runtime "github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
 	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
@@ -192,7 +192,7 @@ func runMigrationsBoundedWith(pool *pgxpool.Pool, migrationsPath, adminEmail, ad
 // deployment. CUDLY_ISSUER_URL (set by the infra module to the
 // Function URL / Container App URL / Cloud Run URL) wins; DashboardURL
 // is the backstop.
-func resolveOIDCIssuerURL(cfg ApplicationConfig) string { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
+func resolveOIDCIssuerURL(cfg *ApplicationConfig) string {
 	if cfg.IssuerURL != "" {
 		return strings.TrimRight(cfg.IssuerURL, "/")
 	}
@@ -211,7 +211,7 @@ func LoadApplicationConfig() ApplicationConfig {
 		NotificationDaysBefore: getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
 		DefaultTerm:            getEnvInt("DEFAULT_TERM", 3),
 		DefaultPaymentOption:   os.Getenv("DEFAULT_PAYMENT_OPTION"),
-		DefaultCoverage:        getEnvFloat("DEFAULT_COVERAGE", 80),
+		DefaultCoverage:        getEnvFloat("DEFAULT_COVERAGE"),
 		DefaultRampSchedule:    os.Getenv("DEFAULT_RAMP_SCHEDULE"),
 		APIKeySecretARN:        os.Getenv("API_KEY_SECRET_ARN"),
 		EnableDashboard:        os.Getenv("ENABLE_DASHBOARD") == "true",
@@ -234,7 +234,7 @@ func LoadApplicationConfig() ApplicationConfig {
 // flow into the purchase manager as system-wide defaults; a typo propagates
 // silently into every purchase unless we reject it here (issue #1026).
 // Empty values are always valid (means "use the purchase manager's built-in default").
-func validateAppConfigEnvDefaults(cfg ApplicationConfig) error { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
+func validateAppConfigEnvDefaults(cfg *ApplicationConfig) error {
 	if err := config.ValidatePaymentOptionEnv(cfg.DefaultPaymentOption); err != nil {
 		return fmt.Errorf("invalid DEFAULT_PAYMENT_OPTION: %w", err)
 	}
@@ -261,7 +261,7 @@ func validateAppConfigEnvDefaults(cfg ApplicationConfig) error { //nolint:gocrit
 // SCHEDULED_TASK_SECRET_NAME (secret-store path) are set, we warn loudly
 // because the plaintext value is visible in Lambda env / Terraform state.
 // The secret-store path is always preferred when both are present.
-func resolveScheduledTaskSecret(ctx context.Context, cfg ApplicationConfig, resolver secrets.Resolver) (string, error) { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
+func resolveScheduledTaskSecret(ctx context.Context, cfg *ApplicationConfig, resolver secrets.Resolver) (string, error) {
 	if cfg.ScheduledTaskSecretName != "" && cfg.ScheduledTaskSecret != "" {
 		log.Printf("SECURITY WARNING: both SCHEDULED_TASK_SECRET (plaintext) and " +
 			"SCHEDULED_TASK_SECRET_NAME are set. The plaintext value is visible in " +
@@ -291,7 +291,7 @@ func (envSourceOS) Get(key string) string { return os.Getenv(key) }
 // a pre-loaded scheduledauth.Config. The bearer secret is injected from cfg
 // rather than re-read from env — in production cfg.ScheduledTaskSecret was
 // already resolved from Key Vault / Secrets Manager by the caller.
-func buildScheduledAuthFromConfig(cfg ApplicationConfig, saCfg scheduledauth.Config) (*scheduledauth.Validator, error) { //nolint:gocritic // ApplicationConfig is an established value type; changing to pointer would cascade to exported NewApplicationFromDeps
+func buildScheduledAuthFromConfig(cfg *ApplicationConfig, saCfg *scheduledauth.Config) (*scheduledauth.Validator, error) {
 	// In bearer mode, override the env-supplied secret with the one
 	// already resolved from KV / SM. LoadConfig reads SCHEDULED_TASK_SECRET
 	// directly which is fine for local dev where the env carries the
@@ -313,13 +313,13 @@ func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver sec
 		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
 	}
 
-	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, *cfg, resolver)
+	resolvedSecret, secretErr := resolveScheduledTaskSecret(ctx, cfg, resolver)
 	if secretErr != nil && saCfg.Mode == scheduledauth.ModeBearer {
 		return nil, fmt.Errorf("failed to resolve scheduled-task secret from %q: %w", cfg.ScheduledTaskSecretName, secretErr)
 	}
 	cfg.ScheduledTaskSecret = resolvedSecret
 
-	v, err := buildScheduledAuthFromConfig(*cfg, saCfg)
+	v, err := buildScheduledAuthFromConfig(cfg, &saCfg)
 	if err != nil {
 		return nil, fmt.Errorf("scheduled-task auth init: %w", err)
 	}
@@ -332,7 +332,7 @@ func initScheduledAuth(ctx context.Context, cfg *ApplicationConfig, resolver sec
 
 // NewApplicationFromDeps creates an Application from pre-built configuration and dependencies.
 // This is the testable constructor - all external I/O is done before calling this.
-func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps ExternalDeps) (*Application, error) { //nolint:gocritic // exported function; changing ApplicationConfig to pointer would be a breaking API change
+func NewApplicationFromDeps(ctx context.Context, cfg *ApplicationConfig, deps ExternalDeps) (*Application, error) {
 	if deps.DBConfig == nil {
 		return nil, fmt.Errorf("database configuration required: DBConfig must be provided")
 	}
@@ -346,7 +346,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	// Wire up the /api/scheduled/* auth validator. initScheduledAuth loads
 	// the mode config, resolves the bearer secret with fail-fast semantics
 	// in bearer mode (04-M4), builds the validator, and warms up JWKS.
-	scheduledAuth, err := initScheduledAuth(ctx, &cfg, deps.SecretResolver)
+	scheduledAuth, err := initScheduledAuth(ctx, cfg, deps.SecretResolver)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +396,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	})
 
 	// Initialize scheduler
-	sched := scheduler.NewScheduler(scheduler.SchedulerConfig{
+	sched := scheduler.NewScheduler(&scheduler.Config{
 		ConfigStore:     deps.ConfigStore,
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
@@ -461,7 +461,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		staticDir:         staticDirFromEnv(),
 		dbConfig:          deps.DBConfig,
 		secretResolver:    deps.SecretResolver,
-		appConfig:         cfg,
+		appConfig:         *cfg,
 		signer:            signer,
 		scheduledAuth:     scheduledAuth,
 		migrationsTimeout: resolveMigrationsTimeout(),
@@ -485,8 +485,7 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	log.Printf("CUDly Server initializing, version: %s", cfg.Version)
 
-	// Initialize configuration store (PostgreSQL). The store connects lazily on
-	// first request, so ConfigStore is wired as nil here (see initConfigStore).
+	// Initialize configuration store (PostgreSQL)
 	dbConfig, secretResolver, err := initConfigStore(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize config store: %w", err)
@@ -507,13 +506,13 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	deps := ExternalDeps{
 		EmailSender:    emailSender,
-		ConfigStore:    nil, // created lazily on first request (see initConfigStore)
+		ConfigStore:    nil, // lazy-init: created on first request to avoid Lambda ENI issues
 		DBConfig:       dbConfig,
 		SecretResolver: secretResolver,
 		STSClient:      stsClient,
 	}
 
-	return NewApplicationFromDeps(ctx, cfg, deps)
+	return NewApplicationFromDeps(ctx, &cfg, deps)
 }
 
 // ensureDB ensures the database connection is established (lazy initialization).
@@ -733,18 +732,18 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		DefaultRampSchedule:    app.appConfig.DefaultRampSchedule,
 		DashboardURL:           app.appConfig.DashboardURL,
 		OIDCSigner:             app.signer,
-		OIDCIssuerURL:          resolveOIDCIssuerURL(app.appConfig),
+		OIDCIssuerURL:          resolveOIDCIssuerURL(&app.appConfig),
 	})
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
 	// Re-initialize scheduler with per-account credential resolution.
-	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
+	app.Scheduler = scheduler.NewScheduler(&scheduler.Config{
 		ConfigStore:     app.Config,
 		PurchaseManager: app.Purchase,
 		EmailSender:     app.Email,
 		CredentialStore: credStore,
 		OIDCSigner:      app.signer,
-		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
+		OIDCIssuerURL:   resolveOIDCIssuerURL(&app.appConfig),
 		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
 		STSClient:       sts.NewFromConfig(awsCfg),
 		IsLambda:        app.appConfig.IsLambda,
@@ -802,7 +801,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		AnalyticsCollector:  app.AnalyticsCollector,
 		AnalyticsSnapshots:  analytics.NewPostgresAnalyticsStore(dbConn),
 		OIDCSigner:          app.signer,
-		OIDCIssuerURL:       resolveOIDCIssuerURL(app.appConfig),
+		OIDCIssuerURL:       resolveOIDCIssuerURL(&app.appConfig),
 		CommitmentOpts:      commitmentOpts,
 		EncryptionKeySource: app.encKeySource,
 	})
@@ -876,9 +875,7 @@ func initConfigStore(ctx context.Context) (*database.Config, secrets.Resolver, e
 
 	log.Printf("PostgreSQL config loaded (will connect on first request): %s:%d", dbConfig.Host, dbConfig.Port)
 
-	// The config store itself is created lazily on first request (not here), so
-	// callers wire a nil ConfigStore into ExternalDeps. Deferring the connection
-	// avoids connecting during Lambda init when the ENI isn't ready.
+	// Config store is created lazily on first request to avoid Lambda ENI issues.
 	return dbConfig, secretResolver, nil
 }
 
@@ -896,16 +893,19 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
-func getEnvFloat(key string, defaultVal float64) float64 { //nolint:unparam // defaultVal=80 today; kept for future call sites with different defaults
+// defaultCoverage is the default coverage percentage used when DEFAULT_COVERAGE is unset.
+const defaultCoverage = 80.0
+
+func getEnvFloat(key string) float64 {
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.ParseFloat(val, 64)
 		if err != nil {
-			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultVal)
-			return defaultVal
+			log.Printf("WARNING: %s=%q is not a valid float; using default %g", key, val, defaultCoverage)
+			return defaultCoverage
 		}
 		return result
 	}
-	return defaultVal
+	return defaultCoverage
 }
 
 // authServiceAdapter adapts auth.Service to api.AuthServiceInterface.
@@ -993,7 +993,7 @@ func (a *authServiceAdapter) ConfirmPasswordReset(ctx context.Context, req api.P
 	return a.service.ConfirmPasswordReset(ctx, authReq)
 }
 
-func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (state string, flow string, err error) { //nolint:gocritic // unnamedResult: named for interface clarity; hugeParam: receiver is a pointer
+func (a *authServiceAdapter) ResetTokenStatus(ctx context.Context, token string) (state, flow string, err error) {
 	s, f, e := a.service.ResetTokenStatus(ctx, token)
 	return string(s), string(f), e
 }
@@ -1117,6 +1117,7 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 	return a.service.RevokeAPIKeyAPI(ctx, userID, keyID)
 }
 
-func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) { //nolint:gocritic // interface method has unnamed return types; naming them would require a disproportionate refactor
-	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
+func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (key, user any, err error) {
+	key, user, err = a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
+	return key, user, err
 }

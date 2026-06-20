@@ -628,8 +628,8 @@ func writeCFNFiles(zw *zip.Writer, data *federationIaCData, source, slug string)
 	}
 	// Shell-escape template values before rendering the deploy script to prevent
 	// injection via account names or OIDC URLs containing shell metacharacters.
-	escapedData := shellEscapeData(data)
-	deployScript, err := renderTemplate(deployTmplPath, &escapedData)
+	escaped := shellEscapeData(data)
+	deployScript, err := renderTemplate(deployTmplPath, &escaped)
 	if err != nil {
 		return fmt.Errorf("cfn: %w", err)
 	}

@@ -25,25 +25,25 @@ const (
 // PostgreSQL for the historical-savings analytics time-series. It runs on a
 // schedule (see server.handleCollectAnalytics) across all tenants.
 type Collector struct {
-	store       AnalyticsStore
+	store       Store
 	configStore config.StoreInterface
 }
 
 // CollectorConfig holds configuration for the collector.
 type CollectorConfig struct {
-	AnalyticsStore AnalyticsStore
+	Store Store
 }
 
 // NewCollector creates a new savings collector.
 func NewCollector(cfg CollectorConfig, configStore config.StoreInterface) (*Collector, error) {
-	if cfg.AnalyticsStore == nil {
+	if cfg.Store == nil {
 		return nil, fmt.Errorf("analytics store is required")
 	}
 	if configStore == nil {
 		return nil, fmt.Errorf("config store is required")
 	}
 	return &Collector{
-		store:       cfg.AnalyticsStore,
+		store:       cfg.Store,
 		configStore: configStore,
 	}, nil
 }
@@ -72,7 +72,7 @@ type aggregateData struct {
 // aggKey is the bucket identity. cloudAccountID is dereferenced (or "" when
 // nil) so two rows for the same provider account but differing UUID-vs-NULL
 // don't merge across the tenant boundary.
-func aggKey(p config.PurchaseHistoryRecord, commitmentType string) string {
+func aggKey(p *config.PurchaseHistoryRecord, commitmentType string) string {
 	cloud := ""
 	if p.CloudAccountID != nil {
 		cloud = *p.CloudAccountID
@@ -133,7 +133,8 @@ func (c *Collector) Collect(ctx context.Context) error {
 func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryRecord, now time.Time) (serviceMap map[string]*aggregateData, activePurchases, skippedBadTerm int, err error) {
 	serviceMap = make(map[string]*aggregateData)
 
-	for _, p := range purchases {
+	for i := range purchases {
+		p := &purchases[i]
 		if err := ctx.Err(); err != nil {
 			return nil, 0, 0, fmt.Errorf("collection canceled after %d rows: %w", activePurchases, err)
 		}

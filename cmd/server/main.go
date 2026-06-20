@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/runtime"
+	runtime "github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/server"
 )
 

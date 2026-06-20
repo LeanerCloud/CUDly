@@ -782,7 +782,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 
 func (m *Manager) sendPurchaseNotification(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) error {
 	data := m.buildPurchaseConfirmationData(exec, plan, totalSavings, totalUpfront)
-	return m.email.SendPurchaseConfirmation(ctx, data)
+	return m.email.SendPurchaseConfirmation(ctx, &data)
 }
 
 func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) email.NotificationData {

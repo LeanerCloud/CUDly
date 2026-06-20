@@ -1423,7 +1423,7 @@ func TestDiscoverOrgAccounts_CredResolutionFailureIs5xx(t *testing.T) {
 		// discoverOrgFn must NOT be reached — credential resolution fails
 		// upstream of it. If the test triggers this, the test is
 		// mis-wired (or the handler stopped failing on cred error).
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			t.Fatal("discoverOrgFn must not be called when credential resolution fails")
 			return nil, nil
 		},
@@ -1494,7 +1494,7 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 		auth:      mockAuth,
 		config:    store,
 		credStore: credStore,
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return &accounts.OrgDiscoveryResult{
 				Accounts: []config.CloudAccount{
 					{Provider: "aws", ExternalID: "200000000002", Name: "Already Known"}, // dedupe: skipped
@@ -1575,7 +1575,7 @@ func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
 			},
 		},
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return &accounts.OrgDiscoveryResult{
 				Accounts: []config.CloudAccount{
 					{Provider: "aws", ExternalID: "300000000003", Name: "Dup On Insert"},
@@ -1626,7 +1626,7 @@ func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
 				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
 			},
 		},
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return nil, nil
 		},
 	}

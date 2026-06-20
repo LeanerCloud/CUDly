@@ -164,9 +164,9 @@ func (app *Application) sendExchangeNotification(ctx context.Context, result *ex
 	var err error
 	if result.Mode == "manual" && len(result.Pending) > 0 {
 		data.RecipientEmail = notifyEmail
-		err = app.Email.SendRIExchangePendingApproval(ctx, data)
+		err = app.Email.SendRIExchangePendingApproval(ctx, &data)
 	} else if len(result.Completed)+len(result.Failed) > 0 {
-		err = app.Email.SendRIExchangeCompleted(ctx, data)
+		err = app.Email.SendRIExchangeCompleted(ctx, &data)
 	}
 
 	if err != nil {

@@ -13,7 +13,7 @@ type fakeLambdaClient struct {
 	url string
 }
 
-func (f *fakeLambdaClient) GetFunctionUrlConfig(_ context.Context, _ *lambda.GetFunctionUrlConfigInput, _ ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error) { //nolint:revive // must match SDK method name: (*lambda.Client).GetFunctionUrlConfig
+func (f *fakeLambdaClient) GetFunctionURLConfig(_ context.Context, _ *lambda.GetFunctionUrlConfigInput, _ ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

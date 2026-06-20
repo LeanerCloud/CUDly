@@ -32,8 +32,8 @@ type Report struct {
 	Results   []CheckResult `json:"results"`
 }
 
-func (r *Report) Add(res CheckResult) {
-	r.Results = append(r.Results, res)
+func (r *Report) Add(res *CheckResult) {
+	r.Results = append(r.Results, *res)
 }
 
 func (r *Report) HasFailures() bool {

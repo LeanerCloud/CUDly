@@ -28,6 +28,29 @@ const bcryptCost = 12
 // inside the 000024 migration SQL.
 const defaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 
+// closeMigratorWithLog closes m and logs any errors. Extracted so that
+// defer closures in RunMigrations / RollbackMigrations do not count their
+// conditional branches against the callers' cyclomatic complexity budget.
+func closeMigratorWithLog(m *migrate.Migrate, label string) {
+	if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+		log.Printf("WARNING: error closing migrator%s: source=%v database=%v", label, srcErr, dbErr)
+	}
+}
+
+// checkMigratorVersion reads the current schema version and returns an error
+// if the database is in a dirty state. It treats ErrNilVersion (no migrations
+// applied yet) as non-fatal and returns version 0.
+func checkMigratorVersion(m *migrate.Migrate) (uint, error) {
+	version, dirty, err := m.Version()
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
+		return 0, fmt.Errorf("failed to get migration version: %w", err)
+	}
+	if dirty {
+		return 0, fmt.Errorf("database is in dirty state at version %d", version)
+	}
+	return version, nil
+}
+
 // RunMigrations runs database migrations using golang-migrate.
 // adminEmail is optional - if provided, admin user will be created after migrations complete.
 // adminPassword is optional - if provided, admin is created with hashed password and active=true.
@@ -39,21 +62,16 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath, admi
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer closeMigratorWithLog(m, "")
 
 	// Run migrations
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) { //nolint:govet // err shadows outer err intentionally; scoped to the if block
-		return fmt.Errorf("failed to run migrations: %w", err)
+	if upErr := m.Up(); upErr != nil && !errors.Is(upErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to run migrations: %w", upErr)
 	}
 
-	// Get current version
-	version, dirty, err := m.Version()
-	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
-		return fmt.Errorf("failed to get migration version: %w", err)
-	}
-
-	if dirty {
-		return fmt.Errorf("database is in dirty state at version %d", version)
+	version, err := checkMigratorVersion(m)
+	if err != nil {
+		return err
 	}
 
 	log.Printf("Database migrations completed successfully (version: %d)", version)
@@ -102,8 +120,8 @@ func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrat
 	// the given version. Used to recover from a partially-applied
 	// migration without direct DB access. Remove the env var after the
 	// next successful deploy.
-	if err := maybeForceMigrationVersion(m); err != nil { //nolint:govet // err shadows outer err intentionally; scoped to the if block
-		m.Close()
+	if err := maybeForceMigrationVersion(m); err != nil {
+		closeMigratorWithLog(m, " on force-recovery failure")
 		return nil, err
 	}
 
@@ -111,8 +129,8 @@ func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrat
 	// clear the dirty flag at the CURRENT recorded version so the subsequent
 	// Up() re-applies any pending migrations, letting a cold start self-recover
 	// instead of staying broken until a manual force.
-	if err := maybeAutoHealDirty(m); err != nil { //nolint:govet // err shadows outer err intentionally; scoped to the if block
-		m.Close()
+	if err := maybeAutoHealDirty(m); err != nil {
+		closeMigratorWithLog(m, " on auto-heal failure")
 		return nil, err
 	}
 
@@ -387,7 +405,11 @@ func maybeAutoHealDirty(m *migrate.Migrate) error {
 	// Force the CURRENT recorded version (never lower -- see the doc comment),
 	// then let the caller's Up() re-apply only the pending tail.
 	log.Printf("Database is DIRTY at version %d: auto-heal forcing the current version %d to clear the dirty flag, then re-applying pending migrations (set CUDLY_MIGRATION_AUTOHEAL=false to disable)", version, version)
-	if err := m.Force(int(version)); err != nil { //nolint:gosec // migration version numbers are small non-negative integers; overflow is not possible in practice
+	vInt, err := uintToInt(version)
+	if err != nil {
+		return fmt.Errorf("auto-heal: migration version %d overflows int: %w", version, err)
+	}
+	if err := m.Force(vInt); err != nil {
 		return fmt.Errorf("auto-heal: failed to force version %d to clear dirty flag: %w", version, err)
 	}
 	log.Printf("Auto-heal cleared dirty flag at version %d; proceeding to re-apply pending migrations", version)
@@ -413,8 +435,8 @@ func autoHealEnabled() bool {
 	return b
 }
 
-// RollbackMigrations rolls back N migrations.
-func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, steps int) error {
+// validateRollbackSteps returns an error if steps is out of the safe range.
+func validateRollbackSteps(steps int) error {
 	if steps <= 0 {
 		return fmt.Errorf("rollback steps must be positive, got %d", steps)
 	}
@@ -422,35 +444,39 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	if steps > maxRollbackSteps {
 		return fmt.Errorf("refusing to rollback more than %d migrations at once (requested %d); use multiple calls for safety", maxRollbackSteps, steps)
 	}
+	return nil
+}
 
-	dsn := buildMigrateDSN(pool.Config())
+// RollbackMigrations rolls back N migrations.
+func RollbackMigrations(_ context.Context, pool *pgxpool.Pool, migrationsPath string, steps int) error {
+	if err := validateRollbackSteps(steps); err != nil {
+		return err
+	}
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
-		dsn,
+		buildMigrateDSN(pool.Config()),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create migrator: %w", err)
 	}
-	defer m.Close()
+	defer closeMigratorWithLog(m, "")
 
-	// Log current version before rollback (error is intentionally ignored here; if version is
-	// unavailable we log 0 and proceed — rollback failure will surface at m.Steps below).
-	currentVersion, _, _ := m.Version() //nolint:errcheck // best-effort pre-rollback log; errors surface at m.Steps
+	// Log current version before rollback (best-effort; version info is only for
+	// logging and rollback failures surface at m.Steps below).
+	currentVersion, _, vErr := m.Version()
+	if vErr != nil && !errors.Is(vErr, migrate.ErrNilVersion) {
+		log.Printf("WARNING: could not read current migration version before rollback: %v", vErr)
+	}
 	log.Printf("Rolling back %d migration(s) from version %d...", steps, currentVersion)
 
-	// Rollback steps
-	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) { //nolint:govet // err shadows outer err intentionally; scoped to the if block
-		return fmt.Errorf("failed to rollback migrations: %w", err)
+	if stepsErr := m.Steps(-steps); stepsErr != nil && !errors.Is(stepsErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to rollback migrations: %w", stepsErr)
 	}
 
-	version, dirty, err := m.Version()
-	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
-		return fmt.Errorf("failed to get migration version: %w", err)
-	}
-
-	if dirty {
-		return fmt.Errorf("database is in dirty state at version %d", version)
+	version, err := checkMigratorVersion(m)
+	if err != nil {
+		return err
 	}
 
 	log.Printf("Rolled back %d migration(s) (current version: %d)", steps, version)
@@ -473,18 +499,15 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 	if err != nil {
 		return fmt.Errorf("failed to create migrator: %w", err)
 	}
-	defer m.Close()
+	defer closeMigratorWithLog(m, "")
 
-	if err := m.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) { //nolint:govet // err shadows outer err intentionally; scoped to the if block
-		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
+	if migErr := m.Migrate(version); migErr != nil && !errors.Is(migErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to migrate to version %d: %w", version, migErr)
 	}
 
-	current, dirty, err := m.Version()
+	current, err := checkMigratorVersion(m)
 	if err != nil {
-		return fmt.Errorf("failed to get migration version: %w", err)
-	}
-	if dirty {
-		return fmt.Errorf("database is in dirty state at version %d", current)
+		return err
 	}
 	if current != version {
 		return fmt.Errorf("expected migration version %d, got %d", version, current)
@@ -496,7 +519,7 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 
 // GetMigrationVersion returns the current migration version.
 func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string) (version uint, dirty bool, err error) {
-	dsn := buildMigrateDSN(pool.Config(), "")
+	dsn := buildMigrateDSN(pool.Config())
 
 	m, migrateErr := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -505,7 +528,11 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 	if migrateErr != nil {
 		return 0, false, fmt.Errorf("failed to create migrator: %w", migrateErr)
 	}
-	defer m.Close()
+	defer func() {
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			log.Printf("WARNING: error closing migrator: source=%v database=%v", srcErr, dbErr)
+		}
+	}()
 
 	version, dirty, err = m.Version()
 	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
@@ -516,8 +543,8 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 }
 
 // buildMigrateDSN builds a connection string for golang-migrate from pgx config.
-// sslModeOverride, if non-empty, is used instead of inferring from TLSConfig.
-func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string { //nolint:unparam // sslModeOverride is reserved for test overrides; callers currently pass "" but the parameter enables future overrides without a signature change
+// The SSL mode is inferred from TLSConfig: disabled when TLSConfig is nil, required otherwise.
+func buildMigrateDSN(config *pgxpool.Config) string {
 	// Extract connection details from pgx config
 	host := config.ConnConfig.Host
 	port := config.ConnConfig.Port
@@ -529,7 +556,7 @@ func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string { //
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 
-	// Infer sslmode from the TLS config.
+	// Infer SSL mode from TLS config
 	sslMode := "require"
 	if config.ConnConfig.TLSConfig == nil {
 		sslMode = "disable"
@@ -546,6 +573,18 @@ func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string { //
 		database,
 		sslMode,
 	)
+}
+
+// uintToInt converts a uint migration version to int, returning an error if it
+// would overflow. Migration version numbers are always small non-negative
+// integers, so overflow is not expected in practice; the check satisfies the
+// G115 bounds-check requirement without nolint.
+func uintToInt(v uint) (int, error) {
+	const maxInt = int(^uint(0) >> 1)
+	if v > uint(maxInt) {
+		return 0, fmt.Errorf("value %d exceeds maximum int (%d)", v, maxInt)
+	}
+	return int(v), nil
 }
 
 // ValidateMigrationsPath checks if migrations directory exists.
