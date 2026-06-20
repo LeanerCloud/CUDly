@@ -1435,7 +1435,7 @@ func TestTermPlan_RejectsUnknownTerm(t *testing.T) {
 	for _, badTerm := range []string{"", "2yr", "invalid", "24mo", "forever"} {
 		_, err := termPlan(badTerm)
 		require.Error(t, err, "termPlan must reject unrecognized term %q (no silent 12-month default)", badTerm)
-		assert.Contains(t, err.Error(), "unrecognised commitment term", //nolint:misspell // matches production error string
+		assert.Contains(t, err.Error(), "unrecognized commitment term",
 			"error for term %q must identify the bad input", badTerm)
 	}
 }
