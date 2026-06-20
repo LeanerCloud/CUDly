@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/jackc/pgx/v5"
 )
 
 // CleanupEvent represents the input to the cleanup function.
@@ -74,8 +76,8 @@ func deleteExpired(ctx context.Context, db *database.Connection, now time.Time, 
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx) //nolint:errcheck // rollback in defer; original error takes precedence
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			log.Printf("Warning: failed to rollback transaction: %v", rbErr)
 		}
 	}()
 

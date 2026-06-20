@@ -81,7 +81,7 @@ func TestFireScheduledDelayedPurchases_CASLostToRevokeClassifiedAsRaceLost(t *te
 		Return([]config.PurchaseExecution{row}, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "approved", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-revoked cannot transition from %q to %q",
-			config.ErrExecutionNotInExpectedStatus, "cancelled", "approved")) //nolint:misspell // matches DB status string
+			config.ErrExecutionNotInExpectedStatus, "cancelled", "approved")) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	mgr := newFireManager(store)
 	result, err := mgr.FireScheduledDelayedPurchases(ctx)

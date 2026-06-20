@@ -25,8 +25,7 @@ const bcryptCost = 12
 // The plain-text "dummy" value is intentionally unguessable and never stored.
 //
 // Generated once at compile time with cost bcryptCost (12).
-// nolint:gosec -- this is a public sentinel hash, not a credential
-var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO"
+const dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO"
 
 // Password validation constants following NIST guidelines
 const (

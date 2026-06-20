@@ -20,7 +20,7 @@ func TestNewManager(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	cfg := ManagerConfig{
+	cfg := &ManagerConfig{
 		ConfigStore:            mockStore,
 		EmailSender:            mockEmail,
 		NotificationDaysBefore: 7,
@@ -262,7 +262,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 		{
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
-			Status:        "cancelled", //nolint:misspell // matches DB status string used by the codebase
+			Status:        "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 			ScheduledDate: pastDate,
 		},
 	}
