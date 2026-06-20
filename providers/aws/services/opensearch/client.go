@@ -607,8 +607,8 @@ func getTermMonthsFromDuration(duration int32) int {
 // returns it as int32. This prevents a gosec G115 integer-overflow conversion
 // on the PurchaseReservedInstanceOffering InstanceCount field.
 func safeInt32Count(n int) (int32, error) {
-	if uint(n)-1 > math.MaxInt32 {
+	if n < 1 || n > math.MaxInt32 {
 		return 0, fmt.Errorf("instance count %d is out of valid range [1, %d]", n, math.MaxInt32)
 	}
-	return int32(n), nil //nolint:gosec // bounds-checked by safeInt32Count
+	return int32(n), nil
 }
