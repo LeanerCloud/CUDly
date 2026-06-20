@@ -300,7 +300,7 @@ func TestRenderPurchaseApprovalRequestEmail_NewContextFields_Issue287(t *testing
 	assert.Contains(t, body, "/purchases/cancel/exec-123")
 
 	// Authorized-approvers block survives.
-	assert.Contains(t, body, "Authorised approver(s)")
+	assert.Contains(t, body, "Authorized approver(s)")
 	assert.Contains(t, body, "approver@acme.com")
 }
 
@@ -440,7 +440,7 @@ func TestRenderPurchaseConfirmationEmail_ArcheraBlock(t *testing.T) {
 }
 
 // Issue #287: when AuthorizedApprovers is empty the HTML omits the
-// approver-warning block (legacy broadcast behaviour preserved).
+// approver-warning block (legacy broadcast behavior preserved).
 func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {
 	data := NotificationData{
 		DashboardURL:    "https://example.com",
@@ -450,7 +450,7 @@ func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {
 	}
 	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
 	require.NoError(t, err)
-	assert.NotContains(t, html, "Authorised approver")
+	assert.NotContains(t, html, "Authorized approver")
 }
 
 // TestRenderPasswordResetEmailHTML covers the HTML half of the password
@@ -555,7 +555,7 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 	})
 
 	t.Run("HTML_renderers_still_escape", func(t *testing.T) {
-		// HTML halves MUST still escape data -- that is the XSS defence.
+		// HTML halves MUST still escape data -- that is the XSS defense.
 		// A name with a script tag must not survive literally in the HTML body.
 		const xssName = `<script>alert(1)</script>`
 		data := NotificationData{

@@ -13,13 +13,13 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// GCPResolver implements Resolver for GCP Secret Manager
+// GCPResolver implements Resolver for GCP Secret Manager.
 type GCPResolver struct {
 	client    *secretmanager.Client
 	projectID string
 }
 
-// NewGCPResolver creates a new GCP Secret Manager resolver
+// NewGCPResolver creates a new GCP Secret Manager resolver.
 func NewGCPResolver(ctx context.Context, projectID string) (*GCPResolver, error) {
 	// Create Secret Manager client
 	client, err := secretmanager.NewClient(ctx)
@@ -33,7 +33,7 @@ func NewGCPResolver(ctx context.Context, projectID string) (*GCPResolver, error)
 	}, nil
 }
 
-// GetSecret retrieves a secret from GCP Secret Manager
+// GetSecret retrieves a secret from GCP Secret Manager.
 func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
 	// Build the resource name for the latest version.
 	// secretID may be a short name ("my-secret") or a full resource name
@@ -66,7 +66,7 @@ func (r *GCPResolver) GetSecret(ctx context.Context, secretID string) (string, e
 // Note: unlike AWS, GCP requires the secret resource to already exist — this
 // function only appends a new version. It will return an error if the secret
 // has not been pre-created via CreateSecret.
-func (r *GCPResolver) PutSecret(ctx context.Context, secretID string, value string) error {
+func (r *GCPResolver) PutSecret(ctx context.Context, secretID, value string) error {
 	var parent string
 	if strings.HasPrefix(secretID, "projects/") {
 		parent = secretID
@@ -89,7 +89,7 @@ func (r *GCPResolver) PutSecret(ctx context.Context, secretID string, value stri
 	return nil
 }
 
-// GetSecretJSON retrieves and parses a JSON secret
+// GetSecretJSON retrieves and parses a JSON secret.
 func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *GCPResolver) GetSecretJSON(ctx context.Context, secretID string) (map[s
 
 // ListSecrets lists secrets in GCP Secret Manager whose short name has the given
 // prefix. The Resolver interface documents GCP as using prefix matching
-// (strings.HasPrefix); to honour that contract the filter is applied client-side
+// (strings.HasPrefix); to honor that contract the filter is applied client-side
 // after listing, because GCP's ListSecrets.Filter field accepts an expression
 // language (not a simple name prefix) and the two semantics are incompatible.
 // The API request is sent without a Filter so we always get the full list; for
@@ -140,7 +140,7 @@ func (r *GCPResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 	return secrets, nil
 }
 
-// Close cleans up resources
+// Close cleans up resources.
 func (r *GCPResolver) Close() error {
 	return r.client.Close()
 }

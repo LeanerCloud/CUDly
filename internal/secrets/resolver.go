@@ -1,4 +1,4 @@
-// Package secrets provides cloud-agnostic secret management
+// Package secrets provides cloud-agnostic secret management.
 package secrets
 
 import (
@@ -7,15 +7,15 @@ import (
 	"os"
 )
 
-// Resolver defines the interface for retrieving secrets from various secret managers
+// Resolver defines the interface for retrieving secrets from various secret managers.
 type Resolver interface {
-	// GetSecret retrieves a secret value by ID/ARN/name
+	// GetSecret retrieves a secret value by ID/ARN/name.
 	GetSecret(ctx context.Context, secretID string) (string, error)
 
-	// GetSecretJSON retrieves a secret and parses it as JSON
+	// GetSecretJSON retrieves a secret and parses it as JSON.
 	GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error)
 
-	// PutSecret creates or updates a secret value by ID/ARN/name
+	// PutSecret creates or updates a secret value by ID/ARN/name.
 	PutSecret(ctx context.Context, secretID string, value string) error
 
 	// ListSecrets lists available secrets.
@@ -26,11 +26,11 @@ type Resolver interface {
 	//   - Env: uses prefix matching (strings.HasPrefix)
 	ListSecrets(ctx context.Context, filter string) ([]string, error)
 
-	// Close cleans up any resources
+	// Close cleans up any resources.
 	Close() error
 }
 
-// Config holds secrets resolver configuration
+// Config holds secrets resolver configuration.
 type Config struct {
 	// Provider specifies which secret manager to use
 	// Valid values: "aws", "gcp", "azure", "env"
@@ -59,7 +59,7 @@ func LoadConfigFromEnv() *Config {
 	}
 }
 
-// NewResolver creates a new secret resolver based on the provider
+// NewResolver creates a new secret resolver based on the provider.
 func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
 	if config == nil {
 		return nil, fmt.Errorf("secrets config must not be nil")
@@ -86,7 +86,7 @@ func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
 	}
 }
 
-// Helper function
+// getEnv returns the value of the environment variable key, or defaultValue if not set.
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

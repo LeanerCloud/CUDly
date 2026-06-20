@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockSNSClient is a mock implementation of SNS client
+// MockSNSClient is a mock implementation of SNS client.
 type MockSNSClient struct {
 	mock.Mock
 }
@@ -25,7 +25,7 @@ func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, op
 	return args.Get(0).(*sns.PublishOutput), args.Error(1)
 }
 
-// MockSESClient is a mock implementation of SES client
+// MockSESClient is a mock implementation of SES client.
 type MockSESClient struct {
 	mock.Mock
 }
@@ -60,30 +60,6 @@ func (m *MockSESClient) CreateEmailIdentity(ctx context.Context, input *sesv2.Cr
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*sesv2.CreateEmailIdentityOutput), args.Error(1)
-}
-
-// testSender creates a sender with mock clients for testing
-type testSender struct {
-	*Sender
-	mockSNS *MockSNSClient
-	mockSES *MockSESClient
-}
-
-func newTestSender(topicARN, fromEmail string) *testSender {
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
-
-	return &testSender{
-		Sender: &Sender{
-			snsClient:    nil, // Will be replaced in tests
-			sesClient:    nil, // Will be replaced in tests
-			topicARN:     topicARN,
-			fromEmail:    fromEmail,
-			emailAddress: "",
-		},
-		mockSNS: mockSNS,
-		mockSES: mockSES,
-	}
 }
 
 func TestSenderConfig(t *testing.T) {
@@ -501,7 +477,7 @@ func TestNewSender_Success(t *testing.T) {
 	assert.NotNil(t, sender.sesClient)
 }
 
-// Test SendToEmail sandbox mode flows
+// Test SendToEmail sandbox mode flows.
 func TestSender_SendToEmail_SandboxModeVerified(t *testing.T) {
 	mockSES := new(MockSESClient)
 	// GetAccount returns sandbox mode (ProductionAccessEnabled = false)
@@ -621,7 +597,7 @@ func TestSender_SendToEmail_CreateVerificationError(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-// Test isInSandbox directly
+// Test isInSandbox directly.
 func TestSender_isInSandbox_NilClient(t *testing.T) {
 	sender := &Sender{
 		sesClient: nil,
@@ -668,7 +644,7 @@ func TestSender_isInSandbox_SandboxMode(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-// Test isEmailVerified directly
+// Test isEmailVerified directly.
 func TestSender_isEmailVerified_NilClient(t *testing.T) {
 	sender := &Sender{
 		sesClient: nil,
@@ -733,7 +709,7 @@ func TestSender_isEmailVerified_NotFound(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-// Test createVerificationRequest directly
+// Test createVerificationRequest directly.
 func TestSender_createVerificationRequest_NilClient(t *testing.T) {
 	sender := &Sender{
 		sesClient: nil,
@@ -1006,7 +982,7 @@ func TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty(t *testing.T)
 //
 // Regression test for issue #1015: previously the method called
 // s.SendNotification which broadcast per-exchange approve/reject tokens to
-// every SNS subscriber, allowing unauthorised spend approval.
+// every SNS subscriber, allowing unauthorized spend approval.
 func TestSendRIExchangePendingApproval_UsesSESNotSNS(t *testing.T) {
 	t.Parallel()
 	mockSNS := new(MockSNSClient)
