@@ -214,7 +214,7 @@ func (c *ComputeEngineClient) GetRegion() string {
 }
 
 // GetRecommendations gets CUD recommendations from GCP Recommender API
-func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected client if available (for testing)
@@ -266,7 +266,7 @@ func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params com
 			continue
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec, params)
+		converted := c.convertGCPRecommendation(ctx, rec, *params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -504,9 +504,9 @@ func unwrapNonSentinel(err error) error {
 }
 
 // PurchaseCommitment purchases a Compute Engine CUD
-func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -526,7 +526,7 @@ func (c *ComputeEngineClient) PurchaseCommitment(ctx context.Context, rec common
 	}
 	defer svc.Close()
 
-	insertReq, commitmentName, buildErr := c.buildInsertRequest(rec, opts)
+	insertReq, commitmentName, buildErr := c.buildInsertRequest(*rec, opts)
 	if buildErr != nil {
 		result.Error = buildErr
 		return result, buildErr
@@ -663,7 +663,7 @@ func (c *ComputeEngineClient) buildInsertRequest(rec common.Recommendation, opts
 }
 
 // ValidateOffering validates that a machine type exists
-func (c *ComputeEngineClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *ComputeEngineClient) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validTypes, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid machine types: %w", err)
@@ -679,7 +679,7 @@ func (c *ComputeEngineClient) ValidateOffering(ctx context.Context, rec common.R
 }
 
 // GetOfferingDetails retrieves CUD offering details from GCP Billing API
-func (c *ComputeEngineClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *ComputeEngineClient) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3

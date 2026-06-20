@@ -295,7 +295,7 @@ func TestCloudSQLClient_ValidateOffering_TierListError(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list SQL tiers")
 }
@@ -387,7 +387,7 @@ func TestCloudSQLClient_ValidateOffering_Valid(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.NoError(t, err)
 }
 
@@ -408,7 +408,7 @@ func TestCloudSQLClient_ValidateOffering_Invalid(t *testing.T) {
 		ResourceType: "invalid-tier",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Cloud SQL tier")
 }
@@ -433,7 +433,7 @@ func TestCloudSQLClient_PurchaseCommitment_NotSupported(t *testing.T) {
 		CommitmentCost: 1000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
@@ -506,7 +506,7 @@ func TestCloudSQLClient_GetOfferingDetails_WithMock(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "db-n1-standard-1", details.ResourceType)
 	assert.Equal(t, "1yr", details.Term)
@@ -530,7 +530,7 @@ func TestCloudSQLClient_GetOfferingDetails_3Year(t *testing.T) {
 		PaymentOption: "monthly",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "3yr", details.Term)
 	assert.Equal(t, "monthly", details.PaymentOption)
@@ -553,7 +553,7 @@ func TestCloudSQLClient_GetOfferingDetails_NoPricing(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing found")
 }
@@ -571,7 +571,7 @@ func TestCloudSQLClient_GetOfferingDetails_APIError(t *testing.T) {
 		ResourceType: "db-n1-standard-1",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list SKUs")
 }
@@ -617,7 +617,7 @@ func TestCloudSQLClient_GetRecommendations_WithMock(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -635,7 +635,7 @@ func TestCloudSQLClient_GetRecommendations_IteratorError(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cloudsql: iterate recommendations")
 	assert.Nil(t, recs, "partial data must not leak on iterator failure")
@@ -655,7 +655,7 @@ func TestCloudSQLClient_GetRecommendations_Empty(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }

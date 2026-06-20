@@ -54,7 +54,7 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 //
 // The Azure Consumption Reservation Recommendations API is subscription-scoped:
 // the response covers every region in one call. Iterating regions and calling each
-// service per region (the previous behaviour) produced ~60× duplicate results,
+// service per region (the previous behavior) produced ~60× duplicate results,
 // hammered the rate limit, and meant downstream consumers had to deduplicate.
 // We now call each service client exactly once. Region is intentionally left
 // blank on the client — converters must populate Region from the response data
@@ -65,7 +65,7 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // its own error and returns nil to the group so that a single service failure
 // does not cancel sibling calls. Results are appended in a deterministic order
 // (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
-func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	var (
 		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
 		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
@@ -132,7 +132,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// Savings Plans — Azure has no stable public API for SP purchase
 	// recommendations (Benefits Recommendations API is still in preview).
 	// The call returns an empty slice so the service appears in the fan-out
-	// and will start returning data once the API stabilises without requiring
+	// and will start returning data once the API stabilizes without requiring
 	// a scheduler change.
 	if shouldIncludeService(params, common.ServiceSavingsPlans) {
 		goService(&spErr, func() {
@@ -155,17 +155,19 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// "the parent ctx was canceled mid-fan-out". Without this check the
 	// CHECK could swallow a deadline exceeded that the caller expected to
 	// see.
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return mergeServiceResults(serviceResult{"compute", computeRecs, computeErr},
-		serviceResult{"database", dbRecs, dbErr},
-		serviceResult{"cache", cacheRecs, cacheErr},
-		serviceResult{"cosmosdb", cosmosRecs, cosmosErr},
-		serviceResult{"savingsplans", spRecs, spErr},
-		serviceResult{"advisor", advisorRecs, advisorErr}), nil
+	return mergeServiceResults(serviceResult{name: "compute", recs: computeRecs, err: computeErr},
+		serviceResult{name: "database", recs: dbRecs, err: dbErr},
+		serviceResult{name: "cache", recs: cacheRecs, err: cacheErr},
+		serviceResult{name: "cosmosdb", recs: cosmosRecs, err: cosmosErr},
+		serviceResult{name: "savingsplans", recs: spRecs, err: spErr},
+		serviceResult{name: "advisor", recs: advisorRecs, err: advisorErr}), nil
 }
 
 // serviceResult bundles a per-service collection outcome for the deterministic
@@ -173,13 +175,13 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 // stays under the cyclomatic-complexity gate after the post-Wait ctx.Err()
 // propagation was added.
 type serviceResult struct {
+	err  error
 	name string
 	recs []common.Recommendation
-	err  error
 }
 
 // mergeServiceResults logs per-service errors (matches the previous sequential
-// behaviour where each error was logged inline via logging.Warnf) and appends
+// behavior where each error was logged inline via logging.Warnf) and appends
 // successful results in the order the slice is passed — callers must preserve
 // the canonical compute → database → cache → cosmosdb → savingsplans → advisor
 // order so that order-sensitive consumers remain stable. The advisor entry's
@@ -204,22 +206,22 @@ func mergeServiceResults(results ...serviceResult) []common.Recommendation {
 	return out
 }
 
-// GetRecommendationsForService retrieves Azure reservation recommendations for a specific service
+// GetRecommendationsForService retrieves Azure reservation recommendations for a specific service.
 func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error) {
 	params := common.RecommendationParams{
 		Service: service,
 	}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
-// GetAllRecommendations retrieves all Azure reservation recommendations across all services
+// GetAllRecommendations retrieves all Azure reservation recommendations across all services.
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	params := common.RecommendationParams{}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
-// getAdvisorRecommendations retrieves cost optimization recommendations from Azure Advisor
-func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+// getAdvisorRecommendations retrieves cost optimization recommendations from Azure Advisor.
+func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	client, err := armadvisor.NewRecommendationsClient(r.subscriptionID, r.cred, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create advisor client: %w", err)
@@ -253,7 +255,7 @@ func (r *RecommendationsClientAdapter) getAdvisorRecommendations(ctx context.Con
 // and appends them to the provided slice. Pulled out of getAdvisorRecommendations
 // to keep that function under the cyclomatic limit.
 func (r *RecommendationsClientAdapter) appendAdvisorPageRecs(
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	page armadvisor.RecommendationsClientListResponse,
 	recommendations []common.Recommendation,
 ) []common.Recommendation {
@@ -268,7 +270,7 @@ func (r *RecommendationsClientAdapter) appendAdvisorPageRecs(
 			// and CommitmentCost are unset (zero), since ExpandPaymentVariants
 			// would otherwise overwrite it with zero (OnDemandCost - CommitmentCost).
 			advisorSavings := rec.EstimatedSavings
-			variants := azrecs.ExpandPaymentVariants(*rec)
+			variants := azrecs.ExpandPaymentVariants(rec)
 			if rec.OnDemandCost == 0 && rec.CommitmentCost == 0 && advisorSavings != 0 {
 				for i := range variants {
 					variants[i].EstimatedSavings = advisorSavings
@@ -299,7 +301,7 @@ func resolveAdvisorRegion(advisorRec *armadvisor.ResourceRecommendationBase) str
 	return ""
 }
 
-// convertAdvisorRecommendation converts an Azure Advisor recommendation to common format
+// convertAdvisorRecommendation converts an Azure Advisor recommendation to common format.
 func (r *RecommendationsClientAdapter) convertAdvisorRecommendation(advisorRec *armadvisor.ResourceRecommendationBase) *common.Recommendation {
 	if advisorRec.Properties == nil {
 		return nil
@@ -431,7 +433,7 @@ func serviceFromExtendedProperties(ext map[string]*string) string {
 // Advisor recommendation whose ID happens to carry a /locations/{region}/
 // segment (some reservation-scope resource IDs do).
 //
-// Returns "" when the ID has no recognisable region segment.
+// Returns "" when the ID has no recognizable region segment.
 func extractRegionFromResourceID(resourceID string) string {
 	// Case-insensitive scan for /locations/{region}/ — Azure is inconsistent
 	// between `locations`, `Locations`, `location`.
@@ -452,8 +454,8 @@ func extractRegionFromResourceID(resourceID string) string {
 	return ""
 }
 
-// shouldIncludeService checks if a service should be included based on params
-func shouldIncludeService(params common.RecommendationParams, service common.ServiceType) bool {
+// shouldIncludeService checks if a service should be included based on params.
+func shouldIncludeService(params *common.RecommendationParams, service common.ServiceType) bool {
 	// If no service specified in params, include all
 	if params.Service == "" {
 		return true

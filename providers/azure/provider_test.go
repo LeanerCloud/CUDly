@@ -15,7 +15,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/provider"
 )
 
-// mockSubscriptionsClient implements SubscriptionsClient for testing
+// mockSubscriptionsClient implements SubscriptionsClient for testing.
 type mockSubscriptionsClient struct {
 	listPagerFunc          func(options *armsubscriptions.ClientListOptions) SubscriptionsPager
 	listLocationsPagerFunc func(subscriptionID string, options *armsubscriptions.ClientListLocationsOptions) LocationsPager
@@ -35,11 +35,11 @@ func (m *mockSubscriptionsClient) NewListLocationsPager(subscriptionID string, o
 	return nil
 }
 
-// mockSubscriptionsPager implements SubscriptionsPager for testing
+// mockSubscriptionsPager implements SubscriptionsPager for testing.
 type mockSubscriptionsPager struct {
+	nextErr     error
 	pages       []armsubscriptions.ClientListResponse
 	pageIdx     int
-	nextErr     error
 	errReturned bool
 }
 
@@ -64,11 +64,11 @@ func (m *mockSubscriptionsPager) NextPage(ctx context.Context) (armsubscriptions
 	return page, nil
 }
 
-// mockLocationsPager implements LocationsPager for testing
+// mockLocationsPager implements LocationsPager for testing.
 type mockLocationsPager struct {
+	nextErr     error
 	pages       []armsubscriptions.ClientListLocationsResponse
 	pageIdx     int
-	nextErr     error
 	errReturned bool
 }
 
@@ -93,7 +93,7 @@ func (m *mockLocationsPager) NextPage(ctx context.Context) (armsubscriptions.Cli
 	return page, nil
 }
 
-// mockCredentialProvider implements CredentialProvider for testing
+// mockCredentialProvider implements CredentialProvider for testing.
 type mockCredentialProvider struct {
 	cred azcore.TokenCredential
 	err  error
@@ -101,11 +101,6 @@ type mockCredentialProvider struct {
 
 func (m *mockCredentialProvider) NewDefaultAzureCredential() (azcore.TokenCredential, error) {
 	return m.cred, m.err
-}
-
-// Helper function to create a string pointer
-func stringPtr(s string) *string {
-	return &s
 }
 
 func TestNewAzureProvider(t *testing.T) {
@@ -177,11 +172,11 @@ func TestNewAzureProvider(t *testing.T) {
 	}
 }
 
-// TestNewAzureProvider_TokenCredentialInjection verifies that a pre-resolved
+// TestNewProvider_TokenCredentialInjection verifies that a pre-resolved
 // azcore.TokenCredential supplied via config.AzureTokenCredential is installed
 // on the provider so subsequent client builds skip the DefaultAzureCredential
 // lazy initialisation path.
-func TestNewAzureProvider_TokenCredentialInjection(t *testing.T) {
+func TestNewProvider_TokenCredentialInjection(t *testing.T) {
 	t.Run("Nil credential leaves cred unset", func(t *testing.T) {
 		p, err := NewAzureProvider(&provider.ProviderConfig{
 			AzureSubscriptionID: "sub-1",
@@ -204,8 +199,8 @@ func TestNewAzureProvider_TokenCredentialInjection(t *testing.T) {
 		// The wrong-typed slot is now logged via logging.Warnf so mis-wirings
 		// surface in production logs rather than producing a confusing
 		// "ADC unavailable" error. We don't capture the log output here
-		// (the project has no log-capture harness); the behavioural assertion
-		// is unchanged: p.cred stays nil and NewAzureProvider doesn't error.
+		// (the project has no log-capture harness); the behavioral assertion
+		// is unchanged: p.cred stays nil and NewProvider doesn't error.
 		p, err := NewAzureProvider(&provider.ProviderConfig{
 			AzureSubscriptionID:  "sub-1",
 			AzureTokenCredential: "not-a-credential",
@@ -215,35 +210,35 @@ func TestNewAzureProvider_TokenCredentialInjection(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_Name(t *testing.T) {
-	p := &AzureProvider{}
+func TestProvider_Name(t *testing.T) {
+	p := &Provider{}
 	assert.Equal(t, "azure", p.Name())
 }
 
-func TestAzureProvider_DisplayName(t *testing.T) {
-	p := &AzureProvider{}
+func TestProvider_DisplayName(t *testing.T) {
+	p := &Provider{}
 	assert.Equal(t, "Microsoft Azure", p.DisplayName())
 }
 
-func TestAzureProvider_GetDefaultRegion(t *testing.T) {
+func TestProvider_GetDefaultRegion(t *testing.T) {
 	tests := []struct {
 		name           string
-		provider       *AzureProvider
+		provider       *Provider
 		expectedRegion string
 	}{
 		{
 			name:           "No region set - returns default",
-			provider:       &AzureProvider{},
+			provider:       &Provider{},
 			expectedRegion: "eastus",
 		},
 		{
 			name:           "Empty region - returns default",
-			provider:       &AzureProvider{region: ""},
+			provider:       &Provider{region: ""},
 			expectedRegion: "eastus",
 		},
 		{
 			name:           "Region set - returns configured",
-			provider:       &AzureProvider{region: "westeurope"},
+			provider:       &Provider{region: "westeurope"},
 			expectedRegion: "westeurope",
 		},
 	}
@@ -255,8 +250,8 @@ func TestAzureProvider_GetDefaultRegion(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_GetSupportedServices(t *testing.T) {
-	p := &AzureProvider{}
+func TestProvider_GetSupportedServices(t *testing.T) {
+	p := &Provider{}
 	services := p.GetSupportedServices()
 
 	require.NotEmpty(t, services)
@@ -270,16 +265,16 @@ func TestAzureProvider_GetSupportedServices(t *testing.T) {
 	assert.Contains(t, services, common.ServiceDataWarehouse)
 }
 
-func TestAzureProvider_IsConfigured(t *testing.T) {
+func TestProvider_IsConfigured(t *testing.T) {
 	t.Run("returns true when credential is already set", func(t *testing.T) {
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		assert.True(t, p.IsConfigured())
 	})
 
 	t.Run("returns true when credential provider succeeds", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{
 			cred: &mockTokenCredential{},
 			err:  nil,
@@ -290,7 +285,7 @@ func TestAzureProvider_IsConfigured(t *testing.T) {
 	})
 
 	t.Run("returns false when credential provider fails", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{
 			cred: nil,
 			err:  errors.New("no credentials"),
@@ -299,9 +294,9 @@ func TestAzureProvider_IsConfigured(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetCredentials_NotConfigured(t *testing.T) {
+func TestProvider_GetCredentials_NotConfigured(t *testing.T) {
 	// Test GetCredentials when Azure is not configured
-	p := &AzureProvider{}
+	p := &Provider{}
 	// If IsConfigured returns false, GetCredentials should return error
 	if !p.IsConfigured() {
 		_, err := p.GetCredentials()
@@ -310,9 +305,9 @@ func TestAzureProvider_GetCredentials_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_ValidateCredentials(t *testing.T) {
+func TestProvider_ValidateCredentials(t *testing.T) {
 	t.Run("returns error when not configured", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{
 			cred: nil,
 			err:  errors.New("no credentials"),
@@ -345,7 +340,7 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -363,7 +358,7 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -374,9 +369,9 @@ func TestAzureProvider_ValidateCredentials(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetServiceClient_NotConfigured(t *testing.T) {
+func TestProvider_GetServiceClient_NotConfigured(t *testing.T) {
 	// Test GetServiceClient when Azure is not configured
-	p := &AzureProvider{}
+	p := &Provider{}
 	if !p.IsConfigured() {
 		_, err := p.GetServiceClient(context.Background(), common.ServiceCompute, "eastus")
 		assert.Error(t, err)
@@ -384,9 +379,9 @@ func TestAzureProvider_GetServiceClient_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_GetServiceClient_UnsupportedService(t *testing.T) {
+func TestProvider_GetServiceClient_UnsupportedService(t *testing.T) {
 	// Create a mock credential for testing
-	p := &AzureProvider{
+	p := &Provider{
 		cred:           &mockTokenCredential{},
 		subscriptionID: "test-subscription",
 		region:         "eastus",
@@ -398,9 +393,9 @@ func TestAzureProvider_GetServiceClient_UnsupportedService(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported service")
 }
 
-func TestAzureProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
+func TestProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 	// Create a provider with mock credentials
-	p := &AzureProvider{
+	p := &Provider{
 		cred:           &mockTokenCredential{},
 		subscriptionID: "test-subscription",
 		region:         "eastus",
@@ -428,9 +423,9 @@ func TestAzureProvider_GetServiceClient_AllServiceTypes(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_GetRecommendationsClient_NotConfigured(t *testing.T) {
+func TestProvider_GetRecommendationsClient_NotConfigured(t *testing.T) {
 	// Test GetRecommendationsClient when Azure is not configured
-	p := &AzureProvider{}
+	p := &Provider{}
 	if !p.IsConfigured() {
 		_, err := p.GetRecommendationsClient(context.Background())
 		assert.Error(t, err)
@@ -438,9 +433,9 @@ func TestAzureProvider_GetRecommendationsClient_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestAzureProvider_GetRecommendationsClient(t *testing.T) {
+func TestProvider_GetRecommendationsClient(t *testing.T) {
 	// Create a provider with mock credentials
-	p := &AzureProvider{
+	p := &Provider{
 		cred:           &mockTokenCredential{},
 		subscriptionID: "test-subscription",
 	}
@@ -450,14 +445,14 @@ func TestAzureProvider_GetRecommendationsClient(t *testing.T) {
 	require.NotNil(t, client)
 }
 
-// mockTokenCredential implements azcore.TokenCredential for testing
+// mockTokenCredential implements azcore.TokenCredential for testing.
 type mockTokenCredential struct{}
 
 func (m *mockTokenCredential) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
 	return azcore.AccessToken{Token: "mock-token"}, nil
 }
 
-func TestAzureProvider_GetAccounts(t *testing.T) {
+func TestProvider_GetAccounts(t *testing.T) {
 	t.Run("success with single subscription", func(t *testing.T) {
 		subID := "test-subscription-id"
 		subName := "Test Subscription"
@@ -481,7 +476,7 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -529,7 +524,7 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -563,7 +558,7 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -583,7 +578,7 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -594,7 +589,7 @@ func TestAzureProvider_GetAccounts(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetRegions(t *testing.T) {
+func TestProvider_GetRegions(t *testing.T) {
 	t.Run("success with locations", func(t *testing.T) {
 		subID := "test-subscription"
 		subName := "Test Sub"
@@ -633,7 +628,7 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -684,7 +679,7 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -730,7 +725,7 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -756,7 +751,7 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -791,7 +786,7 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		p.SetSubscriptionsClient(mockClient)
@@ -802,9 +797,9 @@ func TestAzureProvider_GetRegions(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetCredentials(t *testing.T) {
+func TestProvider_GetCredentials(t *testing.T) {
 	t.Run("returns error when not configured", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{
 			cred: nil,
 			err:  errors.New("no credentials"),
@@ -815,7 +810,7 @@ func TestAzureProvider_GetCredentials(t *testing.T) {
 	})
 
 	t.Run("success returns credentials info", func(t *testing.T) {
-		p := &AzureProvider{
+		p := &Provider{
 			cred: &mockTokenCredential{},
 		}
 		creds, err := p.GetCredentials()
@@ -825,30 +820,30 @@ func TestAzureProvider_GetCredentials(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_SetterMethods(t *testing.T) {
+func TestProvider_SetterMethods(t *testing.T) {
 	t.Run("SetSubscriptionsClient", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		mockClient := &mockSubscriptionsClient{}
 		p.SetSubscriptionsClient(mockClient)
 		assert.NotNil(t, p.subscriptionsClient)
 	})
 
 	t.Run("SetCredentialProvider", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		mockProvider := &mockCredentialProvider{}
 		p.SetCredentialProvider(mockProvider)
 		assert.NotNil(t, p.credProvider)
 	})
 
 	t.Run("SetCredential", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		mockCred := &mockTokenCredential{}
 		p.SetCredential(mockCred)
 		assert.NotNil(t, p.cred)
 	})
 }
 
-func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
+func TestProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
 	t.Run("fetches subscription when subscriptionID not set", func(t *testing.T) {
 		subID := "fetched-subscription"
 		subName := "Fetched Sub"
@@ -869,7 +864,7 @@ func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "", // Not set - should fetch from accounts
 		}
@@ -895,7 +890,7 @@ func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "",
 		}
@@ -915,7 +910,7 @@ func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "",
 		}
@@ -926,7 +921,7 @@ func TestAzureProvider_GetServiceClient_WithSubscriptionLookup(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testing.T) {
+func TestProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testing.T) {
 	t.Run("fetches subscription when subscriptionID not set", func(t *testing.T) {
 		subID := "fetched-subscription"
 		subName := "Fetched Sub"
@@ -947,7 +942,7 @@ func TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testin
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "", // Not set - should fetch from accounts
 		}
@@ -973,7 +968,7 @@ func TestAzureProvider_GetRecommendationsClient_WithSubscriptionLookup(t *testin
 			},
 		}
 
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "",
 		}
@@ -1051,13 +1046,13 @@ func TestResolveDefaultSubscription(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
+func TestProvider_GetAccounts_IsDefault(t *testing.T) {
 	t.Run("single subscription is marked IsDefault", func(t *testing.T) {
 		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
 		subID := "only-sub"
 		subName := "Only Sub"
 
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(&mockSubscriptionsClient{
 			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
 				return makeSubscriptionsPager([]string{subID}, []string{subName})
@@ -1072,7 +1067,7 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 
 	t.Run("configured subscriptionID is marked IsDefault among many", func(t *testing.T) {
 		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-env")
-		p := &AzureProvider{
+		p := &Provider{
 			cred:           &mockTokenCredential{},
 			subscriptionID: "sub-2",
 		}
@@ -1095,7 +1090,7 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 
 	t.Run("multiple subscriptions without explicit config all non-default", func(t *testing.T) {
 		t.Setenv("AZURE_SUBSCRIPTION_ID", "")
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(&mockSubscriptionsClient{
 			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
 				return makeSubscriptionsPager(
@@ -1114,7 +1109,7 @@ func TestAzureProvider_GetAccounts_IsDefault(t *testing.T) {
 
 	t.Run("env subscriptionID is marked IsDefault when config is empty", func(t *testing.T) {
 		t.Setenv("AZURE_SUBSCRIPTION_ID", "sub-2")
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		p.SetSubscriptionsClient(&mockSubscriptionsClient{
 			listPagerFunc: func(_ *armsubscriptions.ClientListOptions) SubscriptionsPager {
 				return makeSubscriptionsPager(
@@ -1152,9 +1147,9 @@ func TestGetDefaultSubscriptionID(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
+func TestProvider_GetServiceClientForAccount(t *testing.T) {
 	t.Run("returns client for explicit subscription", func(t *testing.T) {
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 
 		services := []common.ServiceType{
 			common.ServiceCompute,
@@ -1176,21 +1171,21 @@ func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
 	})
 
 	t.Run("returns error for empty subscriptionID", func(t *testing.T) {
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "subscriptionID must not be empty")
 	})
 
 	t.Run("returns error for unsupported service", func(t *testing.T) {
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceType("unknown"), "eastus", "sub-1")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported service")
 	})
 
 	t.Run("returns error when not configured", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
 		_, err := p.GetServiceClientForAccount(context.Background(), common.ServiceCompute, "eastus", "sub-1")
 		assert.Error(t, err)
@@ -1198,23 +1193,23 @@ func TestAzureProvider_GetServiceClientForAccount(t *testing.T) {
 	})
 }
 
-func TestAzureProvider_GetRecommendationsClientForAccount(t *testing.T) {
+func TestProvider_GetRecommendationsClientForAccount(t *testing.T) {
 	t.Run("returns client for explicit subscription", func(t *testing.T) {
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		client, err := p.GetRecommendationsClientForAccount(context.Background(), "explicit-sub")
 		require.NoError(t, err)
 		require.NotNil(t, client)
 	})
 
 	t.Run("returns error for empty subscriptionID", func(t *testing.T) {
-		p := &AzureProvider{cred: &mockTokenCredential{}}
+		p := &Provider{cred: &mockTokenCredential{}}
 		_, err := p.GetRecommendationsClientForAccount(context.Background(), "")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "subscriptionID must not be empty")
 	})
 
 	t.Run("returns error when not configured", func(t *testing.T) {
-		p := &AzureProvider{}
+		p := &Provider{}
 		p.SetCredentialProvider(&mockCredentialProvider{err: errors.New("no cred")})
 		_, err := p.GetRecommendationsClientForAccount(context.Background(), "sub-1")
 		assert.Error(t, err)

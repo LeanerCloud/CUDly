@@ -42,19 +42,19 @@ type ReservationsDetailsPager interface {
 	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
-// SynapseClient handles Azure Synapse Analytics Reserved Capacity.
-type SynapseClient struct {
+// Client handles Azure Synapse Analytics Reserved Capacity.
+type Client struct {
 	cred                 azcore.TokenCredential
-	subscriptionID       string
-	region               string
 	httpClient           HTTPClient
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
+	subscriptionID       string
+	region               string
 }
 
 // NewClient creates a new Azure Synapse Analytics client.
-func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *SynapseClient {
-	return &SynapseClient{
+func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Client {
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -64,11 +64,11 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Syna
 
 // NewClientWithHTTP creates a new Azure Synapse client with a custom HTTP client (for testing).
 // If httpClient is nil, http.DefaultClient is used.
-func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *SynapseClient {
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &SynapseClient{
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -77,31 +77,29 @@ func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region strin
 }
 
 // SetRecommendationsPager sets the recommendations pager (for testing).
-func (c *SynapseClient) SetRecommendationsPager(pager RecommendationsPager) {
+func (c *Client) SetRecommendationsPager(pager RecommendationsPager) {
 	c.recommendationsPager = pager
 }
 
 // SetReservationsPager sets the reservations pager (for testing).
-func (c *SynapseClient) SetReservationsPager(pager ReservationsDetailsPager) {
+func (c *Client) SetReservationsPager(pager ReservationsDetailsPager) {
 	c.reservationsPager = pager
 }
 
 // GetServiceType returns the service type.
-func (c *SynapseClient) GetServiceType() common.ServiceType {
+func (c *Client) GetServiceType() common.ServiceType {
 	return common.ServiceDataWarehouse
 }
 
 // GetRegion returns the region.
-func (c *SynapseClient) GetRegion() string {
+func (c *Client) GetRegion() string {
 	return c.region
 }
 
-// SynapseRetailPriceItem is the Azure Retail Prices API item shape for
+// RetailPriceItem is the Azure Retail Prices API item shape for
 // Synapse Analytics. Used as the type parameter to pricing.FetchAll.
-type SynapseRetailPriceItem struct {
+type RetailPriceItem struct {
 	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
 	ArmRegionName   string  `json:"armRegionName"`
 	ProductName     string  `json:"productName"`
 	ServiceName     string  `json:"serviceName"`
@@ -110,11 +108,13 @@ type SynapseRetailPriceItem struct {
 	SKUName         string  `json:"skuName"`
 	ReservationTerm string  `json:"reservationTerm"`
 	Type            string  `json:"type"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
 }
 
 // GetRecommendations retrieves Synapse reservation recommendations from the
 // Azure Consumption API.
-func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recs := make([]common.Recommendation, 0)
 
 	var pager RecommendationsPager
@@ -153,7 +153,7 @@ func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.Re
 
 // GetExistingCommitments retrieves existing Synapse reserved capacity
 // commitments from the Azure Consumption API.
-func (c *SynapseClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
+func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
 		return nil, fmt.Errorf("synapse: create reservations pager: %w", err)
@@ -162,7 +162,7 @@ func (c *SynapseClient) GetExistingCommitments(ctx context.Context) ([]common.Co
 	return c.collectSynapseReservations(ctx, pager)
 }
 
-func (c *SynapseClient) createReservationsPager() (ReservationsDetailsPager, error) {
+func (c *Client) createReservationsPager() (ReservationsDetailsPager, error) {
 	if c.reservationsPager != nil {
 		return c.reservationsPager, nil
 	}
@@ -174,7 +174,7 @@ func (c *SynapseClient) createReservationsPager() (ReservationsDetailsPager, err
 	return client.NewListPager(scope, &armconsumption.ReservationsDetailsClientListOptions{}), nil
 }
 
-func (c *SynapseClient) collectSynapseReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
+func (c *Client) collectSynapseReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pager.More() {
@@ -196,7 +196,7 @@ func (c *SynapseClient) collectSynapseReservations(ctx context.Context, pager Re
 // it is a Synapse SQL Pool or Spark reservation. Identification relies on the
 // SKU name containing a Synapse-specific prefix ("DW" for Dedicated SQL Pools
 // or "SCU" for Spark Compute Units).
-func (c *SynapseClient) convertSynapseReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+func (c *Client) convertSynapseReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
 	if detail == nil || detail.Properties == nil {
 		return nil
 	}
@@ -229,9 +229,9 @@ func (c *SynapseClient) convertSynapseReservation(detail *armconsumption.Reserva
 // PurchaseCommitment purchases Synapse reserved capacity via the Azure
 // Reservations API two-step flow (calculatePrice -> purchase). The reserved
 // resource type is "SqlDW" which covers Dedicated SQL Pool DWU reservations.
-func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -306,7 +306,7 @@ func (c *SynapseClient) PurchaseCommitment(ctx context.Context, rec common.Recom
 }
 
 // ValidateOffering validates that a Synapse SKU is in the known set.
-func (c *SynapseClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validSKUs, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid SKUs: %w", err)
@@ -322,7 +322,7 @@ func (c *SynapseClient) ValidateOffering(ctx context.Context, rec common.Recomme
 
 // GetOfferingDetails retrieves Synapse reservation offering details from the
 // Azure Retail Prices API.
-func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
@@ -344,7 +344,7 @@ func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		// Fail loud on an unrecognised payment option rather than silently
+		// Fail loud on an unrecognized payment option rather than silently
 		// billing it as all-upfront (owner policy: no silent fallbacks on
 		// money-affecting fields).
 		return nil, fmt.Errorf("unsupported payment option for Azure Synapse offering details: %q", rec.PaymentOption)
@@ -366,7 +366,7 @@ func (c *SynapseClient) GetOfferingDetails(ctx context.Context, rec common.Recom
 // GetValidResourceTypes returns the known Synapse Dedicated SQL Pool DWU SKUs
 // that support reservations. Azure Synapse reservations are available for
 // DW100c through DW30000c performance levels.
-func (c *SynapseClient) GetValidResourceTypes(_ context.Context) ([]string, error) {
+func (c *Client) GetValidResourceTypes(_ context.Context) ([]string, error) {
 	return []string{
 		// Dedicated SQL Pool DWU levels (cDWU generation)
 		"DW100c",
@@ -389,16 +389,16 @@ func (c *SynapseClient) GetValidResourceTypes(_ context.Context) ([]string, erro
 }
 
 // SynapsePricing holds pricing information for Synapse Analytics.
-type SynapsePricing struct {
+type Pricing struct {
+	Currency          string
 	HourlyRate        float64
 	ReservationPrice  float64
 	OnDemandPrice     float64
-	Currency          string
 	SavingsPercentage float64
 }
 
 // getSynapsePricing fetches pricing from the Azure Retail Prices API.
-func (c *SynapseClient) getSynapsePricing(ctx context.Context, sku, region string, termYears int) (*SynapsePricing, error) {
+func (c *Client) getSynapsePricing(ctx context.Context, sku, region string, termYears int) (*Pricing, error) {
 	filter := fmt.Sprintf("serviceName eq 'Azure Synapse Analytics' and armRegionName eq '%s' and skuName eq '%s'",
 		region, sku)
 
@@ -407,7 +407,7 @@ func (c *SynapseClient) getSynapsePricing(ctx context.Context, sku, region strin
 	params.Add("api-version", "2023-01-01-preview")
 
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
-	items, err := pricing.FetchAll[SynapseRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +428,7 @@ func (c *SynapseClient) getSynapsePricing(ctx context.Context, sku, region strin
 
 	savingsPercentage := ((onDemandPrice*hoursInTerm - reservationPrice) / (onDemandPrice * hoursInTerm)) * 100
 
-	return &SynapsePricing{
+	return &Pricing{
 		HourlyRate:        reservationPrice / hoursInTerm,
 		ReservationPrice:  reservationPrice,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
@@ -438,24 +438,24 @@ func (c *SynapseClient) getSynapsePricing(ctx context.Context, sku, region strin
 }
 
 // extractSynapsePricing extracts on-demand and reservation pricing from price items.
-func extractSynapsePricing(items []SynapseRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+func extractSynapsePricing(items []RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := fmt.Sprintf("%d Year", termYears)
 	if termYears > 1 {
 		termStr = fmt.Sprintf("%d Years", termYears)
 	}
 
-	for _, item := range items {
-		if item.CurrencyCode != "" {
-			currency = item.CurrencyCode
+	for i := range items {
+		if items[i].CurrencyCode != "" {
+			currency = items[i].CurrencyCode
 		}
 		switch {
-		case strings.Contains(item.ReservationTerm, termStr):
-			if item.RetailPrice > 0 {
-				reservation = item.RetailPrice
+		case strings.Contains(items[i].ReservationTerm, termStr):
+			if items[i].RetailPrice > 0 {
+				reservation = items[i].RetailPrice
 			}
-		case item.Type == "Consumption" && item.RetailPrice > 0:
-			onDemand = item.RetailPrice
+		case items[i].Type == "Consumption" && items[i].RetailPrice > 0:
+			onDemand = items[i].RetailPrice
 		}
 	}
 	return onDemand, reservation, currency
@@ -463,7 +463,7 @@ func extractSynapsePricing(items []SynapseRetailPriceItem, termYears int) (onDem
 
 // convertSynapseRecommendation converts an Azure reservation recommendation
 // to the common Recommendation format.
-func (c *SynapseClient) convertSynapseRecommendation(azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+func (c *Client) convertSynapseRecommendation(azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(azureRec)
 	if f == nil {
 		return nil

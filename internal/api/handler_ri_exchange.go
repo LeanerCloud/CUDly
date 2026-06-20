@@ -164,7 +164,7 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 
 // azureExchangeClient is the narrow interface that listExchangeableAzureRIs
 // needs from the Azure compute client. Satisfied by
-// *azurecompute.ComputeClient; a stub can be injected via
+// *azurecompute.Client; a stub can be injected via
 // Handler.azureExchangeFactory for tests.
 type azureExchangeClient interface {
 	ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error)

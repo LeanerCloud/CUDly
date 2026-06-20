@@ -49,6 +49,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
@@ -263,9 +264,9 @@ type reservationOrdersListResponse struct {
 // either rolled back or aged out; the recommendation is still owed and the
 // re-drive must be allowed through.
 var reservationOrderTerminalFailedStates = map[string]struct{}{
-	"Cancelled": {}, //nolint:misspell // Azure API returns British spelling "Cancelled"
-	"Failed":    {},
-	"Expired":   {},
+	string(armreservations.ProvisioningStateCancelled): {},
+	string(armreservations.ProvisioningStateFailed):    {},
+	string(armreservations.ProvisioningStateExpired):   {},
 }
 
 // FindReservationOrderByIdempotencyToken lists reservation orders visible to
@@ -283,7 +284,7 @@ var reservationOrderTerminalFailedStates = map[string]struct{}{
 // Terminal-failed orders (Canceled, Failed, Expired) are skipped so they do
 // not suppress a legitimate fresh purchase of the same recommendation -- this
 // mirrors the EC2 dedupe guard's state filter (active + payment-pending only).
-func FindReservationOrderByIdempotencyToken(ctx context.Context, httpClient HTTPClient, bearerToken, idempotencyToken string) (string, bool, error) { //nolint:gocritic // unnamedResult: the three return types are distinct and their roles are documented in the godoc
+func FindReservationOrderByIdempotencyToken(ctx context.Context, httpClient HTTPClient, bearerToken, idempotencyToken string) (orderID string, found bool, err error) {
 	if idempotencyToken == "" {
 		return "", false, nil
 	}
