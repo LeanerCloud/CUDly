@@ -379,7 +379,7 @@ function renderSavingsChart(
     // Map each data point to {x: timestamp_ms, y: value} so Chart.js positions
     // each point at its real date on the linear axis instead of by label index.
     // M-6: use ?? 0 (not || 0) to treat a genuine 0-saving bucket correctly.
-    const savingsData = dataPoints.map(dp => ({
+    const periodSavingsData = dataPoints.map(dp => ({
         x: new Date(dp.timestamp).getTime(),
         y: convertFromMonthly(dp.total_savings ?? 0, unit),
     }));
@@ -404,7 +404,7 @@ function renderSavingsChart(
             datasets: [
                 {
                     label: 'Period Savings',
-                    data: savingsData,
+                    data: periodSavingsData,
                     borderColor: '#34a853',
                     backgroundColor: 'rgba(52, 168, 83, 0.1)',
                     fill: true,
