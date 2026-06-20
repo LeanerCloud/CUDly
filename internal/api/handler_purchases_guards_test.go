@@ -39,8 +39,8 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		return r
 	}
 	tests := []struct {
-		rec       config.RecommendationRecord
 		name      string
+		rec       config.RecommendationRecord
 		wantError bool
 	}{
 		// --- AWS canonical set ---
