@@ -53,8 +53,8 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 			return nil, err
 		}
 		out := make([]exchange.OfferingOption, 0, len(recs))
-		for _, rec := range recs {
-			out = append(out, recommendationToOffering(rec, currencyCode))
+		for i := range recs {
+			out = append(out, recommendationToOffering(&recs[i], currencyCode))
 		}
 		return out, nil
 	}
@@ -70,7 +70,7 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 // SDK reports on ec2.ReservedInstance.Duration so the term-match guard
 // in pkg/exchange.fillAlternativesFromRecs can compare apples-to-apples
 // against RIInfo.TermSeconds populated from ec2.ConvertibleRI.Duration.
-func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
+func recommendationToOffering(rec *config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
 	// AWS Cost Explorer returns MonthlyCost and UpfrontCost as totals for
 	// the recommended Count of instances, not per-instance. The reshape
 	// layer compares OfferingOption.EffectiveMonthlyCost against
@@ -194,9 +194,9 @@ func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) 
 		// no-op rather than a leak.
 		return "", nil
 	}
-	for _, a := range accounts {
-		if a.ExternalID == awsAccountID {
-			return a.ID, nil
+	for i := range accounts {
+		if accounts[i].ExternalID == awsAccountID {
+			return accounts[i].ID, nil
 		}
 	}
 	// Resolved-but-unregistered: AWS host has accounts, but the running

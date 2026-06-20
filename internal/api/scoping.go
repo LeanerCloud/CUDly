@@ -66,8 +66,8 @@ func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planI
 	if err != nil {
 		return fmt.Errorf("failed to get plan accounts: %w", err)
 	}
-	for _, acct := range accounts {
-		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
+	for i := range accounts {
+		if auth.MatchesAccount(allowed, accounts[i].ID, accounts[i].Name) {
 			return nil
 		}
 	}
@@ -88,11 +88,11 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 		return nil
 	}
 	nameByID := h.resolveAccountNamesByID(ctx)
-	for i, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for i := range recs {
+		if recs[i].CloudAccountID == nil {
 			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
 		}
-		id := *rec.CloudAccountID
+		id := *recs[i].CloudAccountID
 		if !auth.MatchesAccount(allowed, id, nameByID[id]) {
 			return NewClientError(403, fmt.Sprintf("recommendation %d targets account %s which is outside your allowed_accounts", i, id))
 		}
@@ -162,9 +162,9 @@ func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (
 	}
 	type provExt struct{ provider, externalID string }
 	byUUID := make(map[string]provExt, len(accounts))
-	for _, a := range accounts {
-		if a.ExternalID != "" {
-			byUUID[a.ID] = provExt{provider: a.Provider, externalID: a.ExternalID}
+	for i := range accounts {
+		if accounts[i].ExternalID != "" {
+			byUUID[accounts[i].ID] = provExt{provider: accounts[i].Provider, externalID: accounts[i].ExternalID}
 		}
 	}
 	for _, u := range uuids {
@@ -219,12 +219,12 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 	if err != nil {
 		return nil, map[string][]string{"": {accountID}}
 	}
-	for _, a := range accounts {
-		if a.ID == accountID {
+	for i := range accounts {
+		if accounts[i].ID == accountID {
 			// Known UUID: match cloud_account_id by UUID and, when present,
 			// account_id by the resolved external number scoped to its provider.
-			if a.ExternalID != "" {
-				return []string{accountID}, map[string][]string{a.Provider: {a.ExternalID}}
+			if accounts[i].ExternalID != "" {
+				return []string{accountID}, map[string][]string{accounts[i].Provider: {accounts[i].ExternalID}}
 			}
 			return []string{accountID}, nil
 		}
@@ -251,10 +251,10 @@ func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string
 	}
 	// Allocate 2x capacity since each account contributes up to two keys.
 	nameByID := make(map[string]string, len(accounts)*2)
-	for _, a := range accounts {
-		nameByID[a.ID] = a.Name
-		if a.ExternalID != "" {
-			nameByID[a.ExternalID] = a.Name
+	for i := range accounts {
+		nameByID[accounts[i].ID] = accounts[i].Name
+		if accounts[i].ExternalID != "" {
+			nameByID[accounts[i].ExternalID] = accounts[i].Name
 		}
 	}
 	return nameByID

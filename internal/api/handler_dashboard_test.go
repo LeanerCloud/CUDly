@@ -207,9 +207,9 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 	_ = acctB // referenced only via rec(acctB, …) inside test cases
 
 	tests := []struct {
+		coverage  map[string]float64
 		name      string
 		recs      []config.RecommendationRecord
-		coverage  map[string]float64
 		wantTotal float64
 	}{
 		{

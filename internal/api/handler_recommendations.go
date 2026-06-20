@@ -129,18 +129,18 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
 	}
 	nameByID := make(map[string]string, len(accounts))
-	for _, a := range accounts {
-		nameByID[a.ID] = a.Name
+	for i := range accounts {
+		nameByID[accounts[i].ID] = accounts[i].Name
 	}
 
 	filtered := recs[:0]
-	for _, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for i := range recs {
+		if recs[i].CloudAccountID == nil {
 			continue
 		}
-		id := *rec.CloudAccountID
+		id := *recs[i].CloudAccountID
 		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, recs[i])
 		}
 	}
 	return filtered, nil

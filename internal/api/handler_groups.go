@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// Group management handlers
+// Group management handlers.
 
 // listGroups handles GET /api/groups.
 func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
@@ -34,7 +34,8 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 
 	// Rate limiting: 30 admin operations per user per minute
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		var allowed bool
+		allowed, err = h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
@@ -43,7 +44,7 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 	}
 
 	var createReq auth.APICreateGroupRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	if err = json.Unmarshal([]byte(req.Body), &createReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 

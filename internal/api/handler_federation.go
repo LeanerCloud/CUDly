@@ -91,7 +91,7 @@ func gcpOIDCIssuerURI(source, tenantID string) string {
 }
 
 // renderTemplate renders a named template from the embedded iacfiles.Templates FS.
-func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
+func renderTemplate(tmplPath string, data federationIaCData) (string, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	tmplBytes, err := iacfiles.Templates.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("read template %s: %w", tmplPath, err)
@@ -138,16 +138,16 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	// Reject impossible target/source combinations early — before bundle
 	// construction — so the caller gets a clear 400 instead of a downloadable
 	// bundle that fails at terraform apply with a cryptic IAM error. See #42.
-	if err = validateFederationTargetSource(target, source); err != nil {
+	if err := validateFederationTargetSource(target, source); err != nil {
 		return nil, err
 	}
 
 	apiURL := deriveFederationAPIURL(h.dashboardURL, req.RequestContext.DomainName)
 	data := buildGenericIaCData(target, source, apiURL)
-	if err = h.populateSourceAccountID(ctx, source, &data); err != nil {
+	if err := h.populateSourceAccountID(ctx, source, &data); err != nil {
 		return nil, err
 	}
-	if err = h.validateSourceIdentity(ctx); err != nil {
+	if err := h.validateSourceIdentity(ctx); err != nil {
 		return nil, err
 	}
 	// ContactEmail is always the email of the authenticated user who requested
@@ -255,7 +255,7 @@ func validateFederationTargetSource(target, source string) error {
 }
 
 // renderSingleFile renders a single-file IaC template (currently only "cli" is supported).
-func (h *Handler) renderSingleFile(data federationIaCData, target, source, format string) (*FederationIaCResponse, error) {
+func (h *Handler) renderSingleFile(data federationIaCData, target, source, format string) (*FederationIaCResponse, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, "target")
 	if err != nil {
 		return nil, err
@@ -273,7 +273,7 @@ func (h *Handler) renderSingleFile(data federationIaCData, target, source, forma
 
 // shellEscapeData returns a copy of data with all fields interpolated into CLI
 // shell templates escaped for safe use inside double-quoted bash strings.
-func shellEscapeData(data federationIaCData) federationIaCData {
+func shellEscapeData(data federationIaCData) federationIaCData { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	d := data
 	d.AccountName = shellEscape(data.AccountName)
 	d.AccountExternalID = shellEscape(data.AccountExternalID)
@@ -305,7 +305,7 @@ func formatNeedsZip(format string) bool {
 // buildZipResponse is the single encoder for zip-format IaC downloads. It dispatches
 // to the appropriate builder, which returns raw bytes + filename, then base64-wraps
 // the result into a FederationIaCResponse.
-func (h *Handler) buildZipResponse(data federationIaCData, target, source, format, slug string) (*FederationIaCResponse, error) {
+func (h *Handler) buildZipResponse(data federationIaCData, target, source, format, slug string) (*FederationIaCResponse, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	var (
 		zipBytes []byte
 		filename string
@@ -431,7 +431,7 @@ func cliScriptSpec(target, source, slug string) (tmplPath, filename, contentType
 //
 // Returns the raw zip bytes and output filename. base64 wrapping happens in
 // buildZipResponse.
-func buildFederationBundle(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildFederationBundle(data federationIaCData, target, source, slug string) ([]byte, string, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
@@ -455,7 +455,7 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 
 // buildCFNZip creates a self-contained CloudFormation zip with template.yaml,
 // the parameters JSON, and deploy-cfn.sh. Returns raw zip bytes + filename.
-func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	if target != "aws" {
 		return nil, "", NewClientError(400, "format=cfn requires target=aws")
 	}
@@ -492,7 +492,7 @@ func azureTemplateName(format string) string {
 // identity, then deploy this template to assign the Reservation Purchaser role).
 //
 // format must be "bicep" or "arm". target must be "azure".
-func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) ([]byte, string, error) {
+func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) ([]byte, string, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	if target != "azure" {
 		return nil, "", NewClientError(400, "format="+format+" requires target=azure")
 	}
@@ -514,7 +514,7 @@ func buildAzureTemplateZip(format string, data federationIaCData, target, slug s
 // writeAzureTemplateFiles reads the static Azure template, renders the
 // parameters file, deploy script, and README, then writes all four into the zip.
 // The deploy script is marked executable (mode 0755) in the zip header.
-func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, templateName string) error {
+func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, templateName string) error { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	templateBytes, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/" + templateName)
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
@@ -550,7 +550,7 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	return nil
 }
 
-func buildAzureTemplateReadme(data federationIaCData, format string) string {
+func buildAzureTemplateReadme(data federationIaCData, format string) string { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	var sb strings.Builder
 	sb.WriteString("CUDly Azure Federation — ")
 	if format == "bicep" {
@@ -573,7 +573,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 }
 
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
-func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
+func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	tfDir := bundleModuleDir(target, source) + "/terraform"
 	if err := addDirToZip(zw, cudlyiac.Modules, tfDir, "terraform"); err != nil {
 		return fmt.Errorf("bundle: terraform dir: %w", err)
@@ -591,7 +591,7 @@ func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, 
 
 // addBundleCFN adds CloudFormation files to the zip for AWS target bundles
 // (both cross-account and WIF). Thin wrapper around writeCFNFiles.
-func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
+func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug string) error { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	if target != "aws" {
 		return nil
 	}
@@ -604,7 +604,7 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 //
 // Dispatches on source: "aws" → cross-account IAM role template; anything else
 // → AWS WIF template.
-func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) error {
+func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) error { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	cfTemplatePath := "federation/aws-target/cloudformation/template.yaml"
 	deployTmplPath := "templates/aws-cfn-deploy.sh.tmpl"
 	if source == "aws" {
@@ -689,7 +689,7 @@ func bundleZipName(target, source, slug string) string {
 	}
 }
 
-func buildBundleReadme(data federationIaCData, target, source string) string {
+func buildBundleReadme(data federationIaCData, target, source string) string { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	var sb strings.Builder
 	sb.WriteString("CUDly Federation IaC Bundle\n")
 	sb.WriteString("===========================\n\n")
@@ -754,7 +754,7 @@ type cfParam struct {
 //
 // Dispatches on source: "aws" → cross-account params (SourceAccountID, ExternalID);
 // anything else → AWS WIF params (OIDC values).
-func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
+func buildCFParamsJSON(data federationIaCData, source string) (string, error) { //nolint:gocritic // hugeParam: federationIaCData is the primary data container for federation IaC generation; passing by pointer would cascade through all callers
 	var params []cfParam
 	if source == "aws" {
 		params = []cfParam{

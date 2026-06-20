@@ -27,41 +27,38 @@ import (
 
 // CloudAccountRequest is the request body for create/update account endpoints.
 type CloudAccountRequest struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	ContactEmail string `json:"contact_email"`
-	Provider     string `json:"provider"`
-	ExternalID   string `json:"external_id"`
-	Enabled      *bool  `json:"enabled"`
-	// AWS
+	Enabled                 *bool  `json:"enabled"`
+	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureClientID           string `json:"azure_client_id"`
+	Provider                string `json:"provider"`
+	Name                    string `json:"name"`
+	Description             string `json:"description"`
 	AWSAuthMode             string `json:"aws_auth_mode"`
 	AWSRoleARN              string `json:"aws_role_arn"`
 	AWSExternalID           string `json:"aws_external_id"`
+	ContactEmail            string `json:"contact_email"`
+	GCPWIFAudience          string `json:"gcp_wif_audience"`
+	ExternalID              string `json:"external_id"`
+	AzureSubscriptionID     string `json:"azure_subscription_id"`
+	AzureTenantID           string `json:"azure_tenant_id"`
 	AWSBastionID            string `json:"aws_bastion_id"`
-	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
+	AzureAuthMode           string `json:"azure_auth_mode"`
+	GCPProjectID            string `json:"gcp_project_id"`
+	GCPClientEmail          string `json:"gcp_client_email"`
+	GCPAuthMode             string `json:"gcp_auth_mode"`
 	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
-	// Azure
-	AzureSubscriptionID string `json:"azure_subscription_id"`
-	AzureTenantID       string `json:"azure_tenant_id"`
-	AzureClientID       string `json:"azure_client_id"`
-	AzureAuthMode       string `json:"azure_auth_mode"`
-	// GCP
-	GCPProjectID   string `json:"gcp_project_id"`
-	GCPClientEmail string `json:"gcp_client_email"`
-	GCPAuthMode    string `json:"gcp_auth_mode"`
-	GCPWIFAudience string `json:"gcp_wif_audience"` // Full WIF provider resource, secret-free path only.
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
 type CredentialsRequest struct {
-	CredentialType string                 `json:"credential_type"`
 	Payload        map[string]interface{} `json:"payload"`
+	CredentialType string                 `json:"credential_type"`
 }
 
 // AccountTestResult is the response for the test-credentials endpoint.
 type AccountTestResult struct {
-	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+	OK      bool   `json:"ok"`
 }
 
 // AccountServiceOverrideRequest is the request body for service override endpoints.
@@ -1078,7 +1075,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 	// checkCommitmentOptionCombo is permissive when commitmentOpts is nil or
 	// probe data is absent (ErrNoData) — the frontend's hardcoded rules are the
 	// primary gate in those cases.
-	if err := h.checkCommitmentOptionCombo(ctx, config.ServiceConfig{
+	if err := h.checkCommitmentOptionCombo(ctx, &config.ServiceConfig{
 		Provider: override.Provider,
 		Service:  override.Service,
 		Term:     derefInt(override.Term),

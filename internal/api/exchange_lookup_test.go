@@ -27,10 +27,10 @@ func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) 
 // so tests can assert region / account / provider scoping landed in the
 // SQL query. Returns a configurable result set or error.
 type fakeRecsLister struct {
-	gotFilter config.RecommendationFilter
-	calls     int
-	out       []config.RecommendationRecord
 	err       error
+	gotFilter config.RecommendationFilter
+	out       []config.RecommendationRecord
+	calls     int
 }
 
 func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
@@ -217,7 +217,7 @@ func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
 	require.Len(t, got, 1)
 	// No recurring monthly charge (nil → 0), so effective cost = amortized upfront only.
 	assert.InDelta(t, 10.0, got[0].EffectiveMonthlyCost, 0.001,
-		"nil MonthlyCost + 120 upfront / 12mo = 10/mo effective")
+		"nil MonthlyCost + 120 upfront / 12 months = 10/mo effective")
 }
 
 // TestResolveAWSCloudAccountID_FailsClosedOnSTSError pins the

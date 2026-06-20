@@ -18,9 +18,9 @@ import (
 // raw JSON payload + fetched_at so the cache layer exercises the same
 // marshaling path as the real Postgres store.
 type fakeRIUtilCacheStore struct {
-	mu      sync.Mutex
-	entries map[string]config.RIUtilizationCacheEntry
 	getErr  error
+	entries map[string]config.RIUtilizationCacheEntry
+	mu      sync.Mutex
 }
 
 func newFakeRIUtilCacheStore() *fakeRIUtilCacheStore {
@@ -59,10 +59,10 @@ func (f *fakeRIUtilCacheStore) UpsertRIUtilizationCache(ctx context.Context, reg
 // seedStale writes a cache row with fetchedAt set in the past so the
 // caller can control exactly how "stale" the row is relative to soft
 // / hard TTLs.
-//
-//nolint:unparam // test helper: region fixed by design across current callers
-func (f *fakeRIUtilCacheStore) seedStale(t *testing.T, region string, lookbackDays int, data []recommendations.RIUtilization, age time.Duration) {
+func (f *fakeRIUtilCacheStore) seedStale(t *testing.T, data []recommendations.RIUtilization, age time.Duration) {
 	t.Helper()
+	const region = "us-east-1"
+	const lookbackDays = 30
 	payload, err := json.Marshal(data)
 	if err != nil {
 		t.Fatalf("seedStale marshal: %v", err)
@@ -126,7 +126,7 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
 	// Seed a row whose age is between the soft TTL (50ms) and hard TTL (1h).
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, false) // non-Lambda
 
@@ -174,7 +174,7 @@ func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
 	store := newFakeRIUtilCacheStore()
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, true) // Lambda mode
 
@@ -197,7 +197,7 @@ func TestRIUtilizationCache_HardExpirySyncRefetch(t *testing.T) {
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
 	// Age (2h) exceeds both soft (15m) and hard (1h).
-	store.seedStale(t, "us-east-1", 30, staleData, 2*time.Hour)
+	store.seedStale(t, staleData, 2*time.Hour)
 
 	c := newRIUtilizationCache(store, false) // non-Lambda, but hard-expired
 
@@ -219,7 +219,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	store := newFakeRIUtilCacheStore()
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, false)
 
@@ -227,8 +227,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// Gate the fetcher so concurrent calls all race to enter the
 	// refresh — singleflight should collapse them.
 	release := make(chan struct{})
-	//nolint:unparam // fetcher signature is fixed by newRIUtilizationCache; this refresh path never errors
-	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) { //nolint:unparam // error return required by the fetch function signature used in getOrFetch
 		calls.Add(1)
 		<-release
 		return freshData, nil

@@ -19,10 +19,10 @@ import (
 type TrendsResponse struct {
 	Start    string                        `json:"start"`
 	End      string                        `json:"end"`
-	Months   int                           `json:"months"`
 	Monthly  []analytics.MonthlySummary    `json:"monthly"`
 	Provider []analytics.ProviderBreakdown `json:"by_provider"`
 	Service  []analytics.ServiceBreakdown  `json:"by_service"`
+	Months   int                           `json:"months"`
 }
 
 // getAnalyticsTrends handles GET /api/analytics/trends. It returns the
@@ -41,7 +41,8 @@ func (h *Handler) getAnalyticsTrends(ctx context.Context, req *events.LambdaFunc
 	accountID := params["account_id"]
 	// Enforce allowed_accounts scope BEFORE resolving filter ids so a scoped
 	// user can never widen to "all" (empty filters mean all-accessible).
-	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
+	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -102,10 +103,10 @@ type AnalyticsResponse struct {
 
 // BreakdownResponse represents the response for the breakdown endpoint.
 type BreakdownResponse struct {
+	Data      map[string]BreakdownValue `json:"data"`
 	Dimension string                    `json:"dimension"`
 	Start     string                    `json:"start"`
 	End       string                    `json:"end"`
-	Data      map[string]BreakdownValue `json:"data"`
 }
 
 // getHistoryAnalytics handles GET /history/analytics.
@@ -142,7 +143,8 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	if provider == "all" {
 		provider = "" // explicit "no filter" sentinel
 	}
-	if err := validateProvider(provider); err != nil {
+	err = validateProvider(provider)
+	if err != nil {
 		return nil, err
 	}
 
@@ -150,7 +152,8 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	// We don't (yet) support analytics across a subset — the underlying
 	// aggregate takes a single account_id. An unrestricted/admin session
 	// can pass "" to mean "all accessible accounts".
-	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
+	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -198,7 +201,8 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		dimension = "service"
 	}
 
-	if err := h.validateAnalyticsAccountScope(ctx, session, accountID); err != nil {
+	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -267,10 +271,7 @@ func (h *Handler) triggerAnalyticsCollection(ctx context.Context, req *events.La
 }
 
 // parseDateRange parses start and end date strings with defaults.
-func parseDateRange(startStr, endStr string) (time.Time, time.Time, error) {
-	var start, end time.Time
-	var err error
-
+func parseDateRange(startStr, endStr string) (start, end time.Time, err error) {
 	// Default end to now
 	if endStr == "" {
 		end = time.Now().UTC()

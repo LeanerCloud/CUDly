@@ -47,7 +47,8 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// surface is lower than the unauthenticated credential endpoints. Emit a
 	// high-severity alert so the fail-open window is observable (02-M1).
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		var allowed bool
+		allowed, err = h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
 			logging.Errorf("ALERT: rate limiter error on admin operation for user %s; proceeding fail-open (02-M1): %v",
 				session.UserID, err)
@@ -57,7 +58,8 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	var createReq CreateAPIKeyRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &createReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -81,7 +83,8 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	if err := h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
+	err = h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to delete API key: %w", err)
 	}
 
@@ -101,7 +104,8 @@ func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	if err := h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
+	err = h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to revoke API key: %w", err)
 	}
 

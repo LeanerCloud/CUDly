@@ -162,7 +162,7 @@ func (h *Handler) propagateGlobalDefaults(ctx context.Context, cfg *config.Globa
 // the save isn't AWS, or the combo is valid. Errors from Validate are
 // logged and swallowed (permissive) so a transient DB blip never blocks
 // a settings save.
-func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error {
+func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg *config.ServiceConfig) error {
 	if h.commitmentOpts == nil || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
 		return nil
 	}
@@ -205,16 +205,16 @@ var serviceConfigFilterKeys = []string{
 // A "not found" error means no existing record — cfg is returned unchanged.
 // Any other DB error is returned to prevent a partial write from clobbering
 // previously configured filter fields.
-func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
+func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg *config.ServiceConfig, body string) (config.ServiceConfig, error) {
 	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return cfg, nil // new record — no existing fields to preserve
+			return *cfg, nil // new record — no existing fields to preserve
 		}
-		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
+		return *cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
 	}
 	if existing == nil {
-		return cfg, nil
+		return *cfg, nil
 	}
 
 	existing.Enabled = cfg.Enabled
@@ -224,9 +224,9 @@ func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg co
 
 	present, perr := presentKeys(body, serviceConfigFilterKeys)
 	if perr != nil {
-		return cfg, perr
+		return *cfg, perr
 	}
-	overlayPresentFilterFields(existing, &cfg, present)
+	overlayPresentFilterFields(existing, cfg, present)
 	return *existing, nil
 }
 
@@ -334,7 +334,7 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	// recommendation-filter fields only when the body carried them, so a
 	// partial PUT never zeroes a filter (ramp_schedule, or a filter set
 	// out-of-band) the request didn't mean to touch.
-	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg, req.Body)
+	merged, mergeErr := mergeServiceConfig(ctx, h.config, &cfg, req.Body)
 	if mergeErr != nil {
 		return nil, mergeErr
 	}
@@ -345,7 +345,7 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
-	if err := h.checkCommitmentOptionCombo(ctx, cfg); err != nil {
+	if err := h.checkCommitmentOptionCombo(ctx, &cfg); err != nil {
 		return nil, err
 	}
 

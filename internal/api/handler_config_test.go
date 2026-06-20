@@ -629,7 +629,7 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 		}
 		body := `{"enabled":false,"term":1,"payment":"no-upfront","coverage":90,"include_engines":["postgres"],"min_count":7}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(ctx, store, &req, body)
 		require.NoError(t, err)
 		assert.False(t, merged.Enabled)
 		assert.Equal(t, 1, merged.Term)
@@ -651,7 +651,7 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 		}
 		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(ctx, store, &req, body)
 		require.NoError(t, err)
 		assert.Equal(t, 80.0, merged.Coverage)
 		assert.Equal(t, []string{"mysql"}, merged.IncludeEngines, "omitted filter must be preserved")
@@ -671,7 +671,7 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 		}
 		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80,"include_engines":[]}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(ctx, store, &req, body)
 		require.NoError(t, err)
 		assert.Empty(t, merged.IncludeEngines, "explicit empty list clears the filter")
 	})

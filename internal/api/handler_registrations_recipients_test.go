@@ -1,4 +1,4 @@
-package api
+package api //nolint:revive // package name matches the directory and is consistent across all files in this package
 
 import (
 	"context"

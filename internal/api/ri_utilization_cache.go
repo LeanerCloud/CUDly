@@ -74,8 +74,8 @@ type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]recomme
 // refresh, avoiding a thundering-herd CE fan-out.
 type riUtilizationCache struct {
 	store    riUtilizationCacheStore
-	isLambda bool
 	sf       singleflight.Group
+	isLambda bool
 }
 
 func newRIUtilizationCache(store riUtilizationCacheStore, isLambda bool) *riUtilizationCache {

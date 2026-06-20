@@ -1035,8 +1035,8 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 		target      string
 		source      string
 		sourceCloud string
-		wantStatus  int
 		wantErrSub  string
+		wantStatus  int
 	}{
 		// aws-cross-account cases (original #42 coverage)
 		{
@@ -1131,9 +1131,9 @@ func TestValidateFederationTargetSource(t *testing.T) {
 		target      string
 		source      string
 		sourceCloud string
-		wantErr     bool
-		wantCode    int
 		wantSub     string
+		wantCode    int
+		wantErr     bool
 	}{
 		// Self-source combos on the correct cloud: allowed
 		{name: "aws-self-source-on-aws", target: "aws", source: "aws", sourceCloud: "aws", wantErr: false},

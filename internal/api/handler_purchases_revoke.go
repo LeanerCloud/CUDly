@@ -58,12 +58,9 @@ const azureRefundSafetyMargin = 1 * time.Hour
 // revokeQuoteResult is the JSON body returned by
 // GET /api/purchases/revoke/calculate/{id}.
 type revokeQuoteResult struct {
-	// RefundAmount is the amount Azure will refund (from CalculateRefund).
-	RefundAmount float64 `json:"refund_amount"`
-	// RefundCurrency is the ISO-4217 currency code (e.g. "USD").
-	RefundCurrency string `json:"refund_currency"`
-	// QuotedAt is an RFC3339 timestamp of when this quote was generated.
-	QuotedAt string `json:"quoted_at"`
+	RefundCurrency string  `json:"refund_currency"`
+	QuotedAt       string  `json:"quoted_at"`
+	RefundAmount   float64 `json:"refund_amount"`
 }
 
 // revokeConfirmBody is the JSON body expected on
@@ -110,8 +107,8 @@ type revokePurchaseResult struct {
 // with no retry button (issue #290 Finding #6).
 type revokeReconcilePendingResult struct {
 	Code          string `json:"code"`
-	AzureReturned bool   `json:"azure_returned"`
 	Message       string `json:"message"`
+	AzureReturned bool   `json:"azure_returned"`
 }
 
 // revokeMarkRetryBackoffs are the sleep durations between consecutive
@@ -227,7 +224,7 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 //
 // The method enforces revoke-any/revoke-own RBAC (same permissions as the
 // completed-purchase revoke path), then atomically transitions the execution
-// to "cancelled" and removes its purchase_suppressions.
+// to "canceled" and removes its purchase_suppressions.
 //
 // Returns 410 Gone only when the CAS observes the row already transitioned out
 // of "scheduled" (the scheduler fired the SDK call between our SELECT and the
@@ -247,23 +244,23 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 		return nil, err
 	}
 
-	// Atomically transition from scheduled -> cancelled and remove suppressions.
-	var cancelledBy *string
+	// Atomically transition from scheduled -> canceled and remove suppressions.
+	var canceledBy *string
 	if session.Email != "" {
 		e := session.Email
-		cancelledBy = &e
+		canceledBy = &e
 	}
 	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		// The scheduled-revoke path uses its own CAS variant that flips ONLY
-		// status='scheduled' -> 'cancelled'. CancelExecutionAtomic accepts
+		// status='scheduled' -> 'canceled'. CancelExecutionAtomic accepts
 		// only ('pending','notified') and would always return zero rows on
 		// a scheduled row, miscoded as "race lost" -> a misleading 410 even
 		// during the happy path. Issue #290 wave-2: keep the two CAS contracts
 		// distinct so 410 unambiguously means "scheduler already fired".
-		canceled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, canceledBy)
 		if err != nil {
 			return err
 		}
@@ -286,8 +283,8 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
 	return map[string]string{
-		"status":  "cancelled",
-		"message": "Purchase cancelled. No cloud API call was made; no cost incurred.",
+		"status":  "canceled",
+		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }
 
@@ -452,7 +449,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 // parse the reservation order/ID from the ARM path. Extracted to keep
 // calculateAzureRevoke under the cyclomatic-complexity limit. Returns the loaded
 // record plus the parsed orderID, reservationID, and commitment count.
-func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (*config.PurchaseHistoryRecord, string, string, int, error) {
+func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (record *config.PurchaseHistoryRecord, orderID, reservationID string, count int, err error) {
 	if purchaseID == "" {
 		return nil, "", "", 0, NewClientError(400, "purchase_id is required")
 	}
@@ -460,12 +457,13 @@ func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.La
 		return nil, "", "", 0, NewClientError(403, "authentication service not configured")
 	}
 
-	session, err := h.requireSession(ctx, req)
+	var session *Session
+	session, err = h.requireSession(ctx, req)
 	if err != nil {
 		return nil, "", "", 0, err
 	}
 
-	record, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
+	record, err = h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
 	if err != nil {
 		return nil, "", "", 0, fmt.Errorf("revoke/calculate: load purchase %s: %w", purchaseID, err)
 	}
@@ -473,11 +471,12 @@ func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.La
 		return nil, "", "", 0, NewClientError(404, "purchase not found")
 	}
 
-	if err := h.authorizeSessionRevoke(ctx, session, record); err != nil {
+	err = h.authorizeSessionRevoke(ctx, session, record)
+	if err != nil {
 		return nil, "", "", 0, err
 	}
 
-	orderID, reservationID, err := azureRevokeWindowAndIDs(record)
+	orderID, reservationID, err = azureRevokeWindowAndIDs(record)
 	if err != nil {
 		return nil, "", "", 0, err
 	}
@@ -488,7 +487,7 @@ func (h *Handler) validateAzureRevokeRequest(ctx context.Context, req *events.La
 // window check, then parses the reservation order/ID from the ARM path.
 // Extracted from validateAzureRevokeRequest to keep both under the cyclomatic-
 // complexity limit. Returns 422 ClientErrors for every reject case.
-func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, string, error) {
+func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (orderID, reservationID string, err error) {
 	if record.Provider != "azure" {
 		return "", "", NewClientError(422, fmt.Sprintf("provider %q does not support refund calculation", record.Provider))
 	}
@@ -506,7 +505,7 @@ func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, stri
 		))
 	}
 
-	orderID, reservationID, err := parseAzureReservationIDs(record.PurchaseID)
+	orderID, reservationID, err = parseAzureReservationIDs(record.PurchaseID)
 	if err != nil {
 		return "", "", NewClientError(422, "cannot determine Azure reservation order ID from purchase record; contact Azure Support to request a refund")
 	}
@@ -519,9 +518,7 @@ func azureRevokeWindowAndIDs(record *config.PurchaseHistoryRecord) (string, stri
 // extractAzureRefundQuote pulls the refund amount and currency out of a
 // CalculateRefund response, guarding every nil pointer in the chain. Returns
 // zero values when the response carries no billing-refund amount.
-func extractAzureRefundQuote(resp armreservations.CalculateRefundClientPostResponse) (float64, string) {
-	var refundAmount float64
-	var refundCurrency string
+func extractAzureRefundQuote(resp armreservations.CalculateRefundClientPostResponse) (refundAmount float64, refundCurrency string) {
 	if resp.Properties != nil && resp.Properties.BillingRefundAmount != nil {
 		if resp.Properties.BillingRefundAmount.Amount != nil {
 			refundAmount = *resp.Properties.BillingRefundAmount.Amount
@@ -655,8 +652,9 @@ func (h *Handler) callAzureReturn(
 // azureCalculateRefund runs the CalculateRefund step and parses out the session
 // ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
 // check). Errors are classified into 400 (client) vs 500 (transient).
-func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) {
-	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (sessionID string, refundAmount *float64, refundCurrency string, err error) {
+	var calcResp armreservations.CalculateRefundClientPostResponse
+	calcResp, err = calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
 				ReservationID: &reservationID,
@@ -672,9 +670,6 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 		return "", nil, "", fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
 	}
 
-	var sessionID string
-	var calcRefundAmount *float64
-	var calcRefundCurrency string
 	if calcResp.Properties != nil {
 		if calcResp.Properties.SessionID != nil {
 			sessionID = *calcResp.Properties.SessionID
@@ -682,14 +677,14 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 		if calcResp.Properties.BillingRefundAmount != nil {
 			if calcResp.Properties.BillingRefundAmount.Amount != nil {
 				v := *calcResp.Properties.BillingRefundAmount.Amount
-				calcRefundAmount = &v
+				refundAmount = &v
 			}
 			if calcResp.Properties.BillingRefundAmount.CurrencyCode != nil {
-				calcRefundCurrency = *calcResp.Properties.BillingRefundAmount.CurrencyCode
+				refundCurrency = *calcResp.Properties.BillingRefundAmount.CurrencyCode
 			}
 		}
 	}
-	return sessionID, calcRefundAmount, calcRefundCurrency, nil
+	return sessionID, refundAmount, refundCurrency, nil
 }
 
 // handleAzureReturnError clears the in-flight flag (no refund was issued) and

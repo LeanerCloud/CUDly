@@ -606,24 +606,14 @@ const MaxHistoryDateRangeDays = 366
 // times are zero-valued and the SQL/in-memory date predicates are skipped
 // entirely (so legacy clients that don't send dates keep working).
 type historyFilters struct {
-	Provider        string
-	LegacyAccountID string
-	AccountIDs      []string
-	// ExternalIDsByProvider are the cloud-provider external account numbers
-	// resolved from AccountIDs (the UUIDs) via Handler.resolveAccountFilterIDs,
-	// grouped by provider so the external-id match stays provider-scoped (a
-	// reused external number across providers cannot leak rows). Populated by
-	// the handler AFTER parse (the resolution needs a DB read), not by
-	// parseHistoryFilters. Both the SQL path (provider = $p AND account_id =
-	// ANY) and the in-memory matchesExecution use them so a row/execution that
-	// carries only the external id (cloud_account_id NULL) is still matched
-	// (issue #701/#498). The "" provider key means "provider unknown" and
-	// matches the external id regardless of provider (legacy behavior).
-	ExternalIDsByProvider map[string][]string
-	HasDate               bool
 	Start                 time.Time
 	End                   time.Time
+	ExternalIDsByProvider map[string][]string
+	Provider              string
+	LegacyAccountID       string
+	AccountIDs            []string
 	Limit                 int
+	HasDate               bool
 }
 
 // parseHistoryFilters validates and normalises the /api/history query string.
