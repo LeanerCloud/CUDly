@@ -1120,10 +1120,10 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	canceledExec := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"} //nolint:misspell // DB status value
+	canceledExec := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"} //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1158,7 +1158,7 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 	canceledExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled", //nolint:misspell // DB status value
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	plan := &config.PurchasePlan{
 		ID:      planID,
@@ -1168,7 +1168,7 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	// Assert that UpdatePurchasePlan is called with enabled=false.
 	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
@@ -1209,7 +1209,7 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	canceledExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled", //nolint:misspell // DB status value
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	// Plan already disabled - UpdatePurchasePlan must NOT be called.
 	plan := &config.PurchasePlan{
@@ -1220,7 +1220,7 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1261,7 +1261,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
 	existingExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled",
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	plan := &config.PurchasePlan{
 		ID:      planID,
@@ -1271,7 +1271,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
@@ -1311,7 +1311,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 	existingExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled",
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	// Plan already disabled; UpdatePurchasePlan must NOT be called.
 	plan := &config.PurchasePlan{
@@ -1322,7 +1322,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	// UpdatePurchasePlan is intentionally NOT registered; AssertExpectations
@@ -1341,7 +1341,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 // TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409 is a
 // regression test for CR #995 Finding 1: when TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus but the fetched row is NOT
-// "cancelled" (e.g. the execution raced to "running"), cancelOrRecoverExecution
+// "canceled" (e.g. the execution raced to "running"), cancelOrRecoverExecution
 // must return a 409 and must NOT call disablePlan (no GetPurchasePlan call).
 func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing.T) {
 	ctx := context.Background()
@@ -1359,7 +1359,7 @@ func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing
 
 	conflictErr := fmt.Errorf("%w: execution %s cannot transition", config.ErrExecutionNotInExpectedStatus, execID)
 
-	// The execution raced to "running" — not "cancelled".
+	// The execution raced to "running" -- not "canceled".
 	runningExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
@@ -1368,9 +1368,9 @@ func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr)
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, conflictErr) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetExecutionByID", ctx, execID).Return(runningExec, nil)
-	// GetPurchasePlan must NOT be called — AssertExpectations verifies this.
+	// GetPurchasePlan must NOT be called -- AssertExpectations verifies this.
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1521,7 +1521,7 @@ func TestHandler_deletePlannedPurchase_NilExecution(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999")) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2254,17 +2254,17 @@ func sessionCancelReq() *events.LambdaFunctionURLRequest {
 // cancel commits in a single tx via CancelExecutionAtomic +
 // DeleteSuppressionsByExecutionTx; the mock store's WithTx default
 // forwards fn(nil) and CancelExecutionAtomic default returns
-// (true, "cancelled", nil) when no explicit expectation is registered.
+// (true, "canceled", nil) when no explicit expectation is registered.
 //
 // Asserts the audit-stamp invariant: when session.Email is non-empty
-// the cancelledBy pointer passed to CancelExecutionAtomic must carry
+// the canceledBy pointer passed to CancelExecutionAtomic must carry
 // that email so the DB column is stamped correctly for History UI
 // attribution.
 func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, session *Session, hasAny, hasOwn bool) {
 	t.Helper()
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, hasAny, hasOwn)
 
-	// Capture the cancelledBy pointer passed to CancelExecutionAtomic
+	// Capture the canceledBy pointer passed to CancelExecutionAtomic
 	// so we can assert attribution was stamped correctly.
 	var capturedCanceledBy *string
 	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
@@ -2273,7 +2273,7 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 				capturedCanceledBy = v
 			}
 		}).
-		Return(true, "cancelled", nil)
+		Return(true, "cancelled", nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	// When cancel succeeds the transaction must also clean up suppressions.
 	mockConfig.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID).
 		Return(nil)
@@ -2287,8 +2287,8 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 	// Verify suppression cleanup ran within the same transaction.
 	mockConfig.AssertCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID)
 	if session != nil && session.Email != "" {
-		require.NotNil(t, capturedCanceledBy, "cancelledBy must be stamped when session has an email")
-		assert.Equal(t, session.Email, *capturedCanceledBy, "cancelledBy must equal session.Email for audit attribution")
+		require.NotNil(t, capturedCanceledBy, "canceledBy must be stamped when session has an email")
+		assert.Equal(t, session.Email, *capturedCanceledBy, "canceledBy must equal session.Email for audit attribution")
 	}
 	// Verify the session-auth boundary actually fired — without this a
 	// regression that bypassed ValidateSession (or stopped consulting
@@ -2304,9 +2304,9 @@ func TestHandler_cancelPurchase_Session_Admin_AllowsAny(t *testing.T) {
 		CreatedByUserID: &creator,
 	}
 	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
-	// Admin == Administrators-group member, modelled as a cancel-any holder
+	// Admin == Administrators-group member, modeled as a cancel-any holder
 	// (issue #907 removed the role short-circuit); the row belongs to another
-	// user, so cancel-any is what authorises the action.
+	// user, so cancel-any is what authorizes the action.
 	runSessionCancelAllowed(t, exec, session, true, false)
 }
 
@@ -2399,7 +2399,7 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 // the focus on the status guard (which fires before authorizeSessionCancel)
 // rather than the RBAC matrix, already covered by the matrix tests above.
 func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testing.T) {
-	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "cancelled"}
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "cancelled"} //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	for _, status := range rejected {
 		t.Run(status, func(t *testing.T) {
 			creator := cancelCallerID
@@ -2439,7 +2439,7 @@ func TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus(t *testing.T)
 			}
 			session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
 			// Caller owns the row (creator == cancelCallerID); cancel-own
-			// authorises it (issue #907 group-only authz).
+			// authorizes it (issue #907 group-only authz).
 			runSessionCancelAllowed(t, exec, session, false, true)
 		})
 	}
@@ -2460,7 +2460,7 @@ func TestHandler_cancelPurchase_Session_RaceWithApprove(t *testing.T) {
 	}
 	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
 
-	// Caller owns the row; cancel-own authorises it (issue #907).
+	// Caller owns the row; cancel-own authorizes it (issue #907).
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 	// Simulate concurrent approve winning between IsCancelable check and
 	// the conditional UPDATE inside the tx.
@@ -2560,7 +2560,7 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 	// test is independent of how that authority is derived.
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, true, false)
 
-	// Capture cancelledBy to verify the audit-stamp is passed to the
+	// Capture canceledBy to verify the audit-stamp is passed to the
 	// atomic UPDATE.
 	var capturedCanceledBy *string
 	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
@@ -2569,16 +2569,16 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 				capturedCanceledBy = v
 			}
 		}).
-		Return(true, "cancelled", nil)
+		Return(true, "cancelled", nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
-	// Token IS present in the URL — the deep-link flow always sends one.
+	// Token IS present in the URL -- the deep-link flow always sends one.
 	// The fix's whole point is that the admin session takes the
 	// session-authed branch instead of routing through the token path.
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
 	require.NoError(t, err, "admin clicking Cancel from notification email must succeed even when no contact_email is configured")
 	assert.Equal(t, "canceled", result.(map[string]string)["status"])
 
-	require.NotNil(t, capturedCanceledBy, "session-authed branch must stamp cancelledBy")
+	require.NotNil(t, capturedCanceledBy, "session-authed branch must stamp canceledBy")
 	assert.Equal(t, session.Email, *capturedCanceledBy)
 
 	// Critical security assertion: the token branch's contact_email gate
@@ -2611,7 +2611,7 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false /*hasAny*/, true /*hasOwn*/)
 	// CancelExecutionAtomic is called by the session-authed branch.
 	mockConfig.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).
-		Return(true, "cancelled", nil)
+		Return(true, "cancelled", nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
 	require.NoError(t, err)
@@ -2824,7 +2824,7 @@ func TestHandler_retryPurchase_Admin_AllowsAny(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
-	// Admin (Administrators-group member) modelled as a retry-any holder; the
+	// Admin (Administrators-group member) modeled as a retry-any holder; the
 	// row belongs to another user (issue #907 group-only authz).
 	newExec, updated := runSessionRetryAllowed(t, failed, session, true, false, sessionRetryReq())
 	assert.Equal(t, "pending", newExec.Status)
@@ -2940,7 +2940,7 @@ func TestHandler_retryPurchase_PersistentFailure_BlocksWithOpsHint(t *testing.T)
 		CreatedByUserID: &creator,
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -2968,7 +2968,7 @@ func TestHandler_retryPurchase_PersistentFailure_NoMatch_AllowsRetry(t *testing.
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 }
 
@@ -2982,7 +2982,7 @@ func TestHandler_retryPurchase_Threshold_BlocksAtFive_NoForce(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -3005,7 +3005,7 @@ func TestHandler_retryPurchase_Threshold_AllowsWithForce(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReqWithForce())
 	assert.Equal(t, 6, newExec.RetryAttemptN, "force=true past threshold still increments the chain count")
 }
@@ -3020,7 +3020,7 @@ func TestHandler_retryPurchase_JustUnderThreshold_AllowsNoForce(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	assert.Equal(t, 5, newExec.RetryAttemptN)
 }
@@ -3039,7 +3039,7 @@ func TestHandler_retryPurchase_AlreadyRetried_Rejects(t *testing.T) {
 		Recommendations:  []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
 	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
 	require.Error(t, err)
@@ -3077,7 +3077,7 @@ func TestHandler_retryPurchase_PreservesPlanMetadata(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	assert.Equal(t, "plan-abc", newExec.PlanID, "successor must inherit predecessor PlanID")
 	assert.Equal(t, 3, newExec.StepNumber, "successor must inherit predecessor StepNumber")
@@ -3134,7 +3134,7 @@ func TestPersistRetryExecution_ApprovalTokenNotUUID(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Term: 1}},
 	}
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 
 	// 64 hex characters = 32 bytes = 256 bits. UUID format is 36 chars
@@ -3165,7 +3165,7 @@ func TestPersistRetryExecution_ApprovalTokenExpiresAtSet(t *testing.T) {
 	session := &Session{UserID: retryCallerID, Email: "admin@example.com"}
 
 	before := time.Now()
-	// Caller owns the row; retry-own authorises it (issue #907).
+	// Caller owns the row; retry-own authorizes it (issue #907).
 	newExec, _ := runSessionRetryAllowed(t, failed, session, false, true, sessionRetryReq())
 	after := time.Now()
 
@@ -3813,13 +3813,13 @@ func TestGatherAccountContactEmails_DBError_NoPIILeak(t *testing.T) {
 
 // TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel verifies the
 // CAS safety property of scheduleApprovedExecution (Finding #2): if a
-// concurrent Cancel flips the execution to "cancelled" before the approve
+// concurrent Cancel flips the execution to "canceled" before the approve
 // writes, TransitionExecutionStatus returns ErrExecutionNotInExpectedStatus and
 // scheduleApprovedExecution surfaces that error rather than silently
-// overwriting the cancelled state.
+// overwriting the canceled state.
 //
 // In the old blind-write code, SavePurchaseExecution would overwrite the
-// "cancelled" row with status="scheduled", losing the revoke. With the CAS fix
+// "canceled" row with status="scheduled", losing the revoke. With the CAS fix
 // the row is never touched after a concurrent cancel wins.
 func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.T) {
 	ctx := context.Background()
@@ -3830,7 +3830,7 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 		Status:      "pending",
 	}
 
-	concurrentCancelErr := fmt.Errorf("%w: execution %s is in status \"cancelled\", not one of [pending notified]",
+	concurrentCancelErr := fmt.Errorf("%w: execution %s is in status \"canceled\", not one of [pending notified]",
 		config.ErrExecutionNotInExpectedStatus, execID)
 
 	mockConfig := new(MockConfigStore)
@@ -3842,7 +3842,7 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 
 	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil)
 	require.Error(t, err, "concurrent cancel must surface as an error, not a silent overwrite")
-	// SavePurchaseExecution must NEVER be called: the cancelled row is untouched.
+	// SavePurchaseExecution must NEVER be called: the canceled row is untouched.
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 	mockConfig.AssertExpectations(t)
 }
