@@ -341,7 +341,7 @@ func TestGetRecommendations_EmptyPager(t *testing.T) {
 			}},
 		},
 	})
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -358,7 +358,7 @@ func TestGetRecommendations_MultiplePages(t *testing.T) {
 			}},
 		},
 	})
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }

@@ -65,7 +65,7 @@ func NewRecommendationsClientAdapter(cred azcore.TokenCredential, subscriptionID
 // its own error and returns nil to the group so that a single service failure
 // does not cancel sibling calls. Results are appended in a deterministic order
 // (compute → database → cache → cosmosdb → savingsplans → advisor) after all goroutines finish.
-func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	var (
 		computeRecs, dbRecs, cacheRecs, cosmosRecs, advisorRecs, spRecs []common.Recommendation
 		computeErr, dbErr, cacheErr, cosmosErr, advisorErr, spErr       error
@@ -98,7 +98,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// Compute (VM) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceCompute) {
+	if shouldIncludeService(*params, common.ServiceCompute) {
 		goService(&computeErr, func() {
 			computeClient := compute.NewClient(r.cred, r.subscriptionID, "")
 			computeRecs, computeErr = computeClient.GetRecommendations(gctx, params)
@@ -106,7 +106,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// Database (SQL) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceRelationalDB) {
+	if shouldIncludeService(*params, common.ServiceRelationalDB) {
 		goService(&dbErr, func() {
 			dbClient := database.NewClient(r.cred, r.subscriptionID, "")
 			dbRecs, dbErr = dbClient.GetRecommendations(gctx, params)
@@ -114,7 +114,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// Cache (Redis) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceCache) {
+	if shouldIncludeService(*params, common.ServiceCache) {
 		goService(&cacheErr, func() {
 			cacheClient := cache.NewClient(r.cred, r.subscriptionID, "")
 			cacheRecs, cacheErr = cacheClient.GetRecommendations(gctx, params)
@@ -122,7 +122,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 
 	// CosmosDB (NoSQL) recommendations — subscription-wide.
-	if shouldIncludeService(params, common.ServiceNoSQL) {
+	if shouldIncludeService(*params, common.ServiceNoSQL) {
 		goService(&cosmosErr, func() {
 			cosmosClient := cosmosdb.NewClient(r.cred, r.subscriptionID, "")
 			cosmosRecs, cosmosErr = cosmosClient.GetRecommendations(gctx, params)
@@ -134,7 +134,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// The call returns an empty slice so the service appears in the fan-out
 	// and will start returning data once the API stabilises without requiring
 	// a scheduler change.
-	if shouldIncludeService(params, common.ServiceSavingsPlans) {
+	if shouldIncludeService(*params, common.ServiceSavingsPlans) {
 		goService(&spErr, func() {
 			spClient := savingsplans.NewClient(r.cred, r.subscriptionID, "")
 			spRecs, spErr = spClient.GetRecommendations(gctx, params)
@@ -145,7 +145,7 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	// per-service Reservation API. Failures here are non-fatal — the per-service
 	// results above are still useful on their own.
 	goService(&advisorErr, func() {
-		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, params)
+		advisorRecs, advisorErr = r.getAdvisorRecommendations(gctx, *params)
 	})
 
 	// Wait for all goroutines. g.Wait() always returns nil because every
@@ -209,13 +209,13 @@ func (r *RecommendationsClientAdapter) GetRecommendationsForService(ctx context.
 	params := common.RecommendationParams{
 		Service: service,
 	}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // GetAllRecommendations retrieves all Azure reservation recommendations across all services
 func (r *RecommendationsClientAdapter) GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error) {
 	params := common.RecommendationParams{}
-	return r.GetRecommendations(ctx, params)
+	return r.GetRecommendations(ctx, &params)
 }
 
 // getAdvisorRecommendations retrieves cost optimization recommendations from Azure Advisor

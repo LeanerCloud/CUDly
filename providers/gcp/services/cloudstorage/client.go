@@ -159,7 +159,8 @@ func (c *CloudStorageClient) GetRegion() string {
 }
 
 // GetRecommendations gets Cloud Storage recommendations from GCP Recommender API
-func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *CloudStorageClient) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	params := *p
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected client if available (for testing)

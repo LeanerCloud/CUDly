@@ -152,7 +152,8 @@ func (c *MemorystoreClient) GetRegion() string {
 }
 
 // GetRecommendations gets Memorystore Redis recommendations from GCP Recommender API
-func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *MemorystoreClient) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	params := *p
 	recClient := c.recommenderClient
 	if recClient == nil {
 		client, err := recommender.NewClient(ctx, c.clientOpts...)

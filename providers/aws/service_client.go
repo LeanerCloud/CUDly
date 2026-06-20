@@ -66,18 +66,18 @@ type RecommendationsClientAdapter struct {
 // NewRecommendationsClient creates a new recommendations client
 func NewRecommendationsClient(cfg aws.Config) provider.RecommendationsClient {
 	return &RecommendationsClientAdapter{
-		client: recommendations.NewClient(cfg),
+		client: recommendations.NewClient(&cfg),
 	}
 }
 
 // GetRecommendations gets recommendations with filtering
-func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recs, err := r.client.GetRecommendations(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 
-	recs = applyRecommendationFilters(recs, params)
+	recs = applyRecommendationFilters(recs, *params)
 	return recs, nil
 }
 
@@ -178,7 +178,7 @@ func (r *RecommendationsClientAdapter) GetRICoverageMap(ctx context.Context, loo
 // (needed for GetRIUtilization which is not part of the generic provider interface).
 func NewRecommendationsClientDirect(cfg aws.Config) *RecommendationsClientAdapter {
 	return &RecommendationsClientAdapter{
-		client: recommendations.NewClient(cfg),
+		client: recommendations.NewClient(&cfg),
 	}
 }
 

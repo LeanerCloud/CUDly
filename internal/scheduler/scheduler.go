@@ -898,7 +898,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 			PaymentOption:  globalCfg.DefaultPayment,
 			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
-		recs, _ = recClient.GetRecommendations(ctx, params)
+		recs, _ = recClient.GetRecommendations(ctx, &params)
 	}
 	result := s.convertRecommendations(recs, providerName)
 	if accountID != nil {

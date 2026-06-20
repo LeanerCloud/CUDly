@@ -214,7 +214,8 @@ func (c *ComputeEngineClient) GetRegion() string {
 }
 
 // GetRecommendations gets CUD recommendations from GCP Recommender API
-func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *ComputeEngineClient) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	params := *p
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected client if available (for testing)

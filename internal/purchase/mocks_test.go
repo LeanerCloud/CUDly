@@ -110,7 +110,7 @@ func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec common.R
 	return args.Get(0).(common.PurchaseResult), args.Error(1)
 }
 
-func (m *MockServiceClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (m *MockServiceClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

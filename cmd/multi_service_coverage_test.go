@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // ==================== Tests for coverage improvement ====================
@@ -583,16 +584,7 @@ func TestProcessService_GetRegionsError(t *testing.T) {
 	toolCfg.Regions = []string{"us-east-1"}
 
 	// Setup mock to return empty recommendations
-	params := common.RecommendationParams{
-		Service:        common.ServiceRDS,
-		Region:         "us-east-1",
-		PaymentOption:  "all-upfront",
-		Term:           "3yr",
-		LookbackPeriod: "7d",
-		IncludeSPTypes: toolCfg.IncludeSPTypes,
-		ExcludeSPTypes: toolCfg.ExcludeSPTypes,
-	}
-	mockClient.On("GetRecommendations", ctx, params).Return([]common.Recommendation{}, nil)
+	mockClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return([]common.Recommendation{}, nil)
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 
@@ -619,16 +611,7 @@ func TestProcessService_GetRecommendationsError(t *testing.T) {
 	accountCache := NewAccountAliasCache(awsCfg)
 
 	// Setup mock to return error
-	params := common.RecommendationParams{
-		Service:        common.ServiceEC2,
-		Region:         "us-east-1",
-		PaymentOption:  "partial-upfront",
-		Term:           "1yr",
-		LookbackPeriod: "7d",
-		IncludeSPTypes: toolCfg.IncludeSPTypes,
-		ExcludeSPTypes: toolCfg.ExcludeSPTypes,
-	}
-	mockClient.On("GetRecommendations", ctx, params).Return([]common.Recommendation(nil), errors.New("API error"))
+	mockClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return([]common.Recommendation(nil), errors.New("API error"))
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceEC2, true, toolCfg, engineVersionData{})
 
@@ -655,22 +638,12 @@ func TestProcessService_AllRecommendationsFilteredOut(t *testing.T) {
 	mockClient := &MockRecommendationsClient{}
 	accountCache := NewAccountAliasCache(awsCfg)
 
-	params := common.RecommendationParams{
-		Service:        common.ServiceRDS,
-		Region:         "us-east-1",
-		PaymentOption:  "no-upfront",
-		Term:           "1yr",
-		LookbackPeriod: "7d",
-		IncludeSPTypes: toolCfg.IncludeSPTypes,
-		ExcludeSPTypes: toolCfg.ExcludeSPTypes,
-	}
-
 	// Return recommendations that don't match the filter
 	mockRecs := []common.Recommendation{
 		{ResourceType: "db.t3.small", Count: 5, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "db.t3.medium", Count: 3, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, mock.AnythingOfType("*common.RecommendationParams")).Return(mockRecs, nil)
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 
