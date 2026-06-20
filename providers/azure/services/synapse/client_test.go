@@ -866,7 +866,10 @@ func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
 		"nil fallback must never be http.DefaultClient")
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
 	require.NoError(t, err)
-	_, err = c.httpClient.Do(req) //nolint:bodyclose // Do always errors here; no body to close
+	resp, err := c.httpClient.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	require.Error(t, err, "nil-fallback client must reject IMDS connections")
 	assert.Contains(t, err.Error(), "blocked")
 }
