@@ -4,7 +4,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// ServiceProcessingStats holds statistics for each service
+// ServiceProcessingStats holds statistics for each service.
 type ServiceProcessingStats struct {
 	Service                 common.ServiceType
 	RegionsProcessed        int
@@ -16,7 +16,7 @@ type ServiceProcessingStats struct {
 	TotalEstimatedSavings   float64
 }
 
-// calculateServiceStats calculates statistics for a service based on recommendations and results
+// calculateServiceStats calculates statistics for a service based on recommendations and results.
 func calculateServiceStats(service common.ServiceType, recs []common.Recommendation, results []common.PurchaseResult) ServiceProcessingStats {
 	stats := ServiceProcessingStats{
 		Service:                 service,
@@ -25,15 +25,15 @@ func calculateServiceStats(service common.ServiceType, recs []common.Recommendat
 	}
 
 	regionSet := make(map[string]bool)
-	for _, rec := range recs {
-		regionSet[rec.Region] = true
-		stats.InstancesProcessed += rec.Count
-		stats.TotalEstimatedSavings += rec.EstimatedSavings
+	for i := range recs {
+		regionSet[recs[i].Region] = true
+		stats.InstancesProcessed += recs[i].Count
+		stats.TotalEstimatedSavings += recs[i].EstimatedSavings
 	}
 	stats.RegionsProcessed = len(regionSet)
 
-	for _, result := range results {
-		if result.Success {
+	for i := range results {
+		if results[i].Success {
 			stats.SuccessfulPurchases++
 		} else {
 			stats.FailedPurchases++
@@ -43,7 +43,7 @@ func calculateServiceStats(service common.ServiceType, recs []common.Recommendat
 	return stats
 }
 
-// printServiceSummary prints a summary for a single service
+// printServiceSummary prints a summary for a single service.
 func printServiceSummary(service common.ServiceType, stats ServiceProcessingStats) {
 	AppLogger.Printf("\n📊 %s Summary:\n", getServiceDisplayName(service))
 	AppLogger.Printf("  Regions processed: %d\n", stats.RegionsProcessed)
@@ -55,8 +55,8 @@ func printServiceSummary(service common.ServiceType, stats ServiceProcessingStat
 	}
 }
 
-// printMultiServiceSummary prints the final summary for all services
-func printMultiServiceSummary(allRecommendations []common.Recommendation, allResults []common.PurchaseResult, serviceStats map[common.ServiceType]ServiceProcessingStats, isDryRun bool) {
+// printMultiServiceSummary prints the final summary for all services.
+func printMultiServiceSummary(allRecommendations []common.Recommendation, _ []common.PurchaseResult, serviceStats map[common.ServiceType]ServiceProcessingStats, isDryRun bool) {
 	printSummaryHeader(isDryRun)
 
 	spStats, riStats, riAggregates := separateAndAggregateStats(serviceStats)
@@ -75,7 +75,7 @@ func printMultiServiceSummary(allRecommendations []common.Recommendation, allRes
 	printFinalMessage(isDryRun, riAggregates.success)
 }
 
-// riAggregateStats holds aggregated RI statistics
+// riAggregateStats holds aggregated RI statistics.
 type riAggregateStats struct {
 	recommendations int
 	instances       int
@@ -84,7 +84,7 @@ type riAggregateStats struct {
 	failed          int
 }
 
-// printSummaryHeader prints the summary header with mode indication
+// printSummaryHeader prints the summary header with mode indication.
 func printSummaryHeader(isDryRun bool) {
 	AppLogger.Println("\n🎯 Final Summary:")
 	AppLogger.Println("==========================================")
@@ -95,7 +95,7 @@ func printSummaryHeader(isDryRun bool) {
 	}
 }
 
-// separateAndAggregateStats separates SP from RI stats and aggregates RI totals
+// separateAndAggregateStats separates SP from RI stats and aggregates RI totals.
 func separateAndAggregateStats(serviceStats map[common.ServiceType]ServiceProcessingStats) (ServiceProcessingStats, map[common.ServiceType]ServiceProcessingStats, riAggregateStats) {
 	spStats := ServiceProcessingStats{}
 	riStats := make(map[common.ServiceType]ServiceProcessingStats)
@@ -136,7 +136,7 @@ func separateAndAggregateStats(serviceStats map[common.ServiceType]ServiceProces
 	return spStats, riStats, aggregates
 }
 
-// printReservedInstancesSection prints the RI section with per-service and total stats
+// printReservedInstancesSection prints the RI section with per-service and total stats.
 func printReservedInstancesSection(riStats map[common.ServiceType]ServiceProcessingStats, aggregates riAggregateStats) {
 	if len(riStats) == 0 {
 		return
@@ -158,7 +158,7 @@ func printReservedInstancesSection(riStats map[common.ServiceType]ServiceProcess
 		aggregates.savings)
 }
 
-// printSuccessRate prints the overall success rate if results exist
+// printSuccessRate prints the overall success rate if results exist.
 func printSuccessRate(success, failed int) {
 	totalResults := success + failed
 	if totalResults > 0 {
@@ -167,7 +167,7 @@ func printSuccessRate(success, failed int) {
 	}
 }
 
-// printFinalMessage prints the final message based on mode and results
+// printFinalMessage prints the final message based on mode and results.
 func printFinalMessage(isDryRun bool, riSuccess int) {
 	if isDryRun {
 		AppLogger.Println("\n💡 To actually purchase these RIs, run with --purchase flag")
@@ -178,8 +178,8 @@ func printFinalMessage(isDryRun bool, riSuccess int) {
 	}
 }
 
-// printSavingsPlansSection prints the Savings Plans summary section
-func printSavingsPlansSection(allRecommendations []common.Recommendation, spStats ServiceProcessingStats) {
+// printSavingsPlansSection prints the Savings Plans summary section.
+func printSavingsPlansSection(allRecommendations []common.Recommendation, _ ServiceProcessingStats) {
 	AppLogger.Println("\n📊 SAVINGS PLANS:")
 	AppLogger.Println("--------------------------------------------------")
 
@@ -193,7 +193,7 @@ func printSavingsPlansSection(allRecommendations []common.Recommendation, spStat
 	printBestSPOptions(breakdown)
 }
 
-// printComparisonSection prints the comparison between RIs and Savings Plans
+// printComparisonSection prints the comparison between RIs and Savings Plans.
 func printComparisonSection(allRecommendations []common.Recommendation, riStats map[common.ServiceType]ServiceProcessingStats, riSavings float64) {
 	AppLogger.Println("\n🔄 COMPARISON:")
 	AppLogger.Println("--------------------------------------------------")

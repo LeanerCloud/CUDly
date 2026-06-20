@@ -23,8 +23,8 @@ import (
 type Combo struct {
 	Provider  string
 	Service   string
-	TermYears int
 	Payment   string
+	TermYears int
 }
 
 // Options groups valid combos by provider and service. Shape:

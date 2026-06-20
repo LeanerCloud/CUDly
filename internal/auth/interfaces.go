@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// StoreInterface defines the methods required for auth storage
+// StoreInterface defines the methods required for auth storage.
 type StoreInterface interface {
 	// User operations
 	GetUserByID(ctx context.Context, userID string) (*User, error)
@@ -55,7 +55,7 @@ type StoreInterface interface {
 	Ping(ctx context.Context) error
 }
 
-// EmailSenderInterface defines the methods required for sending emails
+// EmailSenderInterface defines the methods required for sending emails.
 type EmailSenderInterface interface {
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
 	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
