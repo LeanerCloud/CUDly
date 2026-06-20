@@ -296,7 +296,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -324,7 +324,7 @@ func TestClient_ValidateOffering_NotFound(t *testing.T) {
 			ReservedDBInstancesOfferings: []types.ReservedDBInstancesOffering{},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
 	mockRDS.AssertExpectations(t)

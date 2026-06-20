@@ -102,7 +102,7 @@ const vmID1 = "/providers/Microsoft.Capacity/reservationOrders/order-1111/reserv
 const vmID2 = "/providers/Microsoft.Capacity/reservationOrders/order-2222/reservations/res-bbbb"
 const sqlID = "/providers/Microsoft.Capacity/reservationOrders/order-3333/reservations/res-cccc"
 
-func newClient() *compute.ComputeClient {
+func newClient() *compute.Client {
 	// nil credential is fine -- tests inject a pager so no real API call
 	// is ever made.
 	return compute.NewClient(nil, "test-sub", "eastus")

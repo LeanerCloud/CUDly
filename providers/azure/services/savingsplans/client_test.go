@@ -22,8 +22,8 @@ import (
 
 // mockListAllPager is a simple struct-based mock for SavingsPlanListAllPager.
 type mockListAllPager struct {
-	results   []*armbillingbenefits.SavingsPlanModel
 	err       error
+	results   []*armbillingbenefits.SavingsPlanModel
 	pageCount int
 }
 
@@ -114,7 +114,7 @@ func TestGetRegion(t *testing.T) {
 
 func TestGetRecommendations_AlwaysEmpty(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -202,8 +202,8 @@ func TestGetExistingCommitments_PagerError(t *testing.T) {
 
 // --- PurchaseCommitment ---
 
-func makeRec(term string) common.Recommendation {
-	return common.Recommendation{
+func makeRec(term string) *common.Recommendation {
+	return &common.Recommendation{
 		Term:          term,
 		PaymentOption: "No Upfront",
 		Details: &common.SavingsPlanDetails{
@@ -258,7 +258,7 @@ func TestPurchaseCommitment_WrongDetails(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	rec := common.Recommendation{Term: "1yr", Details: nil}
 
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "invalid service details")
@@ -374,7 +374,7 @@ func TestValidateOffering_WrongDetails(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	rec := common.Recommendation{Term: "1yr", Details: nil}
 
-	err := c.ValidateOffering(context.Background(), rec)
+	err := c.ValidateOffering(context.Background(), &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
 }
@@ -389,7 +389,7 @@ func TestGetOfferingDetails_1yr_NoUpfront(t *testing.T) {
 		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
 	}
 
-	details, err := c.GetOfferingDetails(context.Background(), rec)
+	details, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 
@@ -410,7 +410,7 @@ func TestGetOfferingDetails_3yr_AllUpfront(t *testing.T) {
 		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
 	}
 
-	details, err := c.GetOfferingDetails(context.Background(), rec)
+	details, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 
@@ -427,7 +427,7 @@ func TestGetOfferingDetails_5yr_AllUpfront(t *testing.T) {
 		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
 	}
 
-	details, err := c.GetOfferingDetails(context.Background(), rec)
+	details, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 
@@ -445,7 +445,7 @@ func TestGetOfferingDetails_BadTerm(t *testing.T) {
 		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
 	}
 
-	_, err := c.GetOfferingDetails(context.Background(), rec)
+	_, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported savings plan term")
 }
@@ -458,7 +458,7 @@ func TestGetOfferingDetails_BadPaymentOption(t *testing.T) {
 		Details:       &common.SavingsPlanDetails{PlanType: "Compute", HourlyCommitment: 1.0},
 	}
 
-	_, err := c.GetOfferingDetails(context.Background(), rec)
+	_, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported payment option")
 }
@@ -467,7 +467,7 @@ func TestGetOfferingDetails_WrongDetails(t *testing.T) {
 	c := NewClient(nil, "sub", "eastus")
 	rec := common.Recommendation{Term: "1yr", Details: nil}
 
-	_, err := c.GetOfferingDetails(context.Background(), rec)
+	_, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
 }
@@ -502,7 +502,11 @@ func TestNewClient_UsesHardenedHTTPClient(t *testing.T) {
 	require.NotNil(t, c.httpClient)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
 	require.NoError(t, err)
-	_, err = c.httpClient.Do(req)
+	resp, doErr := c.httpClient.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	err = doErr
 	require.Error(t, err, "hardened client must reject IMDS connections")
 	assert.Contains(t, err.Error(), "blocked")
 }
@@ -514,7 +518,11 @@ func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
 	require.NotNil(t, c.httpClient)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/metadata/instance", nil)
 	require.NoError(t, err)
-	_, err = c.httpClient.Do(req)
+	resp2, doErr2 := c.httpClient.Do(req)
+	if resp2 != nil {
+		_ = resp2.Body.Close()
+	}
+	err = doErr2
 	require.Error(t, err, "nil-fallback client must also reject IMDS connections")
 	assert.Contains(t, err.Error(), "blocked")
 }
@@ -527,7 +535,9 @@ func TestNewClientWithHTTP_NilFallbackIsHardened(t *testing.T) {
 func TestFetchOnDemandRate_NotFound(t *testing.T) {
 	h := &mockHTTPClient{}
 	t.Cleanup(func() { h.AssertExpectations(t) })
-	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+	mockResp3 := fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`)
+	_ = mockResp3.Body.Close()
+	h.On("Do", mock.Anything).Return(mockResp3, nil)
 
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	_, err := c.fetchOnDemandRate(context.Background(), "Compute")
@@ -546,7 +556,9 @@ func TestFetchOnDemandRate_ReturnsFirstPositivePrice(t *testing.T) {
 		],
 		"NextPageLink": ""
 	}`
-	h.On("Do", mock.Anything).Return(fakeHTTPResp(http.StatusOK, body), nil)
+	mockResp2 := fakeHTTPResp(http.StatusOK, body)
+	_ = mockResp2.Body.Close()
+	h.On("Do", mock.Anything).Return(mockResp2, nil)
 
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	rate, err := c.fetchOnDemandRate(context.Background(), "Compute")
@@ -562,10 +574,12 @@ func TestFetchOnDemandRate_URLEncoding(t *testing.T) {
 	t.Cleanup(func() { h.AssertExpectations(t) })
 	// Capture the request URL and assert it is properly encoded.
 	var capturedURL string
+	mockResp1 := fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`)
+	_ = mockResp1.Body.Close()
 	h.On("Do", mock.MatchedBy(func(req *http.Request) bool {
 		capturedURL = req.URL.RawQuery
 		return true
-	})).Return(fakeHTTPResp(http.StatusOK, `{"Items":[],"NextPageLink":""}`), nil)
+	})).Return(mockResp1, nil)
 
 	c := NewClientWithHTTP(nil, "sub", "eastus", h)
 	_, _ = c.fetchOnDemandRate(context.Background(), "Compute")

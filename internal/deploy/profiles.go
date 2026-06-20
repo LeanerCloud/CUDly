@@ -19,25 +19,25 @@ type ProfileConfig struct {
 	Region            string  `yaml:"region"`
 	AWSProfile        string  `yaml:"aws_profile"`
 	Email             string  `yaml:"email"`
-	Term              int     `yaml:"term"`
 	PaymentOption     string  `yaml:"payment_option"`
-	Coverage          float64 `yaml:"coverage"`
 	RampSchedule      string  `yaml:"ramp_schedule"`
-	NotifyDays        int     `yaml:"notify_days"`
-	EnableDashboard   bool    `yaml:"enable_dashboard"`
 	DashboardDomain   string  `yaml:"dashboard_domain,omitempty"`
 	HostedZoneID      string  `yaml:"hosted_zone_id,omitempty"`
 	Architecture      string  `yaml:"architecture"`
-	MemorySize        int     `yaml:"memory_size"`
 	ImageTag          string  `yaml:"image_tag,omitempty"`
 	CORSAllowedOrigin string  `yaml:"cors_allowed_origin,omitempty"`
 	AdminEmail        string  `yaml:"admin_email,omitempty"`
+	Term              int     `yaml:"term"`
+	Coverage          float64 `yaml:"coverage"`
+	NotifyDays        int     `yaml:"notify_days"`
+	MemorySize        int     `yaml:"memory_size"`
+	EnableDashboard   bool    `yaml:"enable_dashboard"`
 }
 
 // DeploymentConfig holds all deployment profiles
 type DeploymentConfig struct {
-	ActiveProfile string                   `yaml:"active_profile"`
 	Profiles      map[string]ProfileConfig `yaml:"profiles"`
+	ActiveProfile string                   `yaml:"active_profile"`
 }
 
 // GetConfigPath returns the path to the deployment configuration file

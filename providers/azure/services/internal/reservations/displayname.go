@@ -93,10 +93,10 @@ type DisplayNameFields struct {
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
 //
-//nolint:gocritic // hugeParam: value receiver is intentional -- copy-on-update is the semantic contract for this immutable builder pattern
-func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
+
+func (f *DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 	f.randSource = b
-	return f
+	return *f
 }
 
 // BuildDisplayName composes a rich, parseable identifier for an Azure
@@ -115,8 +115,8 @@ func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 // high-signal segments operators rely on to identify the reservation in
 // the Azure portal.
 //
-//nolint:gocritic // hugeParam: callers compose DisplayNameFields inline; switching to pointer would require heap allocation at every call site
-func BuildDisplayName(f DisplayNameFields) string {
+
+func BuildDisplayName(f *DisplayNameFields) string {
 	svc := normalizeSegment(f.Service)
 	region := normalizeSegment(f.Region)
 	sku := normalizeSegment(f.ResourceType)

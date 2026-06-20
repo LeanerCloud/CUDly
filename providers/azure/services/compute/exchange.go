@@ -51,7 +51,7 @@ type ExchangeableReservationPager interface {
 
 // SetExchangeablePager injects a mock pager for unit tests. Tests call
 // this instead of providing real Azure credentials.
-func (c *ComputeClient) SetExchangeablePager(p ExchangeableReservationPager) {
+func (c *Client) SetExchangeablePager(p ExchangeableReservationPager) {
 	c.exchangeablePager = p
 }
 
@@ -67,7 +67,7 @@ func (c *ComputeClient) SetExchangeablePager(p ExchangeableReservationPager) {
 // which span subscriptions.
 //
 // Returns an empty non-nil slice when no eligible reservations are found.
-func (c *ComputeClient) ListExchangeableReservations(ctx context.Context) ([]ExchangeableReservation, error) {
+func (c *Client) ListExchangeableReservations(ctx context.Context) ([]ExchangeableReservation, error) {
 	pager, err := c.createExchangeablePager()
 	if err != nil {
 		return nil, fmt.Errorf("compute: list exchangeable reservations: create pager: %w", err)
@@ -78,7 +78,7 @@ func (c *ComputeClient) ListExchangeableReservations(ctx context.Context) ([]Exc
 // createExchangeablePager returns an injected mock pager when one has
 // been set via SetExchangeablePager, or constructs a real
 // armreservations.ReservationClient pager otherwise.
-func (c *ComputeClient) createExchangeablePager() (ExchangeableReservationPager, error) {
+func (c *Client) createExchangeablePager() (ExchangeableReservationPager, error) {
 	if c.exchangeablePager != nil {
 		return c.exchangeablePager, nil
 	}
@@ -93,7 +93,7 @@ func (c *ComputeClient) createExchangeablePager() (ExchangeableReservationPager,
 // eligibility filter. Any pagination error is returned immediately
 // (partial results are unsafe -- a missing reservation could lead to a
 // duplicate exchange attempt upstream).
-func (c *ComputeClient) collectExchangeableReservations(ctx context.Context, pager ExchangeableReservationPager) ([]ExchangeableReservation, error) {
+func (c *Client) collectExchangeableReservations(ctx context.Context, pager ExchangeableReservationPager) ([]ExchangeableReservation, error) {
 	result := make([]ExchangeableReservation, 0)
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -130,34 +130,46 @@ func isExchangeEligible(item *armreservations.ReservationResponse) bool {
 	return props.InstanceFlexibility != nil && *props.InstanceFlexibility == armreservations.InstanceFlexibilityOn
 }
 
+// reservationFields holds the optional pointer fields extracted from an
+// armreservations.ReservationResponse, with safe zero values for any nil
+// pointers.
+type reservationFields struct {
+	expiryDate  time.Time
+	id          string
+	sku         string
+	region      string
+	term        string
+	displayName string
+	quantity    int32
+}
+
 // extractReservationFields reads the optional pointer fields from item and its
 // Properties, returning safe zero values for any nil pointers.
-//
-//nolint:gocritic // tooManyResultsChecker: 7 returns map 1:1 to ExchangeableReservation fields; grouping into a struct would add indirection with no clarity gain
-func extractReservationFields(item *armreservations.ReservationResponse) (id, sku, region, term, displayName string, quantity int32, expiryDate time.Time) {
+func extractReservationFields(item *armreservations.ReservationResponse) reservationFields {
 	props := item.Properties // guaranteed non-nil by isExchangeEligible
+	f := reservationFields{}
 	if item.ID != nil {
-		id = *item.ID
+		f.id = *item.ID
 	}
 	if item.SKU != nil && item.SKU.Name != nil {
-		sku = *item.SKU.Name
+		f.sku = *item.SKU.Name
 	}
 	if item.Location != nil {
-		region = *item.Location
+		f.region = *item.Location
 	}
 	if props.Quantity != nil {
-		quantity = *props.Quantity
+		f.quantity = *props.Quantity
 	}
 	if props.Term != nil {
-		term = string(*props.Term)
+		f.term = string(*props.Term)
 	}
 	if props.ExpiryDate != nil {
-		expiryDate = *props.ExpiryDate
+		f.expiryDate = *props.ExpiryDate
 	}
 	if props.DisplayName != nil {
-		displayName = *props.DisplayName
+		f.displayName = *props.DisplayName
 	}
-	return
+	return f
 }
 
 // convertToExchangeableReservation converts a single armreservations item
@@ -167,8 +179,8 @@ func convertToExchangeableReservation(item *armreservations.ReservationResponse)
 	if !isExchangeEligible(item) {
 		return nil
 	}
-	id, sku, region, term, displayName, quantity, expiryDate := extractReservationFields(item)
-	orderID := parseReservationOrderID(id)
+	fields := extractReservationFields(item)
+	orderID := parseReservationOrderID(fields.id)
 	// parseReservationOrderID returns "" for IDs that do not contain the expected
 	// "/reservationOrders/" segment (malformed or unexpected format). Reservations
 	// with an empty order ID are still returned here so the caller can include them
@@ -177,14 +189,14 @@ func convertToExchangeableReservation(item *armreservations.ReservationResponse)
 	// non-empty reservationOrderId.
 	return &ExchangeableReservation{
 		ReservationOrderID:  orderID,
-		ReservationID:       id,
-		SKU:                 sku,
-		Quantity:            quantity,
-		Region:              region,
-		Term:                term,
-		ExpiryDate:          expiryDate,
+		ReservationID:       fields.id,
+		SKU:                 fields.sku,
+		Quantity:            fields.quantity,
+		Region:              fields.region,
+		Term:                fields.term,
+		ExpiryDate:          fields.expiryDate,
 		InstanceFlexibility: string(armreservations.InstanceFlexibilityOn),
-		DisplayName:         displayName,
+		DisplayName:         fields.displayName,
 	}
 }
 

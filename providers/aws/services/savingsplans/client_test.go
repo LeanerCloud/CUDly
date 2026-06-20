@@ -430,7 +430,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockSP.AssertExpectations(t)
 }
@@ -446,7 +446,7 @@ func TestClient_ValidateOffering_InvalidDetails(t *testing.T) {
 		},
 	}
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
 }
@@ -908,7 +908,7 @@ func TestClient_FindOfferingID_AllPlanTypes(t *testing.T) {
 					}, nil)
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -969,7 +969,7 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 					}, nil).Once()
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans payment option")
@@ -1025,7 +1025,7 @@ func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 					}, nil).Once()
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans term")
@@ -1057,7 +1057,7 @@ func TestClient_FindOfferingID_APIError(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error"))
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to describe Savings Plans offerings")
 	mockSP.AssertExpectations(t)

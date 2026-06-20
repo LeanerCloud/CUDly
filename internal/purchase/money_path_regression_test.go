@@ -49,7 +49,7 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 	var mu sync.Mutex
 	tokens := map[string]string{}
 	mockServiceClient.On("PurchaseCommitment", mock.Anything,
-		mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"),
+		mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"),
 	).Run(func(args mock.Arguments) {
 		rec := args.Get(1).(common.Recommendation)
 		opts := args.Get(2).(common.PurchaseOptions)

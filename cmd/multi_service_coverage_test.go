@@ -592,7 +592,7 @@ func TestProcessService_GetRegionsError(t *testing.T) {
 		IncludeSPTypes: toolCfg.IncludeSPTypes,
 		ExcludeSPTypes: toolCfg.ExcludeSPTypes,
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return([]common.Recommendation{}, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return([]common.Recommendation{}, nil)
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 
@@ -628,7 +628,7 @@ func TestProcessService_GetRecommendationsError(t *testing.T) {
 		IncludeSPTypes: toolCfg.IncludeSPTypes,
 		ExcludeSPTypes: toolCfg.ExcludeSPTypes,
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return([]common.Recommendation(nil), errors.New("API error"))
+	mockClient.On("GetRecommendations", ctx, &params).Return([]common.Recommendation(nil), errors.New("API error"))
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceEC2, true, toolCfg, engineVersionData{})
 
@@ -670,7 +670,7 @@ func TestProcessService_AllRecommendationsFilteredOut(t *testing.T) {
 		{ResourceType: "db.t3.small", Count: 5, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "db.t3.medium", Count: 3, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
 

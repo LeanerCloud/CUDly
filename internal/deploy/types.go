@@ -14,23 +14,23 @@ import (
 type Config struct {
 	StackName         string
 	Email             string
-	Term              int
 	PaymentOption     string
-	Coverage          float64
 	RampSchedule      string
-	NotifyDays        int
-	EnableDashboard   bool
 	DashboardDomain   string
 	HostedZoneID      string
 	Architecture      string
+	ImageTag          string
+	CORSAllowedOrigin string
+	AdminEmail        string
+	Term              int
+	Coverage          float64
+	NotifyDays        int
 	MemorySize        int
+	EnableDashboard   bool
 	SkipBuild         bool
 	SkipPush          bool
 	SkipFrontend      bool
 	SkipAdmin         bool
-	ImageTag          string
-	CORSAllowedOrigin string
-	AdminEmail        string
 }
 
 // ECRClient interface for ECR operations.

@@ -13,17 +13,18 @@ import (
 )
 
 type Output struct {
+	Quote      any    `json:"quote"`
 	Mode       string `json:"mode"` // dry-run | execute
 	Region     string `json:"region"`
 	AccountChk string `json:"expected_account,omitempty"`
 
-	ReservedIDs      []string `json:"reserved_instance_ids"`
-	TargetOfferingID string   `json:"target_offering_id"`
-	TargetCount      int32    `json:"target_count"`
-	MaxPaymentDueUSD string   `json:"max_payment_due_usd,omitempty"`
-	ExchangeID       string   `json:"exchange_id,omitempty"`
-	Quote            any      `json:"quote"`
-	Error            string   `json:"error,omitempty"`
+	TargetOfferingID string `json:"target_offering_id"`
+	MaxPaymentDueUSD string `json:"max_payment_due_usd,omitempty"`
+	ExchangeID       string `json:"exchange_id,omitempty"`
+	Error            string `json:"error,omitempty"`
+
+	ReservedIDs []string `json:"reserved_instance_ids"`
+	TargetCount int32    `json:"target_count"`
 }
 
 func parseIDs(s string) []string {

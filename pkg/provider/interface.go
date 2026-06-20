@@ -41,13 +41,13 @@ type ServiceClient interface {
 	GetRegion() string
 
 	// Recommendations
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Commitments (RI/SP/CUD/etc)
 	GetExistingCommitments(ctx context.Context) ([]common.Commitment, error)
-	PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error)
-	ValidateOffering(ctx context.Context, rec common.Recommendation) error
-	GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error)
+	PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error)
+	ValidateOffering(ctx context.Context, rec *common.Recommendation) error
+	GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error)
 
 	// Resource validation
 	GetValidResourceTypes(ctx context.Context) ([]string, error)
@@ -56,7 +56,7 @@ type ServiceClient interface {
 // RecommendationsClient provides centralized recommendations across all services.
 type RecommendationsClient interface {
 	// Get recommendations with filtering
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Get recommendations for a specific service
 	GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)

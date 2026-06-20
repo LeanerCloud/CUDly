@@ -87,7 +87,7 @@ var fixedTime = time.Date(2026, 5, 22, 19, 0, 0, 0, time.UTC)
 var fixedRand = []byte{0xa1, 0xb2, 0xc3, 0xd4}
 
 func TestBuildDisplayName_HappyPath(t *testing.T) {
-	got := BuildDisplayName(DisplayNameFields{
+	_fields1 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard_D2a_v4",
@@ -95,7 +95,9 @@ func TestBuildDisplayName_HappyPath(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields2 := _fields1.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields2)
 
 	want := "vm-eastus-Standard_D2a_v4-1x-1yr-allup-20260522T190000-a1b2c3d4"
 	assert.Equal(t, want, got)
@@ -120,7 +122,7 @@ func TestBuildDisplayName_PerServiceExamples(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.svc, func(t *testing.T) {
-			got := BuildDisplayName(DisplayNameFields{
+			_fields3 := DisplayNameFields{
 				Service:      tc.svc,
 				Region:       tc.region,
 				ResourceType: tc.sku,
@@ -128,7 +130,9 @@ func TestBuildDisplayName_PerServiceExamples(t *testing.T) {
 				Term:         "1yr",
 				Payment:      "all-upfront",
 				Now:          fixedTime,
-			}.WithRandSource(fixedRand))
+			}
+			_fields4 := _fields3.WithRandSource(fixedRand)
+			got := BuildDisplayName(&_fields4)
 			assert.True(t, strings.HasPrefix(got, tc.wantHead),
 				"want prefix %q, got %q", tc.wantHead, got)
 			assert.LessOrEqual(t, len(got), 64)
@@ -141,7 +145,7 @@ func TestBuildDisplayName_LengthFitDropsRandomFirst(t *testing.T) {
 	// Long but realistic input: huge SKU + long region. Full format is
 	// ~75 chars; builder must drop the random suffix first, then the
 	// timestamp, keeping payment + the required segments.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields5 := DisplayNameFields{
 		Service:      "search",
 		Region:       "australiaeast",
 		ResourceType: "Standard_NV24ads_A10_v5",
@@ -149,7 +153,9 @@ func TestBuildDisplayName_LengthFitDropsRandomFirst(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "allup",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields6 := _fields5.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields6)
 
 	assert.LessOrEqual(t, len(got), 64)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, got)
@@ -164,7 +170,7 @@ func TestBuildDisplayName_LengthFitDropsRandomFirst(t *testing.T) {
 func TestBuildDisplayName_LengthFitDropsTimestampNext(t *testing.T) {
 	// Push beyond just dropping random — also need to drop timestamp.
 	// Use a long SKU that pushes the total above 64 even without random.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields7 := DisplayNameFields{
 		Service:      "search",
 		Region:       "germanywestcentral", // 18 chars
 		ResourceType: "Standard_NV24ads_A10_v5",
@@ -172,7 +178,9 @@ func TestBuildDisplayName_LengthFitDropsTimestampNext(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "allup",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields8 := _fields7.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields8)
 
 	assert.LessOrEqual(t, len(got), 64)
 	for _, must := range []string{"search", "germanywestcentral", "Standard_NV24ads_A10_v5", "999x", "1yr"} {
@@ -190,7 +198,7 @@ func TestBuildDisplayName_LengthFitDropsPaymentLast(t *testing.T) {
 	// Sizes: "search"(6) + "germanywestcentral"(18) + SKU(25) + "9999x"(5)
 	// + "1yr"(3) + 4 separators = 61 -- the longest combo where required
 	// segments still fit and all optional ones must drop.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields9 := DisplayNameFields{
 		Service:      "search",
 		Region:       "germanywestcentral",
 		ResourceType: strings.Repeat("X", 25),
@@ -198,7 +206,9 @@ func TestBuildDisplayName_LengthFitDropsPaymentLast(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields10 := _fields9.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields10)
 
 	assert.LessOrEqual(t, len(got), 64)
 	for _, must := range []string{"search", "germanywestcentral", strings.Repeat("X", 25), "9999x", "1yr"} {
@@ -214,7 +224,7 @@ func TestBuildDisplayName_LengthFitTruncatesRequiredAsLastResort(t *testing.T) {
 	// Even the required segments alone exceed 64. Builder must still
 	// produce a ≤64-char allowlist-conformant string rather than panicking
 	// or returning a too-long value.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields11 := DisplayNameFields{
 		Service:      "search",
 		Region:       "germanywestcentral",
 		ResourceType: strings.Repeat("X", 80),
@@ -222,7 +232,9 @@ func TestBuildDisplayName_LengthFitTruncatesRequiredAsLastResort(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields12 := _fields11.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields12)
 
 	assert.LessOrEqual(t, len(got), 64)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, got)
@@ -263,7 +275,7 @@ func TestBuildDisplayName_PaymentNormalizationVisibleInOutput(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.paymt, func(t *testing.T) {
-			got := BuildDisplayName(DisplayNameFields{
+			_fields13 := DisplayNameFields{
 				Service:      "vm",
 				Region:       "eastus",
 				ResourceType: "Standard_D2a_v4",
@@ -271,7 +283,9 @@ func TestBuildDisplayName_PaymentNormalizationVisibleInOutput(t *testing.T) {
 				Term:         "1yr",
 				Payment:      tc.paymt,
 				Now:          fixedTime,
-			}.WithRandSource(fixedRand))
+			}
+			_fields14 := _fields13.WithRandSource(fixedRand)
+			got := BuildDisplayName(&_fields14)
 			// Payment segment is bracketed by dashes in the output.
 			assert.Contains(t, got, "-"+tc.wantSeg+"-",
 				"payment %q should normalize to segment %q in %q", tc.paymt, tc.wantSeg, got)
@@ -302,7 +316,7 @@ func TestBuildDisplayName_TermNormalization(t *testing.T) {
 
 func TestBuildDisplayName_SanitizesDirtyInput(t *testing.T) {
 	// Unexpected chars in any field must be sanitized to underscores.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields15 := DisplayNameFields{
 		Service:      "v m", // space
 		Region:       "east/us",
 		ResourceType: "Standard@D2a v4",
@@ -310,7 +324,9 @@ func TestBuildDisplayName_SanitizesDirtyInput(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields16 := _fields15.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields16)
 
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, got)
 	// Should not contain spaces, slashes, or @.
@@ -322,7 +338,7 @@ func TestBuildDisplayName_SanitizesDirtyInput(t *testing.T) {
 func TestBuildDisplayName_EmbeddedDashInSegmentBecomesUnderscore(t *testing.T) {
 	// A SKU containing a dash would create ambiguity with the join
 	// separator. The builder collapses internal dashes to underscores.
-	got := BuildDisplayName(DisplayNameFields{
+	_fields17 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard-D2a-v4",
@@ -330,7 +346,9 @@ func TestBuildDisplayName_EmbeddedDashInSegmentBecomesUnderscore(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields18 := _fields17.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields18)
 
 	// The SKU's dashes should be underscores in the output.
 	assert.Contains(t, got, "Standard_D2a_v4")
@@ -340,7 +358,7 @@ func TestBuildDisplayName_EmbeddedDashInSegmentBecomesUnderscore(t *testing.T) {
 
 func TestBuildDisplayName_Deterministic(t *testing.T) {
 	// Same fields + same Now + same randSource -> identical output.
-	f := DisplayNameFields{
+	_fbase := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard_D2a_v4",
@@ -348,9 +366,10 @@ func TestBuildDisplayName_Deterministic(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand)
-	first := BuildDisplayName(f)
-	second := BuildDisplayName(f)
+	}
+	f := _fbase.WithRandSource(fixedRand)
+	first := BuildDisplayName(&f)
+	second := BuildDisplayName(&f)
 	assert.Equal(t, first, second)
 }
 
@@ -364,8 +383,10 @@ func TestBuildDisplayName_DifferentRandsProduceDifferentOutputs(t *testing.T) {
 		Payment:      "all-upfront",
 		Now:          fixedTime,
 	}
-	a := BuildDisplayName(base.WithRandSource([]byte{0x01, 0x02, 0x03, 0x04}))
-	b := BuildDisplayName(base.WithRandSource([]byte{0xff, 0xee, 0xdd, 0xcc}))
+	_fields19 := base.WithRandSource([]byte{0x01, 0x02, 0x03, 0x04})
+	a := BuildDisplayName(&_fields19)
+	_fields20 := base.WithRandSource([]byte{0xff, 0xee, 0xdd, 0xcc})
+	b := BuildDisplayName(&_fields20)
 	assert.NotEqual(t, a, b)
 	assert.Contains(t, a, "01020304")
 	assert.Contains(t, b, "ffeeddcc")
@@ -384,8 +405,8 @@ func TestBuildDisplayName_ProductionUsesCryptoRand(t *testing.T) {
 		Payment:      "all-upfront",
 		Now:          fixedTime,
 	}
-	a := BuildDisplayName(base)
-	b := BuildDisplayName(base)
+	a := BuildDisplayName(&base)
+	b := BuildDisplayName(&base)
 	assert.NotEqual(t, a, b)
 	allowlist := regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	require.Regexp(t, allowlist, a)
@@ -393,7 +414,7 @@ func TestBuildDisplayName_ProductionUsesCryptoRand(t *testing.T) {
 }
 
 func TestBuildDisplayName_EmptyPaymentSegmentIsSkipped(t *testing.T) {
-	got := BuildDisplayName(DisplayNameFields{
+	_fields21 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard_D2a_v4",
@@ -401,7 +422,9 @@ func TestBuildDisplayName_EmptyPaymentSegmentIsSkipped(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "", // no payment info
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields22 := _fields21.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields22)
 
 	// Must not contain double-dash from the missing payment segment.
 	assert.NotContains(t, got, "--")
@@ -421,7 +444,7 @@ func TestBuildDisplayName_EmptyPaymentSegmentIsSkipped(t *testing.T) {
 // suffix AND the 15-char timestamp; the result must end with "-allup" and
 // contain NO trace of the timestamp digits.
 func TestBuildDisplayName_DropLoopActuallyDropsTimestamp(t *testing.T) {
-	got := BuildDisplayName(DisplayNameFields{
+	_fields23 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "germanywestcentral", // 18 chars
 		ResourceType: "Standard_NV24ads_A10_v5",
@@ -429,7 +452,9 @@ func TestBuildDisplayName_DropLoopActuallyDropsTimestamp(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields24 := _fields23.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields24)
 
 	// With the fixed drop loop, both optional ts and random are dropped
 	// cleanly. The broken loop returned a 64-char mid-truncated value that
@@ -448,7 +473,7 @@ func TestBuildDisplayName_DropLoopActuallyDropsTimestamp(t *testing.T) {
 // segment too (keep=0, required-only). The broken loop again would short-
 // circuit at iteration 1 and mid-truncate, leaving partial payment bytes.
 func TestBuildDisplayName_DropLoopActuallyDropsPayment(t *testing.T) {
-	got := BuildDisplayName(DisplayNameFields{
+	_fields25 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "germanywestcentral",
 		ResourceType: strings.Repeat("X", 30), // forces required-only fallback
@@ -456,7 +481,9 @@ func TestBuildDisplayName_DropLoopActuallyDropsPayment(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          fixedTime,
-	}.WithRandSource(fixedRand))
+	}
+	_fields26 := _fields25.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields26)
 
 	// With the fixed drop loop, all optional segments drop cleanly and the
 	// result is exactly the required segments joined by dashes.
@@ -473,7 +500,7 @@ func TestBuildDisplayName_DropLoopActuallyDropsPayment(t *testing.T) {
 // a zero-value Now must not emit the placeholder "00010101T000000" segment.
 // The builder substitutes time.Now() so the timestamp is always meaningful.
 func TestBuildDisplayName_ZeroNowReplacedByWallClock(t *testing.T) {
-	got := BuildDisplayName(DisplayNameFields{
+	_fields27 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard_D2a_v4",
@@ -481,7 +508,9 @@ func TestBuildDisplayName_ZeroNowReplacedByWallClock(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		// Now intentionally left as zero value.
-	}.WithRandSource(fixedRand))
+	}
+	_fields28 := _fields27.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields28)
 
 	assert.NotContains(t, got, "00010101T000000",
 		"zero-value Now must be replaced by wall-clock time, not emitted as placeholder")
@@ -496,7 +525,7 @@ func TestBuildDisplayName_TimestampUTC(t *testing.T) {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	require.NoError(t, err)
 	local := time.Date(2026, 5, 22, 12, 0, 0, 0, loc) // 19:00 UTC
-	got := BuildDisplayName(DisplayNameFields{
+	_fields29 := DisplayNameFields{
 		Service:      "vm",
 		Region:       "eastus",
 		ResourceType: "Standard_D2a_v4",
@@ -504,6 +533,8 @@ func TestBuildDisplayName_TimestampUTC(t *testing.T) {
 		Term:         "1yr",
 		Payment:      "all-upfront",
 		Now:          local,
-	}.WithRandSource(fixedRand))
+	}
+	_fields30 := _fields29.WithRandSource(fixedRand)
+	got := BuildDisplayName(&_fields30)
 	assert.Contains(t, got, "20260522T190000")
 }
