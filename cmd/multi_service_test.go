@@ -281,7 +281,7 @@ func TestProcessServiceWithMocks(t *testing.T) {
 					IncludeSPTypes: toolCfg.IncludeSPTypes,
 					ExcludeSPTypes: toolCfg.ExcludeSPTypes,
 				}
-				mockClient.On("GetRecommendations", ctx, params).Return(tt.mockRecs, nil)
+				mockClient.On("GetRecommendations", ctx, &params).Return(tt.mockRecs, nil)
 			}
 
 			// Set regions in toolCfg for this test
@@ -349,7 +349,7 @@ func TestProcessService_SavingsPlansAccountLevel(t *testing.T) {
 	mockRecs := []common.Recommendation{
 		{Service: common.ServiceSavingsPlansCompute, ResourceType: "ComputeSP", Count: 1, Region: "us-east-1", EstimatedSavings: 1000},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceSavingsPlansCompute, true, toolCfg, engineVersionData{})
@@ -396,7 +396,7 @@ func TestProcessService_WithInstanceLimit(t *testing.T) {
 		{ResourceType: "db.t3.micro", Count: 10, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "db.t3.small", Count: 10, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
@@ -438,7 +438,7 @@ func TestProcessService_WithOverrideCount(t *testing.T) {
 		{ResourceType: "cache.t3.micro", Count: 10, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "cache.t3.small", Count: 5, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceElastiCache, true, toolCfg, engineVersionData{})
@@ -479,7 +479,7 @@ func TestProcessService_MultipleRegions(t *testing.T) {
 		mockRecs := []common.Recommendation{
 			{ResourceType: "db.t3.small", Count: 2, Region: region, EstimatedSavings: 100},
 		}
-		mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+		mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 	}
 
 	accountCache := NewAccountAliasCache(awsCfg)

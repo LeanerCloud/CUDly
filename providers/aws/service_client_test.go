@@ -137,7 +137,7 @@ type testRecommendationsClientAdapter struct {
 	getAllRecommendationsFunc        func(ctx context.Context) ([]common.Recommendation, error)
 }
 
-func (t *testRecommendationsClientAdapter) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (t *testRecommendationsClientAdapter) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	if t.getRecommendationsFunc != nil {
 		return t.getRecommendationsFunc(ctx, params)
 	}

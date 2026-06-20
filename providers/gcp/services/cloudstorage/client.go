@@ -159,7 +159,7 @@ func (c *CloudStorageClient) GetRegion() string {
 }
 
 // GetRecommendations gets Cloud Storage recommendations from GCP Recommender API
-func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected client if available (for testing)
@@ -208,7 +208,7 @@ func (c *CloudStorageClient) GetRecommendations(ctx context.Context, params comm
 			continue
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec, params)
+		converted := c.convertGCPRecommendation(ctx, rec, *params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -232,9 +232,9 @@ func (c *CloudStorageClient) GetExistingCommitments(_ context.Context) ([]common
 // a "purchase" silently provisioned billable infrastructure. Cloud Storage
 // recommendations are therefore advisory only; this returns a clear not-supported
 // error and never calls any resource-creation API (issue #640).
-func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	return common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -245,7 +245,7 @@ func (c *CloudStorageClient) PurchaseCommitment(ctx context.Context, rec common.
 }
 
 // ValidateOffering validates that a storage class exists
-func (c *CloudStorageClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *CloudStorageClient) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validClasses, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid storage classes: %w", err)
@@ -261,7 +261,7 @@ func (c *CloudStorageClient) ValidateOffering(ctx context.Context, rec common.Re
 }
 
 // GetOfferingDetails retrieves Cloud Storage offering details from GCP Billing API
-func (c *CloudStorageClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *CloudStorageClient) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3

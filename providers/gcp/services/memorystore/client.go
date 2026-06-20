@@ -152,7 +152,7 @@ func (c *MemorystoreClient) GetRegion() string {
 }
 
 // GetRecommendations gets Memorystore Redis recommendations from GCP Recommender API
-func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recClient := c.recommenderClient
 	if recClient == nil {
 		client, err := recommender.NewClient(ctx, c.clientOpts...)
@@ -198,7 +198,7 @@ func (c *MemorystoreClient) GetRecommendations(ctx context.Context, params commo
 			continue
 		}
 
-		converted := c.convertGCPRecommendation(ctx, rec, params)
+		converted := c.convertGCPRecommendation(ctx, rec, *params)
 		if converted != nil {
 			recommendations = append(recommendations, *converted)
 		}
@@ -224,9 +224,9 @@ func (c *MemorystoreClient) GetExistingCommitments(ctx context.Context) ([]commo
 // Redis instance that kept billing. Memorystore recommendations are therefore
 // advisory only; this returns a clear not-supported error and never calls any
 // resource-creation API (issue #640).
-func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	return common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -238,7 +238,7 @@ func (c *MemorystoreClient) PurchaseCommitment(ctx context.Context, rec common.R
 }
 
 // ValidateOffering validates that a Redis tier exists
-func (c *MemorystoreClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *MemorystoreClient) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validTiers, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid tiers: %w", err)
@@ -254,7 +254,7 @@ func (c *MemorystoreClient) ValidateOffering(ctx context.Context, rec common.Rec
 }
 
 // GetOfferingDetails retrieves Memorystore offering details from GCP Billing API
-func (c *MemorystoreClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *MemorystoreClient) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears := 1
 	if rec.Term == "3yr" || rec.Term == "3" {
 		termYears = 3

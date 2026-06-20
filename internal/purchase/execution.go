@@ -483,8 +483,8 @@ func getMaxAccountParallelism() int {
 // savePurchaseHistory from a single goroutine (no concurrent map / slice
 // mutation). The index field is the position in exec.Recommendations.
 type recPurchaseOutcome struct {
-	purchase common.PurchaseResult
 	err      error
+	purchase common.PurchaseResult
 	index    int
 }
 
@@ -930,7 +930,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
-	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
+	result, err := serviceClient.PurchaseCommitment(recCtx, &recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {
 		logRecCtxErr(opts.ExecutionID, recTuple, elapsed, recCtx.Err())

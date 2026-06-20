@@ -43,13 +43,11 @@ type SchedulerConfig struct {
 	ConfigStore     config.StoreInterface
 	PurchaseManager ManagerInterface
 	EmailSender     email.SenderInterface
-	DashboardURL    string
 	// Provider factory for creating cloud providers (allows injection for testing)
 	ProviderFactory provider.FactoryInterface
 	// Per-account credential resolution (mirrors purchase manager)
 	CredentialStore credentials.CredentialStore
 	OIDCSigner      oidc.Signer
-	OIDCIssuerURL   string
 	AssumeRoleSTS   credentials.STSClient
 
 	// STSClient is the runtime AWS STS client used to discover the
@@ -61,6 +59,9 @@ type SchedulerConfig struct {
 	// path keeps its pre-fix behaviour (CloudAccountID = nil), which
 	// preserves the truly-orphan case.
 	STSClient STSClient
+
+	DashboardURL  string
+	OIDCIssuerURL string
 
 	// IsLambda gates the stale-while-revalidate background goroutine.
 	// On Lambda, goroutines freeze between invocations — firing one from
@@ -77,10 +78,10 @@ type SchedulerConfig struct {
 // clause to providers that actually ran, and the frontend banner can
 // surface the specific failures.
 type CollectResult struct {
+	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
+	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
 	Recommendations     int               `json:"recommendations"`
 	TotalSavings        float64           `json:"total_savings"`
-	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
-	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
 }
 
 // ManagerInterface defines the purchase manager methods used by scheduler
@@ -98,17 +99,14 @@ type Scheduler struct {
 	config          config.StoreInterface
 	purchase        ManagerInterface
 	email           email.SenderInterface
-	dashboardURL    string
 	providerFactory provider.FactoryInterface
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
-	oidcIssuerURL   string
 	assumeRoleSTS   credentials.STSClient
 	stsClient       STSClient
 
-	// isLambda gates the stale-while-revalidate background goroutine. See
-	// SchedulerConfig.IsLambda for the rationale.
-	isLambda bool
+	dashboardURL  string
+	oidcIssuerURL string
 
 	// cacheTTL is the age past which opportunistic background refresh kicks
 	// in on non-Lambda runtimes. Parsed from CUDLY_RECOMMENDATION_CACHE_TTL
@@ -118,6 +116,10 @@ type Scheduler struct {
 	// collecting is a single-flight guard so N concurrent stale reads only
 	// trigger ONE background refresh.
 	collecting atomic.Bool
+
+	// isLambda gates the stale-while-revalidate background goroutine. See
+	// SchedulerConfig.IsLambda for the rationale.
+	isLambda bool
 }
 
 // defaultCacheTTL is the fallback when CUDLY_RECOMMENDATION_CACHE_TTL is
@@ -295,9 +297,9 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 // succeeded (possibly partially — partial-account-failure semantics live in
 // fanOutPerAccount, not here).
 type providerOutcome struct {
+	err                 error
 	recs                []config.RecommendationRecord
 	succeededAccountIDs []string
-	err                 error
 }
 
 // collectAllProviders fans out provider collection (AWS / Azure / GCP) under
@@ -509,10 +511,10 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // account-scoped eviction. Order is not preserved — the eviction
 // query treats it as a set.
 type accountOutcome struct {
-	SucceededCount      int
-	FailedCount         int
 	LastErr             string   // most-recent per-account error message, for surfacing in the banner
 	SucceededAccountIDs []string // IDs of accounts that succeeded this run
+	SucceededCount      int
+	FailedCount         int
 }
 
 // fanOutPerAccount runs fn concurrently across accounts, bounded by the
@@ -1095,10 +1097,10 @@ type suppressionKey struct {
 // "Xd remaining"), and the execution whose suppression contributed
 // the most (drives the badge deep-link).
 type suppressionAgg struct {
-	suppressedCount         int
 	earliestExpiresAt       time.Time
-	primaryExecutionID      string
 	primaryExecutionCreated time.Time
+	primaryExecutionID      string
+	suppressedCount         int
 	primaryExecutionContrib int
 }
 

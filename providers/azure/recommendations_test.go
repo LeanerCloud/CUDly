@@ -14,7 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// mockAzureTokenCredential implements azcore.TokenCredential for testing
+// mockAzureTokenCredential implements azcore.TokenCredential for testing.
 type mockAzureTokenCredential struct{}
 
 func (m *mockAzureTokenCredential) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
@@ -24,8 +24,8 @@ func (m *mockAzureTokenCredential) GetToken(ctx context.Context, options policy.
 func TestShouldIncludeService(t *testing.T) {
 	tests := []struct {
 		name     string
-		params   common.RecommendationParams
 		service  common.ServiceType
+		params   common.RecommendationParams
 		expected bool
 	}{
 		{
@@ -74,7 +74,7 @@ func TestShouldIncludeService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := shouldIncludeService(tt.params, tt.service)
+			result := shouldIncludeService(&tt.params, tt.service)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -160,7 +160,7 @@ func TestExtractRegionFromResourceID(t *testing.T) {
 			expected:   "westus2",
 		},
 		{
-			name:       "Singular location segment also recognised",
+			name:       "Singular location segment also recognized",
 			resourceID: "/subscriptions/123/providers/Microsoft.Resources/location/northeurope/foo/bar",
 			expected:   "northeurope",
 		},
@@ -246,7 +246,7 @@ func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldIncludeService(tt.params, common.ServiceSavingsPlans)
+			got := shouldIncludeService(&tt.params, common.ServiceSavingsPlans)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -254,7 +254,7 @@ func TestGetRecommendations_SavingsPlansServiceIncluded(t *testing.T) {
 
 // TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancellation
 // pins the contract that GetRecommendations propagates ctx.Err() to its caller
-// after the errgroup Wait() — the parent context being cancelled or its
+// after the errgroup Wait() — the parent context being canceled or its
 // deadline exceeding must surface as an error rather than being swallowed by
 // the per-service error-isolation goroutines (which all return nil to the
 // errgroup so a single per-service failure does not cancel siblings).
@@ -271,13 +271,13 @@ func TestRecommendationsClientAdapter_GetRecommendations_PropagatesContextCancel
 
 	// Cancel the context BEFORE the call so we don't depend on race-y timing
 	// inside the SDK clients. The Azure clients constructed inside the
-	// goroutines will observe the cancelled gctx (derived from the parent ctx
-	// via errgroup.WithContext) and either short-circuit or return cancelled
+	// goroutines will observe the canceled gctx (derived from the parent ctx
+	// via errgroup.WithContext) and either short-circuit or return canceled
 	// errors; either way, our post-Wait ctx.Err() check returns context.Canceled.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := adapter.GetRecommendations(ctx, common.RecommendationParams{})
+	_, err := adapter.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err, "expected context.Canceled to propagate from GetRecommendations")
 	assert.ErrorIs(t, err, context.Canceled,
 		"GetRecommendations must propagate the parent ctx error after g.Wait()")
@@ -436,12 +436,12 @@ func TestMergeServiceResults_OrderIsStable(t *testing.T) {
 
 	// Replicate the exact call order from GetRecommendations.
 	result := mergeServiceResults(
-		serviceResult{"compute", []common.Recommendation{computeRec}, nil},
-		serviceResult{"database", []common.Recommendation{dbRec}, nil},
-		serviceResult{"cache", []common.Recommendation{cacheRec}, nil},
-		serviceResult{"cosmosdb", []common.Recommendation{cosmosRec}, nil},
-		serviceResult{"savingsplans", []common.Recommendation{spRec}, nil},
-		serviceResult{"advisor", []common.Recommendation{advisorRec}, nil},
+		serviceResult{name: "compute", recs: []common.Recommendation{computeRec}},
+		serviceResult{name: "database", recs: []common.Recommendation{dbRec}},
+		serviceResult{name: "cache", recs: []common.Recommendation{cacheRec}},
+		serviceResult{name: "cosmosdb", recs: []common.Recommendation{cosmosRec}},
+		serviceResult{name: "savingsplans", recs: []common.Recommendation{spRec}},
+		serviceResult{name: "advisor", recs: []common.Recommendation{advisorRec}},
 	)
 
 	require.Len(t, result, 6, "all six services must be represented")

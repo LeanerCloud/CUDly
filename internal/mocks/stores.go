@@ -25,7 +25,6 @@ import (
 //  2. Registered .On() expectation (dispatches through m.Called)
 //  3. Hardcoded default (zero-value / sensible stub)
 type MockConfigStore struct {
-	mock.Mock
 
 	// GetCloudAccountFn overrides GetCloudAccount when non-nil.
 	GetCloudAccountFn func(ctx context.Context, id string) (*config.CloudAccount, error)
@@ -51,6 +50,7 @@ type MockConfigStore struct {
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	// SavePurchaseExecutionFn overrides SavePurchaseExecution when non-nil.
 	SavePurchaseExecutionFn func(ctx context.Context, exec *config.PurchaseExecution) error
+	mock.Mock
 }
 
 // GetGlobalConfig mocks the GetGlobalConfig operation. Returns an empty

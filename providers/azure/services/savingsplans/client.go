@@ -59,15 +59,15 @@ type HTTPClient interface {
 
 // Client handles Azure Savings Plans.
 type Client struct {
-	cred           azcore.TokenCredential
-	subscriptionID string
-	region         string
-	httpClient     HTTPClient
+	cred       azcore.TokenCredential
+	httpClient HTTPClient
 
 	// Injected in tests to avoid real Azure API calls.
 	orderAliasClient SavingsPlanOrderAliasAPI
 	listAllPager     SavingsPlanListAllPager
 	rpValidateClient RPValidateAPI
+	subscriptionID   string
+	region           string
 }
 
 // NewClient creates a new Azure Savings Plans client.
@@ -126,7 +126,7 @@ func (c *Client) GetRegion() string {
 // recommendations (the Benefits Recommendations API is still in preview).
 // This mirrors the AWS Savings Plans client which also returns empty here and
 // delegates to Cost Explorer centrally.
-func (c *Client) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(_ context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 
@@ -217,9 +217,9 @@ func convertSavingsPlan(sp *armbillingbenefits.SavingsPlanModel, subscriptionID 
 // #636) re-PUTs the same alias instead of double-buying. When the token is empty
 // (the CLI path, which has no owning execution), the prior timestamp-based name
 // is retained.
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -262,12 +262,12 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	if c.orderAliasClient != nil {
 		aliasClient = c.orderAliasClient
 	} else {
-		real, err := armbillingbenefits.NewSavingsPlanOrderAliasClient(c.cred, nil)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to create order alias client: %w", err)
+		sdkClient, createErr := armbillingbenefits.NewSavingsPlanOrderAliasClient(c.cred, nil)
+		if createErr != nil {
+			result.Error = fmt.Errorf("failed to create order alias client: %w", createErr)
 			return result, result.Error
 		}
-		aliasClient = &realOrderAliasClient{client: real}
+		aliasClient = &realOrderAliasClient{client: sdkClient}
 	}
 
 	// Derive a deterministic alias name from the idempotency token when present
@@ -298,7 +298,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 }
 
 // ValidateOffering checks whether the Savings Plan configuration is valid.
-func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validateBody, err := c.buildValidateBody(rec)
 	if err != nil {
 		return err
@@ -318,7 +318,7 @@ func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation
 }
 
 // buildValidateBody constructs the SavingsPlanPurchaseValidateRequest from a recommendation.
-func (c *Client) buildValidateBody(rec common.Recommendation) (armbillingbenefits.SavingsPlanPurchaseValidateRequest, error) {
+func (c *Client) buildValidateBody(rec *common.Recommendation) (armbillingbenefits.SavingsPlanPurchaseValidateRequest, error) {
 	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
 	if !ok {
 		return armbillingbenefits.SavingsPlanPurchaseValidateRequest{}, fmt.Errorf("invalid service details for Azure Savings Plans")
@@ -360,11 +360,11 @@ func (c *Client) getRPValidateClient() (RPValidateAPI, error) {
 	if c.rpValidateClient != nil {
 		return c.rpValidateClient, nil
 	}
-	real, err := armbillingbenefits.NewRPClient(c.cred, nil)
+	sdkClient, err := armbillingbenefits.NewRPClient(c.cred, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RP client: %w", err)
 	}
-	return real, nil
+	return sdkClient, nil
 }
 
 // checkValidateResponse returns an error if any benefit in the response is invalid.
@@ -388,18 +388,18 @@ func checkValidateResponse(resp armbillingbenefits.RPClientValidatePurchaseRespo
 // services/search; consolidating into internal/pricing is tracked as a follow-up.
 type savingsPlanPriceItem struct {
 	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
 	ArmRegionName   string  `json:"armRegionName"`
 	ProductName     string  `json:"productName"`
 	ServiceName     string  `json:"serviceName"`
 	ArmSKUName      string  `json:"armSkuName"`
 	ReservationTerm string  `json:"reservationTerm"`
 	Type            string  `json:"type"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
 }
 
 // GetOfferingDetails retrieves pricing details for an Azure Savings Plan offering.
-func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	spDetails, ok := rec.Details.(*common.SavingsPlanDetails)
 	if !ok {
 		return nil, fmt.Errorf("invalid service details for Azure Savings Plans")
@@ -474,9 +474,9 @@ func (c *Client) fetchOnDemandRate(ctx context.Context, planType string) (float6
 		return 0, fmt.Errorf("failed to fetch on-demand rate for plan type %s: %w", planType, err)
 	}
 
-	for _, item := range items {
-		if item.RetailPrice > 0 {
-			return item.RetailPrice, nil
+	for i := range items {
+		if items[i].RetailPrice > 0 {
+			return items[i].RetailPrice, nil
 		}
 	}
 

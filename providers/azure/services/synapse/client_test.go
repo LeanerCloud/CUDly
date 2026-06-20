@@ -24,8 +24,8 @@ import (
 // ---- credential mock -------------------------------------------------------
 
 type mockTokenCredential struct {
-	token string
 	err   error
+	token string
 }
 
 func (m *mockTokenCredential) GetToken(_ context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
@@ -60,21 +60,6 @@ func newHTTPResponse(statusCode int, body string) *http.Response {
 	}
 }
 
-// captureHTTPClient captures the request body on each call.
-type captureHTTPClient struct {
-	response *http.Response
-	captured []byte
-}
-
-func (c *captureHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		b, _ := io.ReadAll(req.Body)
-		c.captured = b
-		req.Body = io.NopCloser(bytes.NewReader(b))
-	}
-	return c.response, nil
-}
-
 // ---- pager mocks -----------------------------------------------------------
 
 type fakeRecommendationsPager struct {
@@ -107,9 +92,9 @@ func (e *errorRecommendationsPager) NextPage(_ context.Context) (armconsumption.
 }
 
 type fakeReservationsPager struct {
+	err   error
 	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
-	err   error
 }
 
 func (m *fakeReservationsPager) More() bool {
@@ -130,8 +115,8 @@ func (m *fakeReservationsPager) NextPage(_ context.Context) (armconsumption.Rese
 
 // ---- helpers ---------------------------------------------------------------
 
-func newTestClient() *SynapseClient {
-	return &SynapseClient{
+func newTestClient() *Client {
+	return &Client{
 		subscriptionID: "sub-123",
 		region:         "eastus",
 	}
@@ -167,7 +152,7 @@ func TestGetRecommendations_empty(t *testing.T) {
 	c := newTestClient()
 	c.SetRecommendationsPager(&fakeRecommendationsPager{})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -191,7 +176,7 @@ func TestGetRecommendations_singlePage(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 
@@ -243,7 +228,7 @@ func TestGetRecommendations_multiPage(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -252,7 +237,7 @@ func TestGetRecommendations_pagerError(t *testing.T) {
 	c := newTestClient()
 	c.SetRecommendationsPager(&errorRecommendationsPager{})
 
-	_, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.Error(t, err)
 }
 
@@ -281,7 +266,7 @@ func TestGetRecommendations_regionFilter(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "DW500c", recs[0].ResourceType)
@@ -307,7 +292,7 @@ func TestGetRecommendations_modernShape(t *testing.T) {
 		},
 	})
 
-	recs, err := c.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := c.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "DW2000c", recs[0].ResourceType)
@@ -400,14 +385,14 @@ func TestGetExistingCommitments_pagerError(t *testing.T) {
 func TestValidateOffering_valid(t *testing.T) {
 	c := newTestClient()
 	rec := common.Recommendation{ResourceType: "DW1000c"}
-	err := c.ValidateOffering(context.Background(), rec)
+	err := c.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 }
 
 func TestValidateOffering_invalid(t *testing.T) {
 	c := newTestClient()
 	rec := common.Recommendation{ResourceType: "not-a-synapse-sku"}
-	err := c.ValidateOffering(context.Background(), rec)
+	err := c.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 }
 
@@ -415,14 +400,14 @@ func TestValidateOffering_caseInsensitive(t *testing.T) {
 	c := newTestClient()
 	// Lowercase variant of DW1000c should validate.
 	rec := common.Recommendation{ResourceType: "dw1000c"}
-	err := c.ValidateOffering(context.Background(), rec)
+	err := c.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 }
 
 func TestValidateOffering_trimsWhitespace(t *testing.T) {
 	c := newTestClient()
 	rec := common.Recommendation{ResourceType: "  DW1000c  "}
-	err := c.ValidateOffering(context.Background(), rec)
+	err := c.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 }
 
@@ -452,13 +437,15 @@ const sampleSynapsePricingJSON = `{
 }`
 
 func TestGetOfferingDetails_upfront(t *testing.T) {
+	mockResp1 := newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON)
+	_ = mockResp1.Body.Close()
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
+	mHTTP.On("Do", mock.Anything).Return(mockResp1, nil)
 
-	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
+	c := &Client{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 
 	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr", PaymentOption: "upfront"}
-	details, err := c.GetOfferingDetails(context.Background(), rec)
+	details, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "DW100c", details.ResourceType)
 	assert.Equal(t, "1yr", details.Term)
@@ -468,13 +455,15 @@ func TestGetOfferingDetails_upfront(t *testing.T) {
 }
 
 func TestGetOfferingDetails_monthly(t *testing.T) {
+	mockResp2 := newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON)
+	_ = mockResp2.Body.Close()
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, sampleSynapsePricingJSON), nil)
+	mHTTP.On("Do", mock.Anything).Return(mockResp2, nil)
 
-	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
+	c := &Client{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 
 	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr", PaymentOption: "monthly"}
-	details, err := c.GetOfferingDetails(context.Background(), rec)
+	details, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, details.UpfrontCost)
 	assert.InDelta(t, 2000.0/12.0, details.RecurringCost, 0.01)
@@ -484,10 +473,10 @@ func TestGetOfferingDetails_httpError(t *testing.T) {
 	mHTTP := &mockHTTPClient{}
 	mHTTP.On("Do", mock.Anything).Return(nil, errors.New("network error"))
 
-	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
+	c := &Client{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 
 	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr"}
-	_, err := c.GetOfferingDetails(context.Background(), rec)
+	_, err := c.GetOfferingDetails(context.Background(), &rec)
 	assert.Error(t, err)
 }
 
@@ -502,12 +491,16 @@ func calcPriceRespJSON(orderID string) string {
 func TestPurchaseCommitment_success(t *testing.T) {
 	mHTTP := &mockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mockResp3 := newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-001"))
+	_ = mockResp3.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-001")), nil).Once()
+	})).Return(mockResp3, nil).Once()
+	mockResp4 := newHTTPResponse(http.StatusOK, `{}`)
+	_ = mockResp4.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-001/purchase"
-	})).Return(newHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mockResp4, nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
@@ -518,7 +511,7 @@ func TestPurchaseCommitment_success(t *testing.T) {
 		Count:          1,
 		CommitmentCost: 5000.0,
 	}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "syn-order-001", result.CommitmentID)
@@ -528,18 +521,22 @@ func TestPurchaseCommitment_success(t *testing.T) {
 func TestPurchaseCommitment_3yrTerm(t *testing.T) {
 	mHTTP := &mockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mockResp5 := newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-3yr"))
+	_ = mockResp5.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-3yr")), nil).Once()
+	})).Return(mockResp5, nil).Once()
+	mockResp6 := newHTTPResponse(http.StatusAccepted, `{}`)
+	_ = mockResp6.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-3yr/purchase"
-	})).Return(newHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(mockResp6, nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW500c", Term: "3yr", Count: 2, CommitmentCost: 9000.0}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -549,6 +546,8 @@ func TestPurchaseCommitment_withSource(t *testing.T) {
 	var capturedBody []byte
 	mHTTP := &mockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mockResp7 := newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-src"))
+	_ = mockResp7.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
 	})).Run(func(args mock.Arguments) {
@@ -557,16 +556,18 @@ func TestPurchaseCommitment_withSource(t *testing.T) {
 			capturedBody, _ = io.ReadAll(req.Body)
 			req.Body = io.NopCloser(bytes.NewReader(capturedBody))
 		}
-	}).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-src")), nil).Once()
+	}).Return(mockResp7, nil).Once()
+	mockResp8 := newHTTPResponse(http.StatusCreated, `{}`)
+	_ = mockResp8.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-src/purchase"
-	})).Return(newHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+	})).Return(mockResp8, nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW500c", Term: "1yr", Count: 1}
-	_, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: "automation"})
+	_, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: "automation"})
 	require.NoError(t, err)
 	assert.Contains(t, string(capturedBody), "purchase-automation")
 	assert.Contains(t, string(capturedBody), "automation")
@@ -576,18 +577,22 @@ func TestPurchaseCommitment_apiError(t *testing.T) {
 	// calculatePrice succeeds; purchase fails with a non-timeout 400.
 	mHTTP := &mockHTTPClient{}
 	t.Cleanup(func() { mHTTP.AssertExpectations(t) })
+	mockResp9 := newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-err"))
+	_ = mockResp9.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(newHTTPResponse(http.StatusOK, calcPriceRespJSON("syn-order-err")), nil).Once()
+	})).Return(mockResp9, nil).Once()
+	mockResp10 := newHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`)
+	_ = mockResp10.Body.Close()
 	mHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/syn-order-err/purchase"
-	})).Return(newHTTPResponse(http.StatusBadRequest, `{"error":"bad request"}`), nil).Once()
+	})).Return(mockResp10, nil).Once()
 
 	cred := &mockTokenCredential{token: "test-token"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -604,7 +609,7 @@ func TestPurchaseCommitment_httpError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
@@ -615,7 +620,7 @@ func TestPurchaseCommitment_tokenError(t *testing.T) {
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -692,7 +697,7 @@ func TestConvertSynapseReservation_nilSKUName(t *testing.T) {
 // ---- extractSynapsePricing ------------------------------------------------
 
 func TestExtractSynapsePricing_1yr(t *testing.T) {
-	items := []SynapseRetailPriceItem{
+	items := []RetailPriceItem{
 		{CurrencyCode: "USD", RetailPrice: 0.5, Type: "Consumption"},
 		{CurrencyCode: "USD", RetailPrice: 2000.0, ReservationTerm: "1 Year", Type: "Reservation"},
 		{CurrencyCode: "USD", RetailPrice: 3500.0, ReservationTerm: "3 Years", Type: "Reservation"},
@@ -704,7 +709,7 @@ func TestExtractSynapsePricing_1yr(t *testing.T) {
 }
 
 func TestExtractSynapsePricing_3yr(t *testing.T) {
-	items := []SynapseRetailPriceItem{
+	items := []RetailPriceItem{
 		{CurrencyCode: "USD", RetailPrice: 0.5, Type: "Consumption"},
 		{CurrencyCode: "USD", RetailPrice: 2000.0, ReservationTerm: "1 Year", Type: "Reservation"},
 		{CurrencyCode: "USD", RetailPrice: 3500.0, ReservationTerm: "3 Years", Type: "Reservation"},
@@ -716,7 +721,7 @@ func TestExtractSynapsePricing_3yr(t *testing.T) {
 }
 
 func TestExtractSynapsePricing_noReservation(t *testing.T) {
-	items := []SynapseRetailPriceItem{
+	items := []RetailPriceItem{
 		{CurrencyCode: "USD", RetailPrice: 0.5, Type: "Consumption"},
 	}
 	onDemand, reservation, currency := extractSynapsePricing(items, 1)
@@ -764,7 +769,7 @@ func TestPurchaseCommitment_emptyResourceType(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "resource type is required")
@@ -774,7 +779,7 @@ func TestPurchaseCommitment_zeroCount(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 0}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "quantity must be greater than zero")
@@ -784,7 +789,7 @@ func TestPurchaseCommitment_negativeCount(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: -1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 }
@@ -793,7 +798,7 @@ func TestPurchaseCommitment_unsupportedTerm(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", nil)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "5yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "unsupported reservation term")
@@ -811,7 +816,7 @@ func TestPurchaseCommitment_requiresSource(t *testing.T) {
 	cred := &mockTokenCredential{token: "tok"}
 	c := NewClientWithHTTP(cred, "sub-123", "eastus", mHTTP)
 	rec := common.Recommendation{ResourceType: "DW1000c", Term: "1yr", Count: 1}
-	result, err := c.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := c.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "purchase source is required")
@@ -835,11 +840,13 @@ func TestGetOfferingDetails_noReservationPrice(t *testing.T) {
 		"NextPageLink": "",
 		"Count": 1
 	}`
+	mockResp11 := newHTTPResponse(http.StatusOK, onDemandOnlyJSON)
+	_ = mockResp11.Body.Close()
 	mHTTP := &mockHTTPClient{}
-	mHTTP.On("Do", mock.Anything).Return(newHTTPResponse(http.StatusOK, onDemandOnlyJSON), nil)
-	c := &SynapseClient{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
+	mHTTP.On("Do", mock.Anything).Return(mockResp11, nil)
+	c := &Client{subscriptionID: "sub-123", region: "eastus", httpClient: mHTTP}
 	rec := common.Recommendation{ResourceType: "DW100c", Term: "1yr"}
-	_, err := c.GetOfferingDetails(context.Background(), rec)
+	_, err := c.GetOfferingDetails(context.Background(), &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pricing data unavailable")
 }

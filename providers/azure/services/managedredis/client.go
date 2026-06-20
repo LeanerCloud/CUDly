@@ -24,45 +24,45 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/services/internal/reservations"
 )
 
-// HTTPClient interface for HTTP operations (enables mocking)
+// HTTPClient interface for HTTP operations (enables mocking).
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// RecommendationsPager interface for recommendations pager (enables mocking)
+// RecommendationsPager interface for recommendations pager (enables mocking).
 type RecommendationsPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
 }
 
-// ReservationsDetailsPager interface for reservations details pager (enables mocking)
+// ReservationsDetailsPager interface for reservations details pager (enables mocking).
 type ReservationsDetailsPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
-// RedisCachesPager interface for Redis caches pager (enables mocking)
+// RedisCachesPager interface for Redis caches pager (enables mocking).
 type RedisCachesPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armredis.ClientListBySubscriptionResponse, error)
 }
 
-// ManagedRedisClient handles Azure Cache for Redis Reserved Capacity as Azure's MemoryDB equivalent.
+// Client handles Azure Cache for Redis Reserved Capacity as Azure's MemoryDB equivalent.
 // It surfaces under ServiceMemoryDB so it is treated symmetrically with AWS MemoryDB at the
 // provider-dispatch level.
-type ManagedRedisClient struct {
+type Client struct {
 	cred                 azcore.TokenCredential
-	subscriptionID       string
-	region               string
 	httpClient           HTTPClient
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
 	redisCachesPager     RedisCachesPager
+	subscriptionID       string
+	region               string
 }
 
 // NewClient creates a new ManagedRedisClient.
-func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *ManagedRedisClient {
-	return &ManagedRedisClient{
+func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Client {
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -70,14 +70,14 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Mana
 	}
 }
 
-// NewClientWithHTTP creates a new ManagedRedisClient with a custom HTTP client (for testing).
+// NewClientWithHTTP creates a new Client with a custom HTTP client (for testing).
 // When httpClient is nil, the SSRF-hardened httpclient.New() is used so the nil
 // fallback also blocks IMDS connections.
-func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *ManagedRedisClient {
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *Client {
 	if httpClient == nil {
 		httpClient = httpclient.New()
 	}
-	return &ManagedRedisClient{
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -86,27 +86,27 @@ func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region strin
 }
 
 // SetRecommendationsPager sets the recommendations pager (for testing).
-func (c *ManagedRedisClient) SetRecommendationsPager(pager RecommendationsPager) {
+func (c *Client) SetRecommendationsPager(pager RecommendationsPager) {
 	c.recommendationsPager = pager
 }
 
 // SetReservationsPager sets the reservations pager (for testing).
-func (c *ManagedRedisClient) SetReservationsPager(pager ReservationsDetailsPager) {
+func (c *Client) SetReservationsPager(pager ReservationsDetailsPager) {
 	c.reservationsPager = pager
 }
 
 // SetRedisCachesPager sets the Redis caches pager (for testing).
-func (c *ManagedRedisClient) SetRedisCachesPager(pager RedisCachesPager) {
+func (c *Client) SetRedisCachesPager(pager RedisCachesPager) {
 	c.redisCachesPager = pager
 }
 
 // GetServiceType returns ServiceMemoryDB -- the cloud-agnostic label for in-memory DB services.
-func (c *ManagedRedisClient) GetServiceType() common.ServiceType {
+func (c *Client) GetServiceType() common.ServiceType {
 	return common.ServiceMemoryDB
 }
 
 // GetRegion returns the region.
-func (c *ManagedRedisClient) GetRegion() string {
+func (c *Client) GetRegion() string {
 	return c.region
 }
 
@@ -115,8 +115,6 @@ func (c *ManagedRedisClient) GetRegion() string {
 // constraint; the anonymous struct in AzureRetailPrice was the blocker.
 type redisPriceItem struct {
 	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
 	ArmRegionName   string  `json:"armRegionName"`
 	ProductName     string  `json:"productName"`
 	ServiceName     string  `json:"serviceName"`
@@ -124,11 +122,13 @@ type redisPriceItem struct {
 	MeterName       string  `json:"meterName"`
 	ReservationTerm string  `json:"reservationTerm"`
 	Type            string  `json:"type"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
 }
 
 // GetRecommendations gets Redis Cache reservation recommendations from the Azure Consumption API.
-func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
-	recommendations := make([]common.Recommendation, 0)
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
+	recSlice := make([]common.Recommendation, 0)
 
 	var pager RecommendationsPager
 	if c.recommendationsPager != nil {
@@ -151,16 +151,16 @@ func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, params comm
 		for _, rec := range page.Value {
 			converted := c.convertRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, *converted)
+				recSlice = append(recSlice, *converted)
 			}
 		}
 	}
 
-	return recommendations, nil
+	return recSlice, nil
 }
 
 // GetExistingCommitments retrieves existing Azure Cache for Redis reserved capacity.
-func (c *ManagedRedisClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
+func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	pager, err := c.reservationDetailsPager()
@@ -187,7 +187,7 @@ func (c *ManagedRedisClient) GetExistingCommitments(ctx context.Context) ([]comm
 // preferring the injected mock over a real SDK pager.
 // The subscription-scope NewListPager is used so that all reservation orders
 // are queried rather than a single hardcoded order ID.
-func (c *ManagedRedisClient) reservationDetailsPager() (ReservationsDetailsPager, error) {
+func (c *Client) reservationDetailsPager() (ReservationsDetailsPager, error) {
 	if c.reservationsPager != nil {
 		return c.reservationsPager, nil
 	}
@@ -201,7 +201,7 @@ func (c *ManagedRedisClient) reservationDetailsPager() (ReservationsDetailsPager
 
 // reservationDetailToCommitment converts a single reservation detail to a Commitment.
 // Returns nil when the detail should be skipped (nil properties, non-Redis SKU).
-func (c *ManagedRedisClient) reservationDetailToCommitment(detail *armconsumption.ReservationDetail) *common.Commitment {
+func (c *Client) reservationDetailToCommitment(detail *armconsumption.ReservationDetail) *common.Commitment {
 	if detail == nil || detail.Properties == nil {
 		return nil
 	}
@@ -226,9 +226,9 @@ func (c *ManagedRedisClient) reservationDetailToCommitment(detail *armconsumptio
 
 // PurchaseCommitment purchases Azure Cache for Redis reserved capacity using the two-step
 // calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
-func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -298,7 +298,7 @@ func (c *ManagedRedisClient) PurchaseCommitment(ctx context.Context, rec common.
 }
 
 // ValidateOffering validates that the given Redis Cache SKU is known.
-func (c *ManagedRedisClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validSKUs, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid SKUs: %w", err)
@@ -314,19 +314,19 @@ func (c *ManagedRedisClient) ValidateOffering(ctx context.Context, rec common.Re
 }
 
 // GetOfferingDetails retrieves reservation offering details from the Azure Retail Prices API.
-func (c *ManagedRedisClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, err
 	}
 
-	pricing, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears)
+	priceData, err := c.getRedisPricing(ctx, rec.ResourceType, c.region, termYears)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pricing: %w", err)
 	}
 
 	var upfrontCost, recurringCost float64
-	totalCost := pricing.ReservationPrice
+	totalCost := priceData.ReservationPrice
 
 	switch rec.PaymentOption {
 	case "all-upfront", "upfront":
@@ -347,14 +347,14 @@ func (c *ManagedRedisClient) GetOfferingDetails(ctx context.Context, rec common.
 		UpfrontCost:         upfrontCost,
 		RecurringCost:       recurringCost,
 		TotalCost:           totalCost,
-		EffectiveHourlyRate: pricing.HourlyRate,
-		Currency:            pricing.Currency,
+		EffectiveHourlyRate: priceData.HourlyRate,
+		Currency:            priceData.Currency,
 	}, nil
 }
 
 // GetValidResourceTypes returns Redis Cache SKUs discovered from the subscription, or a
 // curated fallback list when the subscription API is unreachable.
-func (c *ManagedRedisClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
+func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	pager, err := c.redisCacheListPager()
 	if err != nil {
 		return c.commonSKUs(), nil
@@ -378,7 +378,7 @@ func (c *ManagedRedisClient) GetValidResourceTypes(ctx context.Context) ([]strin
 
 // redisCacheListPager returns the pager to use for listing Redis caches,
 // preferring the injected mock over a real SDK pager.
-func (c *ManagedRedisClient) redisCacheListPager() (RedisCachesPager, error) {
+func (c *Client) redisCacheListPager() (RedisCachesPager, error) {
 	if c.redisCachesPager != nil {
 		return c.redisCachesPager, nil
 	}
@@ -423,7 +423,7 @@ func extractSKUName(cache *armredis.ResourceInfo) string {
 }
 
 // commonSKUs returns a curated list of Azure Cache for Redis SKUs that support reservations.
-func (c *ManagedRedisClient) commonSKUs() []string {
+func (c *Client) commonSKUs() []string {
 	return []string{
 		// Basic tier
 		"Basic_C0", "Basic_C1", "Basic_C2", "Basic_C3", "Basic_C4", "Basic_C5", "Basic_C6",
@@ -436,10 +436,10 @@ func (c *ManagedRedisClient) commonSKUs() []string {
 
 // RedisPricing holds pricing details for a given Redis Cache SKU.
 type RedisPricing struct {
+	Currency          string
 	HourlyRate        float64
 	ReservationPrice  float64
 	OnDemandPrice     float64
-	Currency          string
 	SavingsPercentage float64
 }
 
@@ -447,7 +447,7 @@ type RedisPricing struct {
 // shared pricing.FetchAll walker, which enforces a seen-URL guard, a max-pages
 // cap, and a per-page timeout independent of the caller's context budget. This
 // replaces the former hand-rolled NextPageLink loop (issue #1021 H2).
-func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region string, termYears int) (*RedisPricing, error) {
+func (c *Client) getRedisPricing(ctx context.Context, sku, region string, termYears int) (*RedisPricing, error) {
 	filter := fmt.Sprintf("serviceName eq 'Azure Cache for Redis' and armRegionName eq '%s' and contains(armSkuName, '%s')",
 		region, sku)
 
@@ -503,14 +503,14 @@ func azureTermString(termYears int) string {
 func parsePriceItems(items []redisPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
-	for _, item := range items {
-		if item.CurrencyCode != "" {
-			currency = item.CurrencyCode
+	for i := range items {
+		if items[i].CurrencyCode != "" {
+			currency = items[i].CurrencyCode
 		}
-		if item.ReservationTerm == termStr {
-			reservation = item.RetailPrice
-		} else if item.Type == "Consumption" {
-			onDemand = item.UnitPrice
+		if items[i].ReservationTerm == termStr {
+			reservation = items[i].RetailPrice
+		} else if items[i].Type == "Consumption" {
+			onDemand = items[i].UnitPrice
 		}
 	}
 	return
@@ -518,7 +518,7 @@ func parsePriceItems(items []redisPriceItem, termYears int) (onDemand, reservati
 
 // convertRecommendation converts an Azure Consumption API recommendation to the common format.
 // Returns nil when the input is nil or cannot be parsed (e.g. an unsupported SDK Kind).
-func (c *ManagedRedisClient) convertRecommendation(_ context.Context, rec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+func (c *Client) convertRecommendation(_ context.Context, rec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	f := recommendations.Extract(rec)
 	if f == nil {
 		return nil

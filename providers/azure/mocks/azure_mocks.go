@@ -129,9 +129,13 @@ type MockHTTPClient struct {
 func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	args := m.Called(req)
 	if args.Get(0) == nil {
-		return nil, args.Error(1) //nolint:errcheck // mock: testify Arguments.Error returns the typed error value
+		return nil, args.Error(1)
 	}
-	return args.Get(0).(*http.Response), args.Error(1) //nolint:errcheck // mock: testify Arguments.Error returns the typed error value
+	v, ok := args.Get(0).(*http.Response)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 // CreateMockHTTPResponse creates a mock HTTP response.
