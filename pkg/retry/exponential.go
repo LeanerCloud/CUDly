@@ -25,25 +25,12 @@ import (
 
 // Config bundles the exponential-backoff knobs.
 type Config struct {
-	// MaxAttempts is the total number of attempts (NOT retries). 1 = no
-	// retry, 5 = first attempt + 4 retries.
-	MaxAttempts int
-	// BaseDelay is the delay before the SECOND attempt; subsequent
-	// delays double until MaxDelay caps them.
-	BaseDelay time.Duration
-	// MaxDelay caps the per-iteration backoff after exponential growth.
-	MaxDelay time.Duration
-	// PerAttemptTimeout, if > 0, wraps each op invocation in a
-	// context.WithTimeout independent of the outer ctx so a single hung
-	// attempt fails fast and the retry budget continues. Zero disables.
+	OnAttempt         OnAttemptFn
+	MaxAttempts       int
+	BaseDelay         time.Duration
+	MaxDelay          time.Duration
 	PerAttemptTimeout time.Duration
-	// Jitter, if true, adds ±25% noise to each backoff via math/rand/v2
-	// (lock-free per-goroutine source, no global RNG mutex contention
-	// under concurrent retries). math/rand/v2 is sufficient for backoff
-	// jitter; cryptographic randomness is not needed.
-	Jitter bool
-	// OnAttempt, if non-nil, is invoked once per attempt — see OnAttemptFn.
-	OnAttempt OnAttemptFn
+	Jitter            bool
 }
 
 // OnAttemptFn is called BEFORE each attempt (after any backoff
@@ -56,7 +43,7 @@ type Config struct {
 // about-to-wait ("retrying after Nms") or right after a failure.
 // The shared callback fires before each attempt and gets prevErr,
 // so call-sites guard on `prevErr != nil` to log only on retries
-// (matching today's behaviour: no log on the first/only attempt).
+// (matching today's behavior: no log on the first/only attempt).
 // The first-attempt invocation with prevErr=nil is a no-op for
 // most call-sites.
 type OnAttemptFn func(attempt int, prevErr error)
@@ -99,7 +86,7 @@ func (c Config) Validate() error {
 // short-circuit retries.
 //
 // Returned error: nil on success, ctx.Err() if the outer context is
-// cancelled mid-backoff, the unwrapped op error if it short-circuits
+// canceled mid-backoff, the unwrapped op error if it short-circuits
 // via ErrPermanent, or a wrapped "after N attempts: …" of the last
 // op error if the budget exhausts.
 func Do(ctx context.Context, cfg Config, op func(ctx context.Context, attempt int) error) error {
@@ -113,7 +100,7 @@ func Do(ctx context.Context, cfg Config, op func(ctx context.Context, attempt in
 			delay := backoffFor(attempt, cfg)
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("retry: cancelled mid-backoff after %d attempts: %w", attempt-1, ctx.Err())
+				return fmt.Errorf("retry: canceled mid-backoff after %d attempts: %w", attempt-1, ctx.Err())
 			case <-time.After(delay):
 			}
 		}

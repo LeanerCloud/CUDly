@@ -58,12 +58,15 @@ func WithSharedSemaphore(ctx context.Context, sem *semaphore.Weighted) context.C
 
 // SharedSemaphore returns the semaphore stashed in ctx, or nil if none.
 func SharedSemaphore(ctx context.Context) *semaphore.Weighted {
-	sem, _ := ctx.Value(ctxKey{}).(*semaphore.Weighted)
+	sem, ok := ctx.Value(ctxKey{}).(*semaphore.Weighted)
+	if !ok {
+		return nil
+	}
 	return sem
 }
 
 // Acquire blocks until a slot is available on the shared semaphore in ctx and
-// returns nil. Returns ctx.Err() if the wait is cancelled. If no semaphore is
+// returns nil. Returns ctx.Err() if the wait is canceled. If no semaphore is
 // attached to ctx, Acquire is a no-op and returns nil immediately — leaf
 // callers can use it unconditionally without checking.
 func Acquire(ctx context.Context) error {
@@ -75,7 +78,7 @@ func Acquire(ctx context.Context) error {
 }
 
 // Release returns one slot to the shared semaphore in ctx. Always pair with a
-// successful Acquire (return value nil); calling Release after a cancelled
+// successful Acquire (return value nil); calling Release after a canceled
 // Acquire would corrupt the slot count. If no semaphore is attached to ctx,
 // Release is a no-op.
 func Release(ctx context.Context) {

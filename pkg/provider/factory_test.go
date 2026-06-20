@@ -31,7 +31,7 @@ func setupTestRegistry(t *testing.T) *Registry {
 	return r
 }
 
-// registerGlobalTestProvider registers a provider in the global registry for testing
+// registerGlobalTestProvider registers a provider in the global registry for testing.
 func registerGlobalTestProvider(t *testing.T, name string, configured bool, credentialsError error) {
 	t.Helper()
 	GetRegistry().Unregister(name) // Clean up first
@@ -164,8 +164,8 @@ func TestCreateProviders(t *testing.T) {
 	r := setupTestRegistry(t)
 
 	// Create multiple providers
-	providers := make([]Provider, 0)
 	names := []string{"test-aws", "test-azure"}
+	providers := make([]Provider, 0, len(names))
 	for _, name := range names {
 		provider, err := r.GetProviderWithConfig(name, &ProviderConfig{Name: name})
 		require.NoError(t, err)

@@ -3,8 +3,8 @@ package common
 import "strings"
 
 // engineNameMap maps database engine names to a consistent normalized format.
-// AWS RIs use: "aurora-postgresql", "aurora-mysql", "mysql", "postgres"
-// Cost Explorer uses: "Aurora PostgreSQL", "Aurora MySQL", "MySQL", "PostgreSQL"
+// AWS RIs use: "aurora-postgresql", "aurora-mysql", "mysql", "postgres".
+// Cost Explorer uses: "Aurora PostgreSQL", "Aurora MySQL", "MySQL", "PostgreSQL".
 var engineNameMap = map[string]string{
 	// Cost Explorer format -> normalized
 	"Aurora PostgreSQL": "aurora-postgresql",

@@ -1,27 +1,25 @@
-// Package provider provides credential detection and provider discovery
+// Package provider provides credential detection and provider discovery.
 package provider
 
 import (
 	"context"
 	"fmt"
-	"sync"
 )
 
-// CredentialDetector detects available cloud credentials
+// CredentialDetector detects available cloud credentials.
 type CredentialDetector struct {
 	providers []Provider
-	mu        sync.RWMutex
 }
 
-// NewCredentialDetector creates a new credential detector
+// NewCredentialDetector creates a new credential detector.
 func NewCredentialDetector() *CredentialDetector {
 	return &CredentialDetector{
 		providers: make([]Provider, 0),
 	}
 }
 
-// DetectAvailableProviders scans for configured cloud credentials
-// It checks all registered providers and returns those with valid credentials
+// DetectAvailableProviders scans for configured cloud credentials.
+// It checks all registered providers and returns those with valid credentials.
 func DetectAvailableProviders(ctx context.Context) ([]Provider, error) {
 	// Get all registered providers from the registry
 	allProviders := GetRegistry().GetAllProviders()
@@ -52,7 +50,7 @@ func DetectAvailableProviders(ctx context.Context) ([]Provider, error) {
 	return available, nil
 }
 
-// DetectProvider detects a specific provider by name
+// DetectProvider detects a specific provider by name.
 func DetectProvider(ctx context.Context, name string) (Provider, error) {
 	provider, err := GetRegistry().GetProvider(name)
 	if err != nil {
@@ -70,7 +68,7 @@ func DetectProvider(ctx context.Context, name string) (Provider, error) {
 	return provider, nil
 }
 
-// GetProvidersByNames gets providers by their names
+// GetProvidersByNames gets providers by their names.
 func GetProvidersByNames(ctx context.Context, names []string) ([]Provider, error) {
 	var providers []Provider
 	var errors []error
@@ -91,7 +89,7 @@ func GetProvidersByNames(ctx context.Context, names []string) ([]Provider, error
 	return providers, nil
 }
 
-// CredentialSource represents the source of credentials
+// CredentialSource represents the source of credentials.
 type CredentialSource string
 
 const (
@@ -103,16 +101,18 @@ const (
 	CredentialSourceCLI         CredentialSource = "cli"
 )
 
-// BaseCredentials provides a base implementation of Credentials interface
+// BaseCredentials provides a base implementation of Credentials interface.
 type BaseCredentials struct {
 	Source CredentialSource
 	Valid  bool
 }
 
+// IsValid reports whether the credentials are valid.
 func (c BaseCredentials) IsValid() bool {
 	return c.Valid
 }
 
+// GetType returns the credential source type string.
 func (c BaseCredentials) GetType() string {
 	return string(c.Source)
 }

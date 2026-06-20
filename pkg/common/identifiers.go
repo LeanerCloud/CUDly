@@ -48,7 +48,7 @@ const idempotencyIDTokenLen = 40
 // so a re-driven purchase reuses the identical customer-supplied reservation ID
 // and AWS rejects the duplicate server-side (RDS/ElastiCache/MemoryDB each
 // return a *AlreadyExists* fault). Returns "" when token is empty so the caller
-// keeps its prior non-idempotent (timestamp-based) ID behaviour for call sites
+// keeps its prior non-idempotent (timestamp-based) ID behavior for call sites
 // that supply no token (e.g. the CLI path).
 //
 // prefix should be a short, lowercase, hyphen-terminated service tag (e.g.
