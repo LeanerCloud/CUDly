@@ -66,7 +66,6 @@ type Principal struct {
 	Kind    PrincipalKind
 	UserID  string   // empty for PrincipalAdminAPIKey
 	Email   string   // empty for PrincipalAdminAPIKey; populated for session/user-api-key
-	Role    string   // "admin" for PrincipalAdminAPIKey; empty for session/user-api-key (role system removed in #907)
 	Session *Session // non-nil only for PrincipalSession
 }
 
@@ -93,7 +92,7 @@ func (h *Handler) authenticatePrincipal(ctx context.Context, req *events.LambdaF
 	apiKey := extractAPIKey(req)
 
 	if h.checkAdminAPIKey(apiKey) {
-		return &Principal{Kind: PrincipalAdminAPIKey, Role: "admin"}, nil
+		return &Principal{Kind: PrincipalAdminAPIKey}, nil
 	}
 
 	if h.auth == nil {
