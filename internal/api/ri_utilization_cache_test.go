@@ -227,7 +227,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// Gate the fetcher so concurrent calls all race to enter the
 	// refresh — singleflight should collapse them.
 	release := make(chan struct{})
-	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) { //nolint:unparam // error return required by the fetch function signature used in getOrFetch
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
 		calls.Add(1)
 		<-release
 		return freshData, nil
