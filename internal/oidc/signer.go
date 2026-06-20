@@ -204,7 +204,11 @@ func ComputeKeyID(pub crypto.PublicKey) (string, error) {
 		if k == nil {
 			return "", fmt.Errorf("oidc: nil ecdsa public key")
 		}
-		uncompressed := elliptic.Marshal(k.Curve, k.X, k.Y) //nolint:staticcheck // elliptic.Marshal is the only Go stdlib way to get the uncompressed point from *ecdsa.PublicKey without converting to crypto/ecdh first.
+		ecdhKey, err := k.ECDH()
+		if err != nil {
+			return "", fmt.Errorf("oidc: convert ecdsa public key to ecdh: %w", err)
+		}
+		uncompressed := ecdhKey.Bytes()
 		sum := sha256.Sum256(uncompressed)
 		return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 	default:
