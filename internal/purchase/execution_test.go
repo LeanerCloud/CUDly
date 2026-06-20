@@ -87,7 +87,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 	// Mock provider factory to return a mock provider
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)
@@ -150,7 +150,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 	// The deterministic idempotency token (issue #636) is derived per-rec from
 	// the execution ID and the rec's index, so the web path now also carries it.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           common.PurchaseSourceWeb,
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-web", 0),
@@ -206,7 +206,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
 	// The idempotency token (issue #636) is still derived regardless of source.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           "",
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-bad", 0),
@@ -522,7 +522,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success: true, CommitmentID: "ri-99999",
 	}, nil)
 
@@ -751,7 +751,7 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil).Once()
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: commitmentV}, nil).Once()
 
@@ -920,7 +920,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	// execution the total elapsed time would exceed serialBoundary; under
 	// errgroup-style parallelism it stays close to perCallDelay.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-parallel"}, nil).
 		Run(func(_ mock.Arguments) {
@@ -1043,7 +1043,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// regardless of the ServiceType passed in.
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-1"}, nil)
 
@@ -1169,7 +1169,7 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 			// the canonical ServiceType — not an AWS-legacy constant.
 			mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.expectedType, "eastus").Return(mockServiceClient, nil)
 			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-" + tc.name}, nil)
 
@@ -1385,7 +1385,7 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-auditgap",
 	}, nil)
@@ -1681,7 +1681,7 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 			mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.provider, mock.Anything).Return(mockProviderInst, nil)
 			mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.expectedType, tc.region).Return(mockServiceClient, nil)
 			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "commit-1"}, nil)
 

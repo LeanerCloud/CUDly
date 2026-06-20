@@ -31,7 +31,7 @@ type MockRecommendationsClient struct {
 	mock.Mock
 }
 
-func (m *MockRecommendationsClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (m *MockRecommendationsClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -70,7 +70,7 @@ func (m *MockServiceClient) GetRegion() string {
 	return args.String(0)
 }
 
-func (m *MockServiceClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (m *MockServiceClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -78,17 +78,17 @@ func (m *MockServiceClient) GetRecommendations(ctx context.Context, params commo
 	return args.Get(0).([]common.Recommendation), args.Error(1)
 }
 
-func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	args := m.Called(ctx, rec, opts)
 	return args.Get(0).(common.PurchaseResult), args.Error(1)
 }
 
-func (m *MockServiceClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (m *MockServiceClient) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	args := m.Called(ctx, rec)
 	return args.Error(0)
 }
 
-func (m *MockServiceClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (m *MockServiceClient) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	args := m.Called(ctx, rec)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

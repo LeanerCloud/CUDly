@@ -269,7 +269,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockRS.AssertExpectations(t)
 }
@@ -956,7 +956,7 @@ func TestClient_FindOfferingID_NoMatchingNodeType(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
@@ -990,7 +990,7 @@ func TestClient_FindOfferingID_NoMatchingDuration(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
@@ -1027,7 +1027,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected type")

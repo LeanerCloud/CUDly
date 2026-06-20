@@ -28,9 +28,9 @@ type InstanceEngineVersion struct {
 
 // EngineLifecycleInfo stores lifecycle support information for a major engine version.
 type EngineLifecycleInfo struct {
-	LifecycleSupportName      string
 	LifecycleSupportStartDate time.Time
 	LifecycleSupportEndDate   time.Time
+	LifecycleSupportName      string
 }
 
 // MajorEngineVersionInfo stores support information for a major engine version.

@@ -526,7 +526,7 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(ctx, params)
+	recs, err := client.GetRecommendations(ctx, &params)
 
 	// With the pagination loop added (issue #692), ctx.Err() is checked at
 	// the top of the first page iteration before the rate-limiter runs. A

@@ -235,7 +235,7 @@ func executePurchase(ctx context.Context, rec common.Recommendation, region stri
 	// (e.g. RDS ReservedDBInstanceId), not just in our local report.
 	commitmentID := generatePurchaseID(rec, region, index, false, effectiveSizingPct(cfg))
 	opts := common.PurchaseOptions{Source: common.PurchaseSourceCLI, ReservationID: commitmentID}
-	result, err := serviceClient.PurchaseCommitment(ctx, rec, opts)
+	result, err := serviceClient.PurchaseCommitment(ctx, &rec, opts)
 	if err != nil {
 		result.Success = false
 		result.Error = err
@@ -432,7 +432,7 @@ func fetchRecommendationsForRegion(
 		ExcludeSPTypes: cfg.ExcludeSPTypes,
 	}
 
-	recs, err := recClient.GetRecommendations(ctx, params)
+	recs, err := recClient.GetRecommendations(ctx, &params)
 	if err != nil {
 		AppLogger.Printf("  ❌ Failed to fetch recommendations: %v\n", err)
 		return nil

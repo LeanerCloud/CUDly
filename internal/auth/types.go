@@ -7,19 +7,18 @@ import (
 
 // User represents a user account.
 type User struct {
-	ID                  string     `json:"id" dynamodbav:"PK"`
-	Email               string     `json:"email" dynamodbav:"Email"`
-	PasswordHash        string     `json:"-" dynamodbav:"PasswordHash"`
-	Salt                string     `json:"-" dynamodbav:"Salt"`
-	GroupIDs            []string   `json:"group_ids,omitempty" dynamodbav:"GroupIDs"`
-	CreatedAt           time.Time  `json:"created_at" dynamodbav:"CreatedAt"`
-	UpdatedAt           time.Time  `json:"updated_at" dynamodbav:"UpdatedAt"`
-	LastLoginAt         *time.Time `json:"last_login_at,omitempty" dynamodbav:"LastLoginAt"`
-	PasswordResetToken  string     `json:"-" dynamodbav:"PasswordResetToken,omitempty"`
-	PasswordResetExpiry *time.Time `json:"-" dynamodbav:"PasswordResetExpiry,omitempty"`
-	Active              bool       `json:"active" dynamodbav:"Active"`
-	MFAEnabled          bool       `json:"mfa_enabled" dynamodbav:"MFAEnabled"`
-	MFASecret           string     `json:"-" dynamodbav:"MFASecret,omitempty"`
+	CreatedAt                 time.Time  `json:"created_at" dynamodbav:"CreatedAt"`
+	UpdatedAt                 time.Time  `json:"updated_at" dynamodbav:"UpdatedAt"`
+	LastLoginAt               *time.Time `json:"last_login_at,omitempty" dynamodbav:"LastLoginAt"`
+	PasswordResetExpiry       *time.Time `json:"-" dynamodbav:"PasswordResetExpiry,omitempty"`
+	MFAPendingSecretExpiresAt *time.Time `json:"-" dynamodbav:"MFAPendingSecretExpiresAt,omitempty"`
+	LockedUntil               *time.Time `json:"-" dynamodbav:"LockedUntil,omitempty"`
+	ID                        string     `json:"id" dynamodbav:"PK"`
+	Email                     string     `json:"email" dynamodbav:"Email"`
+	PasswordHash              string     `json:"-" dynamodbav:"PasswordHash"`
+	Salt                      string     `json:"-" dynamodbav:"Salt"`
+	PasswordResetToken        string     `json:"-" dynamodbav:"PasswordResetToken,omitempty"`
+	MFASecret                 string     `json:"-" dynamodbav:"MFASecret,omitempty"`
 	// MFA enrollment carrier fields (issue #497). Populated by
 	// MFASetup and consumed by MFAEnable; both cleared on successful
 	// enable / disable. Persisting the pending secret here (instead
@@ -28,45 +27,46 @@ type User struct {
 	// An abandoned enrollment expires harmlessly because the active
 	// MFASecret + MFAEnabled fields stay untouched until enable
 	// succeeds.
-	MFAPendingSecret          string     `json:"-" dynamodbav:"MFAPendingSecret,omitempty"`
-	MFAPendingSecretExpiresAt *time.Time `json:"-" dynamodbav:"MFAPendingSecretExpiresAt,omitempty"`
+	MFAPendingSecret string   `json:"-" dynamodbav:"MFAPendingSecret,omitempty"`
+	GroupIDs         []string `json:"group_ids,omitempty" dynamodbav:"GroupIDs"`
 	// MFARecoveryCodes holds bcrypt hashes of single-use recovery
 	// codes generated at enable / regenerate time. The matching hash
 	// is removed from the slice when consumed during login or disable.
 	MFARecoveryCodes []string `json:"-" dynamodbav:"MFARecoveryCodes,omitempty"`
-	// Account lockout fields for brute-force protection
-	FailedLoginAttempts int        `json:"-" dynamodbav:"FailedLoginAttempts,omitempty"`
-	LockedUntil         *time.Time `json:"-" dynamodbav:"LockedUntil,omitempty"`
 	// Password history for preventing reuse (stores up to 5 previous password hashes)
 	PasswordHistory []string `json:"-" dynamodbav:"PasswordHistory,omitempty"`
+	// Account lockout fields for brute-force protection
+	FailedLoginAttempts int  `json:"-" dynamodbav:"FailedLoginAttempts,omitempty"`
+	Active              bool `json:"active" dynamodbav:"Active"`
+	MFAEnabled          bool `json:"mfa_enabled" dynamodbav:"MFAEnabled"`
 }
 
 // Group represents a permission group.
 type Group struct {
+	CreatedAt       time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
+	UpdatedAt       time.Time    `json:"updated_at" dynamodbav:"UpdatedAt"`
 	ID              string       `json:"id" dynamodbav:"PK"`
 	Name            string       `json:"name" dynamodbav:"Name"`
 	Description     string       `json:"description,omitempty" dynamodbav:"Description"`
+	CreatedBy       string       `json:"created_by" dynamodbav:"CreatedBy"`
 	Permissions     []Permission `json:"permissions" dynamodbav:"Permissions"`
 	AllowedAccounts []string     `json:"allowed_accounts,omitempty" dynamodbav:"AllowedAccounts"`
 	// SystemManaged marks groups that are seeded by migrations and
 	// should not be renamed or deleted via the API. Only membership
 	// can change for system-managed groups.
-	SystemManaged bool      `json:"system_managed,omitempty" dynamodbav:"SystemManaged"`
-	CreatedAt     time.Time `json:"created_at" dynamodbav:"CreatedAt"`
-	UpdatedAt     time.Time `json:"updated_at" dynamodbav:"UpdatedAt"`
-	CreatedBy     string    `json:"created_by" dynamodbav:"CreatedBy"`
+	SystemManaged bool `json:"system_managed,omitempty" dynamodbav:"SystemManaged"`
 }
 
 // Permission defines what actions a group can perform.
 type Permission struct {
+
+	// Constraints limit the permission to specific contexts
+	Constraints *PermissionConstraints `json:"constraints,omitempty" dynamodbav:"Constraints"`
 	// Action: view, purchase, configure, admin
 	Action string `json:"action" dynamodbav:"Action"`
 
 	// Resource type: recommendations, plans, history, config, users
 	Resource string `json:"resource" dynamodbav:"Resource"`
-
-	// Constraints limit the permission to specific contexts
-	Constraints *PermissionConstraints `json:"constraints,omitempty" dynamodbav:"Constraints"`
 }
 
 // PermissionConstraints limit permissions to specific accounts, providers, or services.
@@ -89,15 +89,15 @@ type PermissionConstraints struct {
 
 // UserAPIKey represents a personal API key for a user with scoped permissions.
 type UserAPIKey struct {
+	CreatedAt   time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
+	ExpiresAt   *time.Time   `json:"expires_at,omitempty" dynamodbav:"ExpiresAt"`
+	LastUsedAt  *time.Time   `json:"last_used_at,omitempty" dynamodbav:"LastUsedAt"`
 	ID          string       `json:"id" dynamodbav:"PK"`                             // UUID string
 	UserID      string       `json:"user_id" dynamodbav:"UserID"`                    // User who owns this key
 	Name        string       `json:"name" dynamodbav:"Name"`                         // Human-readable name
 	KeyPrefix   string       `json:"key_prefix" dynamodbav:"KeyPrefix"`              // First 8 chars for display
 	KeyHash     string       `json:"-" dynamodbav:"KeyHash"`                         // SHA-256 hash of the full key
 	Permissions []Permission `json:"permissions,omitempty" dynamodbav:"Permissions"` // Scoped permissions
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty" dynamodbav:"ExpiresAt"`
-	CreatedAt   time.Time    `json:"created_at" dynamodbav:"CreatedAt"`
-	LastUsedAt  *time.Time   `json:"last_used_at,omitempty" dynamodbav:"LastUsedAt"`
 	IsActive    bool         `json:"is_active" dynamodbav:"IsActive"`
 }
 
@@ -275,8 +275,8 @@ type CreateUserRequest struct {
 // (including empty) slice replaces the membership and must be non-empty.
 type UpdateUserRequest struct {
 	Email    *string  `json:"email,omitempty"`
-	GroupIDs []string `json:"group_ids,omitempty"`
 	Active   *bool    `json:"active,omitempty"`
+	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
 // ChangePasswordRequest for users changing their own password.
@@ -293,16 +293,16 @@ type SetupAdminRequest struct {
 
 // CreateAPIKeyRequest for creating a new user API key.
 type CreateAPIKeyRequest struct {
+	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 	Name        string       `json:"name"`
 	Permissions []Permission `json:"permissions,omitempty"`
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 }
 
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
+	Info   *UserAPIKey `json:"info"`
 	APIKey string      `json:"api_key"` // Full key - only returned on creation
 	KeyID  string      `json:"key_id"`
-	Info   *UserAPIKey `json:"info"`
 }
 
 // Predefined roles.

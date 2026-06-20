@@ -42,9 +42,9 @@ type AccountAliasGetter interface {
 
 // AccountAliasCache caches account ID to alias mappings.
 type AccountAliasCache struct {
-	mu        sync.RWMutex
-	cache     map[string]string
 	orgClient OrganizationsAPI
+	cache     map[string]string
+	mu        sync.RWMutex
 }
 
 // NewAccountAliasCache creates a new account alias cache.

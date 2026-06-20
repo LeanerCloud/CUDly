@@ -63,7 +63,7 @@ func (c *Client) GetRegion() string {
 }
 
 // GetRecommendations returns empty as EC2 uses centralized Cost Explorer recommendations
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	// EC2 recommendations come from Cost Explorer API via RecommendationsClient
 	return []common.Recommendation{}, nil
 }
@@ -108,9 +108,9 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 }
 
 // PurchaseCommitment purchases an EC2 Reserved Instance
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -142,7 +142,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
+	offeringID, err := c.findOfferingID(ctx, *rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -183,7 +183,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	// sweep's safe-fail + operator-confirm Retry (PR #635), since EC2 offers no
 	// atomic alternative. The cosmetic tags and the idempotency tag share one
 	// call so they cannot drift apart.
-	if err := c.tagReservedInstance(ctx, result.CommitmentID, rec, opts.Source, opts.IdempotencyToken); err != nil {
+	if err := c.tagReservedInstance(ctx, result.CommitmentID, *rec, opts.Source, opts.IdempotencyToken); err != nil {
 		log.Printf("WARNING: failed to tag EC2 RI %s after purchase (commitment is bought; tag missing): %v", result.CommitmentID, err)
 	}
 
@@ -535,14 +535,14 @@ func scanEC2OfferingPage(offerings []types.ReservedInstancesOffering, wantType t
 }
 
 // ValidateOffering checks if an offering exists without purchasing
-func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
+	_, err := c.findOfferingID(ctx, *rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
-func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
+	offeringID, err := c.findOfferingID(ctx, *rec, "")
 	if err != nil {
 		return nil, err
 	}

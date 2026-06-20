@@ -331,7 +331,7 @@ func termToMonths(term string) int {
 // fields are forced to zero to avoid a divide-by-zero; if CommitmentCost is
 // zero both variants are still emitted with zero costs (caller's responsibility
 // to validate upstream).
-func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation { //nolint:gocritic // large struct copied intentionally to create two independent variants
+func ExpandPaymentVariants(base *common.Recommendation) []common.Recommendation {
 	totalReservation := base.CommitmentCost
 	totalOnDemand := base.OnDemandCost
 
@@ -345,13 +345,13 @@ func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
 	months := termToMonths(base.Term)
 	recurringMonthly := totalReservation / float64(months)
 
-	allUpfront := base
+	allUpfront := *base
 	allUpfront.PaymentOption = "upfront"
 	allUpfront.EstimatedSavings = savings
 	allUpfront.SavingsPercentage = savingsPct
 	allUpfront.RecurringMonthlyCost = float64Ptr(0)
 
-	noUpfront := base
+	noUpfront := *base
 	noUpfront.PaymentOption = "monthly"
 	noUpfront.EstimatedSavings = savings
 	noUpfront.SavingsPercentage = savingsPct

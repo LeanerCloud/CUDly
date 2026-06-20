@@ -32,43 +32,43 @@ const maxReservationsPages = 50
 // maxServicesPages caps Search service list pagination.
 const maxServicesPages = 20
 
-// HTTPClient interface for HTTP operations (enables mocking)
+// HTTPClient interface for HTTP operations (enables mocking).
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// RecommendationsPager interface for recommendations pager (enables mocking)
+// RecommendationsPager interface for recommendations pager (enables mocking).
 type RecommendationsPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armconsumption.ReservationRecommendationsClientListResponse, error)
 }
 
-// ReservationsDetailsPager interface for reservations details pager (enables mocking)
+// ReservationsDetailsPager interface for reservations details pager (enables mocking).
 type ReservationsDetailsPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armconsumption.ReservationsDetailsClientListResponse, error)
 }
 
-// SearchServicesPager interface for search services pager (enables mocking)
-type SearchServicesPager interface {
+// ServicesPager interface for search services pager (enables mocking).
+type ServicesPager interface {
 	More() bool
 	NextPage(ctx context.Context) (armsearch.ServicesClientListBySubscriptionResponse, error)
 }
 
-// SearchClient handles Azure Cognitive Search Reserved Capacity
-type SearchClient struct {
+// Client handles Azure Cognitive Search Reserved Capacity.
+type Client struct {
 	cred                 azcore.TokenCredential
-	subscriptionID       string
-	region               string
 	httpClient           HTTPClient
 	recommendationsPager RecommendationsPager
 	reservationsPager    ReservationsDetailsPager
-	searchServicesPager  SearchServicesPager
+	searchServicesPager  ServicesPager
+	subscriptionID       string
+	region               string
 }
 
-// NewClient creates a new Azure Search client
-func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *SearchClient {
-	return &SearchClient{
+// NewClient creates a new Azure Search client.
+func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Client {
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -76,9 +76,9 @@ func NewClient(cred azcore.TokenCredential, subscriptionID, region string) *Sear
 	}
 }
 
-// NewClientWithHTTP creates a new Azure Search client with a custom HTTP client (for testing)
-func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *SearchClient {
-	return &SearchClient{
+// NewClientWithHTTP creates a new Azure Search client with a custom HTTP client (for testing).
+func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region string, httpClient HTTPClient) *Client {
+	return &Client{
 		cred:           cred,
 		subscriptionID: subscriptionID,
 		region:         region,
@@ -86,37 +86,36 @@ func NewClientWithHTTP(cred azcore.TokenCredential, subscriptionID, region strin
 	}
 }
 
-// SetRecommendationsPager sets the recommendations pager (for testing)
-func (c *SearchClient) SetRecommendationsPager(pager RecommendationsPager) {
+// SetRecommendationsPager sets the recommendations pager (for testing).
+func (c *Client) SetRecommendationsPager(pager RecommendationsPager) {
 	c.recommendationsPager = pager
 }
 
-// SetReservationsPager sets the reservations pager (for testing)
-func (c *SearchClient) SetReservationsPager(pager ReservationsDetailsPager) {
+// SetReservationsPager sets the reservations pager (for testing).
+func (c *Client) SetReservationsPager(pager ReservationsDetailsPager) {
 	c.reservationsPager = pager
 }
 
-// SetSearchServicesPager sets the search services pager (for testing)
-func (c *SearchClient) SetSearchServicesPager(pager SearchServicesPager) {
+// SetServicesPager sets the search services pager (for testing).
+func (c *Client) SetServicesPager(pager ServicesPager) {
 	c.searchServicesPager = pager
 }
 
-// GetServiceType returns the service type
-func (c *SearchClient) GetServiceType() common.ServiceType {
+// GetServiceType returns the service type.
+func (c *Client) GetServiceType() common.ServiceType {
 	return common.ServiceSearch
 }
 
-// GetRegion returns the region
-func (c *SearchClient) GetRegion() string {
+// GetRegion returns the region.
+func (c *Client) GetRegion() string {
 	return c.region
 }
 
-// AzureRetailPrice represents pricing information from Azure Retail Prices API
+// AzureRetailPrice represents pricing information from Azure Retail Prices API.
 type AzureRetailPrice struct {
-	Items []struct {
+	NextPageLink string `json:"NextPageLink"`
+	Items        []struct {
 		CurrencyCode    string  `json:"currencyCode"`
-		RetailPrice     float64 `json:"retailPrice"`
-		UnitPrice       float64 `json:"unitPrice"`
 		ArmRegionName   string  `json:"armRegionName"`
 		ProductName     string  `json:"productName"`
 		ServiceName     string  `json:"serviceName"`
@@ -124,13 +123,14 @@ type AzureRetailPrice struct {
 		MeterName       string  `json:"meterName"`
 		ReservationTerm string  `json:"reservationTerm"`
 		Type            string  `json:"type"`
+		RetailPrice     float64 `json:"retailPrice"`
+		UnitPrice       float64 `json:"unitPrice"`
 	} `json:"Items"`
-	NextPageLink string `json:"NextPageLink"`
-	Count        int    `json:"Count"`
+	Count int `json:"Count"`
 }
 
-// GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API
-func (c *SearchClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+// GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API.
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected pager if available (for testing)
@@ -152,7 +152,7 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 
 	for pageIdx := 0; pager.More(); pageIdx++ {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+			return nil, fmt.Errorf("context canceled during pagination: %w", err)
 		}
 		if pageIdx >= maxRecsPages {
 			return nil, fmt.Errorf("search: GetRecommendations pagination cap (%d pages) reached", maxRecsPages)
@@ -165,7 +165,7 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 		for _, rec := range page.Value {
 			converted := c.convertAzureSearchRecommendation(ctx, rec)
 			if converted != nil {
-				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(*converted)...)
+				recommendations = append(recommendations, azrecs.ExpandPaymentVariants(converted)...)
 			}
 		}
 	}
@@ -173,8 +173,8 @@ func (c *SearchClient) GetRecommendations(ctx context.Context, params common.Rec
 	return recommendations, nil
 }
 
-// GetExistingCommitments retrieves existing Search reserved capacity
-func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
+// GetExistingCommitments retrieves existing Search reserved capacity.
+func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitment, error) {
 	pager, err := c.createReservationsPager()
 	if err != nil {
 		log.Printf("WARNING: failed to create Search reservations pager: %v", err)
@@ -184,8 +184,8 @@ func (c *SearchClient) GetExistingCommitments(ctx context.Context) ([]common.Com
 	return c.collectSearchReservations(ctx, pager)
 }
 
-// createReservationsPager creates a pager for listing reservations
-func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, error) {
+// createReservationsPager creates a pager for listing reservations.
+func (c *Client) createReservationsPager() (ReservationsDetailsPager, error) {
 	// Use injected pager if available (for testing)
 	if c.reservationsPager != nil {
 		return c.reservationsPager, nil
@@ -203,12 +203,12 @@ func (c *SearchClient) createReservationsPager() (ReservationsDetailsPager, erro
 // collectSearchReservations collects Search reservations from the pager.
 // Returns an error on first pagination failure so callers can't silently act
 // on a partial list — see the compute client for the full rationale.
-func (c *SearchClient) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
+func (c *Client) collectSearchReservations(ctx context.Context, pager ReservationsDetailsPager) ([]common.Commitment, error) {
 	commitments := make([]common.Commitment, 0)
 
 	for pageIdx := 0; pager.More(); pageIdx++ {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("context cancelled during pagination: %w", err)
+			return nil, fmt.Errorf("context canceled during pagination: %w", err)
 		}
 		if pageIdx >= maxReservationsPages {
 			return nil, fmt.Errorf("search: GetExistingCommitments pagination cap (%d pages) reached", maxReservationsPages)
@@ -228,8 +228,8 @@ func (c *SearchClient) collectSearchReservations(ctx context.Context, pager Rese
 	return commitments, nil
 }
 
-// convertSearchReservation converts a reservation detail to a commitment if it's a Search reservation
-func (c *SearchClient) convertSearchReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
+// convertSearchReservation converts a reservation detail to a commitment if it's a Search reservation.
+func (c *Client) convertSearchReservation(detail *armconsumption.ReservationDetail) *common.Commitment {
 	if detail.Properties == nil {
 		return nil
 	}
@@ -260,9 +260,9 @@ func (c *SearchClient) convertSearchReservation(detail *armconsumption.Reservati
 
 // PurchaseCommitment purchases Search reserved capacity using the two-step
 // calculatePrice->purchase flow required by Azure's Reservations API (issue #677).
-func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -298,7 +298,7 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 			"billingScopeId":       fmt.Sprintf("/subscriptions/%s", c.subscriptionID),
 			"term":                 fmt.Sprintf("P%dY", termYears),
 			"quantity":             rec.Count,
-			"displayName": reservations.BuildDisplayName(reservations.DisplayNameFields{
+			"displayName": reservations.BuildDisplayName(&reservations.DisplayNameFields{
 				Service:      "search",
 				Region:       c.region,
 				ResourceType: rec.ResourceType,
@@ -339,8 +339,8 @@ func (c *SearchClient) PurchaseCommitment(ctx context.Context, rec common.Recomm
 	return result, nil
 }
 
-// ValidateOffering validates that a Search SKU exists
-func (c *SearchClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+// ValidateOffering validates that a Search SKU exists.
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	validSKUs, err := c.GetValidResourceTypes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get valid SKUs: %w", err)
@@ -356,8 +356,8 @@ func (c *SearchClient) ValidateOffering(ctx context.Context, rec common.Recommen
 	return fmt.Errorf("invalid Azure Search SKU: %s", rec.ResourceType)
 }
 
-// GetOfferingDetails retrieves Search reservation offering details from Azure Retail Prices API
-func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+// GetOfferingDetails retrieves Search reservation offering details from Azure Retail Prices API.
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	termYears, err := reservations.ParseTermYears(rec.Term)
 	if err != nil {
 		return nil, fmt.Errorf("invalid term: %w", err)
@@ -379,7 +379,7 @@ func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recomm
 		upfrontCost = 0
 		recurringCost = totalCost / (float64(termYears) * 12)
 	default:
-		// Fail loud on an unrecognised payment option rather than silently
+		// Fail loud on an unrecognized payment option rather than silently
 		// billing it as all-upfront (owner policy: no silent fallbacks on
 		// money-affecting fields).
 		return nil, fmt.Errorf("unsupported payment option for Azure AI Search offering details: %q", rec.PaymentOption)
@@ -398,8 +398,8 @@ func (c *SearchClient) GetOfferingDetails(ctx context.Context, rec common.Recomm
 	}, nil
 }
 
-// GetValidResourceTypes returns valid Search SKUs from Azure API
-func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, error) {
+// GetValidResourceTypes returns valid Search SKUs from Azure API.
+func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 	pager, ok := c.resolveServicesPager()
 	if !ok {
 		return c.getCommonSKUs(), nil
@@ -421,7 +421,7 @@ func (c *SearchClient) GetValidResourceTypes(ctx context.Context) ([]string, err
 	return c.getCommonSKUs(), nil
 }
 
-func (c *SearchClient) resolveServicesPager() (SearchServicesPager, bool) {
+func (c *Client) resolveServicesPager() (ServicesPager, bool) {
 	if c.searchServicesPager != nil {
 		return c.searchServicesPager, true
 	}
@@ -432,11 +432,11 @@ func (c *SearchClient) resolveServicesPager() (SearchServicesPager, bool) {
 	return client.NewListBySubscriptionPager(nil, nil), true
 }
 
-func (c *SearchClient) collectSKUsFromPager(ctx context.Context, pager SearchServicesPager) (map[string]bool, error) {
+func (c *Client) collectSKUsFromPager(ctx context.Context, pager ServicesPager) (map[string]bool, error) {
 	skuSet := make(map[string]bool)
 	for pageIdx := 0; pager.More(); pageIdx++ {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("search: GetValidResourceTypes context cancelled after %d pages: %w", pageIdx, err)
+			return nil, fmt.Errorf("search: GetValidResourceTypes context canceled after %d pages: %w", pageIdx, err)
 		}
 		if pageIdx >= maxServicesPages {
 			log.Printf("WARNING: search: GetValidResourceTypes pagination cap (%d pages) reached", maxServicesPages)
@@ -455,8 +455,8 @@ func (c *SearchClient) collectSKUsFromPager(ctx context.Context, pager SearchSer
 	return skuSet, nil
 }
 
-// getCommonSKUs returns common Search SKUs
-func (c *SearchClient) getCommonSKUs() []string {
+// getCommonSKUs returns common Search SKUs.
+func (c *Client) getCommonSKUs() []string {
 	return []string{
 		"basic",
 		"standard",
@@ -467,17 +467,17 @@ func (c *SearchClient) getCommonSKUs() []string {
 	}
 }
 
-// SearchPricing contains pricing information for Azure Search
-type SearchPricing struct {
+// SearchPricing contains pricing information for Azure Search.
+type Pricing struct {
+	Currency          string
 	HourlyRate        float64
 	ReservationPrice  float64
 	OnDemandPrice     float64
-	Currency          string
 	SavingsPercentage float64
 }
 
-// getSearchPricing gets real pricing from Azure Retail Prices API
-func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string, termYears int) (*SearchPricing, error) {
+// getSearchPricing gets real pricing from Azure Retail Prices API.
+func (c *Client) getSearchPricing(ctx context.Context, sku, region string, termYears int) (*Pricing, error) {
 	filter := fmt.Sprintf("serviceName eq 'Azure Cognitive Search' and armRegionName eq '%s'", region)
 
 	priceData, err := c.fetchAzurePricing(ctx, filter)
@@ -506,7 +506,7 @@ func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string,
 
 	savingsPercentage := calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice)
 
-	return &SearchPricing{
+	return &Pricing{
 		HourlyRate:        reservationPrice / hoursInTerm,
 		ReservationPrice:  reservationPrice,
 		OnDemandPrice:     onDemandPrice * hoursInTerm,
@@ -515,8 +515,8 @@ func (c *SearchClient) getSearchPricing(ctx context.Context, sku, region string,
 	}, nil
 }
 
-// fetchAzurePricing fetches pricing data from Azure Retail Prices API
-func (c *SearchClient) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
+// fetchAzurePricing fetches pricing data from Azure Retail Prices API.
+func (c *Client) fetchAzurePricing(ctx context.Context, filter string) (*AzureRetailPrice, error) {
 	baseURL := "https://prices.azure.com/api/retail/prices"
 	params := url.Values{}
 	params.Add("$filter", filter)
@@ -524,7 +524,7 @@ func (c *SearchClient) fetchAzurePricing(ctx context.Context, filter string) (*A
 
 	fullURL := baseURL + "?" + params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -536,7 +536,10 @@ func (c *SearchClient) fetchAzurePricing(ctx context.Context, filter string) (*A
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("read error response body: %w", readErr)
+		}
 		return nil, fmt.Errorf("pricing API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -558,11 +561,9 @@ func azureTermString(termYears int) string {
 	return fmt.Sprintf("%d Years", termYears)
 }
 
-// extractSearchPricing extracts on-demand and reservation pricing from price items
+// extractSearchPricing extracts on-demand and reservation pricing from price items.
 func extractSearchPricing(items []struct {
 	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
 	ArmRegionName   string  `json:"armRegionName"`
 	ProductName     string  `json:"productName"`
 	ServiceName     string  `json:"serviceName"`
@@ -570,33 +571,35 @@ func extractSearchPricing(items []struct {
 	MeterName       string  `json:"meterName"`
 	ReservationTerm string  `json:"reservationTerm"`
 	Type            string  `json:"type"`
+	RetailPrice     float64 `json:"retailPrice"`
+	UnitPrice       float64 `json:"unitPrice"`
 }, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 
-	for _, item := range items {
-		if item.CurrencyCode != "" {
-			currency = item.CurrencyCode
+	for i := range items {
+		if items[i].CurrencyCode != "" {
+			currency = items[i].CurrencyCode
 		}
 
-		if item.ReservationTerm != "" && item.ReservationTerm == termStr {
-			reservation = item.RetailPrice
-		} else if item.Type == "Consumption" {
-			onDemand = item.UnitPrice
+		if items[i].ReservationTerm != "" && items[i].ReservationTerm == termStr {
+			reservation = items[i].RetailPrice
+		} else if items[i].Type == "Consumption" {
+			onDemand = items[i].UnitPrice
 		}
 	}
 
 	return onDemand, reservation, currency
 }
 
-// calculateSearchSavingsPercentage calculates the savings percentage
+// calculateSearchSavingsPercentage calculates the savings percentage.
 func calculateSearchSavingsPercentage(onDemandPrice, hoursInTerm, reservationPrice float64) float64 {
 	onDemandTotal := onDemandPrice * hoursInTerm
 	return ((onDemandTotal - reservationPrice) / onDemandTotal) * 100
 }
 
-// convertAzureSearchRecommendation converts Azure Search reservation recommendation to common format
-func (c *SearchClient) convertAzureSearchRecommendation(ctx context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
+// convertAzureSearchRecommendation converts Azure Search reservation recommendation to common format.
+func (c *Client) convertAzureSearchRecommendation(_ context.Context, azureRec armconsumption.ReservationRecommendationClassification) *common.Recommendation {
 	// Extract fields from Azure recommendation using the shared converter
 	extracted := azrecs.Extract(azureRec)
 	if extracted == nil {
