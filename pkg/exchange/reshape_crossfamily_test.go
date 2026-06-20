@@ -44,7 +44,7 @@ func TestAnalyzeReshaping_StandardRIStillSkipped(t *testing.T) {
 }
 
 // TestAnalyzeReshapingWithRecs_RecommendationDrivenAlternatives — the
-// fake lookup returns offerings spanning m5/c5/r5; an underutilised m5
+// fake lookup returns offerings spanning m5/c5/r5; an underutilized m5
 // RI should surface c5 + r5 alternatives (cross-family), with the same
 // family (m5) excluded so the alternatives slice carries only options
 // that differ meaningfully from the primary target. Sort order is
@@ -124,7 +124,7 @@ func TestAnalyzeReshapingWithRecs_EmptyLookupReturnsNoAlternatives(t *testing.T)
 
 // TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter — alternatives
 // that would fail AWS's $-units exchange check are dropped before
-// reaching the UI, matching the existing behaviour of the local
+// reaching the UI, matching the existing behavior of the local
 // pre-filter. Source pricing must be supplied (NF + MonthlyCost) for
 // the gate to engage.
 func TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter(t *testing.T) {
@@ -168,7 +168,7 @@ func TestAnalyzeReshapingWithRecs_NoSourcePricingSkipsFilter(t *testing.T) {
 		return []OfferingOption{
 			// Would normally be dropped if the filter ran, but no source
 			// pricing means we keep today's "show every cross-family match"
-			// behaviour.
+			// behavior.
 			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4},
 			{InstanceType: "r5.large", OfferingID: "off-r5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
 		}, nil
@@ -258,7 +258,7 @@ func TestAnalyzeReshapingWithRecs_NilLookupUsesBaseRecs(t *testing.T) {
 // TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives —
 // post-refactor, "legacy family" support is no longer hand-curated:
 // any cross-family offering returned by the cached recs surfaces as
-// long as it passes the dollar-units check. An underutilised m4 RI
+// long as it passes the dollar-units check. An underutilized m4 RI
 // paired against c5 / r5 / m5 recs surfaces all three (m5 because it
 // is a different family from m4 and the gate accepts).
 func TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives(t *testing.T) {
@@ -357,7 +357,7 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 	)
 	require.Len(t, recs, 1)
 	require.Len(t, recs[0].AlternativeTargets, 1,
-		"source TermSeconds==0 must skip the term gate so today's behaviour is preserved")
+		"source TermSeconds==0 must skip the term gate so today's behavior is preserved")
 	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
 }
 
@@ -369,7 +369,7 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 func TestPassesDollarUnitsCheck(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	cases := []struct { //nolint:govet // fieldalignment: test case struct; layout reflects logical parameter grouping
 		name        string
 		srcNF       float64
 		srcMC       float64
@@ -540,7 +540,7 @@ func TestCompositeScore_HighConfidenceOutranksLow(t *testing.T) {
 }
 
 // TestCompositeScore_AbsentSavingsIsNeutral asserts that an offering with
-// nil SavingsAbs does not get penalised relative to a low-confidence one.
+// nil SavingsAbs does not get penalized relative to a low-confidence one.
 // Per the nullable-not-zero rule, absent data must not be coerced to 0.
 func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
 	t.Parallel()

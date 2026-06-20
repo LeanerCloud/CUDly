@@ -13,26 +13,28 @@ import (
 // ExchangeRecord is a lightweight record type for the auto exchange logic.
 // It mirrors config.RIExchangeRecord but lives in pkg/exchange to avoid
 // cross-module imports (pkg/ is a separate Go module from internal/).
+//
+//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
 type ExchangeRecord struct {
+	CompletedAt        *time.Time
+	ExpiresAt          *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 	ID                 string
 	AccountID          string
 	ExchangeID         string
 	Region             string
-	SourceRIIDs        []string
 	SourceInstanceType string
-	SourceCount        int
 	TargetOfferingID   string
 	TargetInstanceType string
-	TargetCount        int
 	PaymentDue         string
 	Status             string
 	ApprovalToken      string
 	Error              string
 	Mode               string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	CompletedAt        *time.Time
-	ExpiresAt          *time.Time
+	SourceRIIDs        []string
+	SourceCount        int
+	TargetCount        int
 }
 
 // RIExchangeStore is the subset of store operations needed by RunAutoExchange.
@@ -46,6 +48,8 @@ type RIExchangeStore interface {
 }
 
 // ExchangeClientInterface abstracts the ExchangeClient for testability.
+//
+//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
 type ExchangeClientInterface interface {
 	GetQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error)
 	Execute(ctx context.Context, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error)
@@ -70,13 +74,12 @@ type RunAutoExchangeParams struct {
 	LookupOffering LookupOfferingFunc
 	RIs            []RIInfo
 	Utilization    []UtilizationInfo
-	Config         RIExchangeConfig
 	AccountID      string
 	Region         string
 	DashboardURL   string
-
 	// RIMetadata maps RI ID to its metadata (product description, tenancy, scope, duration).
 	RIMetadata map[string]RIMetadataInfo
+	Config     RIExchangeConfig
 }
 
 // RIMetadataInfo holds the offering metadata for a specific RI.
@@ -97,6 +100,8 @@ type AutoExchangeResult struct {
 }
 
 // ExchangeOutcome captures the result of a single exchange attempt.
+//
+//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
 type ExchangeOutcome struct {
 	RecordID           string
 	ApprovalToken      string
@@ -104,11 +109,11 @@ type ExchangeOutcome struct {
 	SourceInstanceType string
 	TargetInstanceType string
 	TargetOfferingID   string
-	TargetCount        int32
 	PaymentDue         string
 	ExchangeID         string
-	UtilizationPct     float64
 	Error              string
+	UtilizationPct     float64
+	TargetCount        int32
 }
 
 // SkippedRecommendation captures a recommendation that was not processed.
@@ -121,19 +126,19 @@ type SkippedRecommendation struct {
 const staleProcessingThreshold = 15 * time.Minute
 
 // RunAutoExchange orchestrates automated RI exchanges.
-func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoExchangeResult, error) {
+func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoExchangeResult, error) { //nolint:gocritic // hugeParam: params is a dependency-injection bundle; pointer semantics would cascade to all callers
 	result := &AutoExchangeResult{Mode: params.Config.Mode}
 
 	// 1. Cancel all stale pending records.
 	// Race condition note: if a user clicks approve at 5h59m while this new run
 	// fires and cancels pending records, the TransitionRIExchangeStatus atomic
-	// WHERE clause prevents the exchange from executing (record already cancelled
+	// WHERE clause prevents the exchange from executing (record already canceled
 	// → returns nil → handler returns 409).
-	cancelled, err := params.Store.CancelAllPendingExchanges(ctx)
+	canceled, err := params.Store.CancelAllPendingExchanges(ctx)
 	if err != nil {
 		logging.Warnf("failed to cancel pending exchanges: %v", err)
-	} else if cancelled > 0 {
-		logging.Infof("cancelled %d stale pending exchange records", cancelled)
+	} else if canceled > 0 {
+		logging.Infof("canceled %d stale pending exchange records", canceled)
 	}
 
 	// 2. Log warning for stale processing records
@@ -141,9 +146,9 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 	if err != nil {
 		logging.Warnf("failed to check stale processing exchanges: %v", err)
 	}
-	for _, s := range stale {
+	for i := range stale {
 		logging.Warnf("stale processing exchange: record_id=%s account_id=%s source_ri_ids=%v updated_at=%s",
-			s.ID, s.AccountID, s.SourceRIIDs, s.UpdatedAt.Format(time.RFC3339))
+			stale[i].ID, stale[i].AccountID, stale[i].SourceRIIDs, stale[i].UpdatedAt.Format(time.RFC3339))
 	}
 
 	// 3. Analyze reshaping
@@ -157,8 +162,8 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 
 	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
 
-	for _, rec := range recs {
-		processRecommendation(ctx, params, rec, perExchangeCap, result)
+	for i := range recs {
+		processRecommendation(ctx, params, recs[i], perExchangeCap, result)
 	}
 
 	return result, nil
@@ -166,7 +171,7 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 
 // processRecommendation handles a single reshape recommendation: validates,
 // quotes, and either creates a pending record (manual) or executes (auto).
-func processRecommendation(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) {
+func processRecommendation(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	// Skip idle RIs with no target
 	if rec.TargetInstanceType == "" {
 		result.Skipped = append(result.Skipped, SkippedRecommendation{
@@ -213,7 +218,7 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 
 // resolveOffering looks up RI metadata and finds the target offering ID.
 // Returns the offering ID on success, or a SkippedRecommendation on failure.
-func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation) (string, *SkippedRecommendation) {
+func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation) (string, *SkippedRecommendation) { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	meta, ok := params.RIMetadata[rec.SourceRIID]
 	if !ok {
 		return "", &SkippedRecommendation{
@@ -238,7 +243,7 @@ func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec Resh
 
 // getValidatedQuote fetches and validates an exchange quote.
 // Returns the quote on success, or a SkippedRecommendation on failure.
-func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID string, perExchangeCap *big.Rat) (*ExchangeQuoteSummary, *SkippedRecommendation) {
+func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID string, perExchangeCap *big.Rat) (*ExchangeQuoteSummary, *SkippedRecommendation) { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	quote, err := params.ExchangeClient.GetQuote(ctx, ExchangeQuoteRequest{
 		Region:           params.Region,
 		ReservedIDs:      []string{rec.SourceRIID},
@@ -274,7 +279,7 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 	return quote, nil
 }
 
-func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
+func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	token, err := common.GenerateApprovalToken()
 	if err != nil {
 		logging.Errorf("failed to generate approval token for %s: %v", rec.SourceRIID, err)
@@ -349,7 +354,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 // succeeds and the second fails because AWS replaces the source RI atomically.
 // No DB-level mutex is needed — AWS itself guarantees idempotency (an RI can
 // only be exchanged once). The failed attempt is recorded with status=failed.
-func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) ExchangeOutcome {
+func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) ExchangeOutcome { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	outcome := ExchangeOutcome{
 		SourceRIID:         rec.SourceRIID,
 		SourceInstanceType: rec.SourceInstanceType,
@@ -443,6 +448,8 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 // `saveFailedRecord` (and any future caller) can't silently leak a typo into
 // `ExchangeRecord.Mode`. The storage field stays `string` for serialization
 // stability — this is a call-site discipline, not a schema change.
+//
+//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
 type ExchangeMode string
 
 const (
@@ -453,7 +460,7 @@ const (
 // saveFailedRecord persists a failed exchange attempt for DB audit.
 // `mode` distinguishes auto-mode failures from manual-mode failures so
 // downstream filters/UI can split the two.
-func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode ExchangeMode) {
+func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode ExchangeMode) { //nolint:gocritic // hugeParam: params+rec are data aggregates; pointer semantics would cascade to all callers
 	record := &ExchangeRecord{
 		AccountID:          params.AccountID,
 		Region:             params.Region,

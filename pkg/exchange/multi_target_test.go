@@ -11,7 +11,7 @@ import (
 
 // fakeEC2 is a test double for EC2ExchangeAPI that records inputs and
 // returns caller-supplied outputs. Enough for verifying request shape —
-// tests that need live EC2 behaviour go in the sanity-test suite.
+// tests that need live EC2 behavior go in the sanity-test suite.
 type fakeEC2 struct {
 	quoteInput   *ec2.GetReservedInstancesExchangeQuoteInput
 	quoteOutput  *ec2.GetReservedInstancesExchangeQuoteOutput
@@ -73,7 +73,7 @@ func TestGetQuote_MultiTargetOverridesLegacy(t *testing.T) {
 		},
 		// When Targets is set, these legacy fields must be ignored —
 		// silently preferring one over the other would otherwise leak
-		// surprising behaviour to callers that populate both.
+		// surprising behavior to callers that populate both.
 		TargetOfferingID: "off-LEGACY",
 		TargetCount:      99,
 	})

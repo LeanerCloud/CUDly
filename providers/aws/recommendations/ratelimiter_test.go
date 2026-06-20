@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// throttleError implements the errorCoder interface used by isThrottleError
+// throttleError implements the errorCoder interface used by isThrottleError.
 type throttleError struct {
 	code string
 	msg  string
