@@ -23,7 +23,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 
 	notified := 0
 	for i := range plans {
-		if m.shouldNotifyPlan(plans[i]) {
+		if m.shouldNotifyPlan(&plans[i]) {
 			if m.sendPlanNotification(ctx, &plans[i]) {
 				notified++
 			}
@@ -36,7 +36,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 }
 
 // shouldNotifyPlan checks if a plan should trigger a notification.
-func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool { //nolint:gocritic // hugeParam: callers pass plan from range loop; changing to pointer cascades to SendUpcomingPurchaseNotifications
+func (m *Manager) shouldNotifyPlan(plan *config.PurchasePlan) bool {
 	if !plan.Enabled || !plan.AutoPurchase {
 		return false
 	}
@@ -86,7 +86,7 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 	}
 
 	// Send notification
-	data := m.buildNotificationData(*plan, execution, daysUntil, notifyEmail)
+	data := m.buildNotificationData(plan, execution, daysUntil, notifyEmail)
 	if err := m.email.SendScheduledPurchaseNotification(ctx, data); err != nil {
 		logging.Errorf("Failed to send notification: %v", err)
 		return false
@@ -142,7 +142,7 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 // buildNotificationData creates notification data from plan and execution.
 // notifyEmail is the global notification address from GlobalConfig; it is set
 // as RecipientEmail so the token-bearing body routes through targeted SES.
-func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int, notifyEmail string) email.NotificationData { //nolint:gocritic // hugeParam: plan passed from caller-owned PurchasePlan; extracting pointer would complicate call site at sendPlanNotification
+func (m *Manager) buildNotificationData(plan *config.PurchasePlan, exec *config.PurchaseExecution, daysUntil int, notifyEmail string) email.NotificationData {
 	data := email.NotificationData{
 		DashboardURL:      m.dashboardURL,
 		ApprovalToken:     exec.ApprovalToken,

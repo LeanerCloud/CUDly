@@ -59,7 +59,7 @@ func TestDetermineCSVCoverage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := determineCSVCoverage(tt.cfg)
+			result := determineCSVCoverage(&tt.cfg)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
