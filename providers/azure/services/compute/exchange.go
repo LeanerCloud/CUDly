@@ -26,37 +26,15 @@ import (
 // ExchangeableReservation represents an Azure VM reservation that is
 // eligible for exchange.
 type ExchangeableReservation struct {
-	// ReservationOrderID is the GUID of the parent reservation order,
-	// parsed from the ARM resource ID. Required by CalculateExchange.
-	ReservationOrderID string `json:"reservation_order_id"`
-
-	// ReservationID is the full ARM resource ID of the reservation item,
-	// e.g. /providers/Microsoft.Capacity/reservationOrders/{orderID}/reservations/{resID}.
-	// Used as the source identifier in CalculateExchange.ReservationsToExchange.
-	ReservationID string `json:"reservation_id"`
-
-	// SKU is the VM size (e.g. "Standard_D2s_v3").
-	SKU string `json:"sku"`
-
-	// Quantity is the number of VM instances covered.
-	Quantity int32 `json:"quantity"`
-
-	// Region is the ARM region name (e.g. "eastus"). May be empty for
-	// reservations with AppliedScopeType == Shared.
-	Region string `json:"region,omitempty"`
-
-	// Term is the reservation term in ISO 8601 duration format ("P1Y" or "P3Y").
-	Term string `json:"term,omitempty"`
-
-	// ExpiryDate is when the reservation expires. Zero if not set by Azure.
-	ExpiryDate time.Time `json:"expiry_date,omitempty"`
-
-	// InstanceFlexibility reports the instance size flexibility setting.
-	// Always "On" for reservations returned by this function.
-	InstanceFlexibility string `json:"instance_flexibility"`
-
-	// DisplayName is the human-readable reservation name set at purchase time.
-	DisplayName string `json:"display_name,omitempty"`
+	ExpiryDate          time.Time `json:"expiry_date,omitempty"`
+	ReservationOrderID  string    `json:"reservation_order_id"`
+	ReservationID       string    `json:"reservation_id"`
+	SKU                 string    `json:"sku"`
+	Region              string    `json:"region,omitempty"`
+	Term                string    `json:"term,omitempty"`
+	InstanceFlexibility string    `json:"instance_flexibility"`
+	DisplayName         string    `json:"display_name,omitempty"`
+	Quantity            int32     `json:"quantity"`
 }
 
 // ExchangeableReservationPager defines the paging contract for listing
@@ -122,7 +100,7 @@ func (c *ComputeClient) collectExchangeableReservations(ctx context.Context, pag
 		if err != nil {
 			return nil, fmt.Errorf("compute: list exchangeable reservations: page: %w", err)
 		}
-		for _, item := range page.ListResult.Value {
+		for _, item := range page.Value {
 			r := convertToExchangeableReservation(item)
 			if r != nil {
 				result = append(result, *r)
@@ -154,6 +132,8 @@ func isExchangeEligible(item *armreservations.ReservationResponse) bool {
 
 // extractReservationFields reads the optional pointer fields from item and its
 // Properties, returning safe zero values for any nil pointers.
+//
+//nolint:gocritic // tooManyResultsChecker: 7 returns map 1:1 to ExchangeableReservation fields; grouping into a struct would add indirection with no clarity gain
 func extractReservationFields(item *armreservations.ReservationResponse) (id, sku, region, term, displayName string, quantity int32, expiryDate time.Time) {
 	props := item.Properties // guaranteed non-nil by isExchangeEligible
 	if item.ID != nil {
