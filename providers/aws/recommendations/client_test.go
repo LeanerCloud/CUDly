@@ -67,7 +67,7 @@ func TestNewClient(t *testing.T) {
 		Region: "us-west-2",
 	}
 
-	client := NewClient(cfg)
+	client := NewClient(&cfg)
 
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.costExplorerClient)
