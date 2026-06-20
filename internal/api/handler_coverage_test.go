@@ -48,7 +48,7 @@ func TestHandler_buildResponse_NilBody(t *testing.T) {
 	resp := handler.buildResponse(200, headers, nil, nil)
 
 	assert.Equal(t, 200, resp.StatusCode)
-	// Q1 (Phase-2 UX plan): nil-body success serialises as "{}" so the
+	// Q1 (Phase-2 UX plan): nil-body success serializes as "{}" so the
 	// frontend's response.json() doesn't throw SyntaxError on DELETE and
 	// other empty-response paths.
 	assert.Equal(t, "{}", resp.Body)
@@ -635,7 +635,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 	})
 }
 
-// Test handler_plans functions
+// Test handler_plans functions.
 func TestHandler_listPlans_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -803,7 +803,7 @@ func TestToAPIPermissions_ReturnsCopy(t *testing.T) {
 	assert.Equal(t, "read", src[0].Action, "original slice must not be mutated")
 }
 
-// Test NewHandler with API key loaded
+// Test NewHandler with API key loaded.
 func TestNewHandler_WithDependencies(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockScheduler := new(MockScheduler)

@@ -13,7 +13,7 @@ import (
 var _ credentials.CredentialStore = (*MockCredentialStore)(nil) // compile-time interface check
 
 // MockConfigStore is the shared testify mock for config.StoreInterface.
-// All Fn-override fields and default behaviours live in internal/mocks.
+// All Fn-override fields and default behaviors live in internal/mocks.
 type MockConfigStore = mocks.MockConfigStore
 
 // MockCredentialStore is a simple stub implementing credentials.CredentialStore.
@@ -256,7 +256,7 @@ func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID stri
 	return args.Get(0), args.Error(1)
 }
 
-// grantAdmin makes every HasPermissionAPI check succeed, modelling an
+// grantAdmin makes every HasPermissionAPI check succeed, modeling an
 // Administrators-group member. Authorization is group-membership-only after
 // issue #907, so admin-gated handlers resolve "is admin" / specific permissions
 // through HasPermissionAPI rather than a Session.Role short-circuit; tests that

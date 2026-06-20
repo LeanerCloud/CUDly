@@ -226,7 +226,7 @@ func TestHandler_deleteUser_SelfDeletion(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot delete your own account")
 }
 
-// Group management endpoint tests
+// Group management endpoint tests.
 func TestHandler_createUser_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)

@@ -16,13 +16,13 @@ import (
 // This implementation uses a sliding window algorithm with the database as the backend,
 // making it suitable for Lambda functions and distributed systems.
 type DBRateLimiter struct {
-	pool            *pgxpool.Pool
-	limits          map[string]RateLimitConfig // endpoint -> config
-	limitsMu        sync.RWMutex
 	lastCleanup     time.Time
+	pool            *pgxpool.Pool
+	limits          map[string]RateLimitConfig
+	cleanupInterval time.Duration
+	limitsMu        sync.RWMutex
 	cleanupMu       sync.Mutex
 	cleanupRunning  atomic.Bool
-	cleanupInterval time.Duration
 }
 
 // Verify that DBRateLimiter implements RateLimiterInterface
@@ -50,7 +50,7 @@ func NewDBRateLimiter(pool *pgxpool.Pool) *DBRateLimiter {
 //
 // This ensures that perpetually-denied keys (whose count never resets to 1)
 // are also evicted, preventing unbounded row growth on the rate_limits table
-// under sustained abuse (02-M2). The goroutine stops when ctx is cancelled.
+// under sustained abuse (02-M2). The goroutine stops when ctx is canceled.
 //
 // Call this once at server startup after creating the DBRateLimiter. The
 // goroutine is lightweight (one blocked timer channel) and safe to call from
@@ -91,7 +91,7 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // production — see commit 9fa4170a1's sibling note in
 // known_issues/05_config_store_postgres.md).
 //
-// Behaviour: each call increments `count` (or resets to 1 if the
+// Behavior: each call increments `count` (or resets to 1 if the
 // window has expired). The returned `count` is then compared to
 // `config.MaxAttempts` to decide allow/deny. `count` may temporarily
 // drift past MaxAttempts under sustained over-limit traffic — the

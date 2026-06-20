@@ -28,9 +28,8 @@ func (s *stubCommitmentOpts) Validate(ctx context.Context, provider, service str
 func TestGetCommitmentOptions_NilService_ReturnsUnavailable(t *testing.T) {
 	h := &Handler{commitmentOpts: nil}
 
-	resp, err := h.getCommitmentOptions(context.Background())
+	resp := h.getCommitmentOptions(context.Background())
 
-	require.NoError(t, err)
 	assert.Equal(t, "unavailable", resp.Status)
 	assert.Nil(t, resp.AWS)
 }
@@ -42,9 +41,8 @@ func TestGetCommitmentOptions_ErrNoData_ReturnsUnavailable(t *testing.T) {
 		},
 	}}
 
-	resp, err := h.getCommitmentOptions(context.Background())
+	resp := h.getCommitmentOptions(context.Background())
 
-	require.NoError(t, err)
 	assert.Equal(t, "unavailable", resp.Status)
 	assert.Nil(t, resp.AWS)
 }
@@ -60,9 +58,8 @@ func TestGetCommitmentOptions_UnexpectedError_CollapsesToUnavailable(t *testing.
 		},
 	}}
 
-	resp, err := h.getCommitmentOptions(context.Background())
+	resp := h.getCommitmentOptions(context.Background())
 
-	require.NoError(t, err)
 	assert.Equal(t, "unavailable", resp.Status)
 	assert.Nil(t, resp.AWS)
 }
@@ -86,9 +83,8 @@ func TestGetCommitmentOptions_EmptyAWS_CollapsesToUnavailable(t *testing.T) {
 		},
 	}}
 
-	resp, err := h.getCommitmentOptions(context.Background())
+	resp := h.getCommitmentOptions(context.Background())
 
-	require.NoError(t, err)
 	assert.Equal(t, "unavailable", resp.Status)
 	assert.Nil(t, resp.AWS)
 }
@@ -112,9 +108,8 @@ func TestGetCommitmentOptions_Success_ReturnsAWSCombos(t *testing.T) {
 		},
 	}}
 
-	resp, err := h.getCommitmentOptions(context.Background())
+	resp := h.getCommitmentOptions(context.Background())
 
-	require.NoError(t, err)
 	assert.Equal(t, "ok", resp.Status)
 	assert.Len(t, resp.AWS["rds"], 3)
 	assert.Len(t, resp.AWS["elasticache"], 2)

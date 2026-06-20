@@ -15,16 +15,16 @@ import (
 // omitted — those commitment rules stay hardcoded in the frontend because
 // their APIs don't expose a comparable probe.
 type commitmentOptionsResponse struct {
-	Status string                             `json:"status"`
 	AWS    map[string][]commitmentOptionCombo `json:"aws,omitempty"`
+	Status string                             `json:"status"`
 }
 
 // commitmentOptionCombo is one (term, payment) tuple as the frontend
 // consumes it. Dropping Provider/Service from the persisted Combo shape
 // keeps the wire payload compact.
 type commitmentOptionCombo struct {
-	Term    int    `json:"term"`
 	Payment string `json:"payment"`
+	Term    int    `json:"term"`
 }
 
 // getCommitmentOptions returns the dynamically-probed AWS commitment
@@ -32,9 +32,9 @@ type commitmentOptionCombo struct {
 // {"status":"unavailable"} (200, not a 5xx) so the frontend can fall
 // back to its hardcoded defaults without tripping the generic
 // error-toast path.
-func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsResponse, error) {
+func (h *Handler) getCommitmentOptions(ctx context.Context) *commitmentOptionsResponse {
 	if h.commitmentOpts == nil {
-		return &commitmentOptionsResponse{Status: "unavailable"}, nil
+		return &commitmentOptionsResponse{Status: "unavailable"}
 	}
 	opts, err := h.commitmentOpts.Get(ctx)
 	if err != nil {
@@ -46,7 +46,7 @@ func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsR
 		if !errors.Is(err, commitmentopts.ErrNoData) {
 			logging.Warnf("commitmentopts handler: %v", err)
 		}
-		return &commitmentOptionsResponse{Status: "unavailable"}, nil
+		return &commitmentOptionsResponse{Status: "unavailable"}
 	}
 
 	awsOpts := opts["aws"]
@@ -62,7 +62,7 @@ func (h *Handler) getCommitmentOptions(ctx context.Context) (*commitmentOptionsR
 		// filtered out by normalization). Treat as unavailable so the
 		// frontend falls through to its hardcoded rules rather than
 		// rendering an empty constraint set.
-		return &commitmentOptionsResponse{Status: "unavailable"}, nil
+		return &commitmentOptionsResponse{Status: "unavailable"}
 	}
-	return &commitmentOptionsResponse{Status: "ok", AWS: out}, nil
+	return &commitmentOptionsResponse{Status: "ok", AWS: out}
 }

@@ -17,7 +17,7 @@ type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest
 // if any registered route leaves it at the zero value. See the const
 // block below for the AuthAdmin / AuthUser / AuthPublic options.
 //
-// Router.Route enforces these levels itself as a defence-in-depth check,
+// Router.Route enforces these levels itself as a defense-in-depth check,
 // in addition to the validateSecurity → authenticate middleware that runs
 // earlier in the request pipeline. If middleware ordering ever changes or
 // a new route bypasses validateSecurity, the router-level enforcement
@@ -50,26 +50,18 @@ const (
 
 // Route defines a routing rule
 type Route struct {
-	// Pattern matching fields
-	ExactPath  string // Exact path match (e.g., "/api/health")
-	PathPrefix string // Path must start with this (e.g., "/api/users/")
-	PathSuffix string // Path must end with this (e.g., "/revoke")
-	Method     string // HTTP method (e.g., "GET", "POST")
-
-	// Handler function
-	Handler RouteHandler
-
-	// Auth controls authentication level. REQUIRED — leaving this unset
-	// (zero value) causes NewRouter to panic at startup so every route
-	// author makes an explicit AuthAdmin / AuthUser / AuthPublic choice.
-	// See AuthLevel doc for the history behind the mandatory-field rule.
-	Auth AuthLevel
+	Handler    RouteHandler
+	ExactPath  string
+	PathPrefix string
+	PathSuffix string
+	Method     string
+	Auth       AuthLevel
 }
 
 // Router manages request routing
 type Router struct {
-	routes []Route
 	h      *Handler
+	routes []Route
 }
 
 // NewRouter creates a new router with all routes configured.
@@ -363,7 +355,7 @@ func (r *Router) registerRoutes() {
 
 // Route finds and executes the matching route handler.
 //
-// Authentication enforcement is defence-in-depth: validateSecurity →
+// Authentication enforcement is defense-in-depth: validateSecurity →
 // authenticate already runs in the middleware pipeline before dispatch,
 // but Router.Route also enforces the per-route Auth level so routes stay
 // protected even if middleware ordering changes or a new code path
@@ -387,7 +379,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 				// no auth check; relied upon by middleware via isPublicEndpoint
 			default:
 				// authUnset / unknown level — NewRouter should have already
-				// panicked at startup. Defence in depth: refuse to dispatch.
+				// panicked at startup. Defense in depth: refuse to dispatch.
 				return nil, NewClientError(500, "internal routing error")
 			}
 			params := r.extractParams(route, path)
@@ -466,7 +458,7 @@ func (r *Router) updateServiceConfigHandler(ctx context.Context, req *events.Lam
 }
 
 func (r *Router) commitmentOptionsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getCommitmentOptions(ctx)
+	return r.h.getCommitmentOptions(ctx), nil
 }
 
 func (r *Router) getRecommendationsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
@@ -734,8 +726,8 @@ func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFun
 	return r.h.getPublicInfo(ctx, req)
 }
 
-func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getVersion(ctx, req)
+func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.getVersion(ctx, req), nil
 }
 
 func (r *Router) getDeploymentInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

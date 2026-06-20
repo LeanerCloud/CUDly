@@ -238,7 +238,7 @@ func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string)
 // requireAuth verifies the request carries a valid authentication credential
 // of any kind (admin API key, user API key, or session bearer token).
 //
-// Used as a defence-in-depth check by Router.Route for AuthUser routes:
+// Used as a defense-in-depth check by Router.Route for AuthUser routes:
 // validateSecurity → authenticate already runs before dispatch, but if a
 // future refactor reorders middleware or a new route bypasses
 // validateSecurity, this check still rejects unauthenticated requests at

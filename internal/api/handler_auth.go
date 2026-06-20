@@ -31,11 +31,11 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 	}
 
 	// Decode base64-encoded password
-	if decoded, err := decodeBase64Password(loginReq.Password); err != nil {
+	decoded, err := decodeBase64Password(loginReq.Password)
+	if err != nil {
 		return nil, err
-	} else {
-		loginReq.Password = decoded
 	}
+	loginReq.Password = decoded
 
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
@@ -43,7 +43,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 		// frontend can detect "MFA required" / "invalid MFA code"
 		// without substring-matching the human message (issue #497).
 		// Both keep the 401 status — the password leg passed, but
-		// the request is not authorised until the MFA leg is too.
+		// the request is not authorized until the MFA leg is too.
 		if errors.Is(err, auth.ErrMFARequired) {
 			return nil, NewClientError(401, "mfa_required")
 		}
@@ -205,7 +205,7 @@ func (h *Handler) resolveAuthenticatedUserID(ctx context.Context, req *events.La
 	return session.UserID, nil
 }
 
-func (h *Handler) checkAdminExists(ctx context.Context, req *events.LambdaFunctionURLRequest) (*AdminExistsResponse, error) {
+func (h *Handler) checkAdminExists(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*AdminExistsResponse, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
 	}
@@ -383,12 +383,14 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 
 	// Parse request body
 	var profileReq ProfileUpdateRequest
-	if err := json.Unmarshal([]byte(req.Body), &profileReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &profileReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
 	// Validate email format before decoding passwords (cheap check first).
-	if err := validateEmailFormat(profileReq.Email); err != nil {
+	err = validateEmailFormat(profileReq.Email)
+	if err != nil {
 		return nil, err
 	}
 
@@ -399,7 +401,8 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	// Update profile through auth service
-	if err := h.auth.UpdateUserProfile(ctx, session.UserID, profileReq.Email, currentPassword, newPassword); err != nil {
+	err = h.auth.UpdateUserProfile(ctx, session.UserID, profileReq.Email, currentPassword, newPassword)
+	if err != nil {
 		return nil, mapProfileUpdateError(err)
 	}
 
@@ -461,7 +464,7 @@ func decodeChangePasswordRequest(pwdReq ChangePasswordRequest) (current, next st
 	return current, next, nil
 }
 
-// changePassword handles POST /api/auth/change-password
+// changePassword handles POST /api/auth/change-password.
 func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
@@ -483,7 +486,8 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 	}
 
 	var pwdReq ChangePasswordRequest
-	if err := json.Unmarshal([]byte(req.Body), &pwdReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &pwdReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -492,7 +496,8 @@ func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunction
 		return nil, err
 	}
 
-	if err := h.auth.ChangePasswordAPI(ctx, session.UserID, currentPassword, newPassword); err != nil {
+	err = h.auth.ChangePasswordAPI(ctx, session.UserID, currentPassword, newPassword)
+	if err != nil {
 		return nil, err
 	}
 
@@ -544,7 +549,8 @@ func (h *Handler) mfaSetup(ctx context.Context, req *events.LambdaFunctionURLReq
 		return nil, err
 	}
 	var body MFASetupRequest
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 	password, err := decodeBase64Password(body.Password)
@@ -567,7 +573,8 @@ func (h *Handler) mfaEnable(ctx context.Context, req *events.LambdaFunctionURLRe
 		return nil, err
 	}
 	var body MFAEnableRequest
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 	codes, err := h.auth.MFAEnableAPI(ctx, session.UserID, body.Code)
@@ -587,14 +594,16 @@ func (h *Handler) mfaDisable(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 	var body MFADisableRequest
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 	password, err := decodeBase64Password(body.Password)
 	if err != nil {
 		return nil, err
 	}
-	if err := h.auth.MFADisableAPI(ctx, session.UserID, password, body.Code); err != nil {
+	err = h.auth.MFADisableAPI(ctx, session.UserID, password, body.Code)
+	if err != nil {
 		return nil, mapMFAServiceError(err)
 	}
 	return &StatusResponse{Status: "mfa disabled"}, nil
@@ -610,7 +619,8 @@ func (h *Handler) mfaRegenerateRecoveryCodes(ctx context.Context, req *events.La
 		return nil, err
 	}
 	var body MFARegenerateRequest
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 	codes, err := h.auth.MFARegenerateRecoveryCodesAPI(ctx, session.UserID, body.Code)
@@ -621,7 +631,7 @@ func (h *Handler) mfaRegenerateRecoveryCodes(ctx context.Context, req *events.La
 }
 
 // redactEmail returns a redacted version of an email address for safe logging.
-// e.g. "user@example.com" -> "us***@example.com"
+// e.g. "user@example.com" -> "us***@example.com".
 func redactEmail(email string) string {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {

@@ -51,7 +51,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// (purchase_executions) from the completed purchase_history rows, so we
 	// merge after the fact. A failure to list executions must not hide
 	// completed history — log, skip, continue. The same filter set is applied
-	// here (in-memory against the synthesised row's recommendations and
+	// here (in-memory against the synthesized row's recommendations and
 	// scheduled_date) so the two halves of the merged response are
 	// consistently scoped (issue #701).
 	//
@@ -95,7 +95,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // states too, rendered with a clear "in progress" badge rather than as a
 // (misleading) completed row.
 //
-// "completed" is also loaded, but fetchExecutionsAsHistory synthesises a
+// "completed" is also loaded, but fetchExecutionsAsHistory synthesizes a
 // row for it ONLY when the execution carries a non-empty Error — the
 // audit-gap case where the purchase succeeded but its purchase_history
 // write failed (issue #621 secondary path). A normal completed execution
@@ -104,9 +104,9 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // the ExecutionID while a purchase_history row's is the CommitmentID, so
 // the keys never collide even when both happen to render.
 //
-// "partially_completed" (issue #642) is loaded and ALWAYS synthesised: a
+// "partially_completed" (issue #642) is loaded and ALWAYS synthesized: a
 // partial run committed some recs to purchase_history (those render from the
-// DB rows) and failed others. The synthesised execution row carries the
+// DB rows) and failed others. The synthesized execution row carries the
 // partial-failure marker and is flagged IsAuditGap so its execution-level
 // dollars are excluded from the dashboard totals — the committed dollars are
 // already counted via the per-rec purchase_history rows that succeeded.
@@ -155,7 +155,7 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		// Dedup: a normal completed execution is already represented by its
 		// purchase_history rows. Skip it here so it shows exactly once. Only
 		// completed executions carrying an audit-gap Error (history write
-		// failed after a successful purchase, issue #621) are synthesised —
+		// failed after a successful purchase, issue #621) are synthesized —
 		// those have no purchase_history row to collide with.
 		if exec.Status == "completed" && exec.Error == "" {
 			continue
@@ -386,7 +386,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		row.StatusDescription = "purchase paused — resume or cancel from the plan"
 	case "partially_completed":
 		// #642: some recs committed, some failed. The committed recs are
-		// surfaced via their own purchase_history rows; this synthesised row
+		// surfaced via their own purchase_history rows; this synthesized row
 		// is the audit flag for the failures. Flag IsAuditGap so the dashboard
 		// excludes its execution-level dollars (the committed dollars are
 		// counted on the per-rec purchase_history rows, not here) — same
@@ -606,7 +606,7 @@ const MaxHistoryDateRangeDays = 366
 
 // historyFilters carries the shared filter set used by both halves of the
 // merged /api/history response: the SQL path (purchase_history rows in
-// fetchPurchaseHistory) and the in-memory path (synthesised execution rows
+// fetchPurchaseHistory) and the in-memory path (synthesized execution rows
 // in fetchExecutionsAsHistory). Keeping them in one struct guarantees the
 // two halves stay scoped consistently — the bug behind issue #701 was that
 // the executions path ignored the filters the SQL path was supposed to apply.
@@ -625,24 +625,14 @@ const MaxHistoryDateRangeDays = 366
 // times are zero-valued and the SQL/in-memory date predicates are skipped
 // entirely (so legacy clients that don't send dates keep working).
 type historyFilters struct {
-	Provider        string
-	LegacyAccountID string
-	AccountIDs      []string
-	// ExternalIDsByProvider are the cloud-provider external account numbers
-	// resolved from AccountIDs (the UUIDs) via Handler.resolveAccountFilterIDs,
-	// grouped by provider so the external-id match stays provider-scoped (a
-	// reused external number across providers cannot leak rows). Populated by
-	// the handler AFTER parse (the resolution needs a DB read), not by
-	// parseHistoryFilters. Both the SQL path (provider = $p AND account_id =
-	// ANY) and the in-memory matchesExecution use them so a row/execution that
-	// carries only the external id (cloud_account_id NULL) is still matched
-	// (issue #701/#498). The "" provider key means "provider unknown" and
-	// matches the external id regardless of provider (legacy behaviour).
-	ExternalIDsByProvider map[string][]string
-	HasDate               bool
 	Start                 time.Time
 	End                   time.Time
+	ExternalIDsByProvider map[string][]string
+	Provider              string
+	LegacyAccountID       string
+	AccountIDs            []string
 	Limit                 int
+	HasDate               bool
 }
 
 // parseHistoryFilters validates and normalises the /api/history query string.
@@ -1029,14 +1019,14 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 			continue
 		}
 		summary.TotalCompleted++
-		// Audit-gap completed rows (issue #621) are synthesised execution rows
+		// Audit-gap completed rows (issue #621) are synthesized execution rows
 		// whose purchase_history write failed. Count them as completed (the
 		// money WAS committed and they must stay visible) but exclude their
 		// execution-level dollars: a partially-saved multi-rec execution can
-		// have BOTH some purchase_history rows AND this synthesised row, and
+		// have BOTH some purchase_history rows AND this synthesized row, and
 		// adding the full execution total here would double-count the recs that
 		// did save. The dollars are surfaced via the individual purchase_history
-		// rows that succeeded; the synthesised row is the audit flag, not a
+		// rows that succeeded; the synthesized row is the audit flag, not a
 		// money source. IsAuditGap is the explicit marker: real purchase_history
 		// rows loaded from the DB always leave it false, so a future change that
 		// annotates completed DB rows can't silently drop them from the totals.
