@@ -9,9 +9,9 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// Group management handlers
+// Group management handlers.
 
-// listGroups handles GET /api/groups
+// listGroups handles GET /api/groups.
 func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "groups"); err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func (h *Handler) listGroups(ctx context.Context, req *events.LambdaFunctionURLR
 	return map[string]any{"groups": groups}, nil
 }
 
-// createGroup handles POST /api/groups
+// createGroup handles POST /api/groups.
 func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "create", "groups")
 	if err != nil {
@@ -34,7 +34,8 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 
 	// Rate limiting: 30 admin operations per user per minute
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		var allowed bool
+		allowed, err = h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
 			// Log but continue on rate limiter errors
 		} else if !allowed {
@@ -43,7 +44,7 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 	}
 
 	var createReq auth.APICreateGroupRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	if err = json.Unmarshal([]byte(req.Body), &createReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -55,7 +56,7 @@ func (h *Handler) createGroup(ctx context.Context, req *events.LambdaFunctionURL
 	return group, nil
 }
 
-// getGroup handles GET /api/groups/{id}
+// getGroup handles GET /api/groups/{id}.
 func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {
@@ -74,7 +75,7 @@ func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLReq
 	return group, nil
 }
 
-// updateGroup handles PUT /api/groups/{id}
+// updateGroup handles PUT /api/groups/{id}.
 func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {
@@ -98,7 +99,7 @@ func (h *Handler) updateGroup(ctx context.Context, req *events.LambdaFunctionURL
 	return group, nil
 }
 
-// deleteGroup handles DELETE /api/groups/{id}
+// deleteGroup handles DELETE /api/groups/{id}.
 func (h *Handler) deleteGroup(ctx context.Context, req *events.LambdaFunctionURLRequest, groupID string) (any, error) {
 	// Validate UUID format to prevent injection attacks
 	if err := validateUUID(groupID); err != nil {

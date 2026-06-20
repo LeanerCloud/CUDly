@@ -12,38 +12,38 @@ import (
 // TestValidateAWSExternalID covers the issue #128 backend validation
 // invariants for the AWS sts:ExternalId field on the role_arn auth mode.
 // The frontend always populates this field (issue #18 / PR #36) but the
-// backend is the source of truth — defence-in-depth requires that empty
+// backend is the source of truth — defense-in-depth requires that empty
 // / out-of-range / disallowed-charset values are rejected with 400s on
 // both create and update.
 func TestValidateAWSExternalID(t *testing.T) {
 	cases := []struct {
 		name        string
 		input       string
-		wantError   bool
 		errContains string
+		wantError   bool
 	}{
 		// --- Valid values ---
-		{"uuid", "550e8400-e29b-41d4-a716-446655440000", false, ""},
-		{"32 hex chars", "0123456789abcdef0123456789abcdef", false, ""},
-		{"with all allowed punctuation", "abcd_+=,.@:/-1234", false, ""},
-		{"max length boundary - 1224 chars", strings.Repeat("a", 1224), false, ""},
-		{"min length boundary - 16 chars", "0123456789abcdef", false, ""},
+		{name: "uuid", input: "550e8400-e29b-41d4-a716-446655440000"},
+		{name: "32 hex chars", input: "0123456789abcdef0123456789abcdef"},
+		{name: "with all allowed punctuation", input: "abcd_+=,.@:/-1234"},
+		{name: "max length boundary - 1224 chars", input: strings.Repeat("a", 1224)},
+		{name: "min length boundary - 16 chars", input: "0123456789abcdef"},
 
 		// --- Invalid: empty / whitespace ---
-		{"empty", "", true, "required"},
-		{"whitespace only", "   \t\n", true, "required"},
+		{name: "empty", input: "", wantError: true, errContains: "required"},
+		{name: "whitespace only", input: "   \t\n", wantError: true, errContains: "required"},
 
 		// --- Invalid: length ---
-		{"too short - 1 char", "x", true, "16-1224"},
-		{"too short - 15 chars", "0123456789abcde", true, "16-1224"},
-		{"too long - 1225 chars", strings.Repeat("a", 1225), true, "16-1224"},
+		{name: "too short - 1 char", input: "x", wantError: true, errContains: "16-1224"},
+		{name: "too short - 15 chars", input: "0123456789abcde", wantError: true, errContains: "16-1224"},
+		{name: "too long - 1225 chars", input: strings.Repeat("a", 1225), wantError: true, errContains: "16-1224"},
 
 		// --- Invalid: charset ---
-		{"contains space", "abcd1234abcd1234 invalid", true, "characters"},
-		{"contains question mark", "abcd1234abcd1234?bad", true, "characters"},
-		{"contains parens", "abcd1234abcd1234(x)", true, "characters"},
-		{"contains semicolon", "abcd1234abcd1234;rm", true, "characters"},
-		{"contains unicode", "abcd1234abcd1234é", true, "characters"},
+		{name: "contains space", input: "abcd1234abcd1234 invalid", wantError: true, errContains: "characters"},
+		{name: "contains question mark", input: "abcd1234abcd1234?bad", wantError: true, errContains: "characters"},
+		{name: "contains parens", input: "abcd1234abcd1234(x)", wantError: true, errContains: "characters"},
+		{name: "contains semicolon", input: "abcd1234abcd1234;rm", wantError: true, errContains: "characters"},
+		{name: "contains unicode", input: "abcd1234abcd1234é", wantError: true, errContains: "characters"},
 	}
 
 	for _, tc := range cases {
@@ -246,7 +246,7 @@ func TestCreateAccount_AWSExternalID_BastionNoRoleArnExempt(t *testing.T) {
 // TestParseArnPartition covers the helper that extracts the partition
 // segment from an STS GetCallerIdentity ARN (issue #130c). The result
 // is interpolated into the IAM trust-policy snippet, so any failure to
-// recognise a known partition must fall back to "" (which the frontend
+// recognize a known partition must fall back to "" (which the frontend
 // then defaults to "aws").
 func TestParseArnPartition(t *testing.T) {
 	cases := []struct {

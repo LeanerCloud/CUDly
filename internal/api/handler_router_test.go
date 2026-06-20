@@ -93,7 +93,7 @@ func TestHandler_createGroup_Error(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// Tests for notFoundError type
+// Tests for notFoundError type.
 func TestNotFoundError_Error(t *testing.T) {
 	err := &notFoundError{}
 	assert.Equal(t, "not found", err.Error())
@@ -121,7 +121,7 @@ func TestFormatNotFoundError(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-// Tests for clientError type
+// Tests for clientError type.
 func TestClientError_Error(t *testing.T) {
 	err := &clientError{message: "bad request", code: 400}
 	assert.Equal(t, "bad request", err.Error())

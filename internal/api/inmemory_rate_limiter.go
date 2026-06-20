@@ -16,23 +16,23 @@ import (
 // memory growth from rotating attacker source IPs (02-M3).
 const inMemoryRateLimitMaxEntries = 500
 
-// InMemoryRateLimiter provides in-memory rate limiting for single-instance deployments (Fargate, ECS)
-// This implementation should NOT be used for Lambda (multi-instance) - use DBRateLimiter instead
+// InMemoryRateLimiter provides in-memory rate limiting for single-instance deployments (Fargate, ECS).
+// This implementation should NOT be used for Lambda (multi-instance) - use DBRateLimiter instead.
 type InMemoryRateLimiter struct {
-	mu       sync.Mutex
 	attempts map[string]*inMemoryRateLimitEntry
 	limits   map[string]RateLimitConfig // endpoint -> config
+	mu       sync.Mutex
 }
 
 type inMemoryRateLimitEntry struct {
-	count     int
 	resetTime time.Time
+	count     int
 }
 
-// Verify that InMemoryRateLimiter implements RateLimiterInterface
+// Verify that InMemoryRateLimiter implements RateLimiterInterface.
 var _ RateLimiterInterface = (*InMemoryRateLimiter)(nil)
 
-// NewInMemoryRateLimiter creates a new in-memory rate limiter for single-instance deployments
+// NewInMemoryRateLimiter creates a new in-memory rate limiter for single-instance deployments.
 func NewInMemoryRateLimiter() *InMemoryRateLimiter {
 	return &InMemoryRateLimiter{
 		attempts: make(map[string]*inMemoryRateLimitEntry),
@@ -40,7 +40,7 @@ func NewInMemoryRateLimiter() *InMemoryRateLimiter {
 	}
 }
 
-// SetLimit allows customizing rate limits for specific endpoints
+// SetLimit allows customizing rate limits for specific endpoints.
 func (rl *InMemoryRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 	if rl.limits == nil {
 		rl.limits = make(map[string]RateLimitConfig)
@@ -83,15 +83,15 @@ func (rl *InMemoryRateLimiter) evictIfAtCap(now time.Time) {
 // Must be called with rl.mu held.
 func (rl *InMemoryRateLimiter) evictOldest() {
 	type kv struct {
-		key string
-		t   time.Time
+		resetTime time.Time
+		key       string
 	}
 	pairs := make([]kv, 0, len(rl.attempts))
 	for k, v := range rl.attempts {
-		pairs = append(pairs, kv{k, v.resetTime})
+		pairs = append(pairs, kv{v.resetTime, k})
 	}
 	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].t.Before(pairs[j].t)
+		return pairs[i].resetTime.Before(pairs[j].resetTime)
 	})
 	target := inMemoryRateLimitMaxEntries * 4 / 5
 	for i := 0; len(rl.attempts) > target && i < len(pairs); i++ {
@@ -102,7 +102,7 @@ func (rl *InMemoryRateLimiter) evictOldest() {
 // Allow checks if a request should be allowed based on rate limits.
 // The key should be formatted as "IP#{ip}" or "EMAIL#{email}".
 // The endpoint identifies which rate limit configuration to use.
-func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint string) (bool, error) {
+func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key, endpoint string) (bool, error) {
 	if rl == nil {
 		return true, nil
 	}
@@ -133,20 +133,20 @@ func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key string, endpoint s
 	return true, nil
 }
 
-// AllowWithIP is a convenience method that formats the key as an IP-based key
-func (rl *InMemoryRateLimiter) AllowWithIP(ctx context.Context, ip string, endpoint string) (bool, error) {
+// AllowWithIP is a convenience method that formats the key as an IP-based key.
+func (rl *InMemoryRateLimiter) AllowWithIP(ctx context.Context, ip, endpoint string) (bool, error) {
 	key := fmt.Sprintf("IP#%s", ip)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithEmail is a convenience method that formats the key as an email-based key
-func (rl *InMemoryRateLimiter) AllowWithEmail(ctx context.Context, email string, endpoint string) (bool, error) {
+// AllowWithEmail is a convenience method that formats the key as an email-based key.
+func (rl *InMemoryRateLimiter) AllowWithEmail(ctx context.Context, email, endpoint string) (bool, error) {
 	key := fmt.Sprintf("EMAIL#%s", email)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithUser is a convenience method that formats the key as a user-based key
-func (rl *InMemoryRateLimiter) AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error) {
+// AllowWithUser is a convenience method that formats the key as a user-based key.
+func (rl *InMemoryRateLimiter) AllowWithUser(ctx context.Context, userID, endpoint string) (bool, error) {
 	key := fmt.Sprintf("USER#%s", userID)
 	return rl.Allow(ctx, key, endpoint)
 }

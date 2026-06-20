@@ -34,7 +34,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	// without this the commitment KPIs (ActiveCommitments / CommittedMonthly /
 	// CurrentCoverage / YTDSavings) would leak other accounts' data to a scoped
 	// user. Unrestricted / admin sessions resolve to an empty scope and keep the
-	// all-accounts behaviour.
+	// all-accounts behavior.
 	if len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
 		accountUUIDs, accountExternalIDsByProvider, err = h.resolveAllowedAccountScope(ctx, session)
 		if err != nil {
@@ -131,7 +131,7 @@ func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[s
 // explicit filter).
 //
 // Returns (nil, nil, nil) for unrestricted / admin sessions so the caller keeps
-// the all-accounts behaviour. A restricted session that matches no account
+// the all-accounts behavior. A restricted session that matches no account
 // resolves to a non-nil-but-empty UUID set (a sentinel that selects no rows),
 // so a scoped user with zero accessible accounts sees zeroed KPIs rather than
 // everyone's data.
@@ -196,7 +196,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // payment) fan-out does not over-report savings; details in the function body.
 //
 // Recs without a CloudAccountID and recs whose triple has no entry in the
-// map all count at full weight — this matches the pre-#196 behaviour for
+// map all count at full weight — this matches the pre-#196 behavior for
 // un-configured accounts. Zero-coverage configs are excluded from the map
 // by resolveCoverageByAccountKey (issue #201) so they also fall through to
 // full weight rather than silently zeroing the headline.
@@ -341,14 +341,14 @@ func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]flo
 // resolveCoverageByAccountKey returns a map of AccountConfigKey -> resolved
 // coverage% for every (account, provider, service) triple represented in
 // recs. Lookup errors degrade gracefully to a nil map (no scaling applied
-// → un-overridden behaviour).
+// → un-overridden behavior).
 //
 // Entries with a resolved coverage of zero are omitted from the map.
 // ServiceConfig.Coverage is a float64 whose zero-value means "not configured",
 // so including a zero entry would silently scale that account's savings to $0
 // even though the operator never set an explicit coverage cap (issue #201).
 // When an entry is absent, scaledSavings falls through to full savings,
-// matching the pre-#196 behaviour for un-configured accounts.
+// matching the pre-#196 behavior for un-configured accounts.
 func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config.RecommendationRecord) map[string]float64 {
 	if len(recs) == 0 {
 		return nil
@@ -392,7 +392,7 @@ func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
 // getPlannedPurchases (handler_purchases.go) so the dashboard widget and
 // the Plans page walk the same canonical "what's about to happen" set.
 //
-// The widget previously enumerated plans and synthesised one row per plan
+// The widget previously enumerated plans and synthesized one row per plan
 // from plan.NextExecutionDate. That was wrong because action endpoints
 // (DELETE /api/purchases/planned/{id}, pause, resume, run) all target
 // purchase_executions.execution_id, not purchase_plans.id; the Cancel
@@ -560,7 +560,7 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 // isActiveCommitment reports whether the purchase is active: its term has not
 // yet expired as of `now` AND its status is one of the successful terminal
 // states ("" for DB-backed rows where the column is unpersisted, or
-// "completed"). Rows synthesised from failed/cancelled/expired executions
+// "completed"). Rows synthesized from failed/canceled/expired executions
 // carry a non-empty status other than "completed" and are excluded so they
 // do not inflate the committed_monthly KPI. The boundary is strict (After):
 // a commitment is active right up to the instant its term ends.
@@ -569,7 +569,7 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
 func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
-	// Synthesised rows set it to "failed", "expired", "cancelled", "pending",
+	// Synthesized rows set it to "failed", "expired", "canceled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
 	// represent a commitment that is actually live on the provider.
 	if p.Status != "" && p.Status != "completed" {

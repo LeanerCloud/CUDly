@@ -1164,10 +1164,10 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 // #414). Each must return a 400 ClientError; none must reach the store.
 func TestHandler_getHistory_FilterValidation(t *testing.T) {
 	cases := []struct {
-		name        string
 		params      map[string]string
-		wantCode    int
+		name        string
 		wantContain string
+		wantCode    int
 	}{
 		{
 			name:        "invalid provider",

@@ -8,8 +8,8 @@ import (
 
 func TestAccountHasCredentialFreePath(t *testing.T) {
 	cases := []struct {
-		name string
 		acct *config.CloudAccount
+		name string
 		want bool
 	}{
 		{

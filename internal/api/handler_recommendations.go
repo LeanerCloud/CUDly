@@ -13,7 +13,7 @@ import (
 )
 
 // parseRecommendationFilter validates all query parameters and builds the DB
-// filter. It centralises the parameter-validation logic so getRecommendations
+// filter. It centralizes the parameter-validation logic so getRecommendations
 // stays below the cyclomatic-complexity threshold.
 //
 // account_ids filter semantics (issue #211):
@@ -80,7 +80,7 @@ func parseRecommendationFilter(params map[string]string) (config.RecommendationF
 	}, nil
 }
 
-// Recommendations handlers
+// Recommendations handlers.
 func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
 	// Require view:recommendations permission
 	session, err := h.requirePermission(ctx, req, "view", "recommendations")
@@ -129,18 +129,18 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
 	}
 	nameByID := make(map[string]string, len(accounts))
-	for _, a := range accounts {
-		nameByID[a.ID] = a.Name
+	for i := range accounts {
+		nameByID[accounts[i].ID] = accounts[i].Name
 	}
 
 	filtered := recs[:0]
-	for _, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for i := range recs {
+		if recs[i].CloudAccountID == nil {
 			continue
 		}
-		id := *rec.CloudAccountID
+		id := *recs[i].CloudAccountID
 		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, recs[i])
 		}
 	}
 	return filtered, nil
@@ -216,7 +216,7 @@ func stampComputeCapacity(rec *config.RecommendationRecord) {
 		return
 	}
 	if compute.VCPU <= 0 || compute.MemoryGB <= 0 {
-		// Unknown size (converter didn't wire a catalogue lookup): keep
+		// Unknown size (converter didn't wire a catalog lookup): keep
 		// both absent so the frontend renders "—".
 		return
 	}
@@ -259,7 +259,7 @@ func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.L
 // used by handler_accounts.go's account lookup).
 //
 // usage_history is intentionally empty in this first pass: the collector
-// pipeline does not yet persist time-series utilisation per
+// pipeline does not yet persist time-series utilization per
 // recommendation. Surfacing the missing field as an empty slice (rather
 // than a 501) keeps the drawer functional today and means the day the
 // collector starts populating it, the frontend automatically picks it
@@ -324,7 +324,7 @@ func (h *Handler) buildRecommendationDetail(ctx context.Context, rec *config.Rec
 }
 
 // confidenceBucketFor mirrors the heuristic that previously lived
-// client-side in frontend/src/recommendations.ts. Centralising it on
+// client-side in frontend/src/recommendations.ts. Centralizing it on
 // the server lets future provider-specific tuning land in one place
 // without a frontend deploy. Thresholds intentionally match the original
 // shim 1:1 so the drawer label doesn't visibly shift on rollout.

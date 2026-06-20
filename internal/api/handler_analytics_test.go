@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockAnalyticsClient is a mock implementation of AnalyticsClientInterface
+// MockAnalyticsClient is a mock implementation of AnalyticsClientInterface.
 type MockAnalyticsClient struct {
 	mock.Mock
 }
@@ -66,7 +66,7 @@ func TestHandler_getHistoryAnalytics_ExternalIDOnlyAccount(t *testing.T) {
 	mockClient.AssertCalled(t, "QueryHistory", ctx, []string{accountUUID}, map[string][]string{"aws": {accountExternal}}, "", mock.Anything, mock.Anything, "hourly")
 }
 
-// MockAnalyticsCollector is a mock implementation of AnalyticsCollectorInterface
+// MockAnalyticsCollector is a mock implementation of AnalyticsCollectorInterface.
 type MockAnalyticsCollector struct {
 	mock.Mock
 }
@@ -78,7 +78,7 @@ func (m *MockAnalyticsCollector) Collect(ctx context.Context) error {
 
 // adminAnalyticsReq returns (mocked auth with admin session, request with admin token).
 // All analytics handlers are permission-gated — this short-circuits the gate so the
-// existing tests can exercise the analytics-specific behaviour without rewriting auth.
+// existing tests can exercise the analytics-specific behavior without rewriting auth.
 func adminAnalyticsReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
