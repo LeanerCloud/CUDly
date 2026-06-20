@@ -75,15 +75,13 @@ type Client struct {
 }
 
 // NewClient creates a new recommendations client.
-//
-//nolint:gocritic // hugeParam: aws.Config is passed by value per AWS SDK convention; changing to pointer fights the SDK idiom.
-func NewClient(cfg aws.Config) *Client {
+func NewClient(cfg *aws.Config) *Client {
 	// Force Cost Explorer to use us-east-1 with explicit endpoint
 	ceConfig := cfg.Copy()
 	ceConfig.Region = "us-east-1"
 	ceConfig.BaseEndpoint = aws.String("https://ce.us-east-1.amazonaws.com")
 
-	ec2Client := awsec2.NewFromConfig(cfg)
+	ec2Client := awsec2.NewFromConfig(*cfg)
 	return &Client{
 		costExplorerClient: costexplorer.NewFromConfig(ceConfig),
 		region:             cfg.Region,
@@ -143,7 +141,7 @@ func (c *Client) GetRecommendations(ctx context.Context, params common.Recommend
 	// via the IsSavingsPlan family predicate so the dispatch keeps working as
 	// callers migrate.
 	if common.IsSavingsPlan(params.Service) {
-		return c.getSavingsPlansRecommendations(ctx, params)
+		return c.getSavingsPlansRecommendations(ctx, &params)
 	}
 
 	input := &costexplorer.GetReservationPurchaseRecommendationInput{

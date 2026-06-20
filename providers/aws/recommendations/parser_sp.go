@@ -27,7 +27,7 @@ import (
 //  2. Otherwise, fall back to the legacy IncludeSPTypes/ExcludeSPTypes
 //     filter mechanism (for callers passing the umbrella ServiceSavingsPlans
 //     slug or for direct CLI invocations that haven't been migrated yet).
-func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) { //nolint:gocritic // hugeParam: RecommendationParams is read-only here; changing to pointer would cascade through many callers and tests
+func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	planTypes := planTypesForParams(params)
 
 	if len(planTypes) == 0 {
@@ -82,10 +82,10 @@ func (c *Client) getSavingsPlansRecommendations(ctx context.Context, params comm
 // fetchSPAllPages paginates over all pages of SP recommendations for a single
 // plan type. ctx.Err() is checked at the top of each iteration so cancellation
 // is terminal (per feedback_ctx_cancel_terminal.md, issue #692).
-func (c *Client) fetchSPAllPages( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
+func (c *Client) fetchSPAllPages(
 	ctx context.Context,
 	input *costexplorer.GetSavingsPlansPurchaseRecommendationInput,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) ([]common.Recommendation, error) {
 	var allRecs []common.Recommendation
@@ -159,9 +159,9 @@ func (c *Client) fetchSPPageWithRetry(
 }
 
 // parseSavingsPlansRecommendations converts Savings Plans recommendations.
-func (c *Client) parseSavingsPlansRecommendations( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
+func (c *Client) parseSavingsPlansRecommendations(
 	spRec *types.SavingsPlansPurchaseRecommendation,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) []common.Recommendation {
 	var recommendations []common.Recommendation
@@ -194,9 +194,9 @@ func parseOptionalFloat(field string, s *string) float64 {
 // hoursPerMonth is the standard AWS billing constant for monthly cost calculations.
 const hoursPerMonth = 730.0
 
-func (c *Client) parseSavingsPlanDetail( //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
+func (c *Client) parseSavingsPlanDetail(
 	detail *types.SavingsPlansPurchaseRecommendationDetail,
-	params common.RecommendationParams,
+	params *common.RecommendationParams,
 	planType types.SupportedSavingsPlansType,
 ) *common.Recommendation {
 	hourlyCommitment := parseOptionalFloat("HourlyCommitmentToPurchase", detail.HourlyCommitmentToPurchase)
@@ -296,7 +296,7 @@ func (c *Client) parseSavingsPlanDetail( //nolint:gocritic // hugeParam: params 
 // otherwise it falls back to the legacy IncludeSPTypes/ExcludeSPTypes filter.
 // See the getSavingsPlansRecommendations docstring for the full resolution
 // order.
-func planTypesForParams(params common.RecommendationParams) []types.SupportedSavingsPlansType { //nolint:gocritic // hugeParam: params is read-only; pointer cascade deferred
+func planTypesForParams(params *common.RecommendationParams) []types.SupportedSavingsPlansType {
 	if pt, ok := planTypeForServiceSlug(params.Service); ok {
 		return []types.SupportedSavingsPlansType{pt}
 	}
