@@ -93,7 +93,7 @@ func (s *Service) probeAndPersist(ctx context.Context) (Options, error) {
 	for i, p := range s.probers {
 		i, p := i, p
 		group.Go(func() error {
-			combos, err := p.Probe(gctx, cfg)
+			combos, err := p.Probe(gctx, &cfg)
 			if err != nil {
 				return fmt.Errorf("probe %s: %w", p.Service(), err)
 			}

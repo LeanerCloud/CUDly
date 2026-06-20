@@ -47,7 +47,7 @@ type Prober interface {
 	// small instance type, normalizes the results, and returns unique
 	// Combos. Errors bubble up — the orchestrating Service treats ANY
 	// probe failure as "don't persist" (all-or-nothing).
-	Probe(ctx context.Context, cfg aws.Config) ([]Combo, error)
+	Probe(ctx context.Context, cfg *aws.Config) ([]Combo, error)
 }
 
 // Store persists probe results. Implementations must treat the combos table

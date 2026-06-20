@@ -147,7 +147,7 @@ func TestManager_BuildNotificationData(t *testing.T) {
 		},
 	}
 
-	data := manager.buildNotificationData(plan, execution, 5, "notify@example.com")
+	data := manager.buildNotificationData(&plan, execution, 5, "notify@example.com")
 
 	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
 	assert.Equal(t, "token-abc", data.ApprovalToken)

@@ -116,7 +116,7 @@ func TestManager_ProcessMessage(t *testing.T) {
 		}
 		execution := &config.PurchaseExecution{
 			ExecutionID: "exec-123",
-			Status:      "cancelled", //nolint:misspell // matches DB status string
+			Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 		}
 		mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 		// The claim CAS rejects a non-executable status (issue #1013): the row
@@ -125,7 +125,7 @@ func TestManager_ProcessMessage(t *testing.T) {
 		// handler acks without error.
 		mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
 			[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).
-			Return(nil, fmt.Errorf("%w: cancelled", config.ErrExecutionNotInExpectedStatus)) //nolint:misspell // matches DB status string
+			Return(nil, fmt.Errorf("%w: cancelled", config.ErrExecutionNotInExpectedStatus)) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 		err := manager.ProcessMessage(ctx, `{"type": "execute_purchase", "execution_id": "exec-123"}`)
 		// Should skip without error when status is not executable

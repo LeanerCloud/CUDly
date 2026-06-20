@@ -139,7 +139,7 @@ func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 			seen[s] = true
 		}
 		return seen["approved"] && seen["running"] &&
-			!seen["completed"] && !seen["failed"] && !seen["cancelled"] && !seen["pending"] && !seen["notified"] //nolint:misspell // "cancelled" is the DB status string used throughout the codebase
+			!seen["completed"] && !seen["failed"] && !seen["cancelled"] && !seen["pending"] && !seen["notified"] //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}), reapAfter).
 		Return([]config.PurchaseExecution{}, nil)
 
