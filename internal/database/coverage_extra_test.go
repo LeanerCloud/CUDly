@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tests for RedactedDSN
+// Tests for RedactedDSN.
 func TestRedactedDSN(t *testing.T) {
 	cfg := &Config{
 		Host:           "db.example.com",
@@ -55,7 +55,7 @@ func TestRedactedDSN_SharesLayoutWithDSN(t *testing.T) {
 	assert.Equal(t, expected, redacted)
 }
 
-// Tests for extractPasswordFromSecret
+// Tests for extractPasswordFromSecret.
 func TestExtractPasswordFromSecret_JSONWithPassword(t *testing.T) {
 	secret := `{"username":"admin","password":"db-pass-123","host":"db.example.com"}`
 	pwd, err := extractPasswordFromSecret(secret)
@@ -92,7 +92,7 @@ func TestExtractPasswordFromSecret_JSONNull(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing 'password' field")
 }
 
-// Tests for buildPoolConfig overflow protection
+// Tests for buildPoolConfig overflow protection.
 func TestBuildPoolConfig_MaxConnectionsOverflow(t *testing.T) {
 	cfg := &Config{
 		Host:           "localhost",
@@ -131,7 +131,7 @@ func TestBuildPoolConfig_MinConnectionsOverflow(t *testing.T) {
 	assert.Contains(t, err.Error(), "MinConnections")
 }
 
-// Tests for resolvePassword branches
+// Tests for resolvePassword branches.
 func TestResolvePassword_NeitherPasswordNorSecret(t *testing.T) {
 	cfg := &Config{
 		Password:       "",
@@ -185,7 +185,7 @@ func TestResolvePassword_SecretResolverFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to retrieve database password from secret manager")
 }
 
-// Tests for NewConnection when PasswordSecret set without resolver
+// Tests for NewConnection when PasswordSecret set without resolver.
 func TestNewConnection_SecretRequiredButNoResolver(t *testing.T) {
 	cfg := &Config{
 		Host:           "localhost",
@@ -209,7 +209,7 @@ func TestNewConnection_SecretRequiredButNoResolver(t *testing.T) {
 	assert.Contains(t, err.Error(), "DB_PASSWORD_SECRET is set but no secret resolver was provided")
 }
 
-// Tests for Pool() — returns the internal pool (nil when not connected)
+// Tests for Pool() — returns the internal pool (nil when not connected).
 func TestConnection_Pool_ReturnsPool(t *testing.T) {
 	conn := &Connection{
 		pool:   nil,
@@ -218,7 +218,7 @@ func TestConnection_Pool_ReturnsPool(t *testing.T) {
 	assert.Nil(t, conn.Pool())
 }
 
-// Tests for DSN()
+// Tests for DSN().
 func TestConfig_DSN(t *testing.T) {
 	cfg := &Config{
 		Host:           "pg.example.com",

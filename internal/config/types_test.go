@@ -98,9 +98,9 @@ func TestRampSchedule_GetNextPurchaseDate(t *testing.T) {
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
+		expected time.Time
 		name     string
 		schedule RampSchedule
-		expected time.Time
 	}{
 		{
 			name: "zero start date returns now",
@@ -280,7 +280,7 @@ func TestPurchasePlan_Defaults(t *testing.T) {
 }
 
 func TestPurchaseExecution_Statuses(t *testing.T) {
-	validStatuses := []string{"pending", "notified", "approved", "cancelled", "completed", "failed"}
+	validStatuses := []string{"pending", "notified", "approved", "canceled", "completed", "failed"}
 
 	for _, status := range validStatuses {
 		exec := PurchaseExecution{Status: status}
