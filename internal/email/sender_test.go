@@ -195,7 +195,7 @@ func TestTemplates_NewRecommendations(t *testing.T) {
 
 	// Just test that template parses without error
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	// Will fail because snsClient is nil, but we're testing template rendering
 	require.Error(t, err)
@@ -228,7 +228,7 @@ func TestTemplates_ScheduledPurchase(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	// Will fail because snsClient is nil, but we're testing template rendering
 	require.Error(t, err)
@@ -257,7 +257,7 @@ func TestTemplates_PurchaseConfirmation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.Error(t, err)
 }
@@ -281,7 +281,7 @@ func TestTemplates_PurchaseFailed(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.Error(t, err)
 }
@@ -803,7 +803,7 @@ func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
 		Recommendations:  []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1, Term: 3, Payment: "all-upfront"}},
 	}
 
-	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 	require.NoError(t, err)
 	require.NotNil(t, captured, "SendEmail should have been called")
 
@@ -944,7 +944,7 @@ func TestSendScheduledPurchaseNotification_UsesSESNotSNS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 	require.NoError(t, err)
 }
 
@@ -972,7 +972,7 @@ func TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty(t *testing.T)
 		// RecipientEmail intentionally absent
 	}
 
-	err := sender.SendScheduledPurchaseNotification(context.Background(), data)
+	err := sender.SendScheduledPurchaseNotification(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
@@ -1021,7 +1021,7 @@ func TestSendRIExchangePendingApproval_UsesSESNotSNS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendRIExchangePendingApproval(ctx, data)
+	err := sender.SendRIExchangePendingApproval(ctx, &data)
 	require.NoError(t, err)
 }
 
@@ -1051,7 +1051,7 @@ func TestSendRIExchangePendingApproval_ErrNoRecipientWhenEmpty(t *testing.T) {
 		},
 	}
 
-	err := sender.SendRIExchangePendingApproval(context.Background(), data)
+	err := sender.SendRIExchangePendingApproval(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 

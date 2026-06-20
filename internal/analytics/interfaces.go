@@ -93,7 +93,7 @@ type Store interface {
 	BulkInsertSnapshots(ctx context.Context, snapshots []SavingsSnapshot) error
 
 	// QuerySavings retrieves savings snapshots based on query parameters.
-	QuerySavings(ctx context.Context, req QueryRequest) ([]SavingsSnapshot, error)
+	QuerySavings(ctx context.Context, req *QueryRequest) ([]SavingsSnapshot, error)
 
 	// Aggregated queries (using materialized views for performance). Scoping is
 	// the dual-column model; pass empty filters only after enforcing scope.
@@ -113,8 +113,3 @@ type Store interface {
 	// Close cleans up resources.
 	Close() error
 }
-
-// AnalyticsStore is an alias for Store, kept for backward compatibility.
-//
-// Deprecated: use Store directly.
-type AnalyticsStore = Store //nolint:revive // stutter is intentional: alias preserves the prior public name for existing callers

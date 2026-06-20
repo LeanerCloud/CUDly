@@ -137,7 +137,7 @@ func newGCPSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("SENDGRID_API_KEY or SENDGRID_API_KEY_SECRET environment variable required for GCP email")
 	}
-	return NewSMTPSender(SMTPConfig{
+	return NewSMTPSender(&SMTPConfig{
 		Host:      "smtp.sendgrid.net",
 		Port:      587,
 		Username:  "apikey", // SendGrid uses literal "apikey" as username
@@ -193,7 +193,7 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	if host == "" {
 		host = "smtp.azurecomm.net"
 	}
-	return NewSMTPSender(SMTPConfig{
+	return NewSMTPSender(&SMTPConfig{
 		Host:      host,
 		Port:      587,
 		Username:  username,
@@ -205,7 +205,7 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 }
 
 // NewSenderWithConfig creates an email sender with explicit configuration.
-func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) { //nolint:gocritic // cfg is a large struct; a pointer API would require callers to take an address of the value
+func NewSenderWithConfig(ctx context.Context, cfg *FactoryConfig) (SenderInterface, error) {
 	switch cfg.Provider {
 	case ProviderAWS:
 		return NewSender(SenderConfig{
@@ -218,7 +218,7 @@ func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterfac
 		if cfg.SendGridAPIKey == "" {
 			return nil, fmt.Errorf("SendGrid API key required for GCP email")
 		}
-		return NewSMTPSender(SMTPConfig{
+		return NewSMTPSender(&SMTPConfig{
 			Host:      "smtp.sendgrid.net",
 			Port:      587,
 			Username:  "apikey",
@@ -236,7 +236,7 @@ func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterfac
 		if host == "" {
 			host = "smtp.azurecomm.net"
 		}
-		return NewSMTPSender(SMTPConfig{
+		return NewSMTPSender(&SMTPConfig{
 			Host:      host,
 			Port:      587,
 			Username:  cfg.AzureSMTPUsername,

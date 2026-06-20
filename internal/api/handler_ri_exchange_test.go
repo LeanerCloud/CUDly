@@ -262,7 +262,7 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 		ExchangeID:    "exch-already-done",
 	}, nil)
 
-	// Transition from pending→cancelled fails (record is not pending).
+	// Transition from pending to cancelled fails (record is not pending).
 	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
@@ -616,11 +616,11 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	// the return value. Returning nil/nil from ListStoredRecommendations
 	// means "no recs in this region" which the downstream pipeline
 	// treats as empty alternatives — fine for our purposes.
-	var capturedFilters []config.RecommendationFilter
+	var capturedFilters []*config.RecommendationFilter
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil).
 		Run(func(args mock.Arguments) {
-			capturedFilters = append(capturedFilters, args.Get(1).(config.RecommendationFilter))
+			capturedFilters = append(capturedFilters, args.Get(1).(*config.RecommendationFilter))
 		})
 
 	h := &Handler{

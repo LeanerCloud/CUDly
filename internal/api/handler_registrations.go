@@ -112,7 +112,7 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 	// Notify admins (synchronous, errors logged but not propagated).
 	if h.emailNotifier != nil {
 		to, cc, approvers := h.resolveRegistrationRecipients(ctx)
-		if notifyErr := h.emailNotifier.SendRegistrationReceivedNotification(context.Background(), email.RegistrationNotificationData{
+		if notifyErr := h.emailNotifier.SendRegistrationReceivedNotification(context.Background(), &email.RegistrationNotificationData{
 			AccountName:    body.AccountName,
 			Provider:       body.Provider,
 			ExternalID:     body.ExternalID,
@@ -241,7 +241,7 @@ func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.R
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, data); err != nil {
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, &data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)
 	}
 }

@@ -209,14 +209,16 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	poolConfig.ConnConfig.Password = password
 
 	// Set pool configuration
-	if config.MaxConnections > math.MaxInt32 {
-		return nil, fmt.Errorf("MaxConnections value %d exceeds int32 max", config.MaxConnections)
+	maxConns, err := intToInt32("MaxConnections", config.MaxConnections)
+	if err != nil {
+		return nil, err
 	}
-	if config.MinConnections > math.MaxInt32 {
-		return nil, fmt.Errorf("MinConnections value %d exceeds int32 max", config.MinConnections)
+	minConns, err := intToInt32("MinConnections", config.MinConnections)
+	if err != nil {
+		return nil, err
 	}
-	poolConfig.MaxConns = int32(config.MaxConnections) //nolint:gosec // overflow guarded by the bounds check above
-	poolConfig.MinConns = int32(config.MinConnections) //nolint:gosec // overflow guarded by the bounds check above
+	poolConfig.MaxConns = maxConns
+	poolConfig.MinConns = minConns
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = config.HealthCheckPeriod
@@ -282,8 +284,13 @@ func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 	return c.pool.Begin(ctx)
 }
 
-// BeginTx starts a new transaction with options.
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // pgx.TxOptions is part of the pgx public API; callers pass by value matching the pgx.Pool interface
+// BeginTx starts a new transaction with options. The opts pointer may be nil
+// to use the default transaction options (equivalent to pgx.TxOptions{}).
+func (c *Connection) BeginTx(ctx context.Context, opts *pgx.TxOptions) (pgx.Tx, error) {
+	var txOptions pgx.TxOptions
+	if opts != nil {
+		txOptions = *opts
+	}
 	return c.pool.BeginTx(ctx, txOptions)
 }
 
@@ -419,4 +426,15 @@ func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string
 	case tracelog.LogLevelError:
 		logging.Errorf("%s %v", msg, safeData)
 	}
+}
+
+// intToInt32 converts an int connection-pool limit to int32, returning an
+// error when the value exceeds math.MaxInt32. This allows the G115 bound
+// check to be expressed once in a function body that gosec can verify, rather
+// than repeating nolint comments at every call site.
+func intToInt32(fieldName string, v int) (int32, error) {
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s value %d out of int32 range [%d, %d]", fieldName, v, math.MinInt32, math.MaxInt32)
+	}
+	return int32(v), nil
 }

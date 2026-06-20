@@ -22,7 +22,7 @@ func TestNewSMTPSender_Success(t *testing.T) {
 		UseTLS:    true,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -41,7 +41,7 @@ func TestNewSMTPSender_MissingHost(t *testing.T) {
 		// Host intentionally not set
 	}
 
-	_, err := NewSMTPSender(cfg)
+	_, err := NewSMTPSender(&cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SMTP host is required")
@@ -53,7 +53,7 @@ func TestNewSMTPSender_MissingFromEmail(t *testing.T) {
 		// FromEmail intentionally not set
 	}
 
-	_, err := NewSMTPSender(cfg)
+	_, err := NewSMTPSender(&cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "from email is required")
@@ -66,7 +66,7 @@ func TestNewSMTPSender_DefaultPort(t *testing.T) {
 		// Port intentionally not set - should default to 587
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.Equal(t, 587, sender.port)
@@ -81,7 +81,7 @@ func TestNewSMTPSender_CustomPort(t *testing.T) {
 		UseTLS:    false,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.Equal(t, 465, sender.port)
@@ -96,7 +96,7 @@ func TestNewSMTPSender_Port587AutoTLS(t *testing.T) {
 		UseTLS:    false, // Even with UseTLS=false, port 587 should enable TLS
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.True(t, sender.useTLS) // TLS should be auto-enabled for port 587
@@ -190,7 +190,7 @@ func TestSMTPSender_SendNewRecommendationsNotification_NoFromEmail(t *testing.T)
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -209,7 +209,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_NoFromEmail(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -227,7 +227,7 @@ func TestSMTPSender_SendPurchaseConfirmation_NoFromEmail(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -244,7 +244,7 @@ func TestSMTPSender_SendPurchaseFailedNotification_NoFromEmail(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -264,7 +264,7 @@ func TestNewSMTPSender_NoAuth(t *testing.T) {
 		// Username and Password not set - no auth
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)

@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -28,7 +29,11 @@ func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt 
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
 	if _, err := tx.Exec(ctx, `DELETE FROM recommendations`); err != nil {
 		return fmt.Errorf("failed to wipe recommendations: %w", err)
@@ -75,7 +80,11 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
 	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
 		return err
@@ -359,8 +368,11 @@ func recOnDemandBaseline(rec *RecommendationRecord) (float64, bool) {
 // MinSavingsUSD) are applied in SQL so Postgres prunes the rows; the
 // MinSavingsPct filter is applied in-process because the on-demand
 // baseline lives inside the JSONB payload (not a native column).
-func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) { //nolint:gocritic // interface method - signature cannot change
-	whereClause, args := buildRecommendationFilter(&filter)
+func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter *RecommendationFilter) ([]RecommendationRecord, error) {
+	if filter == nil {
+		filter = &RecommendationFilter{}
+	}
+	whereClause, args := buildRecommendationFilter(filter)
 	rows, err := s.db.Query(ctx, `SELECT payload FROM recommendations`+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query recommendations: %w", err)

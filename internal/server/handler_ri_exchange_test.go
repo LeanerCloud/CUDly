@@ -259,7 +259,7 @@ func TestSendExchangeNotification_NoResults(t *testing.T) {
 	emailSent := false
 	app := &Application{
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				emailSent = true
 				return nil
 			},
@@ -278,7 +278,7 @@ func TestSendExchangeNotification_ManualPending(t *testing.T) {
 	approvalSent := false
 	app := &Application{
 		Email: &mockEmailSender{
-			sendApprovalFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendApprovalFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				approvalSent = true
 				return nil
 			},
@@ -302,7 +302,7 @@ func TestSendExchangeNotification_AutoCompleted(t *testing.T) {
 	completedSent := false
 	app := &Application{
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				completedSent = true
 				return nil
 			},
@@ -331,7 +331,7 @@ func TestSendExchangeNotification_PendingSetsRecipientEmail(t *testing.T) {
 	approvalSent := false
 	app := &Application{
 		Email: &mockEmailSender{
-			sendApprovalFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendApprovalFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				approvalSent = true
 				gotRecipient = data.RecipientEmail
 				return nil
@@ -363,7 +363,7 @@ func TestSendExchangeNotification_CompletedOmitsRecipientEmail(t *testing.T) {
 	completedSent := false
 	app := &Application{
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				completedSent = true
 				gotRecipient = data.RecipientEmail
 				return nil
@@ -388,7 +388,7 @@ func TestSendExchangeNotification_CompletedOmitsRecipientEmail(t *testing.T) {
 func TestSendExchangeNotification_EmailFailure(t *testing.T) {
 	app := &Application{
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				return errors.New("SES rate limit exceeded")
 			},
 		},
@@ -508,7 +508,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 	app := &Application{
 		Config: store,
 		Email: &mockEmailSender{
-			sendApprovalFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendApprovalFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				approvalSent = true
 				return nil
 			},
@@ -593,7 +593,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 	app := &Application{
 		Config: store,
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				completedSent = true
 				return nil
 			},
@@ -687,7 +687,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 	app := &Application{
 		Config: store,
 		Email: &mockEmailSender{
-			sendCompletedFunc: func(ctx context.Context, data email.RIExchangeNotificationData) error {
+			sendCompletedFunc: func(ctx context.Context, data *email.RIExchangeNotificationData) error {
 				return nil
 			},
 		},
@@ -830,8 +830,8 @@ func (m *mockConfigStoreForExchange) GetRIExchangeDailySpend(ctx context.Context
 }
 
 type mockEmailSender struct {
-	sendApprovalFunc  func(ctx context.Context, data email.RIExchangeNotificationData) error
-	sendCompletedFunc func(ctx context.Context, data email.RIExchangeNotificationData) error
+	sendApprovalFunc  func(ctx context.Context, data *email.RIExchangeNotificationData) error
+	sendCompletedFunc func(ctx context.Context, data *email.RIExchangeNotificationData) error
 }
 
 func (m *mockEmailSender) SendNotification(context.Context, string, string) error { return nil }
@@ -841,22 +841,22 @@ func (m *mockEmailSender) SendToEmail(context.Context, string, string, string) e
 func (m *mockEmailSender) SendToEmailWithCCMultipart(context.Context, string, []string, string, string, string) error {
 	return nil
 }
-func (m *mockEmailSender) SendNewRecommendationsNotification(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendNewRecommendationsNotification(context.Context, *email.NotificationData) error {
 	return nil
 }
-func (m *mockEmailSender) SendScheduledPurchaseNotification(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendScheduledPurchaseNotification(context.Context, *email.NotificationData) error {
 	return nil
 }
-func (m *mockEmailSender) SendPurchaseConfirmation(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendPurchaseConfirmation(context.Context, *email.NotificationData) error {
 	return nil
 }
-func (m *mockEmailSender) SendPurchaseFailedNotification(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendPurchaseFailedNotification(context.Context, *email.NotificationData) error {
 	return nil
 }
-func (m *mockEmailSender) SendPurchaseApprovalRequest(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendPurchaseApprovalRequest(context.Context, *email.NotificationData) error {
 	return nil
 }
-func (m *mockEmailSender) SendPurchaseScheduledNotification(context.Context, email.NotificationData) error {
+func (m *mockEmailSender) SendPurchaseScheduledNotification(context.Context, *email.NotificationData) error {
 	return nil
 }
 func (m *mockEmailSender) SendPasswordResetEmail(context.Context, string, string) error {
@@ -869,25 +869,25 @@ func (m *mockEmailSender) SendUserInviteEmail(context.Context, string, string) e
 	return nil
 }
 
-func (m *mockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *mockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	if m.sendApprovalFunc != nil {
 		return m.sendApprovalFunc(ctx, data)
 	}
 	return nil
 }
 
-func (m *mockEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *mockEmailSender) SendRIExchangeCompleted(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	if m.sendCompletedFunc != nil {
 		return m.sendCompletedFunc(ctx, data)
 	}
 	return nil
 }
 
-func (m *mockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+func (m *mockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ *email.RegistrationNotificationData) error {
 	return nil
 }
 
-func (m *mockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+func (m *mockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *email.RegistrationDecisionData) error {
 	return nil
 }
 

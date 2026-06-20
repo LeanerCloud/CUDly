@@ -30,8 +30,8 @@ type orgListAccountsClient interface {
 //
 // The caller is responsible for using the appropriate credentials for the
 // management account (e.g., resolved via the credentials package).
-func DiscoverOrgAccounts(ctx context.Context, cfg aws.Config) (*OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: aws.Config is always passed by value in the AWS SDK; changing to pointer would break all callers and deviate from AWS patterns
-	return discoverWithClient(ctx, organizations.NewFromConfig(cfg))
+func DiscoverOrgAccounts(ctx context.Context, cfg *aws.Config) (*OrgDiscoveryResult, error) {
+	return discoverWithClient(ctx, organizations.NewFromConfig(*cfg))
 }
 
 // discoverWithClient performs org discovery using the provided client, enabling

@@ -1821,7 +1821,7 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	}
 	before := summarizePurchaseHistory(baseline)
 
-	// After: same rows plus one canceled execution (the pending that got canceled).
+	// After: same rows plus one cancelled execution (the pending that got cancelled).
 	withCancelled := append(baseline, config.PurchaseHistoryRecord{
 		Status:           "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 		UpfrontCost:      999.0,

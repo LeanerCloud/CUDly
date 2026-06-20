@@ -107,8 +107,8 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		TaskCollectRecommendations:    func(c context.Context) (any, error) { return app.handleCollectRecommendations(c) },
 		TaskProcessScheduledPurchases: func(c context.Context) (any, error) { return app.handleProcessScheduledPurchases(c) },
 		TaskSendNotifications:         func(c context.Context) (any, error) { return app.handleSendNotifications(c) },
-		TaskCleanupExpiredRecords:     func(c context.Context) (any, error) { return app.handleCleanupExpiredRecords(c) },
-		TaskRefreshAnalytics:          func(c context.Context) (any, error) { return app.handleRefreshAnalytics(c) },
+		TaskCleanupExpiredRecords:     app.cleanupExpiredRecordsTask,
+		TaskRefreshAnalytics:          app.refreshAnalyticsTask,
 		TaskCollectAnalytics:          func(c context.Context) (any, error) { return app.handleCollectAnalytics(c) },
 		TaskRIExchangeReshape:         func(c context.Context) (any, error) { return app.handleRIExchangeReshape(c) },
 		TaskReapStuckPurchases:        func(c context.Context) (any, error) { return app.handleReapStuckPurchases(c) },
@@ -137,7 +137,9 @@ func (app *Application) taskLocker() TaskLocker {
 func taskLockID(taskType ScheduledTaskType) int64 {
 	h := fnv.New64a()
 	h.Write([]byte("cudly:task:" + string(taskType)))
-	return int64(h.Sum64()) //nolint:gosec // intentional bit-pattern reinterpret for advisory lock ID; overflow is acceptable
+	// Mask the sign bit so the result is always a non-negative int64.
+	// Advisory lock IDs only need to be unique, not cover the full int64 range.
+	return int64(h.Sum64() >> 1)
 }
 
 // handleCollectRecommendations collects cost optimization recommendations.
@@ -177,7 +179,7 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 }
 
 // handleCleanupExpiredRecords cleans up expired sessions and execution records.
-func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) { //nolint:unparam // error return required by dispatch table func(context.Context)(any,error)
+func (app *Application) handleCleanupExpiredRecords(ctx context.Context) map[string]int64 {
 	log.Println("Cleaning up expired records...")
 
 	result := map[string]int64{
@@ -207,7 +209,7 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 	}
 
 	log.Printf("Cleanup complete: %d sessions, %d executions deleted", result["sessions_deleted"], result["executions_deleted"])
-	return result, nil
+	return result
 }
 
 // handleReapStuckPurchases sweeps purchase_executions stuck in
@@ -267,7 +269,7 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 }
 
 // handleRefreshAnalytics refreshes materialized views and analytics data.
-func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) { //nolint:unparam // error return required by dispatch table func(context.Context)(any,error)
+func (app *Application) handleRefreshAnalytics(ctx context.Context) map[string]any {
 	log.Println("Refreshing analytics...")
 
 	result := map[string]any{
@@ -295,7 +297,7 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 	}
 
 	log.Printf("Analytics refresh complete")
-	return result, nil
+	return result
 }
 
 // HandleSQSMessage processes an SQS message for async purchase processing.
@@ -329,4 +331,18 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 		return taskType, nil
 	}
 	return "", fmt.Errorf("unknown scheduled task action: %q", event.Action)
+}
+
+// cleanupExpiredRecordsTask adapts handleCleanupExpiredRecords to the
+// dispatch table signature. The cleanup path absorbs all errors internally
+// (logs warnings and continues) so the task never propagates an error.
+func (app *Application) cleanupExpiredRecordsTask(ctx context.Context) (any, error) {
+	return app.handleCleanupExpiredRecords(ctx), nil
+}
+
+// refreshAnalyticsTask adapts handleRefreshAnalytics to the dispatch table
+// signature. Analytics refresh errors are included in the result map and
+// logged but are not propagated as hard failures.
+func (app *Application) refreshAnalyticsTask(ctx context.Context) (any, error) {
+	return app.handleRefreshAnalytics(ctx), nil
 }

@@ -22,13 +22,13 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	type spRow struct { //nolint:govet // field order matches Scan() call order for clarity; reordering for alignment would obscure the SQL column correspondence
+	type spRow struct {
 		service      string
-		term         int
 		payment      string
-		enabled      bool
-		coverage     float64
 		rampSchedule string
+		coverage     float64
+		term         int
+		enabled      bool
 	}
 
 	// queryAWSSPRows returns a map keyed by service slug for every

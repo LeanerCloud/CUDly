@@ -538,7 +538,7 @@ type MockAnalyticsSnapshotStore struct {
 	mock.Mock
 }
 
-func (m *MockAnalyticsSnapshotStore) QuerySavings(ctx context.Context, req analytics.QueryRequest) ([]analytics.SavingsSnapshot, error) {
+func (m *MockAnalyticsSnapshotStore) QuerySavings(ctx context.Context, req *analytics.QueryRequest) ([]analytics.SavingsSnapshot, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
