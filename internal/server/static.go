@@ -83,7 +83,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	info, err := os.Stat(filePath) //nolint:gosec // path is validated by isPathContainedIn above
+	info, err := os.Stat(filePath) // #nosec G304 G703 -- path is validated by isPathContainedIn above
 	if err != nil || info.IsDir() {
 		if path.Ext(cleanPath) != "" {
 			return "", "", false
@@ -91,7 +91,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		// SPA fallback
 		filePath = filepath.Join(dir, "index.html")
 		cleanPath = "/index.html"
-		if _, err := os.Stat(filePath); err != nil { //nolint:gosec // SPA fallback is always index.html, not user-controlled
+		if _, err := os.Stat(filePath); err != nil { // #nosec G304 G703 -- SPA fallback is always index.html, not user-controlled
 			return "", "", false
 		}
 	}
@@ -142,14 +142,14 @@ func staticDirFromEnv() string {
 	}
 	// Verify the directory and index.html exist
 	indexPath := filepath.Join(dir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil { //nolint:gosec // dir is operator-supplied via STATIC_DIR env var, not user input
+	if _, err := os.Stat(indexPath); err != nil { // #nosec G304 G703 -- dir is operator-supplied via STATIC_DIR env var, not user input
 		if !os.IsNotExist(err) {
 			log.Printf("STATIC_DIR set to %s but index.html not accessible: %v", dir, err)
 		}
 		return ""
 	}
 	// Verify it's actually a directory
-	info, err := os.Stat(dir) //nolint:gosec // dir is operator-supplied via STATIC_DIR env var, not user input
+	info, err := os.Stat(dir) // #nosec G304 G703 -- dir is operator-supplied via STATIC_DIR env var, not user input
 	if err != nil || !info.IsDir() {
 		log.Printf("STATIC_DIR %s is not a directory", dir)
 		return ""

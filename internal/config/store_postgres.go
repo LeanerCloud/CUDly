@@ -800,7 +800,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		capacityPercent = 100
 	}
 
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		INSERT INTO purchase_executions (
 			plan_id, execution_id, status, step_number, scheduled_date,
@@ -899,7 +899,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 // actor is the UUID of the user performing the transition (nil for system-initiated paths);
 // it is stamped onto transitioned_by and transitioned_at is always set to NOW().
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		UPDATE purchase_executions
 		SET status = $2, updated_at = NOW(),
@@ -957,8 +957,8 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // exactly as the old SavePurchaseExecutionTx path did, except now the
 // status guard is inside the UPDATE rather than checked optimistically
 // before entering the tx.
-func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error) { //nolint:misspell // return var name matches the concept; SQL strings use DB-canonical 'cancelled' spelling
-	//nolint:misspell // DB-canonical spellings 'cancelled' and 'cancelled_by'; requires coordinated schema migration to rename
+func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error) {
+	//nolint:misspell // DB schema value 'cancelled'/'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	q := `
 		UPDATE purchase_executions
 		   SET status       = 'cancelled',
@@ -1018,8 +1018,8 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 // Returns (true, "canceled", nil) on success and (false, "", err) on a
 // real DB error. Must be called inside a WithTx block so the suppression
 // cleanup commits atomically with the status flip.
-func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error) { //nolint:misspell // SQL strings use DB-canonical 'cancelled' spelling; parameter/return var use canonical American spelling
-	//nolint:misspell // DB-canonical spellings 'cancelled' and 'cancelled_by'; requires coordinated schema migration to rename
+func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error) {
+	//nolint:misspell // DB schema value 'cancelled'/'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	q := `
 		UPDATE purchase_executions
 		   SET status       = 'cancelled',
@@ -1077,7 +1077,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 	if limit > MaxListLimit {
 		limit = MaxListLimit
 	}
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1119,7 +1119,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 	if limit > MaxListLimit {
 		limit = MaxListLimit
 	}
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1145,7 +1145,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 // TransitionExecutionStatus) and is not touched again unless the run finalizes,
 // so it is the age of the strand. Mirrors GetStaleProcessingExchanges.
 func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1188,7 +1188,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 	if olderThan <= 0 {
 		return nil, fmt.Errorf("ListStuckExecutions: olderThan must be > 0, got %s", olderThan)
 	}
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1210,7 +1210,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 
 // GetPendingExecutions retrieves all pending purchase executions.
 func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1235,7 +1235,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 // duplicate-detection and execution creation atomic, closing the TOCTOU race
 // in executePurchase (issue #643).
 func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	const query = `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1266,7 +1266,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 // (nil execution, non-nil error). All callers must check the execution for
 // nil before use (closes issue #976).
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1294,7 +1294,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 
 // GetExecutionByPlanAndDate retrieves execution for a specific plan and date.
 func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1479,7 +1479,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 // Results are ordered oldest-due-first so the scheduler fires them in FIFO order.
 // Capped at MaxListLimit per sweep to bound the per-tick blast radius.
 func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]PurchaseExecution, error) {
-	//nolint:misspell // DB-canonical column name 'cancelled_by'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token, recommendations,
@@ -1531,7 +1531,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 // NULL `expires_at` is excluded from branch 2 so rows that never had an
 // expiration deadline are safe from expiry-based cleanup.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
-	//nolint:misspell // DB-canonical status value 'cancelled'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
@@ -2375,7 +2375,7 @@ func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.T
 
 // CancelAllPendingExchanges cancels all pending RI exchange records.
 func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
-	//nolint:misspell // DB-canonical status value 'cancelled'; requires coordinated schema migration to rename
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'cancelled'
@@ -2696,7 +2696,11 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
 	// Reset any linked approved registration first (explicit NULL so we don't
 	// rely on the FK's ON DELETE SET NULL behavior).
@@ -3004,10 +3008,14 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
-	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil { //nolint:gocritic // err already declared; := would shadow unintentionally
-		return err
+	if valErr := s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); valErr != nil {
+		return valErr
 	}
 
 	if _, err = tx.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, planID); err != nil {

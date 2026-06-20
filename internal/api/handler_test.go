@@ -1171,9 +1171,9 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	//nolint:misspell // DB value: purchase_executions status column uses cancelled
-	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}                                                         //nolint:misspell // DB value
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil) //nolint:misspell // DB value
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}                                                         //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 

@@ -212,7 +212,7 @@ type PurchaseExecution struct {
 	RetryExecutionID       *string                `json:"retry_execution_id,omitempty" dynamodbav:"retry_execution_id,omitempty"`
 	CreatedByUserID        *string                `json:"created_by_user_id,omitempty" dynamodbav:"created_by_user_id,omitempty"`
 	CompletedAt            *time.Time             `json:"completed_at,omitempty" dynamodbav:"completed_at,omitempty"`
-	CancelledBy            *string                `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"` //nolint:misspell // matches DB column name and JSON API field; requires coordinated schema migration to rename
+	CancelledBy            *string                `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"` //nolint:misspell // DB schema value 'cancelled_by' -- see migration 000035_add_execution_attribution.up.sql
 	ApprovedBy             *string                `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
 	ApprovalToken          string                 `json:"approval_token,omitempty" dynamodbav:"approval_token,omitempty"`
 	ExecutionID            string                 `json:"execution_id" dynamodbav:"execution_id"`
@@ -475,8 +475,8 @@ type RIExchangeRecord struct {
 	TargetCount        int        `json:"target_count"`
 }
 
-// ConfigSetting represents a configuration setting for the defaults system.
-type ConfigSetting struct { //nolint:revive // exported type name; renaming would be a breaking API change for consumers of this package
+// Setting represents a configuration setting for the defaults system.
+type Setting struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Value       any       `json:"value"`
 	Key         string    `json:"key"`

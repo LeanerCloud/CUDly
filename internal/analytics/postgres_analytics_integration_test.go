@@ -162,7 +162,7 @@ func TestPostgresAnalyticsStore_QuerySavings(t *testing.T) {
 			EndDate:                      now,
 		}
 
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Len(t, results, 3)
 	})
@@ -175,7 +175,7 @@ func TestPostgresAnalyticsStore_QuerySavings(t *testing.T) {
 			EndDate:                      now,
 		}
 
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Len(t, results, 2)
 		for _, r := range results {
@@ -191,7 +191,7 @@ func TestPostgresAnalyticsStore_QuerySavings(t *testing.T) {
 			EndDate:                      now,
 		}
 
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, "rds", results[0].Service)
@@ -205,7 +205,7 @@ func TestPostgresAnalyticsStore_QuerySavings(t *testing.T) {
 			Limit:                        2,
 		}
 
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Len(t, results, 2)
 	})
@@ -217,7 +217,7 @@ func TestPostgresAnalyticsStore_QuerySavings(t *testing.T) {
 			EndDate:                      now,
 		}
 
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
@@ -466,7 +466,7 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots(t *testing.T) {
 			StartDate:                    now.Add(-24 * time.Hour),
 			EndDate:                      now,
 		}
-		results, err := store.QuerySavings(ctx, req)
+		results, err := store.QuerySavings(ctx, &req)
 		require.NoError(t, err)
 		assert.Len(t, results, 2)
 	})

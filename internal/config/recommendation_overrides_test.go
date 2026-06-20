@@ -34,7 +34,9 @@ func (f *fakeAccountConfigReader) GetAccountServiceOverride(_ context.Context, a
 	return f.overrides[accountID+"|"+provider+"|"+service], nil
 }
 
-func acctRec(account, provider, service string) RecommendationRecord { //nolint:unparam // provider is always "aws" in current tests but the parameter is kept for future multi-provider test cases
+func acctRec(account string) RecommendationRecord {
+	const provider = "aws"
+	const service = "rds"
 	return RecommendationRecord{
 		Provider:       provider,
 		Service:        service,
@@ -71,7 +73,7 @@ func TestResolveAccountConfigsForRecs_OverridePresent_ResolvedConfigReflectsOver
 			"acct-A|aws|rds": {Enabled: boolPtr(false), Coverage: float64Ptr(50)},
 		},
 	}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.NoError(t, err)
@@ -89,7 +91,7 @@ func TestResolveAccountConfigsForRecs_OverrideAbsent_GlobalReturned(t *testing.T
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true, Coverage: 80},
 		},
 	}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.NoError(t, err)
@@ -104,7 +106,7 @@ func TestResolveAccountConfigsForRecs_OverrideAbsent_GlobalReturned(t *testing.T
 // per-account override exists — there is nothing to apply.
 func TestResolveAccountConfigsForRecs_NoGlobalNoOverride_TripleSkipped(t *testing.T) {
 	reader := &fakeAccountConfigReader{}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.NoError(t, err)
@@ -121,7 +123,7 @@ func TestResolveAccountConfigsForRecs_OverrideWithoutGlobal_OverrideApplied(t *t
 			"acct-A|aws|rds": {Enabled: boolPtr(false), Coverage: float64Ptr(70)},
 		},
 	}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.NoError(t, err)
@@ -145,7 +147,7 @@ func TestResolveAccountConfigsForRecs_OverrideWithGlobal_MergesCorrectly(t *test
 			"acct-B|aws|rds": {Coverage: float64Ptr(50)},
 		},
 	}
-	recs := []RecommendationRecord{acctRec("acct-B", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-B")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.NoError(t, err)
@@ -164,9 +166,9 @@ func TestResolveAccountConfigsForRecs_DedupesPerTriple(t *testing.T) {
 		},
 	}
 	recs := []RecommendationRecord{
-		acctRec("acct-A", "aws", "rds"),
-		acctRec("acct-A", "aws", "rds"), // same triple
-		acctRec("acct-A", "aws", "rds"),
+		acctRec("acct-A"),
+		acctRec("acct-A"), // same triple
+		acctRec("acct-A"),
 	}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
@@ -183,8 +185,8 @@ func TestResolveAccountConfigsForRecs_GlobalCachedAcrossAccounts(t *testing.T) {
 		},
 	}
 	recs := []RecommendationRecord{
-		acctRec("acct-A", "aws", "rds"),
-		acctRec("acct-B", "aws", "rds"), // same (provider, service), different account
+		acctRec("acct-A"),
+		acctRec("acct-B"), // same (provider, service), different account
 	}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
@@ -200,9 +202,9 @@ func TestResolveAccountConfigsForRecs_GlobalAbsentCachedNegative(t *testing.T) {
 	// still run once per account because the override may exist without a global.
 	reader := &fakeAccountConfigReader{}
 	recs := []RecommendationRecord{
-		acctRec("acct-A", "aws", "rds"),
-		acctRec("acct-B", "aws", "rds"),
-		acctRec("acct-C", "aws", "rds"),
+		acctRec("acct-A"),
+		acctRec("acct-B"),
+		acctRec("acct-C"),
 	}
 
 	_, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
@@ -219,9 +221,9 @@ func TestResolveAccountConfigsForRecs_GlobalAbsentCachedNegative(t *testing.T) {
 func TestResolveAccountConfigsForRecs_NoGlobalNoOverride_DedupedCorrectly(t *testing.T) {
 	reader := &fakeAccountConfigReader{} // no globals, no overrides
 	recs := []RecommendationRecord{
-		acctRec("acct-A", "aws", "rds"),
-		acctRec("acct-A", "aws", "rds"), // duplicate
-		acctRec("acct-A", "aws", "rds"), // duplicate
+		acctRec("acct-A"),
+		acctRec("acct-A"), // duplicate
+		acctRec("acct-A"), // duplicate
 	}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
@@ -233,7 +235,7 @@ func TestResolveAccountConfigsForRecs_NoGlobalNoOverride_DedupedCorrectly(t *tes
 
 func TestResolveAccountConfigsForRecs_GlobalErrorPropagates(t *testing.T) {
 	reader := &fakeAccountConfigReader{globalErr: errors.New("boom")}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.Error(t, err)
@@ -247,7 +249,7 @@ func TestResolveAccountConfigsForRecs_OverrideErrorPropagates(t *testing.T) {
 		},
 		overrideErr: errors.New("boom"),
 	}
-	recs := []RecommendationRecord{acctRec("acct-A", "aws", "rds")}
+	recs := []RecommendationRecord{acctRec("acct-A")}
 
 	got, err := ResolveAccountConfigsForRecs(context.Background(), reader, recs)
 	assert.Error(t, err)

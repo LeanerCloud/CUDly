@@ -30,11 +30,11 @@ type azAccountShow struct {
 	} `json:"user"`
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max] + "...(truncated)"
+	return s[:limit] + "...(truncated)"
 }
 
 // validateAccountExpectations parses "az account show" JSON output and checks
@@ -127,24 +127,25 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 
 	// Ensure subscription context (read-only)
 	_, cr := runCmd("azure:account:set", "account", "set", "--subscription", opts.SubscriptionID)
-	rep.Add(cr)
+	rep.Add(&cr)
 
 	// Read-only identity/subscription info (only call once; reuse output)
 	accountOut, cr := runCmd("azure:account:show", "account", "show", "-o", "json")
-	rep.Add(cr)
+	rep.Add(&cr)
 
 	if opts.ExpectedSubID != "" || opts.ExpectedTenantID != "" {
-		rep.Add(validateAccountExpectations(opts, accountOut))
+		expectCr := validateAccountExpectations(opts, accountOut)
+		rep.Add(&expectCr)
 	}
 
 	// Read-only lists (sample)
 	_, cr = runCmd("azure:group:list(sample)", "group", "list",
 		"--query", "[0:10].{name:name, location:location}", "-o", "json")
-	rep.Add(cr)
+	rep.Add(&cr)
 
 	_, cr = runCmd("azure:vm:list(sample)", "vm", "list",
 		"--query", "[0:10].{name:name, resourceGroup:resourceGroup, location:location}", "-o", "json")
-	rep.Add(cr)
+	rep.Add(&cr)
 
 	rep.EndedAt = time.Now().UTC()
 	return rep, nil

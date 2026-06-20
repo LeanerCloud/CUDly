@@ -416,7 +416,10 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 		return nil, fmt.Errorf("revoke/calculate: create calculate-refund client: %w", err)
 	}
 
-	quantity := int32(count) //nolint:gosec
+	quantity, err := safeInt32(count)
+	if err != nil {
+		return nil, err
+	}
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -599,7 +602,10 @@ func (h *Handler) callAzureReturn(
 	}
 
 	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
-	quantity := int32(record.Count) //nolint:gosec // Count > 0 validated at purchase
+	quantity, err := safeInt32(record.Count)
+	if err != nil {
+		return nil, err
+	}
 	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
 	if err != nil {
 		return nil, err
@@ -833,3 +839,13 @@ func isAzureWindowEdgeError(err error) bool {
 // toPtr returns a pointer to its argument. Generic helper used by the Azure
 // revocation call-site to construct ARM struct fields without temp variables.
 func toPtr[T any](v T) *T { return &v }
+
+// safeInt32 converts n to int32, returning a ClientError when n exceeds the
+// int32 range. Azure reservation quantities are always small non-negative
+// integers, so this guard is purely defensive against malformed DB values.
+func safeInt32(n int) (int32, error) {
+	if n < math.MinInt32 || n > math.MaxInt32 {
+		return 0, NewClientError(422, fmt.Sprintf("reservation quantity %d is out of int32 range", n))
+	}
+	return int32(n), nil
+}

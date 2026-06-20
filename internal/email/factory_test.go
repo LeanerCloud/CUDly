@@ -308,7 +308,7 @@ func TestNewSenderWithConfig_AWS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sender, err := NewSenderWithConfig(ctx, cfg)
+	sender, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -325,7 +325,7 @@ func TestNewSenderWithConfig_GCP_MissingAPIKey(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := NewSenderWithConfig(ctx, cfg)
+	_, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SendGrid API key required")
@@ -339,7 +339,7 @@ func TestNewSenderWithConfig_GCP_WithAPIKey(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sender, err := NewSenderWithConfig(ctx, cfg)
+	sender, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -356,7 +356,7 @@ func TestNewSenderWithConfig_Azure_MissingCredentials(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := NewSenderWithConfig(ctx, cfg)
+	_, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AzureSMTPUsername and AzureSMTPPassword required")
@@ -371,7 +371,7 @@ func TestNewSenderWithConfig_Azure_WithCredentials(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	sender, err := NewSenderWithConfig(ctx, cfg)
+	sender, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -387,7 +387,7 @@ func TestNewSenderWithConfig_UnsupportedProvider(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := NewSenderWithConfig(ctx, cfg)
+	_, err := NewSenderWithConfig(ctx, &cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported email provider")

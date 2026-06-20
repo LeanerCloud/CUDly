@@ -18,7 +18,11 @@ func (m *SNSClient) Publish(ctx context.Context, input *sns.PublishInput, opts .
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sns.PublishOutput), args.Error(1) //nolint:errcheck // mock: type assertion is safe; testify panics with a clear message on mismatch
+	v, ok := args.Get(0).(*sns.PublishOutput)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 // SNSAPI defines the interface for SNS operations used by our code.

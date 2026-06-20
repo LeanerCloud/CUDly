@@ -17,15 +17,15 @@ import (
 // in scheduler_suppressions_test.go to keep tests self-contained.
 type mockOverrideStore struct {
 	MockConfigStore
-	recs           []config.RecommendationRecord
-	globals        map[string]*config.ServiceConfig          // key: provider|service
-	overrides      map[string]*config.AccountServiceOverride // key: account|provider|service
 	getGlobalErr   error
 	getOverrideErr error
+	globals        map[string]*config.ServiceConfig
+	overrides      map[string]*config.AccountServiceOverride
+	recs           []config.RecommendationRecord
 }
 
-func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
-	if filter.ID == "" {
+func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	if filter == nil || filter.ID == "" {
 		return m.recs, nil
 	}
 	for _, r := range m.recs {
@@ -65,7 +65,7 @@ func (m *mockOverrideStore) GetAccountServiceOverride(_ context.Context, account
 // the effective stale TTL without panicking on the embedded MockConfigStore.
 // The returned RecommendationsCacheStaleHours of 24 means ListRecommendations
 // will use the DB-configured value (24h); the tests in this file exercise
-// override/suppression logic, not TTL behaviour.
+// override/suppression logic, not TTL behavior.
 func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalConfig, error) {
 	return &config.GlobalConfig{
 		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
@@ -75,8 +75,10 @@ func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalCo
 
 func boolPtr(b bool) *bool { return &b }
 
-// rdsRec returns a rec for the given account/region/engine with sensible defaults.
-func rdsRec(account, region, engine string) config.RecommendationRecord {
+// rdsRec returns a rec for the given account/engine with sensible defaults.
+// All test cases use us-east-1 as the region.
+func rdsRec(account, engine string) config.RecommendationRecord {
+	const region = "us-east-1"
 	a := account
 	return config.RecommendationRecord{
 		ID:             account + "/" + region + "/" + engine,
@@ -94,8 +96,8 @@ func TestApplyAccountOverrides_DisabledOverride_DropsAccountSvcRecs(t *testing.T
 	ctx := context.Background()
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{
-			rdsRec("acct-A", "us-east-1", "mysql"),
-			rdsRec("acct-B", "us-east-1", "mysql"),
+			rdsRec("acct-A", "mysql"),
+			rdsRec("acct-B", "mysql"),
 		},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
@@ -106,7 +108,7 @@ func TestApplyAccountOverrides_DisabledOverride_DropsAccountSvcRecs(t *testing.T
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "acct-A's rec dropped; acct-B's kept")
 	assert.Equal(t, "acct-B", *recs[0].CloudAccountID)
@@ -116,8 +118,8 @@ func TestApplyAccountOverrides_GlobalDisabled_DropsAllRecsForService(t *testing.
 	ctx := context.Background()
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{
-			rdsRec("acct-A", "us-east-1", "mysql"),
-			rdsRec("acct-B", "us-east-1", "mysql"),
+			rdsRec("acct-A", "mysql"),
+			rdsRec("acct-B", "mysql"),
 		},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: false},
@@ -125,7 +127,7 @@ func TestApplyAccountOverrides_GlobalDisabled_DropsAllRecsForService(t *testing.
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, recs, "global Enabled=false drops all per-account recs for the service")
 }
@@ -133,12 +135,12 @@ func TestApplyAccountOverrides_GlobalDisabled_DropsAllRecsForService(t *testing.
 func TestApplyAccountOverrides_NoGlobalConfig_RecsPassThrough(t *testing.T) {
 	ctx := context.Background()
 	store := &mockOverrideStore{
-		recs: []config.RecommendationRecord{rdsRec("acct-A", "us-east-1", "mysql")},
+		recs: []config.RecommendationRecord{rdsRec("acct-A", "mysql")},
 		// globals empty — GetServiceConfig returns nil
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "no global config -> no per-account policy applies -> rec passes through")
 }
@@ -158,7 +160,7 @@ func TestApplyAccountOverrides_NilCloudAccountID_PassesThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "nil CloudAccountID recs are not subject to per-account override policy")
 }
@@ -167,8 +169,8 @@ func TestApplyAccountOverrides_IncludeEngineMatch(t *testing.T) {
 	ctx := context.Background()
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{
-			rdsRec("acct-A", "us-east-1", "mysql"),
-			rdsRec("acct-A", "us-east-1", "postgres"),
+			rdsRec("acct-A", "mysql"),
+			rdsRec("acct-A", "postgres"),
 		},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
@@ -179,7 +181,7 @@ func TestApplyAccountOverrides_IncludeEngineMatch(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "mysql", recs[0].Engine, "non-matching engine filtered out")
@@ -189,8 +191,8 @@ func TestApplyAccountOverrides_ExcludeEngine(t *testing.T) {
 	ctx := context.Background()
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{
-			rdsRec("acct-A", "us-east-1", "mysql"),
-			rdsRec("acct-A", "us-east-1", "postgres"),
+			rdsRec("acct-A", "mysql"),
+			rdsRec("acct-A", "postgres"),
 		},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
@@ -201,7 +203,7 @@ func TestApplyAccountOverrides_ExcludeEngine(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "mysql", recs[0].Engine)
@@ -234,7 +236,7 @@ func TestApplyAccountOverrides_RegionAndTypeFilters(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "us-east-1", recs[0].Region)
@@ -265,7 +267,7 @@ func TestApplyAccountOverrides_MinCount_DropsRecsBelowFloor(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 2, "count=1 must be dropped; count>=2 kept")
 	counts := []int{recs[0].Count, recs[1].Count}
@@ -287,7 +289,7 @@ func TestApplyAccountOverrides_MinCountZero_KeepsAll(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "MinCount=0 disables the floor")
 }
@@ -317,7 +319,7 @@ func TestApplyAccountOverrides_EmptyEngine_NotFilteredByIncludeEngines(t *testin
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "engine-less rec not filtered by IncludeEngines")
 }
@@ -327,12 +329,12 @@ func TestApplyAccountOverrides_LookupError_PassesThrough(t *testing.T) {
 	// A store error must not blank the recommendations page.
 	ctx := context.Background()
 	store := &mockOverrideStore{
-		recs:         []config.RecommendationRecord{rdsRec("acct-A", "us-east-1", "mysql")},
+		recs:         []config.RecommendationRecord{rdsRec("acct-A", "mysql")},
 		getGlobalErr: errors.New("postgres timeout"),
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err, "ListRecommendations swallows the override-resolver error")
 	assert.Len(t, recs, 1, "un-filtered list returned on lookup failure")
 }
@@ -380,7 +382,7 @@ func TestApplyAccountOverrides_OverrideLookupError_PassesThrough(t *testing.T) {
 	// override lookup fails, the page should over-show rather than blank.
 	ctx := context.Background()
 	store := &mockOverrideStore{
-		recs: []config.RecommendationRecord{rdsRec("acct-A", "us-east-1", "mysql")},
+		recs: []config.RecommendationRecord{rdsRec("acct-A", "mysql")},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true},
 		},
@@ -388,7 +390,7 @@ func TestApplyAccountOverrides_OverrideLookupError_PassesThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err, "ListRecommendations swallows the override-resolver error")
 	assert.Len(t, recs, 1, "un-filtered list returned on override lookup failure")
 }
@@ -401,8 +403,8 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 	ctx := context.Background()
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{
-			rdsRec("acct-A", "us-east-1", "mysql"),
-			rdsRec("acct-B", "us-east-1", "mysql"),
+			rdsRec("acct-A", "mysql"),
+			rdsRec("acct-B", "mysql"),
 		},
 		globals: map[string]*config.ServiceConfig{
 			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true, Term: 3, Payment: "all_upfront"},
@@ -413,7 +415,7 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "acct-A's recs hidden by the override")
 	assert.Equal(t, "acct-B", *recs[0].CloudAccountID)
@@ -426,7 +428,7 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 //	(c) rec genuinely absent: returns nil, nil, nil
 func TestGetRecommendationByID_VisibleRec(t *testing.T) {
 	ctx := context.Background()
-	rec := rdsRec("acct-A", "us-east-1", "mysql")
+	rec := rdsRec("acct-A", "mysql")
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{rec},
 		globals: map[string]*config.ServiceConfig{
@@ -446,7 +448,7 @@ func TestGetRecommendationByID_HiddenByOverride(t *testing.T) {
 	// Issue #214: detail endpoint must return the rec with hidden_by reasons
 	// instead of a 404 when an account-service override is filtering it out.
 	ctx := context.Background()
-	rec := rdsRec("acct-A", "us-east-1", "mysql")
+	rec := rdsRec("acct-A", "mysql")
 	store := &mockOverrideStore{
 		recs: []config.RecommendationRecord{rec},
 		globals: map[string]*config.ServiceConfig{

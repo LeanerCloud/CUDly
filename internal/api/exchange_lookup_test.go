@@ -29,11 +29,11 @@ func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) 
 type fakeRecsLister struct {
 	err       error
 	out       []config.RecommendationRecord
-	gotFilter config.RecommendationFilter
+	gotFilter *config.RecommendationFilter
 	calls     int
 }
 
-func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	f.calls++
 	f.gotFilter = filter
 	return f.out, f.err

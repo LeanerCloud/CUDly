@@ -320,7 +320,7 @@ func TestSMTPSender_SendNewRecommendationsNotification_WithMockServer(t *testing
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -355,7 +355,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer(t *testing.
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -386,7 +386,7 @@ func TestSMTPSender_SendPurchaseConfirmation_WithMockServer(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -415,7 +415,7 @@ func TestSMTPSender_SendPurchaseFailedNotification_WithMockServer(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 }

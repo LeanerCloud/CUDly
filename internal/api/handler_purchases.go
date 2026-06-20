@@ -373,7 +373,7 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 // idempotent across retries.
 // actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
-	//nolint:misspell // DB status value
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	result, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled", actor)
 	if err == nil {
 		return result, nil
@@ -388,7 +388,7 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if existing == nil {
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
-	//nolint:misspell // DB status value
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	if existing.Status != "cancelled" {
 		return nil, NewClientError(409, fmt.Sprintf(
 			"execution %s cannot be canceled (status=%s)",
@@ -770,7 +770,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 
 	data := buildScheduledEmailData(h.dashboardURL, execution, globalCfg, actor)
 
-	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, data); sendErr != nil {
+	if sendErr := h.emailNotifier.SendPurchaseScheduledNotification(ctx, &data); sendErr != nil {
 		logging.Errorf("sendPurchaseScheduledEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
 }
@@ -2084,7 +2084,7 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 		AuthorizedApprovers: approvers,
 	}
 	data.ArcheraEducationURL = archeraEducationURL(dashboardBase)
-	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
+	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, &data); err != nil {
 		logging.Errorf("Failed to send purchase approval email: %v", err)
 		switch {
 		case errors.Is(err, email.ErrNoRecipient):

@@ -1120,10 +1120,10 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	canceledExec := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"} //nolint:misspell // DB status value
+	canceledExec := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"} //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1158,7 +1158,7 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 	canceledExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled", //nolint:misspell // DB status value
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	plan := &config.PurchasePlan{
 		ID:      planID,
@@ -1168,7 +1168,7 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	// Assert that UpdatePurchasePlan is called with enabled=false.
 	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
@@ -1209,7 +1209,7 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	canceledExec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		PlanID:      planID,
-		Status:      "cancelled", //nolint:misspell // DB status value
+		Status:      "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 	// Plan already disabled - UpdatePurchasePlan must NOT be called.
 	plan := &config.PurchasePlan{
@@ -1220,7 +1220,7 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB status value
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).Return(canceledExec, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}

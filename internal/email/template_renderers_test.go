@@ -57,7 +57,7 @@ func TestRenderNewRecommendationsEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderNewRecommendationsEmail(data)
+	result, err := RenderNewRecommendationsEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
@@ -78,7 +78,7 @@ func TestRenderNewRecommendationsEmail_WithUpfrontCost(t *testing.T) {
 		Recommendations:  []RecommendationSummary{},
 	}
 
-	result, err := RenderNewRecommendationsEmail(data)
+	result, err := RenderNewRecommendationsEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, "5000.00")
@@ -92,7 +92,7 @@ func TestRenderNewRecommendationsEmail_NoRecommendations(t *testing.T) {
 		Recommendations: []RecommendationSummary{},
 	}
 
-	result, err := RenderNewRecommendationsEmail(data)
+	result, err := RenderNewRecommendationsEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
@@ -120,7 +120,7 @@ func TestRenderScheduledPurchaseEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderScheduledPurchaseEmail(data)
+	result, err := RenderScheduledPurchaseEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
@@ -155,7 +155,7 @@ func TestRenderPurchaseConfirmationEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderPurchaseConfirmationEmail(data)
+	result, err := RenderPurchaseConfirmationEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
@@ -187,7 +187,7 @@ func TestRenderPurchaseFailedEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderPurchaseFailedEmail(data)
+	result, err := RenderPurchaseFailedEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, data.DashboardURL)
@@ -217,7 +217,7 @@ func TestRenderScheduledPurchaseEmail_WithoutEngine(t *testing.T) {
 		},
 	}
 
-	result, err := RenderScheduledPurchaseEmail(data)
+	result, err := RenderScheduledPurchaseEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, "m5.large")
@@ -232,7 +232,7 @@ func TestRenderPurchaseConfirmationEmail_NoUpfrontCost(t *testing.T) {
 		Recommendations:  []RecommendationSummary{},
 	}
 
-	result, err := RenderPurchaseConfirmationEmail(data)
+	result, err := RenderPurchaseConfirmationEmail(&data)
 
 	require.NoError(t, err)
 	assert.Contains(t, result, "500.00")
@@ -273,7 +273,7 @@ func TestRenderPurchaseApprovalRequestEmail_NewContextFields_Issue287(t *testing
 		}},
 	}
 
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	body, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
 
 	// Per-rec lines carry the new fields.
@@ -322,7 +322,7 @@ func TestRenderPurchaseApprovalRequestEmailHTML_Issue287(t *testing.T) {
 		}},
 	}
 
-	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	html, err := RenderPurchaseApprovalRequestEmailHTML(&data)
 	require.NoError(t, err)
 
 	// Inline-styled approve + cancel anchors with the right hrefs.
@@ -367,7 +367,7 @@ func TestRenderPurchaseApprovalRequestEmail_ArcheraBlock(t *testing.T) {
 		}},
 	}
 
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	body, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
 
 	assert.Contains(t, body, "Archera")
@@ -389,7 +389,7 @@ func TestRenderPurchaseApprovalRequestEmail_NoArcheraBlock_WhenURLEmpty(t *testi
 		}},
 	}
 
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	body, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
 
 	assert.NotContains(t, body, "Archera Insurance")
@@ -410,7 +410,7 @@ func TestRenderPurchaseApprovalRequestEmailHTML_ArcheraBlock(t *testing.T) {
 		}},
 	}
 
-	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	html, err := RenderPurchaseApprovalRequestEmailHTML(&data)
 	require.NoError(t, err)
 
 	assert.Contains(t, html, "Archera")
@@ -430,7 +430,7 @@ func TestRenderPurchaseConfirmationEmail_ArcheraBlock(t *testing.T) {
 		}},
 	}
 
-	body, err := RenderPurchaseConfirmationEmail(data)
+	body, err := RenderPurchaseConfirmationEmail(&data)
 	require.NoError(t, err)
 
 	assert.Contains(t, body, "Archera")
@@ -448,7 +448,7 @@ func TestRenderPurchaseApprovalRequestEmailHTML_NoApprovers(t *testing.T) {
 		ExecutionID:     "exec-1",
 		Recommendations: []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
 	}
-	html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+	html, err := RenderPurchaseApprovalRequestEmailHTML(&data)
 	require.NoError(t, err)
 	assert.NotContains(t, html, "Authorized approver")
 }
@@ -529,7 +529,7 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 			Decision:        "Rejected",
 			RejectionReason: reason,
 		}
-		body, err := RenderRegistrationDecisionEmail(data)
+		body, err := RenderRegistrationDecisionEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, body, reason, "rejection reason must survive verbatim in plain-text body")
 		assert.NotContains(t, body, "&amp;")
@@ -546,7 +546,7 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 			RequestedByEmail: email,
 			Recommendations:  []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
 		}
-		body, err := RenderPurchaseApprovalRequestEmail(data)
+		body, err := RenderPurchaseApprovalRequestEmail(&data)
 		require.NoError(t, err)
 		assert.Contains(t, body, name, "RequestedByName with apostrophe must be verbatim in plain-text approval")
 		assert.Contains(t, body, email, "RequestedByEmail with & must be verbatim in plain-text approval")
@@ -565,7 +565,7 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 			RequestedByName: xssName,
 			Recommendations: []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
 		}
-		html, err := RenderPurchaseApprovalRequestEmailHTML(data)
+		html, err := RenderPurchaseApprovalRequestEmailHTML(&data)
 		require.NoError(t, err)
 		assert.NotContains(t, html, xssName, "html/template must escape <script> tags in HTML bodies")
 	})

@@ -398,9 +398,21 @@ func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFuncti
 		w.Header().Add("Set-Cookie", cookie)
 	}
 
+	// Ensure a Content-Type header is always present so browsers cannot
+	// sniff the response as HTML and render body content as markup.
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+
 	// Set status code and write body
 	w.WriteHeader(lambdaResp.StatusCode)
-	if _, err := w.Write(body); err != nil { //nolint:gosec // G115: StatusCode is a bounded HTTP status int; write error is already logged
+	writeResponseBody(w, body)
+}
+
+// writeResponseBody writes body bytes to w and logs any write error.
+// body contains the Lambda handler's response, which is server-generated output.
+func writeResponseBody(w http.ResponseWriter, body []byte) {
+	if _, err := w.Write(body); err != nil { // #nosec G705 -- body is server-generated Lambda handler output, not user-controlled input
 		log.Printf("lambdaResponseToHTTP: error writing response body: %v", err)
 	}
 }

@@ -1822,7 +1822,7 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	before := summarizePurchaseHistory(baseline)
 
 	// After: same rows plus one cancelled execution (the pending that got cancelled).
-	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
+	withCancelled := append(baseline, config.PurchaseHistoryRecord{
 		Status:           "cancelled",
 		UpfrontCost:      999.0,
 		EstimatedSavings: 99.0,
