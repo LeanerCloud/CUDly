@@ -15,9 +15,7 @@ import (
 )
 
 // determineCSVCoverage determines the coverage percentage to use for CSV mode.
-//
-//nolint:gocritic // hugeParam: Config is shared with callers in multi_service.go; pointer change cascades across multiple files
-func determineCSVCoverage(cfg Config) float64 {
+func determineCSVCoverage(cfg *Config) float64 {
 	// When using CSV input, default to 100% coverage (use exact numbers from CSV)
 	// unless user explicitly provided a different coverage value
 	if cfg.Coverage == 80.0 {

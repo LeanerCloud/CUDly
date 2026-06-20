@@ -98,7 +98,7 @@ type NotificationResult struct {
 }
 
 // NewManager creates a new purchase manager.
-func NewManager(cfg ManagerConfig) *Manager { //nolint:gocritic // hugeParam: ManagerConfig is the public API; callers already own the struct
+func NewManager(cfg *ManagerConfig) *Manager {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -275,7 +275,7 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 		return false
 	}
 	for i := range exec.Recommendations {
-		if !recIsSafeToRedrive(exec.Recommendations[i]) {
+		if !recIsSafeToRedrive(&exec.Recommendations[i]) {
 			return false
 		}
 	}
@@ -285,7 +285,7 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 // recIsSafeToRedrive reports whether a single recommendation can be safely
 // re-driven. Extracted from allRecsSafeToRedrive to keep that function under
 // the gocyclo budget and to make per-rec exclusions explicit.
-func recIsSafeToRedrive(rec config.RecommendationRecord) bool { //nolint:gocritic // hugeParam: callers pass record from loop; pointer change cascades to allRecsSafeToRedrive
+func recIsSafeToRedrive(rec *config.RecommendationRecord) bool {
 	switch rec.Provider {
 	case "", "aws":
 		// Empty provider is legacy AWS. All AWS services honor IdempotencyToken.

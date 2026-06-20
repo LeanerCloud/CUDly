@@ -337,7 +337,7 @@ func TestCreateCancelledResults(t *testing.T) {
 		assert.False(t, result.Success)
 		assert.Equal(t, recs[i], result.Recommendation)
 		assert.NotNil(t, result.Error)
-		assert.Contains(t, result.Error.Error(), "cancelled") //nolint:misspell // matches error string from createCancelledResults
+		assert.Contains(t, result.Error.Error(), "canceled")
 		assert.Contains(t, result.CommitmentID, "us-west-2")
 	}
 }

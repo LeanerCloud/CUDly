@@ -382,7 +382,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	}
 
 	// Initialize purchase manager
-	purchaseManager := purchase.NewManager(purchase.ManagerConfig{
+	purchaseManager := purchase.NewManager(&purchase.ManagerConfig{
 		ConfigStore:            deps.ConfigStore,
 		EmailSender:            deps.EmailSender,
 		STSClient:              deps.STSClient,
@@ -719,7 +719,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config for cross-account STS: %w", err)
 	}
-	app.Purchase = purchase.NewManager(purchase.ManagerConfig{
+	app.Purchase = purchase.NewManager(&purchase.ManagerConfig{
 		ConfigStore:            app.Config,
 		EmailSender:            app.Email,
 		STSClient:              sts.NewFromConfig(awsCfg),
