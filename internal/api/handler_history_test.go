@@ -1163,11 +1163,11 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 // exceeds MaxHistoryDateRangeDays (the DoS guard mirroring PR #529 / issue
 // #414). Each must return a 400 ClientError; none must reach the store.
 func TestHandler_getHistory_FilterValidation(t *testing.T) {
-	cases := []struct { //nolint:govet
-		name        string
+	cases := []struct {
 		params      map[string]string
-		wantCode    int
+		name        string
 		wantContain string
+		wantCode    int
 	}{
 		{
 			name:        "invalid provider",
@@ -1710,8 +1710,8 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 		{Status: "pending", UpfrontCost: 999.0, EstimatedSavings: 99.0},
 		// Two canceled rows — the regression case from issue #736.
 		// Neither must appear in the dollar KPIs or TotalCompleted.
-		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0}, //nolint:misspell
-		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0}, //nolint:misspell
+		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	}
 
 	summary := summarizePurchaseHistory(purchases)
@@ -1822,8 +1822,8 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	before := summarizePurchaseHistory(baseline)
 
 	// After: same rows plus one canceled execution (the pending that got canceled).
-	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic,misspell
-		Status:           "cancelled", //nolint:misspell
+	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
+		Status:           "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 		UpfrontCost:      999.0,
 		EstimatedSavings: 99.0,
 	})
