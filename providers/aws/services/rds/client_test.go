@@ -69,7 +69,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -376,7 +376,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -423,7 +423,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedDBInstance: nil,
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -466,7 +466,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 			},
 		}, nil).Twice()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -654,7 +654,8 @@ func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), idempotencyTestRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idempotencyTestRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -681,7 +682,8 @@ func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
 		ReservedDBInstance: &types.ReservedDBInstance{ReservedDBInstanceId: aws.String(derivedID)},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), idempotencyTestRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idempotencyTestRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -712,7 +714,8 @@ func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T
 			},
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), idempotencyTestRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idempotencyTestRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -731,7 +734,8 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	mockRDS.On("DescribeReservedDBInstances", mock.Anything, mock.Anything).
 		Return((*rds.DescribeReservedDBInstancesOutput)(nil), fmt.Errorf("access denied"))
 
-	result, err := client.PurchaseCommitment(context.Background(), idempotencyTestRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idempotencyTestRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -969,7 +973,7 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 		ReservedDBInstance: &types.ReservedDBInstance{ReservedDBInstanceId: aws.String("ri-x")},
 	}, nil)
 
-	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(capturedID, "rds-"), "name must lead with rds- service code: %q", capturedID)
 	assert.Contains(t, capturedID, "eu-west-1", "region must be embedded: %q", capturedID)

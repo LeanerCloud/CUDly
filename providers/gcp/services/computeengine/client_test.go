@@ -941,7 +941,7 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 	require.NoError(t, err)
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
-	_, err = client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err = client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.Error(t, err, "page cap must surface an error when the iterator never terminates")
 }
 

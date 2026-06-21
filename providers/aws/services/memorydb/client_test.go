@@ -68,7 +68,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -270,7 +270,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -430,7 +430,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 			},
 		}, nil).Twice()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -479,7 +479,7 @@ func TestClient_GetOfferingDetails_NotFound(t *testing.T) {
 			ReservedNodesOfferings: []types.ReservedNodesOffering{},
 		}, nil).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -522,7 +522,7 @@ func TestClient_GetOfferingDetails_APIError(t *testing.T) {
 	mockMDB.On("DescribeReservedNodesOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -553,7 +553,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			ReservedNodesOfferings: []types.ReservedNodesOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -595,7 +595,7 @@ func TestClient_PurchaseCommitment_PurchaseError(t *testing.T) {
 	mockMDB.On("PurchaseReservedNodesOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -639,7 +639,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedNode: nil,
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -752,7 +752,8 @@ func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
 		ReservedNodes: []types.ReservedNode{{ReservationId: aws.String(derivedID), State: aws.String("active")}},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	mdbIdemRecVal := mdbIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &mdbIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -774,7 +775,8 @@ func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
 		ReservedNode: &types.ReservedNode{ReservationId: aws.String(derivedID)},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	mdbIdemRecVal := mdbIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &mdbIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -797,7 +799,8 @@ func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T
 			ReservedNodes: []types.ReservedNode{{ReservationId: aws.String(derivedID), State: aws.String("active")}},
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	mdbIdemRecVal := mdbIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &mdbIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -812,7 +815,8 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	mockMDB.On("DescribeReservedNodes", mock.Anything, mock.Anything).
 		Return((*memorydb.DescribeReservedNodesOutput)(nil), fmt.Errorf("access denied"))
 
-	result, err := client.PurchaseCommitment(context.Background(), mdbIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	mdbIdemRecVal2 := mdbIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &mdbIdemRecVal2, common.PurchaseOptions{IdempotencyToken: token})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")
@@ -869,7 +873,7 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 		ReservedNode: &types.ReservedNode{ReservationId: aws.String("mdb-x")},
 	}, nil)
 
-	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(capturedID, "memdb-"), "name must lead with memdb- service code: %q", capturedID)
 	assert.Contains(t, capturedID, "us-east-1", "region must be embedded: %q", capturedID)
