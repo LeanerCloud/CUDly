@@ -66,7 +66,7 @@ func TestShouldIncludeService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := shouldIncludeService(&tt.params, tt.service)
+			result := shouldIncludeService(tt.params, tt.service)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -230,7 +230,7 @@ func TestShouldIncludeService_Cache_Storage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, shouldIncludeService(&tt.params, tt.service))
+			assert.Equal(t, tt.expected, shouldIncludeService(tt.params, tt.service))
 		})
 	}
 }

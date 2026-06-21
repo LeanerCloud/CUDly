@@ -120,7 +120,7 @@ func TestGetRecommendations_EC2_Success(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
@@ -164,7 +164,7 @@ func TestGetRecommendations_RDS_Success(t *testing.T) {
 		LookbackPeriod: "30d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
@@ -210,7 +210,7 @@ func TestGetRecommendations_ElastiCache_Success(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
@@ -249,7 +249,7 @@ func TestGetRecommendations_SavingsPlans_Success(t *testing.T) {
 		IncludeSPTypes: []string{"Compute"},
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
@@ -281,7 +281,7 @@ func TestGetRecommendations_Error(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	assert.Error(t, err)
 	assert.Nil(t, recs)
@@ -305,7 +305,7 @@ func TestGetRecommendations_EmptyResult(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Empty(t, recs)
@@ -750,7 +750,7 @@ func TestGetRecommendations_RI_Paginates(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 	require.NoError(t, err)
 	// 2 + 3 + 4 = 9 recommendation details, each yielding one rec
 	assert.Len(t, recs, 9, "must accumulate recs across all 3 pages")
@@ -779,7 +779,7 @@ func TestGetRecommendations_RI_EmptyTokenTerminates(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.GetRecommendations(context.Background(), params)
+	recs, err := client.GetRecommendations(context.Background(), &params)
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 	assert.Equal(t, 1, mock.calls, "empty-string token must terminate pagination after page 1")
@@ -845,7 +845,7 @@ func TestGetRecommendations_RI_PaginationCapError(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	_, err := client.GetRecommendations(context.Background(), params)
+	_, err := client.GetRecommendations(context.Background(), &params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pagination cap reached")
 	assert.Equal(t, maxRecommendationPages, mock.calls,

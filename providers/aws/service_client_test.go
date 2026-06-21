@@ -132,7 +132,7 @@ func TestRecommendationsClientAdapter_GetRecommendationsForService(t *testing.T)
 // testRecommendationsClientAdapter is a test-only version of RecommendationsClientAdapter
 // that uses an interface for easier mocking.
 type testRecommendationsClientAdapter struct {
-	getRecommendationsFunc           func(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	getRecommendationsFunc           func(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 	getRecommendationsForServiceFunc func(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)
 	getAllRecommendationsFunc        func(ctx context.Context) ([]common.Recommendation, error)
 }
@@ -177,7 +177,7 @@ func TestRecommendationsClientAdapter_GetRecommendations_Integration(t *testing.
 		// This will call the real adapter method which exercises the filtering code
 		// Even though the underlying client returns no recommendations,
 		// this test ensures the adapter's GetRecommendations method is covered
-		_, err := adapter.GetRecommendations(context.Background(), params)
+		_, err := adapter.GetRecommendations(context.Background(), &params)
 		// We expect no error even with empty results
 		require.NoError(t, err)
 	})
