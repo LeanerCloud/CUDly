@@ -503,7 +503,7 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 			}
 			client.SetBillingService(mockBilling)
 
-			details, err := client.GetOfferingDetails(ctx, tt.rec)
+			details, err := client.GetOfferingDetails(ctx, &tt.rec)
 
 			if tt.wantErr {
 				require.Error(t, err)

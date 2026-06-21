@@ -321,7 +321,7 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
 	manager := &Manager{
@@ -468,7 +468,7 @@ func TestManager_SendUpcomingPurchaseNotifications_EmailFails(t *testing.T) {
 	mockStore.On("GetExecutionByPlanAndDate", ctx, "plan-123", nextExec).Return(nil, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(errors.New("email failed"))
+	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("*email.NotificationData")).Return(errors.New("email failed"))
 
 	manager := &Manager{
 		config:       mockStore,
