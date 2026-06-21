@@ -50,7 +50,10 @@ func (l *Logger) getLevel() Level {
 // Level is a named int type whose values are declared in the iota block above;
 // the range [LevelDebug..LevelError] fits comfortably in int32.
 func (l *Logger) setLevel(level Level) {
-	l.level.Store(int32(level)) //nolint:gosec // Level values are small iota constants, no overflow risk
+	if level < LevelDebug || level > LevelError {
+		level = LevelInfo
+	}
+	l.level.Store(int32(level))
 }
 
 // Config holds logger configuration.

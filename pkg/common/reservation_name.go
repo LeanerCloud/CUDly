@@ -35,13 +35,10 @@ type ReservationNameFields struct {
 
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
-// hugeParam: value receiver required to return a modified copy; all callers chain
-// ReservationNameFields{...}.WithRandSource(...) as a value expression.
-//
-//nolint:gocritic
-func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
-	f.randSource = b
-	return f
+func (f *ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
+	cp := *f
+	cp.randSource = b
+	return cp
 }
 
 // BuildReservationName composes a rich, parseable identifier for an AWS
@@ -66,13 +63,7 @@ func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 // unreachable empty-output fallback (e.g. "rds-reserved-"); it preserves
 // the prior call-site behavior at every service when the builder ever
 // emits an unsanitizable input.
-//
-// hugeParam: value semantics are required; WithRandSource chains on a copy and all callers
-// (10+ cross-package sites) use ReservationNameFields{}.WithRandSource(...); a pointer
-// parameter would break every call site outside this package.
-//
-//nolint:gocritic
-func BuildReservationName(f ReservationNameFields, fallbackPrefix string) string {
+func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) string {
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)
 	sku := normalizeReservationSegment(f.ResourceType)

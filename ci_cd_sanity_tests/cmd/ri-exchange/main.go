@@ -80,7 +80,7 @@ func main() {
 
 	if !*execute {
 		o.Mode = "dry-run"
-		q, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
+		q, err := exchange.GetExchangeQuote(ctx, &exchange.QuoteRequest{
 			Region:           *region,
 			ExpectedAccount:  *expectedAccount,
 			ReservedIDs:      ids,
@@ -129,7 +129,7 @@ func main() {
 	}
 	o.MaxPaymentDueUSD = maxRat.FloatString(2)
 
-	exID, q, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	exID, q, err := exchange.ExecuteExchange(ctx, &exchange.ExecuteRequest{
 		Region:           *region,
 		ExpectedAccount:  *expectedAccount,
 		ReservedIDs:      ids,

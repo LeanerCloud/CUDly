@@ -24,7 +24,7 @@ import (
 type riExchangeClients struct {
 	listConvertibleRIs func(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
 	getRIUtilization   func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
-	exchangeClient     exchange.ExchangeClientInterface
+	exchangeClient     exchange.ClientInterface
 	lookupOffering     func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error)
 	accountID          string
 	region             string
@@ -57,7 +57,7 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 			recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
 			return recsClient.GetRIUtilization(ctx, lookbackDays)
 		},
-		exchangeClient: exchange.NewExchangeClient(awsCfg),
+		exchangeClient: exchange.NewClient(&awsCfg),
 		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
 			return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
 				InstanceType:       instanceType,
@@ -91,9 +91,9 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 
 	store := newConfigExchangeStoreAdapter(app.Config)
 
-	result, err := exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
+	exchangeParams := exchange.RunAutoExchangeParams{
 		Store:          store,
-		ExchangeClient: clients.exchangeClient,
+		Client:         clients.exchangeClient,
 		LookupOffering: clients.lookupOffering,
 		RIs:            riInfos,
 		Utilization:    utilInfos,
@@ -108,7 +108,8 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 		Region:       clients.region,
 		DashboardURL: app.appConfig.DashboardURL,
 		RIMetadata:   riMetadata,
-	})
+	}
+	result, err := exchange.RunAutoExchange(ctx, &exchangeParams)
 	if err != nil {
 		return nil, fmt.Errorf("auto exchange failed: %w", err)
 	}
@@ -189,7 +190,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 		RecipientEmail: notifyEmail,
 	}
 
-	allOutcomes := make([]exchange.ExchangeOutcome, 0, len(result.Completed)+len(result.Pending)+len(result.Failed))
+	allOutcomes := make([]exchange.Outcome, 0, len(result.Completed)+len(result.Pending)+len(result.Failed))
 	allOutcomes = append(allOutcomes, result.Completed...)
 	allOutcomes = append(allOutcomes, result.Pending...)
 	allOutcomes = append(allOutcomes, result.Failed...)
@@ -278,7 +279,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 }
 
 // configExchangeStoreAdapter adapts config.StoreInterface to exchange.RIExchangeStore.
-// It converts between config.RIExchangeRecord and exchange.ExchangeRecord.
+// It converts between config.RIExchangeRecord and exchange.Record.
 type configExchangeStoreAdapter struct {
 	store config.StoreInterface
 }
@@ -287,7 +288,7 @@ func newConfigExchangeStoreAdapter(store config.StoreInterface) *configExchangeS
 	return &configExchangeStoreAdapter{store: store}
 }
 
-func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, record *exchange.ExchangeRecord) error {
+func (a *configExchangeStoreAdapter) SaveRIRecord(ctx context.Context, record *exchange.Record) error {
 	cfgRecord := exchangeToConfigRecord(record)
 	return a.store.SaveRIExchangeRecord(ctx, cfgRecord)
 }
@@ -296,12 +297,12 @@ func (a *configExchangeStoreAdapter) CancelAllPendingExchanges(ctx context.Conte
 	return a.store.CancelAllPendingExchanges(ctx)
 }
 
-func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]exchange.ExchangeRecord, error) {
+func (a *configExchangeStoreAdapter) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]exchange.Record, error) {
 	cfgRecords, err := a.store.GetStaleProcessingExchanges(ctx, olderThan)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]exchange.ExchangeRecord, len(cfgRecords))
+	result := make([]exchange.Record, len(cfgRecords))
 	for i := range cfgRecords {
 		result[i] = configToExchangeRecord(&cfgRecords[i])
 	}
@@ -320,7 +321,7 @@ func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id, err
 	return a.store.FailRIExchange(ctx, id, errorMsg)
 }
 
-func exchangeToConfigRecord(r *exchange.ExchangeRecord) *config.RIExchangeRecord {
+func exchangeToConfigRecord(r *exchange.Record) *config.RIExchangeRecord {
 	return &config.RIExchangeRecord{
 		ID:                 r.ID,
 		AccountID:          r.AccountID,
@@ -344,8 +345,8 @@ func exchangeToConfigRecord(r *exchange.ExchangeRecord) *config.RIExchangeRecord
 	}
 }
 
-func configToExchangeRecord(r *config.RIExchangeRecord) exchange.ExchangeRecord {
-	return exchange.ExchangeRecord{
+func configToExchangeRecord(r *config.RIExchangeRecord) exchange.Record {
+	return exchange.Record{
 		ID:                 r.ID,
 		AccountID:          r.AccountID,
 		ExchangeID:         r.ExchangeID,

@@ -61,7 +61,7 @@ func TestRegistry_Register(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{name: config.Name}, nil
 	}
 
@@ -79,7 +79,7 @@ func TestRegistry_GetProvider(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{name: config.Name, displayName: "Test Provider"}, nil
 	}
 
@@ -105,7 +105,7 @@ func TestRegistry_GetProvider_FactoryError(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return nil, errors.New("factory error")
 	}
 
@@ -124,7 +124,7 @@ func TestRegistry_GetProviderWithConfig(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{
 			name:          config.Name,
 			defaultRegion: config.Region,
@@ -135,7 +135,7 @@ func TestRegistry_GetProviderWithConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get with custom config
-	config := &ProviderConfig{Name: "test", Region: "us-west-2"}
+	config := &Config{Name: "test", Region: "us-west-2"}
 	provider, err := r.GetProviderWithConfig("test", config)
 	require.NoError(t, err)
 	require.NotNil(t, provider)
@@ -151,13 +151,13 @@ func TestRegistry_GetAllProviders(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory1 := func(config *ProviderConfig) (Provider, error) {
+	factory1 := func(config *Config) (Provider, error) {
 		return &MockProvider{name: "provider1"}, nil
 	}
-	factory2 := func(config *ProviderConfig) (Provider, error) {
+	factory2 := func(config *Config) (Provider, error) {
 		return &MockProvider{name: "provider2"}, nil
 	}
-	factoryFailing := func(config *ProviderConfig) (Provider, error) {
+	factoryFailing := func(config *Config) (Provider, error) {
 		return nil, errors.New("factory error")
 	}
 
@@ -174,7 +174,7 @@ func TestRegistry_GetProviderNames(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{name: config.Name}, nil
 	}
 
@@ -193,7 +193,7 @@ func TestRegistry_IsRegistered(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{}, nil
 	}
 
@@ -207,7 +207,7 @@ func TestRegistry_Unregister(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{}, nil
 	}
 
@@ -221,9 +221,9 @@ func TestRegistry_Unregister(t *testing.T) {
 	r.Unregister("nonexistent")
 }
 
-func TestProviderConfig_Struct(t *testing.T) {
+func TestConfig_Struct(t *testing.T) {
 	t.Parallel()
-	config := ProviderConfig{
+	config := Config{
 		Name:           "aws",
 		Profile:        "production",
 		Region:         "us-east-1",
@@ -254,7 +254,7 @@ func TestRegisterProvider(t *testing.T) {
 	// Use a unique name to avoid conflicts with other tests
 	testName := "test-register-provider-unique"
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{name: config.Name}, nil
 	}
 
@@ -283,7 +283,7 @@ func TestRegistry_FactoryRunsOutsideLock(t *testing.T) {
 
 	run := func(name string, call func(r *Registry)) {
 		r := NewRegistry()
-		factory := func(config *ProviderConfig) (Provider, error) {
+		factory := func(config *Config) (Provider, error) {
 			// Acquire the write lock from inside the factory. Only safe if the
 			// caller released the read lock before invoking us.
 			r.Unregister(config.Name)
@@ -307,7 +307,7 @@ func TestRegistry_FactoryRunsOutsideLock(t *testing.T) {
 		_, _ = r.GetProvider("getprovider")
 	})
 	run("getproviderwithconfig", func(r *Registry) {
-		_, _ = r.GetProviderWithConfig("getproviderwithconfig", &ProviderConfig{Name: "getproviderwithconfig"})
+		_, _ = r.GetProviderWithConfig("getproviderwithconfig", &Config{Name: "getproviderwithconfig"})
 	})
 	run("getallproviders", func(r *Registry) {
 		_ = r.GetAllProviders()

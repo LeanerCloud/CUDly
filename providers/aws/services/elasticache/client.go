@@ -34,7 +34,7 @@ type Client struct {
 // NewClient creates a new ElastiCache client with purchase-path retry/timeout
 // settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client: elasticache.NewFromConfig(pcfg),
 		region: cfg.Region,
@@ -138,7 +138,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendat
 	// the AWS console without cross-referencing CUDly's purchase audit log.
 	reservationID := common.IdempotentReservationID("elasticache-id-", opts.IdempotencyToken)
 	if reservationID == "" {
-		reservationID = common.BuildReservationName(common.ReservationNameFields{
+		rnf := common.ReservationNameFields{
 			Service:      "cache",
 			Region:       rec.Region,
 			ResourceType: rec.ResourceType,
@@ -146,7 +146,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendat
 			Term:         rec.Term,
 			Payment:      rec.PaymentOption,
 			Now:          time.Now(),
-		}, "elasticache-reserved-")
+		}
+		reservationID = common.BuildReservationName(&rnf, "elasticache-reserved-")
 	}
 
 	// Idempotency dedupe guard (issue #641): short-circuit if a reservation
@@ -470,7 +471,7 @@ func (c *Client) convertPaymentOption(option string) (string, error) {
 // only per-service customizations are the Purpose string and the AWS
 // convention for the instance-type tag key.
 func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
-	pairs := tagging.PurchasePairs(rec, "Reserved Cache Node Purchase", "NodeType", source)
+	pairs := tagging.PurchasePairs(&rec, "Reserved Cache Node Purchase", "NodeType", source)
 	out := make([]types.Tag, len(pairs))
 	for i, p := range pairs {
 		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}

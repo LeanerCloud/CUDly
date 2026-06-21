@@ -10,11 +10,7 @@ import (
 
 // WriteAuditRecord marshals record to a single JSON line and appends it to path.
 // Returns an error if RunID is empty or if any I/O step fails.
-// hugeParam: AuditRecord is constructed inline and immediately passed here by value at the single
-// call site in cmd/multi_service.go; changing to *AuditRecord would require editing out-of-scope files.
-//
-//nolint:gocritic
-func WriteAuditRecord(record AuditRecord, path string) error {
+func WriteAuditRecord(record *AuditRecord, path string) error {
 	if record.RunID == "" {
 		return fmt.Errorf("audit record RunID must not be empty")
 	}
@@ -45,12 +41,7 @@ func WriteAuditRecord(record AuditRecord, path string) error {
 // status must be one of: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
 // source is the CUDly surface that triggered the run -- copied into the JSONL so CLI
 // audit logs can be reconciled against the DB's purchase_history.source column.
-// hugeParam: Recommendation (360 bytes) is passed by value here because the single caller in
-// cmd/multi_service.go already holds a local value; changing to *Recommendation would require
-// editing out-of-scope files in cmd/.
-//
-//nolint:gocritic
-func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, status string, dryRun bool, source string) AuditRecord {
+func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, status string, dryRun bool, source string) AuditRecord {
 	errMsg := ""
 	if result.Error != nil {
 		errMsg = result.Error.Error()
