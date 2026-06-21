@@ -71,12 +71,8 @@ type Credentials interface {
 	GetType() string // "environment", "file", "iam-role", "msi", "adc", etc.
 }
 
-// ProviderConfig represents configuration for a provider.
-// revive/stutter: ProviderConfig is intentional; renaming to Config would conflict with
-// pkg/config.Config and break 27+ callers across providers/aws, providers/azure, providers/gcp.
-//
-//nolint:revive
-type ProviderConfig struct {
+// Config represents configuration for a provider.
+type Config struct {
 	AWSCredentialsProvider aws.CredentialsProvider
 	AzureTokenCredential   any
 	GCPTokenSource         any
@@ -91,7 +87,7 @@ type ProviderConfig struct {
 
 	// Typed per-provider identity fields. When set, these take precedence
 	// over Profile. Each provider only reads its own field and ignores the
-	// others, so a single ProviderConfig can be reused across providers.
+	// others, so a single Config can be reused across providers.
 	AWSProfile          string // AWS named profile from ~/.aws/credentials or ~/.aws/config
 	AzureSubscriptionID string // Azure subscription ID (UUID)
 	GCPProjectID        string // GCP project ID (e.g. "my-project")

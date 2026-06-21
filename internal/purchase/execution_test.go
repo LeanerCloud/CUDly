@@ -978,7 +978,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 //
 // After the fix, singleCloudAccountIDFromRecs derives the account from the recs,
 // GetCloudAccount fetches the CloudAccount record, and resolveAccountProvider
-// constructs a provider.ProviderConfig with explicit creds. The factory receives
+// constructs a provider.Config with explicit creds. The factory receives
 // a non-nil provCfg, which the assertion captures via MatchedBy.
 func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	ctx := context.Background()
@@ -1032,7 +1032,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// Before the fix, nil was passed and Azure SDK fell back to DefaultAzureCredential.
 	// After the fix, resolveAzureProvider populates ProviderOverride on the config.
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "azure",
-		mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+		mock.MatchedBy(func(cfg *provider.Config) bool {
 			return cfg != nil && cfg.ProviderOverride != nil
 		}),
 	).Return(mockProviderInst, nil)
@@ -1161,7 +1161,7 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 			}, nil)
 
 			mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "azure",
-				mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+				mock.MatchedBy(func(cfg *provider.Config) bool {
 					return cfg != nil && cfg.ProviderOverride != nil
 				}),
 			).Return(mockProviderInst, nil)

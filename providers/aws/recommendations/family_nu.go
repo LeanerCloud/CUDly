@@ -303,7 +303,7 @@ func scaleRDSRecInFamily(rec common.Recommendation, scale float64) (common.Recom
 		return rec, false
 	}
 	ratio := float64(newCount) / float64(oldCount)
-	rec = common.ScaleRecommendationCosts(rec, ratio)
+	rec = common.ScaleRecommendationCosts(&rec, ratio)
 	rec.Count = newCount
 	return rec, true
 }
