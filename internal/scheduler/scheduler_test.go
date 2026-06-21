@@ -26,7 +26,7 @@ type MockProviderFactory struct {
 	mock.Mock
 }
 
-func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	args := m.Called(ctx, name, cfg)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1842,7 +1842,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_HappyPath(t *testi
 			EstimatedSavings: 20.0,
 		},
 	}
-	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.Config) bool {
 		return cfg != nil && cfg.AzureSubscriptionID == "sub-abc-123"
 	})).Return(mockProvider, nil)
 	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
@@ -1888,7 +1888,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_NoRegisteredAccoun
 	recommendations := []common.Recommendation{
 		{Provider: common.ProviderAzure, Service: common.ServiceCompute, Region: "westus", ResourceType: "Standard_B2s", Count: 1, Term: "1yr"},
 	}
-	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.Config) bool {
 		return cfg != nil && cfg.AzureSubscriptionID == "sub-unregistered"
 	})).Return(mockProvider, nil)
 	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)
@@ -1925,7 +1925,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_StoreError(t *test
 	recommendations := []common.Recommendation{
 		{Provider: common.ProviderAzure, Service: common.ServiceCompute, Region: "eastus", ResourceType: "Standard_D2s_v3", Count: 1, Term: "1yr"},
 	}
-	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.MatchedBy(func(cfg *provider.Config) bool {
 		return cfg != nil && cfg.AzureSubscriptionID == "sub-abc-123"
 	})).Return(mockProvider, nil)
 	mockProvider.On("GetRecommendationsClient", mock.Anything).Return(mockRecClient, nil)

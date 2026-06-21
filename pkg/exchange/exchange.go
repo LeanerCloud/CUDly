@@ -16,10 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// ExchangeQuoteSummary is a small, stable summary we can log/guard on.
-//
-//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
-type ExchangeQuoteSummary struct {
+// QuoteSummary is a small, stable summary we can log/guard on.
+type QuoteSummary struct {
 	ValidationFailureReason string
 	CurrencyCode            string
 
@@ -63,10 +61,8 @@ type TargetConfig struct {
 	Count      int32
 }
 
-// ExchangeQuoteRequest holds parameters for requesting an exchange quote.
-//
-//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
-type ExchangeQuoteRequest struct {
+// QuoteRequest holds parameters for requesting an exchange quote.
+type QuoteRequest struct {
 	// TargetOfferingID + TargetCount are the legacy single-target
 	// fields, retained so pre-existing callers (HTTP handlers, sanity
 	// tests, serialized PurchasePlans) don't need a flag-day change.
@@ -86,10 +82,8 @@ type ExchangeQuoteRequest struct {
 	DryRun bool
 }
 
-// ExchangeExecuteRequest holds parameters for executing an exchange.
-//
-//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
-type ExchangeExecuteRequest struct {
+// ExecuteRequest holds parameters for executing an exchange.
+type ExecuteRequest struct {
 	// Guardrail: require PaymentDue <= MaxPaymentDueUSD to execute.
 	// AWS returns a single aggregated PaymentDue across all targets,
 	// so for multi-target requests this guardrail naturally becomes a
@@ -112,11 +106,11 @@ type ExchangeExecuteRequest struct {
 // targetConfigs returns the ec2types slice to pass to the EC2 API.
 // Prefers r.Targets when set; otherwise falls back to the legacy
 // TargetOfferingID / TargetCount singleton.
-func (r *ExchangeQuoteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
+func (r *QuoteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
 	return buildTargetConfigs(r.Targets, r.TargetOfferingID, r.TargetCount)
 }
 
-func (r *ExchangeExecuteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
+func (r *ExecuteRequest) targetConfigs() []ec2types.TargetConfigurationRequest {
 	return buildTargetConfigs(r.Targets, r.TargetOfferingID, r.TargetCount)
 }
 
@@ -169,33 +163,31 @@ type EC2ExchangeAPI interface {
 	AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error)
 }
 
-// ExchangeClient wraps an EC2ExchangeAPI for dependency-injected exchange
-// operations. Use NewExchangeClient to construct one.
-//
-//nolint:revive // exported type in pkg/exchange: renaming would require changes to callers in internal/ and cmd/ which are separate modules
-type ExchangeClient struct {
+// Client wraps an EC2ExchangeAPI for dependency-injected exchange
+// operations. Use NewClient to construct one.
+type Client struct {
 	ec2 EC2ExchangeAPI
 }
 
-// NewExchangeClient creates an ExchangeClient from an AWS config.
-func NewExchangeClient(cfg sdkaws.Config) *ExchangeClient { //nolint:gocritic // hugeParam: aws.Config is conventionally passed by value throughout the AWS SDK v2
-	return &ExchangeClient{ec2: ec2.NewFromConfig(cfg)}
+// NewClient creates an Client from an AWS config.
+func NewClient(cfg *sdkaws.Config) *Client {
+	return &Client{ec2: ec2.NewFromConfig(*cfg)}
 }
 
-// NewExchangeClientFromAPI creates an ExchangeClient from an existing
+// NewClientFromAPI creates an Client from an existing
 // EC2ExchangeAPI implementation (useful for testing).
-func NewExchangeClientFromAPI(api EC2ExchangeAPI) *ExchangeClient {
-	return &ExchangeClient{ec2: api}
+func NewClientFromAPI(api EC2ExchangeAPI) *Client {
+	return &Client{ec2: api}
 }
 
 // GetQuote retrieves an exchange quote using the injected EC2 client.
-func (c *ExchangeClient) GetQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) { //nolint:gocritic // hugeParam: interface method; pointer would break ExchangeClientInterface contract
+func (c *Client) GetQuote(ctx context.Context, req *QuoteRequest) (*QuoteSummary, error) {
 	return getQuoteWithAPI(ctx, c.ec2, req)
 }
 
 // Execute performs a convertible RI exchange with a spend-cap guardrail
 // using the injected EC2 client.
-func (c *ExchangeClient) Execute(ctx context.Context, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) { //nolint:gocritic // hugeParam: interface method; pointer would break ExchangeClientInterface contract
+func (c *Client) Execute(ctx context.Context, req *ExecuteRequest) (string, *QuoteSummary, error) {
 	return executeWithAPI(ctx, c.ec2, req)
 }
 
@@ -206,11 +198,11 @@ func loadCfg(ctx context.Context, region string) (sdkaws.Config, error) {
 	return config.LoadDefaultConfig(ctx, config.WithRegion(region))
 }
 
-func assertAccount(ctx context.Context, cfg sdkaws.Config, expected string) error { //nolint:gocritic // hugeParam: aws.Config is conventionally passed by value throughout the AWS SDK v2
+func assertAccount(ctx context.Context, cfg *sdkaws.Config, expected string) error {
 	if expected == "" {
 		return nil
 	}
-	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	out, err := sts.NewFromConfig(*cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return err
 	}
@@ -221,12 +213,12 @@ func assertAccount(ctx context.Context, cfg sdkaws.Config, expected string) erro
 }
 
 // GetExchangeQuote retrieves an exchange quote from the EC2 API.
-func GetExchangeQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) { //nolint:gocritic // hugeParam: public API; changing to pointer would break callers
+func GetExchangeQuote(ctx context.Context, req *QuoteRequest) (*QuoteSummary, error) {
 	cfg, err := loadCfg(ctx, req.Region)
 	if err != nil {
 		return nil, err
 	}
-	err = assertAccount(ctx, cfg, req.ExpectedAccount)
+	err = assertAccount(ctx, &cfg, req.ExpectedAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +227,7 @@ func GetExchangeQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQ
 
 // getQuoteWithAPI performs the quote call using an EC2ExchangeAPI,
 // allowing ExecuteExchange to reuse the same client for both quote and accept.
-func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req *QuoteRequest) (*QuoteSummary, error) {
 	if len(req.ReservedIDs) == 0 {
 		return nil, fmt.Errorf("must provide at least one reserved instance ID")
 	}
@@ -254,7 +246,7 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 		return nil, err
 	}
 
-	s := &ExchangeQuoteSummary{
+	s := &QuoteSummary{
 		IsValidExchange:         sdkaws.ToBool(out.IsValidExchange),
 		ValidationFailureReason: sdkaws.ToString(out.ValidationFailureReason),
 		CurrencyCode:            sdkaws.ToString(out.CurrencyCode),
@@ -291,7 +283,7 @@ func getQuoteWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeQuo
 
 // ExecuteExchange performs a convertible RI exchange with a spend-cap guardrail.
 // This is a convenience wrapper that creates its own AWS client from default config.
-func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeID string, quote *ExchangeQuoteSummary, err error) { //nolint:gocritic // hugeParam: public API; changing to pointer would break callers
+func ExecuteExchange(ctx context.Context, req *ExecuteRequest) (exchangeID string, quote *QuoteSummary, err error) {
 	if req.MaxPaymentDueUSD == nil {
 		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
 	}
@@ -300,7 +292,7 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 	if err != nil {
 		return "", nil, err
 	}
-	err = assertAccount(ctx, cfg, req.ExpectedAccount)
+	err = assertAccount(ctx, &cfg, req.ExpectedAccount)
 	if err != nil {
 		return "", nil, err
 	}
@@ -310,7 +302,7 @@ func ExecuteExchange(ctx context.Context, req ExchangeExecuteRequest) (exchangeI
 
 // resolvePaymentDue returns the quote's PaymentDueUSD, treating nil as zero.
 // AWS may omit PaymentDue for zero-cost exchanges (e.g., same-RI-type conversions).
-func resolvePaymentDue(q *ExchangeQuoteSummary) *big.Rat {
+func resolvePaymentDue(q *QuoteSummary) *big.Rat {
 	if q.PaymentDueUSD != nil {
 		return q.PaymentDueUSD
 	}
@@ -318,7 +310,7 @@ func resolvePaymentDue(q *ExchangeQuoteSummary) *big.Rat {
 }
 
 // checkInitialQuote returns an error if the quote is invalid or exceeds the spend cap.
-func checkInitialQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+func checkInitialQuote(q *QuoteSummary, maxPayment *big.Rat) error {
 	if !q.IsValidExchange {
 		return fmt.Errorf("exchange is not valid: %s", q.ValidationFailureReason)
 	}
@@ -332,7 +324,7 @@ func checkInitialQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
 // checkReQuote returns an error if the pre-accept re-quote is invalid or exceeds the cap.
 // It is called immediately before AcceptReservedInstancesExchangeQuote to narrow the
 // race window between pricing changes.
-func checkReQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
+func checkReQuote(q *QuoteSummary, maxPayment *big.Rat) error {
 	if !q.IsValidExchange {
 		return fmt.Errorf("exchange no longer valid at accept time: %s", q.ValidationFailureReason)
 	}
@@ -348,12 +340,12 @@ func checkReQuote(q *ExchangeQuoteSummary, maxPayment *big.Rat) error {
 }
 
 // executeWithAPI performs the exchange using an injected EC2ExchangeAPI.
-func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req *ExecuteRequest) (string, *QuoteSummary, error) {
 	if req.MaxPaymentDueUSD == nil {
 		return "", nil, fmt.Errorf("refusing to execute without max-payment-due-usd guardrail")
 	}
 
-	quoteReq := ExchangeQuoteRequest{
+	quoteReq := QuoteRequest{
 		Region:           req.Region,
 		ExpectedAccount:  req.ExpectedAccount,
 		ReservedIDs:      req.ReservedIDs,
@@ -363,7 +355,7 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 		DryRun:           false,
 	}
 
-	q, err := getQuoteWithAPI(ctx, client, quoteReq)
+	q, err := getQuoteWithAPI(ctx, client, &quoteReq)
 	if err != nil {
 		return "", nil, err
 	}
@@ -377,7 +369,7 @@ func executeWithAPI(ctx context.Context, client EC2ExchangeAPI, req ExchangeExec
 	// pricing can change between the two calls. This second quote reduces -- but
 	// does not eliminate -- the race window. If the fresh quote now exceeds the
 	// cap, abort before the irreversible accept call.
-	freshQ, err := getQuoteWithAPI(ctx, client, quoteReq)
+	freshQ, err := getQuoteWithAPI(ctx, client, &quoteReq)
 	if err != nil {
 		return "", q, fmt.Errorf("pre-accept re-quote failed: %w", err)
 	}

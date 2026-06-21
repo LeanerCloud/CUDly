@@ -43,7 +43,7 @@ const (
 // to HTTPTimeout, preserving any custom Transport, Jar, or CheckRedirect the
 // caller installed. If base.HTTPClient is nil or a non-*http.Client
 // implementation, a fresh *http.Client{Timeout: HTTPTimeout} is used instead.
-func NewConfig(base aws.Config) aws.Config { //nolint:gocritic // hugeParam: aws.Config is conventionally passed by value throughout the AWS SDK v2
+func NewConfig(base *aws.Config) aws.Config {
 	cfg := base.Copy()
 	cfg.RetryMaxAttempts = MaxAttempts
 	if hc, ok := base.HTTPClient.(*http.Client); ok && hc != nil {

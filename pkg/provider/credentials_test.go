@@ -135,7 +135,7 @@ func registerCredTestProvider(t *testing.T, name string, configured bool, creden
 	t.Helper()
 	GetRegistry().Unregister(name) // Clean up first
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{
 			name:             config.Name,
 			displayName:      config.Name + " Provider",

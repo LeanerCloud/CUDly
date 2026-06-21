@@ -152,7 +152,7 @@ type ReshapeRecommendation struct {
 // GetReservedInstancesExchangeQuote API calls during recommendation
 // generation, which used to make cross-family alternatives
 // prohibitively expensive to surface.
-func passesDollarUnitsCheck(srcNF, srcMonthlyCost float64, srcCurrency string, target OfferingOption) bool { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func passesDollarUnitsCheck(srcNF, srcMonthlyCost float64, srcCurrency string, target *OfferingOption) bool {
 	if srcCurrency != "" && target.CurrencyCode != "" && srcCurrency != target.CurrencyCode {
 		return false
 	}
@@ -205,7 +205,7 @@ const (
 //     is to the source RI's. score = 1 - min(|ratio-1|, 1). Exact match
 //     (ratio = 1) scores 1.0; double or half capacity scores 0.0.
 //     Zero/absent NF is treated as neutral 0.5.
-func compositeScore(off OfferingOption, src RIInfo) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func compositeScore(off *OfferingOption, src *RIInfo) float64 {
 	return scoreWeightCost*costComponent(off, src) +
 		scoreWeightFamilyGen*familyGenComponent(off, src) +
 		scoreWeightArch*archComponent(off, src) +
@@ -216,7 +216,7 @@ func compositeScore(off OfferingOption, src RIInfo) float64 { //nolint:gocritic 
 // costComponent returns a [0,1] cost score for the offering.
 // When src pricing is absent (MonthlyCost == 0) returns 0.5 (neutral) so
 // that a missing field does not falsely penalize or reward the offering.
-func costComponent(off OfferingOption, src RIInfo) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func costComponent(off *OfferingOption, src *RIInfo) float64 {
 	if src.MonthlyCost <= 0 || off.EffectiveMonthlyCost <= 0 {
 		return 0.5
 	}
@@ -232,7 +232,7 @@ func costComponent(off OfferingOption, src RIInfo) float64 { //nolint:gocritic /
 // familyGenComponent returns 1.0 when the offering is a same-family-prefix
 // generation jump (e.g. m5->m6i), 0.0 otherwise. The prefix is the leading
 // letters of the family name before the generation digit.
-func familyGenComponent(off OfferingOption, src RIInfo) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func familyGenComponent(off *OfferingOption, src *RIInfo) float64 {
 	srcFamily, _ := parseInstanceType(src.InstanceType)
 	offFamily, _ := parseInstanceType(off.InstanceType)
 	if srcFamily == "" || offFamily == "" {
@@ -263,7 +263,7 @@ func familyPrefix(family string) string {
 // Architecture is inferred from the family suffix:
 //   - families ending in "g" or "gd" or "gn" use ARM (AWS Graviton)
 //   - all other known suffixes (blank, "i", "n", "d", "a", "id", etc.) use x86
-func archComponent(off OfferingOption, src RIInfo) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func archComponent(off *OfferingOption, src *RIInfo) float64 {
 	srcFamily, _ := parseInstanceType(src.InstanceType)
 	offFamily, _ := parseInstanceType(off.InstanceType)
 	if srcFamily == "" || offFamily == "" {
@@ -315,7 +315,7 @@ func isARMFamily(family string) bool {
 // When SavingsAbs is nil (not supplied) or RecommendationCount is zero
 // (missing) the component returns 0.5 (neutral) so that an absent field
 // doesn't tilt the ranking.
-func confidenceComponent(off OfferingOption) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func confidenceComponent(off *OfferingOption) float64 {
 	if off.SavingsAbs == nil {
 		return 0.5
 	}
@@ -339,7 +339,7 @@ func confidenceComponent(off OfferingOption) float64 { //nolint:gocritic // huge
 // (ratio = 1.0) scores 1.0; a 2x or 0.5x difference scores 0.0. When
 // either NF is zero/absent (src.NormalizationFactor == 0 or
 // off.NormalizationFactor == 0) the component returns 0.5 (neutral).
-func nfProximityComponent(off OfferingOption, src RIInfo) float64 { //nolint:gocritic // hugeParam: internal scoring function; pointer semantics would complicate callers
+func nfProximityComponent(off *OfferingOption, src *RIInfo) float64 {
 	srcNF := src.NormalizationFactor
 	if srcNF <= 0 {
 		_, size := parseInstanceType(src.InstanceType)
@@ -420,7 +420,7 @@ func AnalyzeReshaping(ris []RIInfo, utilization []UtilizationInfo, threshold flo
 
 	var recommendations []ReshapeRecommendation
 	for _, ri := range ris {
-		if rec := analyzeRI(ri, utilMap, threshold); rec != nil {
+		if rec := analyzeRI(&ri, utilMap, threshold); rec != nil {
 			recommendations = append(recommendations, *rec)
 		}
 	}
@@ -429,7 +429,7 @@ func AnalyzeReshaping(ris []RIInfo, utilization []UtilizationInfo, threshold flo
 
 // resolveNormFactor returns the normalization factor for the RI, falling back
 // to the standard table value for the instance size. Returns 0 if unknown.
-func resolveNormFactor(ri RIInfo, size string) float64 { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func resolveNormFactor(ri *RIInfo, size string) float64 {
 	if ri.NormalizationFactor != 0 {
 		return ri.NormalizationFactor
 	}
@@ -438,7 +438,7 @@ func resolveNormFactor(ri RIInfo, size string) float64 { //nolint:gocritic // hu
 
 // analyzeRI evaluates a single RI and returns a reshape recommendation if it is
 // underutilized and convertible, or nil if no action is needed.
-func analyzeRI(ri RIInfo, utilMap map[string]float64, threshold float64) *ReshapeRecommendation { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func analyzeRI(ri *RIInfo, utilMap map[string]float64, threshold float64) *ReshapeRecommendation {
 	if !strings.EqualFold(ri.OfferingClass, "convertible") {
 		return nil
 	}
@@ -581,7 +581,7 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 		srcFamily, _ := parseInstanceType(recs[i].SourceInstanceType)
 		filled := make([]OfferingOption, 0, len(offerings))
 		for _, off := range offerings {
-			if !alternativeIsEligible(recs[i], off, src, hasSrc, srcFamily) {
+			if !alternativeIsEligible(&recs[i], &off, &src, hasSrc, srcFamily) {
 				continue
 			}
 			filled = append(filled, off)
@@ -590,8 +590,8 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 			// Higher composite score = better alternative. Tie-break by
 			// ascending EffectiveMonthlyCost, then by InstanceType
 			// lexicographically so the order is fully deterministic.
-			sa := compositeScore(filled[a], src)
-			sb := compositeScore(filled[b], src)
+			sa := compositeScore(&filled[a], &src)
+			sb := compositeScore(&filled[b], &src)
 			if sa != sb {
 				return sa > sb
 			}
@@ -622,7 +622,7 @@ func fillAlternativesFromRecs(recs []ReshapeRecommendation, offerings []Offering
 //   - $-units: when source pricing is available, the local
 //     passesDollarUnitsCheck approximation must hold; otherwise the
 //     gate is skipped.
-func alternativeIsEligible(rec ReshapeRecommendation, off OfferingOption, src RIInfo, hasSrc bool, srcFamily string) bool { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func alternativeIsEligible(rec *ReshapeRecommendation, off *OfferingOption, src *RIInfo, hasSrc bool, srcFamily string) bool {
 	if !isCrossFamilyAlternative(off, srcFamily, rec.TargetInstanceType) {
 		return false
 	}
@@ -639,7 +639,7 @@ func alternativeIsEligible(rec ReshapeRecommendation, off OfferingOption, src RI
 // cross-family alternative slot — i.e. its family parses, differs from
 // the source family, and the offering isn't the same as the primary
 // target the rec already surfaces.
-func isCrossFamilyAlternative(off OfferingOption, srcFamily, primaryTarget string) bool { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func isCrossFamilyAlternative(off *OfferingOption, srcFamily, primaryTarget string) bool {
 	offFamily, _ := parseInstanceType(off.InstanceType)
 	if offFamily == "" || strings.EqualFold(offFamily, srcFamily) {
 		return false
@@ -654,7 +654,7 @@ func isCrossFamilyAlternative(off OfferingOption, srcFamily, primaryTarget strin
 // report TermSeconds. Either side at zero (or no source RI at all)
 // returns true so legacy fixtures and older callers keep today's
 // behavior.
-func termMatchesIfKnown(src RIInfo, off OfferingOption, hasSrc bool) bool { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func termMatchesIfKnown(src *RIInfo, off *OfferingOption, hasSrc bool) bool {
 	if !hasSrc || src.TermSeconds <= 0 || off.TermSeconds <= 0 {
 		return true
 	}
@@ -675,7 +675,7 @@ func termMatchesIfKnown(src RIInfo, off OfferingOption, hasSrc bool) bool { //no
 // passesDollarUnitsCheck to reject the alternative (srcNF <= 0 path).
 // This is fail-closed: an unrecognized size excludes the offering rather
 // than silently bypassing the dollar-units check.
-func pricingGatePasses(src RIInfo, off OfferingOption, hasSrc bool) bool { //nolint:gocritic // hugeParam: internal helper; pointer semantics would require changes across call sites
+func pricingGatePasses(src *RIInfo, off *OfferingOption, hasSrc bool) bool {
 	if !hasSrc || src.MonthlyCost <= 0 {
 		return true
 	}

@@ -669,7 +669,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	}
 	region := cfg.Region
 
-	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
+	quote, err := exchange.GetExchangeQuote(ctx, &exchange.QuoteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -735,7 +735,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 
 	region := body.Region
 
-	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	exchangeID, quote, err := exchange.ExecuteExchange(ctx, &exchange.ExecuteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -887,8 +887,8 @@ func toExchangeTargets(targets []ExchangeTargetBody) []exchange.TargetConfig {
 
 // ExchangeExecuteResponse is the response from a successful exchange execution.
 type ExchangeExecuteResponse struct {
-	Quote      *exchange.ExchangeQuoteSummary `json:"quote"`
-	ExchangeID string                         `json:"exchange_id"`
+	Quote      *exchange.QuoteSummary `json:"quote"`
+	ExchangeID string                 `json:"exchange_id"`
 }
 
 // getRIExchangeConfig returns the current RI exchange automation settings.
@@ -1260,7 +1260,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 	}
 
 	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
-	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, &exchange.ExecuteRequest{
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,

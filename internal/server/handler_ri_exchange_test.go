@@ -66,7 +66,7 @@ func TestParseScheduledEvent_RIExchangeReshape(t *testing.T) {
 func TestBuildExchangeNotificationData(t *testing.T) {
 	result := &exchange.AutoExchangeResult{
 		Mode: "manual",
-		Completed: []exchange.ExchangeOutcome{
+		Completed: []exchange.Outcome{
 			{
 				RecordID:           "rec-1",
 				SourceRIID:         "ri-completed",
@@ -78,7 +78,7 @@ func TestBuildExchangeNotificationData(t *testing.T) {
 				UtilizationPct:     45.0,
 			},
 		},
-		Pending: []exchange.ExchangeOutcome{
+		Pending: []exchange.Outcome{
 			{
 				RecordID:           "rec-2",
 				ApprovalToken:      "token-abc",
@@ -207,9 +207,9 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 
 	adapter := newConfigExchangeStoreAdapter(mockStore)
 
-	t.Run("SaveRIExchangeRecord", func(t *testing.T) {
+	t.Run("SaveRIRecord", func(t *testing.T) {
 		ctx := testutil.TestContext(t)
-		record := &exchange.ExchangeRecord{
+		record := &exchange.Record{
 			AccountID:          "123456789",
 			Region:             "us-east-1",
 			SourceRIIDs:        []string{"ri-123"},
@@ -222,7 +222,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 			Mode:               "manual",
 		}
 
-		err := adapter.SaveRIExchangeRecord(ctx, record)
+		err := adapter.SaveRIRecord(ctx, record)
 		testutil.AssertNoError(t, err)
 
 		if savedRecord == nil {
@@ -287,7 +287,7 @@ func TestSendExchangeNotification_ManualPending(t *testing.T) {
 
 	result := &exchange.AutoExchangeResult{
 		Mode: "manual",
-		Pending: []exchange.ExchangeOutcome{
+		Pending: []exchange.Outcome{
 			{SourceRIID: "ri-1"},
 		},
 	}
@@ -311,7 +311,7 @@ func TestSendExchangeNotification_AutoCompleted(t *testing.T) {
 
 	result := &exchange.AutoExchangeResult{
 		Mode: "auto",
-		Completed: []exchange.ExchangeOutcome{
+		Completed: []exchange.Outcome{
 			{SourceRIID: "ri-1", ExchangeID: "exch-1"},
 		},
 	}
@@ -341,7 +341,7 @@ func TestSendExchangeNotification_PendingSetsRecipientEmail(t *testing.T) {
 
 	result := &exchange.AutoExchangeResult{
 		Mode: "manual",
-		Pending: []exchange.ExchangeOutcome{
+		Pending: []exchange.Outcome{
 			{SourceRIID: "ri-1"},
 		},
 	}
@@ -373,7 +373,7 @@ func TestSendExchangeNotification_CompletedOmitsRecipientEmail(t *testing.T) {
 
 	result := &exchange.AutoExchangeResult{
 		Mode: "auto",
-		Completed: []exchange.ExchangeOutcome{
+		Completed: []exchange.Outcome{
 			{SourceRIID: "ri-1", ExchangeID: "exch-1"},
 		},
 	}
@@ -396,7 +396,7 @@ func TestSendExchangeNotification_EmailFailure(t *testing.T) {
 
 	result := &exchange.AutoExchangeResult{
 		Mode: "auto",
-		Completed: []exchange.ExchangeOutcome{
+		Completed: []exchange.Outcome{
 			{SourceRIID: "ri-1"},
 		},
 	}
@@ -545,8 +545,8 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 			}, nil
 		},
 		exchangeClient: &mockExchangeClient{
-			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
-				return &exchange.ExchangeQuoteSummary{
+			getQuoteFunc: func(ctx context.Context, req *exchange.QuoteRequest) (*exchange.QuoteSummary, error) {
+				return &exchange.QuoteSummary{
 					IsValidExchange:  true,
 					PaymentDueUSD:    new(big.Rat).SetFloat64(5.00),
 					PaymentDueUSDStr: "5.00",
@@ -630,15 +630,15 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 			}, nil
 		},
 		exchangeClient: &mockExchangeClient{
-			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
-				return &exchange.ExchangeQuoteSummary{
+			getQuoteFunc: func(ctx context.Context, req *exchange.QuoteRequest) (*exchange.QuoteSummary, error) {
+				return &exchange.QuoteSummary{
 					IsValidExchange:  true,
 					PaymentDueUSD:    new(big.Rat).SetFloat64(3.50),
 					PaymentDueUSDStr: "3.50",
 				}, nil
 			},
-			executeFunc: func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
-				return "exch-auto-1", &exchange.ExchangeQuoteSummary{
+			executeFunc: func(ctx context.Context, req *exchange.ExecuteRequest) (string, *exchange.QuoteSummary, error) {
+				return "exch-auto-1", &exchange.QuoteSummary{
 					IsValidExchange:  true,
 					PaymentDueUSD:    new(big.Rat).SetFloat64(3.50),
 					PaymentDueUSDStr: "3.50",
@@ -734,15 +734,15 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 			}, nil
 		},
 		exchangeClient: &mockExchangeClient{
-			getQuoteFunc: func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
-				return &exchange.ExchangeQuoteSummary{
+			getQuoteFunc: func(ctx context.Context, req *exchange.QuoteRequest) (*exchange.QuoteSummary, error) {
+				return &exchange.QuoteSummary{
 					IsValidExchange:  true,
 					PaymentDueUSD:    new(big.Rat).SetFloat64(8.00),
 					PaymentDueUSDStr: "8.00",
 				}, nil
 			},
-			executeFunc: func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
-				return "exch-" + req.ReservedIDs[0], &exchange.ExchangeQuoteSummary{
+			executeFunc: func(ctx context.Context, req *exchange.ExecuteRequest) (string, *exchange.QuoteSummary, error) {
+				return "exch-" + req.ReservedIDs[0], &exchange.QuoteSummary{
 					IsValidExchange:  true,
 					PaymentDueUSD:    new(big.Rat).SetFloat64(8.00),
 					PaymentDueUSDStr: "8.00",
@@ -892,18 +892,18 @@ func (m *mockEmailSender) SendRegistrationDecisionNotification(_ context.Context
 }
 
 type mockExchangeClient struct {
-	getQuoteFunc func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error)
-	executeFunc  func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
+	getQuoteFunc func(ctx context.Context, req *exchange.QuoteRequest) (*exchange.QuoteSummary, error)
+	executeFunc  func(ctx context.Context, req *exchange.ExecuteRequest) (string, *exchange.QuoteSummary, error)
 }
 
-func (m *mockExchangeClient) GetQuote(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+func (m *mockExchangeClient) GetQuote(ctx context.Context, req *exchange.QuoteRequest) (*exchange.QuoteSummary, error) {
 	if m.getQuoteFunc != nil {
 		return m.getQuoteFunc(ctx, req)
 	}
 	return nil, errors.New("GetQuote not mocked")
 }
 
-func (m *mockExchangeClient) Execute(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+func (m *mockExchangeClient) Execute(ctx context.Context, req *exchange.ExecuteRequest) (string, *exchange.QuoteSummary, error) {
 	if m.executeFunc != nil {
 		return m.executeFunc(ctx, req)
 	}

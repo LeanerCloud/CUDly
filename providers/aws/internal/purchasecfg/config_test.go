@@ -17,7 +17,7 @@ func TestNewConfig_SetsRetryMaxAttempts(t *testing.T) {
 		RetryMaxAttempts: 0, // SDK default (will be resolved to 3 at runtime)
 	}
 
-	cfg := NewConfig(base)
+	cfg := NewConfig(&base)
 
 	assert.Equal(t, MaxAttempts, cfg.RetryMaxAttempts,
 		"purchase-path config must cap retries at %d to prevent Lambda budget exhaustion", MaxAttempts)
@@ -27,7 +27,7 @@ func TestNewConfig_SetsHTTPTimeout(t *testing.T) {
 	t.Helper()
 	base := aws.Config{Region: "us-east-1"}
 
-	cfg := NewConfig(base)
+	cfg := NewConfig(&base)
 
 	require.NotNil(t, cfg.HTTPClient, "HTTPClient must not be nil after NewConfig")
 	httpClient, ok := cfg.HTTPClient.(*http.Client)
@@ -44,7 +44,7 @@ func TestNewConfig_DoesNotMutateBase(t *testing.T) {
 		HTTPClient:       &http.Client{Timeout: 60 * time.Second},
 	}
 
-	_ = NewConfig(base)
+	_ = NewConfig(&base)
 
 	assert.Equal(t, 5, base.RetryMaxAttempts, "NewConfig must not modify the original config's RetryMaxAttempts")
 	httpClient, ok := base.HTTPClient.(*http.Client)
@@ -64,7 +64,7 @@ func TestNewConfig_PreservesCustomTransport(t *testing.T) {
 		HTTPClient: &http.Client{Transport: customTransport, Timeout: 60 * time.Second},
 	}
 
-	cfg := NewConfig(base)
+	cfg := NewConfig(&base)
 
 	require.NotNil(t, cfg.HTTPClient, "HTTPClient must not be nil after NewConfig")
 	httpClient, ok := cfg.HTTPClient.(*http.Client)
@@ -79,7 +79,7 @@ func TestNewConfig_PreservesRegion(t *testing.T) {
 	t.Helper()
 	base := aws.Config{Region: "ap-southeast-1"}
 
-	cfg := NewConfig(base)
+	cfg := NewConfig(&base)
 
 	assert.Equal(t, "ap-southeast-1", cfg.Region, "NewConfig must preserve the original region")
 }

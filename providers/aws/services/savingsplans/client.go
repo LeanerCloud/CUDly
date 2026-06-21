@@ -40,7 +40,7 @@ type Client struct {
 // GetServiceType returns and which commitments GetExistingCommitments includes.
 // See purchasecfg for retry rationale.
 func NewClient(cfg aws.Config, planType types.SavingsPlanType) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client:   savingsplans.NewFromConfig(pcfg),
 		region:   cfg.Region,
