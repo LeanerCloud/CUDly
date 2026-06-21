@@ -22,7 +22,7 @@ type MockProviderFactory struct {
 	mock.Mock
 }
 
-func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	args := m.Called(ctx, name, cfg)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

@@ -108,7 +108,7 @@ type AzureProvider struct {
 // azcore.TokenCredential, it is installed directly so all downstream clients
 // use those credentials. Otherwise, GetCredentials lazily falls back to
 // DefaultAzureCredential.
-func NewAzureProvider(config *provider.ProviderConfig) (*AzureProvider, error) {
+func NewAzureProvider(config *provider.Config) (*AzureProvider, error) {
 	p := &AzureProvider{}
 
 	if config != nil {
@@ -132,7 +132,7 @@ func NewAzureProvider(config *provider.ProviderConfig) (*AzureProvider, error) {
 
 // resolveAzureSubscriptionID picks the subscription ID from the typed field,
 // falling back to the deprecated Profile field.
-func resolveAzureSubscriptionID(config *provider.ProviderConfig) string {
+func resolveAzureSubscriptionID(config *provider.Config) string {
 	if config.AzureSubscriptionID != "" {
 		return config.AzureSubscriptionID
 	}
@@ -245,7 +245,7 @@ func (p *AzureProvider) ValidateCredentials(ctx context.Context) error {
 // GetAccounts returns all accessible Azure subscriptions.
 //
 // IsDefault is set to true for the subscription that matches (in priority order):
-//  1. The AzureSubscriptionID set in ProviderConfig (or the Profile fallback).
+//  1. The AzureSubscriptionID set in Config (or the Profile fallback).
 //  2. The AZURE_SUBSCRIPTION_ID environment variable.
 //  3. The sole subscription, when exactly one is visible (mirrors AWS behaviour
 //     where the STS-identified account is always the default).
@@ -300,7 +300,7 @@ func (p *AzureProvider) GetAccounts(ctx context.Context) ([]common.Account, erro
 // resolveDefaultSubscription sets IsDefault on the matching account in-place.
 //
 // Priority:
-//  1. explicitSubID (from ProviderConfig.AzureSubscriptionID / Profile).
+//  1. explicitSubID (from Config.AzureSubscriptionID / Profile).
 //  2. AZURE_SUBSCRIPTION_ID environment variable.
 //  3. When exactly one subscription is visible, mark it default (mirrors AWS
 //     behaviour where the STS-identified account is always the default).
@@ -539,7 +539,7 @@ func (p *AzureProvider) GetRecommendationsClientForAccount(ctx context.Context, 
 
 // Register the Azure provider with the global registry
 func init() {
-	provider.RegisterProvider("azure", func(config *provider.ProviderConfig) (provider.Provider, error) {
+	provider.RegisterProvider("azure", func(config *provider.Config) (provider.Provider, error) {
 		return NewAzureProvider(config)
 	})
 }

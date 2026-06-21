@@ -40,7 +40,7 @@ type Client struct {
 // The tightened config (2 retries, 15s HTTP timeout) bounds worst-case wall
 // clock to 30s, preventing Lambda budget exhaustion on transient API slowness.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client: ec2.NewFromConfig(pcfg),
 		region: cfg.Region,
@@ -235,7 +235,7 @@ func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec commo
 	// self-describing in the AWS console without cross-referencing CUDly's DB.
 	// BuildReservationName produces the same rich {svc}-{region}-{sku}-{count}x-
 	// {term}-{paymt}-{ts}-{rand} format used by the other AWS service clients.
-	displayName := common.BuildReservationName(common.ReservationNameFields{
+	rnf := common.ReservationNameFields{
 		Service:      "ec2",
 		Region:       rec.Region,
 		ResourceType: rec.ResourceType,
@@ -243,7 +243,8 @@ func (c *Client) tagReservedInstance(ctx context.Context, riID string, rec commo
 		Term:         rec.Term,
 		Payment:      rec.PaymentOption,
 		Now:          time.Now(),
-	}, "ec2-reserved-")
+	}
+	displayName := common.BuildReservationName(&rnf, "ec2-reserved-")
 	tags := []types.Tag{
 		{Key: aws.String("Name"), Value: aws.String(displayName)},
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Instance Purchase")},

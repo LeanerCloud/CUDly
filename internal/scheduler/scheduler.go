@@ -678,7 +678,7 @@ func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, exter
 // subscriptionID is passed explicitly to avoid an unnecessary Azure API round-trip
 // to auto-discover subscriptions — the caller already resolved it from env.
 func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, error) {
-	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.ProviderConfig{
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.Config{
 		AzureSubscriptionID: subscriptionID,
 	})
 	if err != nil {
@@ -727,7 +727,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	cfg := &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+	cfg := &provider.Config{Name: "aws", AWSCredentialsProvider: awsCreds}
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
@@ -779,7 +779,7 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
+	azProv, err := azureprovider.NewAzureProvider(&provider.Config{Profile: acct.AzureSubscriptionID})
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
 	}

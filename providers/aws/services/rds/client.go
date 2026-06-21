@@ -36,7 +36,7 @@ type Client struct {
 // NewClient creates a new RDS client with purchase-path retry/timeout settings.
 // See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client: rds.NewFromConfig(pcfg),
 		region: cfg.Region,
@@ -206,7 +206,7 @@ func (c *Client) deriveReservationID(rec common.Recommendation, opts common.Purc
 	if opts.ReservationID != "" {
 		return common.SanitizeReservationID(opts.ReservationID, "rds-reserved-")
 	}
-	return common.BuildReservationName(common.ReservationNameFields{
+	rnf := common.ReservationNameFields{
 		Service:      "rds",
 		Region:       rec.Region,
 		ResourceType: rec.ResourceType,
@@ -214,7 +214,8 @@ func (c *Client) deriveReservationID(rec common.Recommendation, opts common.Purc
 		Term:         rec.Term,
 		Payment:      rec.PaymentOption,
 		Now:          time.Now(),
-	}, "rds-reserved-")
+	}
+	return common.BuildReservationName(&rnf, "rds-reserved-")
 }
 
 // idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it
@@ -614,7 +615,7 @@ func (c *Client) normalizeEngineName(engine string) (string, error) {
 // only per-service customizations are the Purpose string and the AWS
 // convention for the instance-type tag key.
 func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
-	pairs := tagging.PurchasePairs(rec, "Reserved Instance Purchase", "ResourceType", source)
+	pairs := tagging.PurchasePairs(&rec, "Reserved Instance Purchase", "ResourceType", source)
 	out := make([]types.Tag, len(pairs))
 	for i, p := range pairs {
 		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}

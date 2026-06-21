@@ -47,7 +47,7 @@ type Client struct {
 // NewClient creates a new OpenSearch client with purchase-path retry/timeout
 // settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client:    opensearch.NewFromConfig(pcfg),
 		stsClient: sts.NewFromConfig(pcfg),
@@ -163,7 +163,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	// CUDly's purchase audit log.
 	reservationName := common.IdempotentReservationID("opensearch-id-", opts.IdempotencyToken)
 	if reservationName == "" {
-		reservationName = common.BuildReservationName(common.ReservationNameFields{
+		rnf := common.ReservationNameFields{
 			Service:      "opensearch",
 			Region:       rec.Region,
 			ResourceType: rec.ResourceType,
@@ -171,7 +171,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 			Term:         rec.Term,
 			Payment:      rec.PaymentOption,
 			Now:          time.Now(),
-		}, "opensearch-reserved-")
+		}
+		reservationName = common.BuildReservationName(&rnf, "opensearch-reserved-")
 	}
 
 	// Idempotency dedupe guard (issue #641): short-circuit if a reservation with

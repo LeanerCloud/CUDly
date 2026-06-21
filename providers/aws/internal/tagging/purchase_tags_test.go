@@ -10,7 +10,7 @@ import (
 
 func TestPurchasePairs_BaseFields(t *testing.T) {
 	rec := common.Recommendation{ResourceType: "db.m5.large", Region: "eu-west-1"}
-	pairs := PurchasePairs(rec, "Reserved Instance Purchase", "ResourceType", "")
+	pairs := PurchasePairs(&rec, "Reserved Instance Purchase", "ResourceType", "")
 
 	want := map[string]string{
 		"Purpose":      "Reserved Instance Purchase",
@@ -29,7 +29,7 @@ func TestPurchasePairs_BaseFields(t *testing.T) {
 
 func TestPurchasePairs_AppendsPurchaseAutomationWhenSourceSet(t *testing.T) {
 	rec := common.Recommendation{ResourceType: "cache.t3.medium", Region: "us-east-1"}
-	pairs := PurchasePairs(rec, "Reserved Cache Node Purchase", "NodeType", common.PurchaseSourceWeb)
+	pairs := PurchasePairs(&rec, "Reserved Cache Node Purchase", "NodeType", common.PurchaseSourceWeb)
 
 	var found bool
 	for _, p := range pairs {
@@ -47,8 +47,8 @@ func TestPurchasePairs_AppendsPurchaseAutomationWhenSourceSet(t *testing.T) {
 func TestPurchasePairs_HonoursPerServiceKeyName(t *testing.T) {
 	// Each call must use the key name the caller supplied — no hardcoding.
 	rec := common.Recommendation{ResourceType: "r6gd.xlarge"}
-	rds := PurchasePairs(rec, "p", "ResourceType", "")
-	mdb := PurchasePairs(rec, "p", "NodeType", "")
+	rds := PurchasePairs(&rec, "p", "ResourceType", "")
+	mdb := PurchasePairs(&rec, "p", "NodeType", "")
 	assert.Contains(t, pairsMap(rds), "ResourceType")
 	assert.Contains(t, pairsMap(mdb), "NodeType")
 }

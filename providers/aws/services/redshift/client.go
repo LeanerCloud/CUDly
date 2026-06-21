@@ -51,7 +51,7 @@ type Client struct {
 // NewClient creates a new Redshift client with purchase-path retry/timeout
 // settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client:    redshift.NewFromConfig(pcfg),
 		stsClient: sts.NewFromConfig(pcfg),
@@ -350,7 +350,7 @@ func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.
 	// other AWS service clients embed in their reservation name. The Name tag
 	// uses BuildReservationName to produce the same rich format so operators
 	// can identify the node without cross-referencing CUDly's purchase audit log.
-	displayName := common.BuildReservationName(common.ReservationNameFields{
+	rnf := common.ReservationNameFields{
 		Service:      "redshift",
 		Region:       rec.Region,
 		ResourceType: rec.ResourceType,
@@ -358,7 +358,8 @@ func (c *Client) tagReservedNode(ctx context.Context, nodeID string, rec common.
 		Term:         rec.Term,
 		Payment:      rec.PaymentOption,
 		Now:          time.Now(),
-	}, "redshift-reserved-")
+	}
+	displayName := common.BuildReservationName(&rnf, "redshift-reserved-")
 	tags := []redshifttypes.Tag{
 		{Key: aws.String("Name"), Value: aws.String(displayName)},
 		{Key: aws.String("Purpose"), Value: aws.String("Reserved Node Purchase")},

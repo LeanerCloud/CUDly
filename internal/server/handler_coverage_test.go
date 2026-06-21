@@ -228,7 +228,7 @@ func TestConfigExchangeStoreAdapter_GetStaleProcessingExchanges_WithRecords(t *t
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, 2, len(records))
 	testutil.AssertEqual(t, "stale-1", records[0].ID)
-	testutil.AssertEqual(t, exchange.ExchangeRecord{}.Status, "")
+	testutil.AssertEqual(t, exchange.Record{}.Status, "")
 }
 
 func TestConfigExchangeStoreAdapter_GetStaleProcessingExchanges_Error(t *testing.T) {

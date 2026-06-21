@@ -178,19 +178,16 @@ type ServiceDetails interface {
 // family-NU) to keep Count and cost in sync when a recommendation is
 // sized down (or up) from AWS's proposal -- without this helper the same
 // four-field scaling pattern was duplicated at every sizing site.
-// hugeParam: Recommendation (360 bytes) is passed by value here intentionally;
-// the function returns a modified copy so callers can chain without mutation.
-//
-//nolint:gocritic
-func ScaleRecommendationCosts(rec Recommendation, ratio float64) Recommendation {
-	rec.CommitmentCost *= ratio
-	rec.OnDemandCost *= ratio
-	rec.EstimatedSavings *= ratio
-	if rec.RecurringMonthlyCost != nil {
-		scaled := *rec.RecurringMonthlyCost * ratio
-		rec.RecurringMonthlyCost = &scaled
+func ScaleRecommendationCosts(rec *Recommendation, ratio float64) Recommendation {
+	scaled := *rec
+	scaled.CommitmentCost *= ratio
+	scaled.OnDemandCost *= ratio
+	scaled.EstimatedSavings *= ratio
+	if scaled.RecurringMonthlyCost != nil {
+		v := *scaled.RecurringMonthlyCost * ratio
+		scaled.RecurringMonthlyCost = &v
 	}
-	return rec
+	return scaled
 }
 
 // PurchaseResult represents the outcome of a commitment purchase.
@@ -358,10 +355,7 @@ type ComputeDetails struct {
 	MemoryGB     float64 `json:"memory_gb,omitempty"` // 0 = unknown
 }
 
-// hugeParam: value receiver required; ComputeDetails implements ServiceDetails via value methods.
-//
-//nolint:gocritic
-func (d ComputeDetails) GetServiceType() ServiceType {
+func (d ComputeDetails) GetServiceType() ServiceType { //nolint:gocritic // hugeParam: value receiver required by ServiceDetails interface; providers/azure assigns ComputeDetails by value
 	return ServiceCompute
 }
 
@@ -370,10 +364,7 @@ func (d ComputeDetails) GetServiceType() ServiceType {
 // and MemoryGB are populated (>0) the size is appended as
 // " (<vcpu> vCPU / <memory> GB)" to give the UI a one-line summary
 // without forcing the caller to inspect the struct.
-// hugeParam: value receiver required; ComputeDetails implements ServiceDetails via value methods.
-//
-//nolint:gocritic
-func (d ComputeDetails) GetDetailDescription() string {
+func (d ComputeDetails) GetDetailDescription() string { //nolint:gocritic // hugeParam: value receiver required by ServiceDetails interface; providers/azure assigns ComputeDetails by value
 	base := d.Platform + "/" + d.Tenancy
 	if d.VCPU > 0 && d.MemoryGB > 0 {
 		// %g trims trailing zeros (16 GB, not 16.000000 GB) but keeps
@@ -392,17 +383,11 @@ type DatabaseDetails struct {
 	Deployment    string `json:"deployment,omitempty"` // Azure: single, pool
 }
 
-// hugeParam: value receiver required; DatabaseDetails implements ServiceDetails via value methods.
-//
-//nolint:gocritic
-func (d DatabaseDetails) GetServiceType() ServiceType {
+func (d DatabaseDetails) GetServiceType() ServiceType { //nolint:gocritic // hugeParam: value receiver required by ServiceDetails interface; providers/azure assigns DatabaseDetails by value
 	return ServiceRelationalDB
 }
 
-// hugeParam: value receiver required; DatabaseDetails implements ServiceDetails via value methods.
-//
-//nolint:gocritic
-func (d DatabaseDetails) GetDetailDescription() string {
+func (d DatabaseDetails) GetDetailDescription() string { //nolint:gocritic // hugeParam: value receiver required by ServiceDetails interface; providers/azure assigns DatabaseDetails by value
 	return d.Engine + "/" + d.AZConfig
 }
 

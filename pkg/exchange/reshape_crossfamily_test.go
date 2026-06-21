@@ -369,12 +369,12 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 func TestPassesDollarUnitsCheck(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct { //nolint:govet // fieldalignment: test case struct; layout reflects logical parameter grouping
+	cases := []struct {
 		name        string
-		srcNF       float64
-		srcMC       float64
 		srcCurrency string
 		target      OfferingOption
+		srcNF       float64
+		srcMC       float64
 		want        bool
 	}{
 		{
@@ -441,7 +441,7 @@ func TestPassesDollarUnitsCheck(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := passesDollarUnitsCheck(c.srcNF, c.srcMC, c.srcCurrency, c.target)
+			got := passesDollarUnitsCheck(c.srcNF, c.srcMC, c.srcCurrency, &c.target)
 			assert.Equal(t, c.want, got)
 		})
 	}
@@ -477,8 +477,8 @@ func TestCompositeScore_SameGenOutranksTermMismatch(t *testing.T) {
 		EffectiveMonthlyCost: 80, // same cost as source -- better raw price
 		NormalizationFactor:  8,
 	}
-	scoreNearPerfect := compositeScore(nearPerfect, src)
-	scoreCrossFamily := compositeScore(crossFamily, src)
+	scoreNearPerfect := compositeScore(&nearPerfect, &src)
+	scoreCrossFamily := compositeScore(&crossFamily, &src)
 	assert.Greater(t, scoreNearPerfect, scoreCrossFamily,
 		"same-gen m6i should outrank cross-family r5 despite being slightly more expensive")
 }
@@ -507,7 +507,7 @@ func TestCompositeScore_SameArchOutranksCrossArch(t *testing.T) {
 		EffectiveMonthlyCost: 90,
 		NormalizationFactor:  8,
 	}
-	assert.Greater(t, compositeScore(sameArch, src), compositeScore(crossArch, src),
+	assert.Greater(t, compositeScore(&sameArch, &src), compositeScore(&crossArch, &src),
 		"x86->x86 should outrank x86->ARM when family-gen bonus is equal for both")
 }
 
@@ -535,7 +535,7 @@ func TestCompositeScore_HighConfidenceOutranksLow(t *testing.T) {
 		SavingsAbs:           floatPtr(10),
 		RecommendationCount:  1,
 	}
-	assert.Greater(t, compositeScore(highConf, src), compositeScore(lowConf, src),
+	assert.Greater(t, compositeScore(&highConf, &src), compositeScore(&lowConf, &src),
 		"high-confidence CE rec should outrank low-confidence at equal cost")
 }
 
@@ -562,7 +562,7 @@ func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
 		SavingsAbs:           floatPtr(5), // explicitly low confidence
 	}
 	// absent must score >= low confidence (neutral 0.5 vs. 0.0)
-	assert.GreaterOrEqual(t, compositeScore(absentSavings, src), compositeScore(lowConf, src),
+	assert.GreaterOrEqual(t, compositeScore(&absentSavings, &src), compositeScore(&lowConf, &src),
 		"nil SavingsAbs should be treated as neutral (0.5), not as low confidence (0.0)")
 }
 

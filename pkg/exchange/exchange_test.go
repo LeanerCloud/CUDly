@@ -40,7 +40,7 @@ func TestParseDecimalRat(t *testing.T) {
 
 func TestPaymentDueUSDStr_InJSON(t *testing.T) {
 	t.Parallel()
-	s := &ExchangeQuoteSummary{
+	s := &QuoteSummary{
 		IsValidExchange:  true,
 		PaymentDueRaw:    "123.456000",
 		PaymentDueUSD:    new(big.Rat).SetFrac64(123456, 1000),
