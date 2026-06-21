@@ -839,7 +839,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
-	assert.Equal(t, "cancelled", body["status"])
+	assert.Equal(t, "canceled", body["status"])
 }
 
 func TestHandler_HandleRequest_GetHistory(t *testing.T) {
@@ -1171,8 +1171,8 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil)
+	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 

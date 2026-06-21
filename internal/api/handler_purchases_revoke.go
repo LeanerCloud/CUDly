@@ -225,7 +225,7 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 //
 // The method enforces revoke-any/revoke-own RBAC (same permissions as the
 // completed-purchase revoke path), then atomically transitions the execution
-// to "cancelled" and removes its purchase_suppressions.
+// to "canceled" and removes its purchase_suppressions.
 //
 // Returns 410 Gone only when the CAS observes the row already transitioned out
 // of "scheduled" (the scheduler fired the SDK call between our SELECT and the
@@ -245,47 +245,47 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 		return nil, err
 	}
 
-	// Atomically transition from scheduled -> cancelled and remove suppressions.
-	var cancelledBy *string
+	// Atomically transition from scheduled -> canceled and remove suppressions.
+	var canceledBy *string
 	if session.Email != "" {
 		e := session.Email
-		cancelledBy = &e
+		canceledBy = &e
 	}
-	var cancelled bool
+	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		// The scheduled-revoke path uses its own CAS variant that flips ONLY
-		// status='scheduled' -> 'cancelled'. CancelExecutionAtomic accepts
+		// status='scheduled' -> 'canceled'. CancelExecutionAtomic accepts
 		// only ('pending','notified') and would always return zero rows on
 		// a scheduled row, miscoded as "race lost" -> a misleading 410 even
 		// during the happy path. Issue #290 wave-2: keep the two CAS contracts
 		// distinct so 410 unambiguously means "scheduler already fired".
-		cancelled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, canceledBy)
 		if err != nil {
 			return err
 		}
-		if !cancelled {
+		if !canceled {
 			return nil
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
 		return nil, fmt.Errorf("cancel scheduled execution %s: %w", execution.ExecutionID, err)
 	}
-	if !cancelled {
+	if !canceled {
 		// A concurrent scheduler tick transitioned the row away from "scheduled"
-		// between our SELECT and the CAS UPDATE — the window closed. Return 410
+		// between our SELECT and the CAS UPDATE -- the window closed. Return 410
 		// so the client knows to switch to the completed-purchase revoke path.
 		return nil, NewClientError(410, fmt.Sprintf(
 			"revocation window has closed: execution %s was already transitioned to %q", execution.ExecutionID, currentStatus,
 		))
 	}
 
-	logging.Infof("revokeScheduledExecution: execution_id=%s cancelled before SDK call (free cancel)", execution.ExecutionID)
+	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
 	return map[string]string{
-		"status":  "cancelled",
-		"message": "Purchase cancelled. No cloud API call was made; no cost incurred.",
+		"status":  "canceled",
+		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }
 

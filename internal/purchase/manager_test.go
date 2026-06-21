@@ -262,7 +262,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 		{
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
-			Status:        "cancelled",
+			Status:        "canceled",
 			ScheduledDate: pastDate,
 		},
 	}

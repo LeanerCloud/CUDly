@@ -116,16 +116,16 @@ func TestManager_ProcessMessage(t *testing.T) {
 		}
 		execution := &config.PurchaseExecution{
 			ExecutionID: "exec-123",
-			Status:      "cancelled",
+			Status:      "canceled",
 		}
 		mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 		// The claim CAS rejects a non-executable status (issue #1013): the row
-		// is "cancelled", not in [approved,pending,notified], so the CAS loses
-		// and returns ErrExecutionNotInExpectedStatus — a benign skip that the
+		// is "canceled", not in [approved,pending,notified], so the CAS loses
+		// and returns ErrExecutionNotInExpectedStatus -- a benign skip that the
 		// handler acks without error.
 		mockStore.On("TransitionExecutionStatus", ctx, "exec-123",
 			[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).
-			Return(nil, fmt.Errorf("%w: cancelled", config.ErrExecutionNotInExpectedStatus))
+			Return(nil, fmt.Errorf("%w: canceled", config.ErrExecutionNotInExpectedStatus))
 
 		err := manager.ProcessMessage(ctx, `{"type": "execute_purchase", "execution_id": "exec-123"}`)
 		// Should skip without error when status is not executable

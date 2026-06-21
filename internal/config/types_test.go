@@ -280,7 +280,7 @@ func TestPurchasePlan_Defaults(t *testing.T) {
 }
 
 func TestPurchaseExecution_Statuses(t *testing.T) {
-	validStatuses := []string{"pending", "notified", "approved", "cancelled", "completed", "failed"}
+	validStatuses := []string{"pending", "notified", "approved", "canceled", "completed", "failed"}
 
 	for _, status := range validStatuses {
 		exec := PurchaseExecution{Status: status}

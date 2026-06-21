@@ -179,30 +179,30 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 }
 
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
-// Defaults to (true, "cancelled", nil) when no expectation is registered
+// Defaults to (true, "canceled", nil) when no expectation is registered
 // so tests that only need the happy path don't require explicit mock setup.
 // Tests exercising the CAS-race path (zero rows affected) register an
 // expectation that returns (false, <racing_status>, nil).
-func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (bool, string, error) {
 	if !isExpected(&m.Mock, "CancelExecutionAtomic") {
-		return true, "cancelled", nil
+		return true, "canceled", nil
 	}
-	args := m.Called(ctx, tx, executionID, cancelledBy)
+	args := m.Called(ctx, tx, executionID, canceledBy)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
 // CancelScheduledExecutionAtomic mocks the CancelScheduledExecutionAtomic
 // operation (Gmail-style pre-fire delay revoke, issue #290 wave-2). Default
-// is the happy path (true, "cancelled", nil) so the scheduled-revoke tests
+// is the happy path (true, "canceled", nil) so the scheduled-revoke tests
 // inherit the same low-ceremony pattern as CancelExecutionAtomic above.
 // Tests exercising the CAS-race path (scheduler tick already fired) register
 // an expectation that returns (false, <racing_status>, nil), typically
 // (false, "approved", nil) to simulate the scheduler winning the race.
-func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *MockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (bool, string, error) {
 	if !isExpected(&m.Mock, "CancelScheduledExecutionAtomic") {
-		return true, "cancelled", nil
+		return true, "canceled", nil
 	}
-	args := m.Called(ctx, tx, executionID, cancelledBy)
+	args := m.Called(ctx, tx, executionID, canceledBy)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 

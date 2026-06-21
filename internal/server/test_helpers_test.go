@@ -127,11 +127,11 @@ func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context
 	return nil, nil
 }
 
-func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (bool, string, error) {
 	return false, "", nil
 }
 
-func (m *mockConfigStoreForHealth) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+func (m *mockConfigStoreForHealth) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (bool, string, error) {
 	return false, "", nil
 }
 

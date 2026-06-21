@@ -264,14 +264,15 @@ type PurchaseExecution struct {
 	// ("cudly-cli" or "cudly-web"). Propagated into PurchaseOptions and
 	// stamped as a tag/label onto every commitment this execution buys.
 	Source string `json:"source,omitempty" dynamodbav:"source,omitempty"`
-	// ApprovedBy / CancelledBy carry the email of the session-authenticated
+	// ApprovedBy / CanceledBy carry the email of the session-authenticated
 	// user who acted on this execution via the auth-gated deep-link flow
-	// (frontend /purchases/{action}/:id → login-if-needed → session-authed
-	// endpoint). Nil on legacy token-only approve/cancel paths — the
+	// (frontend /purchases/{action}/:id -> login-if-needed -> session-authed
+	// endpoint). Nil on legacy token-only approve/cancel paths; the
 	// handler / History UI falls back to the notification email as the
 	// accountable party in that case. Nullable TEXT in Postgres.
-	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
-	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
+	// DB column: canceled_by (migration 000078 renamed from cancelled_by).
+	ApprovedBy *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
+	CanceledBy *string `json:"canceled_by,omitempty" dynamodbav:"canceled_by,omitempty"`
 	// CreatedByUserID is the UUID of the session-authenticated user who
 	// triggered this execution (e.g. clicked Execute on the Recommendations
 	// page or submitted the bulk-purchase modal). NULL on rows created
@@ -347,12 +348,12 @@ type PurchaseExecution struct {
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
-// IsCancelable reports whether an execution may still be cancelled. Only the
+// IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
-// created, so cancelling would leave the DB and the cloud out of sync;
-// "cancelled", "completed", "failed", "expired", and "paused" are likewise
-// non-cancelable. The "scheduled" state is cancellable because the cloud SDK
+// created, so canceling would leave the DB and the cloud out of sync;
+// "canceled", "completed", "failed", "expired", and "paused" are likewise
+// non-cancelable. The "scheduled" state is cancelable because the cloud SDK
 // has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
 // and the session-authed cancelPurchaseViaSession) call this single predicate

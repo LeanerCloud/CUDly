@@ -403,10 +403,10 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Twice()
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in
-	// tests); actor_email is non-empty so cancelledBy is non-nil.
+	// tests); actor_email is non-empty so canceledBy is non-nil.
 	actor := "owner@example.com"
 	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-cancel", &actor).
-		Return(true, "cancelled", nil)
+		Return(true, "canceled", nil)
 	// Suppression cleanup must follow a successful atomic cancel.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-cancel").
 		Return(nil)
