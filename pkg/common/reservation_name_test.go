@@ -20,7 +20,20 @@ func testFixedRand() []byte { return []byte{0xa1, 0xb2, 0xc3, 0xd4} }
 func TestBuildReservationName_NilFieldsReturnsFallback(t *testing.T) {
 	got := BuildReservationName(nil, "rds-reserved-")
 	assert.NotEmpty(t, got, "nil fields must not panic and must yield a non-empty name")
+	// Under the cap, the nil path equals the plain sanitized fallback.
 	assert.Equal(t, SanitizeReservationID("", "rds-reserved-"), got)
+	assert.LessOrEqual(t, len(got), awsReservationNameMaxLen)
+}
+
+// TestBuildReservationName_NilFieldsRespectsCap is the CR round-3 guard: the
+// nil-fallback path must enforce the same length cap as the normal path, even
+// when a pathologically long fallbackPrefix would otherwise bust it.
+func TestBuildReservationName_NilFieldsRespectsCap(t *testing.T) {
+	longPrefix := strings.Repeat("x", awsReservationNameMaxLen+20) + "-"
+	got := BuildReservationName(nil, longPrefix)
+	assert.LessOrEqual(t, len(got), awsReservationNameMaxLen,
+		"nil-fallback output must respect the AWS reservation-name cap")
+	assert.False(t, strings.HasSuffix(got, "-"), "capped name must not end in a hyphen")
 }
 
 func TestBuildReservationName_HappyPath(t *testing.T) {

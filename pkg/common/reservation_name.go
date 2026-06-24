@@ -69,7 +69,8 @@ func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) strin
 		// Return the caller's fallbackPrefix rather than panicking -- the name is
 		// only a console-display tag, so the same unsanitizable-input fallback
 		// path keeps an exported helper from crashing on a nil pointer argument.
-		return SanitizeReservationID("", fallbackPrefix)
+		// The cap must hold on this path too (a long fallbackPrefix could bust it).
+		return capReservationName(SanitizeReservationID("", fallbackPrefix))
 	}
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)
@@ -123,14 +124,20 @@ func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) strin
 		sku = sku[:newLen]
 		required[2] = sku
 	}
-	out := SanitizeReservationID(joinReservationNonEmpty(required, "-"), fallbackPrefix)
-	if len(out) > awsReservationNameMaxLen {
-		// Last-resort hard cap if the SKU truncation above wasn't enough
-		// (e.g. a region name longer than expected). All output is ASCII
-		// so byte index == rune index.
-		out = strings.TrimRight(out[:awsReservationNameMaxLen], "-")
+	// Last-resort hard cap if the SKU truncation above wasn't enough (e.g. a
+	// region name longer than expected).
+	return capReservationName(SanitizeReservationID(joinReservationNonEmpty(required, "-"), fallbackPrefix))
+}
+
+// capReservationName enforces the AWS reservation-name length limit on any
+// return path of BuildReservationName. All output is ASCII so the byte index
+// equals the rune index; the trailing-hyphen trim keeps the invariant that a
+// name never ends in "-".
+func capReservationName(name string) string {
+	if len(name) > awsReservationNameMaxLen {
+		name = strings.TrimRight(name[:awsReservationNameMaxLen], "-")
 	}
-	return out
+	return name
 }
 
 // normalizeReservationSegment strips disallowed characters from a single

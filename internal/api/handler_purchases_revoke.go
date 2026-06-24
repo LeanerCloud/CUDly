@@ -282,9 +282,10 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 
 	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
+	// Report the status the CAS actually persisted (currentStatus) rather than a
+	// hardcoded literal, so the response can never drift from the DB value.
 	return map[string]string{
-		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
-		"status":  "cancelled",
+		"status":  currentStatus,
 		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }
