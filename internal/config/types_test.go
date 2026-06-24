@@ -280,7 +280,7 @@ func TestPurchasePlan_Defaults(t *testing.T) {
 }
 
 func TestPurchaseExecution_Statuses(t *testing.T) {
-	validStatuses := []string{"pending", "notified", "approved", "canceled", "completed", "failed"}
+	validStatuses := []string{"pending", "notified", "approved", "cancelled", "completed", "failed"} //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	for _, status := range validStatuses {
 		exec := PurchaseExecution{Status: status}

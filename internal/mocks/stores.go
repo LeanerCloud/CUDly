@@ -237,8 +237,9 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 }
 
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
-// Defaults to (true, "cancelled", nil) when no expectation is registered
-// so tests that only need the happy path don't require explicit mock setup.
+// Defaults to (canceled=true, the persisted cancel status, nil) when no
+// expectation is registered so tests that only need the happy path don't
+// require explicit mock setup.
 // Tests exercising the CAS-race path (zero rows affected) register an
 // expectation that returns (false, <racing_status>, nil).
 func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
@@ -251,8 +252,9 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 
 // CancelScheduledExecutionAtomic mocks the CancelScheduledExecutionAtomic
 // operation (Gmail-style pre-fire delay revoke, issue #290 wave-2). Default
-// is the happy path (true, "cancelled", nil) so the scheduled-revoke tests
-// inherit the same low-ceremony pattern as CancelExecutionAtomic above.
+// is the happy path (canceled=true, the persisted cancel status, nil) so the
+// scheduled-revoke tests inherit the same low-ceremony pattern as
+// CancelExecutionAtomic above.
 // Tests exercising the CAS-race path (scheduler tick already fired) register
 // an expectation that returns (false, <racing_status>, nil), typically
 // (false, "approved", nil) to simulate the scheduler winning the race.

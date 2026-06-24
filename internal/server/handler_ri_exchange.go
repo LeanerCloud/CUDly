@@ -49,6 +49,10 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	}
 
 	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
+	exchangeClient, err := exchange.NewClient(&awsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RI exchange client: %w", err)
+	}
 	clients := riExchangeClients{
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return ec2Client.ListConvertibleReservedInstances(ctx)
@@ -57,7 +61,7 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 			recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
 			return recsClient.GetRIUtilization(ctx, lookbackDays)
 		},
-		exchangeClient: exchange.NewClient(&awsCfg),
+		exchangeClient: exchangeClient,
 		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
 			return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
 				InstanceType:       instanceType,

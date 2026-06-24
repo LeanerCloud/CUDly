@@ -510,3 +510,11 @@ func TestNormalizeSource(t *testing.T) {
 		})
 	}
 }
+
+// TestScaleRecommendationCosts_NilReturnsZero is the CR #1276 guard: the
+// exported in-place-style scaler must return the zero Recommendation as a safe
+// no-op on a nil pointer argument rather than panicking.
+func TestScaleRecommendationCosts_NilReturnsZero(t *testing.T) {
+	got := ScaleRecommendationCosts(nil, 0.5)
+	assert.Equal(t, Recommendation{}, got, "nil rec must yield the zero Recommendation, not panic")
+}

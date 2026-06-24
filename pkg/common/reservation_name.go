@@ -65,7 +65,11 @@ func (f *ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 // emits an unsanitizable input.
 func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) string {
 	if f == nil {
-		panic("BuildReservationName: fields are nil")
+		// Nil fields are a programmer error (every call site passes &localStruct).
+		// Return the caller's fallbackPrefix rather than panicking -- the name is
+		// only a console-display tag, so the same unsanitizable-input fallback
+		// path keeps an exported helper from crashing on a nil pointer argument.
+		return SanitizeReservationID("", fallbackPrefix)
 	}
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)
