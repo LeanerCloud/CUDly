@@ -237,7 +237,7 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) { //nolint:gocritic // hugeParam: data kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
@@ -458,7 +458,7 @@ func generateReferenceToken() (string, error) {
 // for a new-registration notification email.
 //
 // Rules:
-//   - Every member of the Administrators group is an authorised reviewer.
+//   - Every member of the Administrators group is an authorized reviewer.
 //   - The first admin email is the To; remaining admins + the global
 //     Settings → General notification email go on Cc.
 //   - When no admin users are configured, falls through to the legacy
@@ -467,7 +467,7 @@ func generateReferenceToken() (string, error) {
 //
 // The account's own ContactEmail is NOT included in the approver set
 // because the submitter can't review their own registration.
-func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc []string, approvers []string) {
+func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc, approvers []string) {
 	adminEmails := h.gatherAdminEmails(ctx)
 	globalNotify := h.globalNotificationEmail(ctx)
 
@@ -497,7 +497,7 @@ func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string,
 }
 
 // gatherAdminEmails returns the deduped, insertion-ordered list of emails
-// for every authorised reviewer, i.e. every member of the Administrators group
+// for every authorized reviewer, i.e. every member of the Administrators group
 // (the group-membership replacement for the former role == "admin" check;
 // issue #907). Transport errors are logged and result in an empty return so
 // registration notifications don't block on auth-store hiccups.

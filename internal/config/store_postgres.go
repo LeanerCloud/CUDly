@@ -26,24 +26,24 @@ type dbConn interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// PostgresStore implements StoreInterface using PostgreSQL
+// PostgresStore implements StoreInterface using PostgreSQL.
 type PostgresStore struct {
 	db dbConn
 }
 
-// NewPostgresStore creates a new PostgreSQL-backed config store
+// NewPostgresStore creates a new PostgreSQL-backed config store.
 func NewPostgresStore(db *database.Connection) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-// Verify PostgresStore implements StoreInterface
+// Verify PostgresStore implements StoreInterface.
 var _ StoreInterface = (*PostgresStore)(nil)
 
 // ==========================================
 // GLOBAL CONFIGURATION
 // ==========================================
 
-// GetGlobalConfig retrieves the global configuration
+// GetGlobalConfig retrieves the global configuration.
 func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, error) {
 	query := `
 		SELECT enabled_providers, notification_email, approval_required,
@@ -121,7 +121,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	return &config, nil
 }
 
-// SaveGlobalConfig saves the global configuration
+// SaveGlobalConfig saves the global configuration.
 func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConfig) error {
 	// Ensure EnabledProviders is never nil (empty slice is ok, nil is not)
 	if config.EnabledProviders == nil {
@@ -229,7 +229,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 // SERVICE CONFIGURATION
 // ==========================================
 
-// GetServiceConfig retrieves configuration for a specific service
+// GetServiceConfig retrieves configuration for a specific service.
 func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error) {
 	query := `
 		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
@@ -277,7 +277,7 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 	return &config, nil
 }
 
-// SaveServiceConfig saves configuration for a service
+// SaveServiceConfig saves configuration for a service.
 func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceConfig) error {
 	query := `
 		INSERT INTO service_configs (
@@ -331,7 +331,7 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 // realistic upper bound (each cloud has a bounded set of services, so the
 // total is roughly (providers × service-types × per-service-variants),
 // which stays under ~150 even with generous provider growth). The cap is
-// defence-in-depth against a compromised admin inserting millions of rows
+// defense-in-depth against a compromised admin inserting millions of rows
 // and matches the sibling GetPendingExecutions limit.
 func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error) {
 	query := `
@@ -391,7 +391,7 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 // PURCHASE PLANS
 // ==========================================
 
-// CreatePurchasePlan creates a new purchase plan
+// CreatePurchasePlan creates a new purchase plan.
 func (s *PostgresStore) CreatePurchasePlan(ctx context.Context, plan *PurchasePlan) error {
 	// Generate UUID if not provided
 	if plan.ID == "" {
@@ -495,7 +495,7 @@ func scanPurchasePlanRow(row pgx.Row) (*PurchasePlan, error) {
 	return &plan, nil
 }
 
-// GetPurchasePlan retrieves a purchase plan by ID
+// GetPurchasePlan retrieves a purchase plan by ID.
 func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*PurchasePlan, error) {
 	query := purchasePlanSelectCols + ` WHERE id = $1`
 	plan, err := scanPurchasePlanRow(s.db.QueryRow(ctx, query, planID))
@@ -513,7 +513,7 @@ func (s *PostgresStore) GetPurchasePlan(ctx context.Context, planID string) (*Pu
 // callers (overlapping Lambda invocations, multi-tick cron) cannot both read
 // the same CurrentStep value and both write CurrentStep+1, skipping a step.
 // Returns nil when the plan no longer exists (deleted between execution and
-// progress update) so the caller is not penalised for a race it cannot control.
+// progress update) so the caller is not penalized for a race it cannot control.
 func (s *PostgresStore) IncrementPlanCurrentStep(ctx context.Context, planID string) error {
 	return s.WithTx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, purchasePlanSelectCols+` WHERE id = $1 FOR UPDATE`, planID)
@@ -623,7 +623,7 @@ func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, pla
 	return nil
 }
 
-// DeletePurchasePlan deletes a purchase plan
+// DeletePurchasePlan deletes a purchase plan.
 func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	query := `DELETE FROM purchase_plans WHERE id = $1`
 
@@ -755,7 +755,7 @@ func (s *PostgresStore) ListPurchasePlans(ctx context.Context, filter PurchasePl
 // PURCHASE EXECUTIONS
 // ==========================================
 
-// SavePurchaseExecution saves a purchase execution record
+// SavePurchaseExecution saves a purchase execution record.
 func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *PurchaseExecution) error {
 	// Generate the execution ID before we attempt to open a tx so
 	// pre-existing tests (which passed a nil DB and relied on ID
@@ -772,6 +772,8 @@ func (s *PostgresStore) SavePurchaseExecution(ctx context.Context, execution *Pu
 // SavePurchaseExecution. Used from handlers that need to bundle the
 // execution insert with other writes (e.g. purchase_suppressions rows)
 // in a single atomic transaction.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error {
 	// Generate execution ID if not provided
 	if execution.ExecutionID == "" {
@@ -898,6 +900,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 // the execution was not found or not in an allowed status.
 // actor is the UUID of the user performing the transition (nil for system-initiated paths);
 // it is stamped onto transitioned_by and transitioned_at is always set to NOW().
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
 	query := `
 		UPDATE purchase_executions
@@ -928,7 +932,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 		}
 		// Wrap ErrExecutionNotInExpectedStatus so callers can use
-		// errors.Is to recognise CAS rejection (status changed between
+		// errors.Is to recognize CAS rejection (status changed between
 		// SELECT and UPDATE) as race-lost rather than a real error.
 		return nil, fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 	}
@@ -956,6 +960,8 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // exactly as the old SavePurchaseExecutionTx path did, except now the
 // status guard is inside the UPDATE rather than checked optimistically
 // before entering the tx.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error) {
 	q := `
 		UPDATE purchase_executions
@@ -1016,6 +1022,8 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 // Returns (true, "cancelled", nil) on success and (false, "", err) on a
 // real DB error. Must be called inside a WithTx block so the suppression
 // cleanup commits atomically with the status flip.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error) {
 	q := `
 		UPDATE purchase_executions
@@ -1064,6 +1072,8 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // handler to merge pending/failed/expired rows alongside completed purchases
 // without changing the narrower GetPendingExecutions contract the scheduler
 // depends on.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
 	if len(statuses) == 0 {
 		return nil, nil
@@ -1105,6 +1115,8 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 // scheduled_date. NULLS LAST is defensive: the schema makes scheduled_date
 // NOT NULL today, but the clause guards against a future relaxation silently
 // hiding rows at the top of the list.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
 	if len(statuses) == 0 {
 		return nil, nil
@@ -1139,6 +1151,8 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 // updated_at is stamped to NOW() at the moment of the approved transition (see
 // TransitionExecutionStatus) and is not touched again unless the run finalizes,
 // so it is the age of the strand. Mirrors GetStaleProcessingExchanges.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1175,6 +1189,8 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 // olderThan is passed as a Postgres interval (seconds) so the comparison
 // happens server-side against NOW() — keeping the cutoff in the DB clock
 // avoids any drift between the API process and the database.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []string, olderThan time.Duration) ([]PurchaseExecution, error) {
 	if len(statuses) == 0 {
 		return nil, nil
@@ -1201,7 +1217,9 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 	return s.queryExecutions(ctx, query, statuses, intervalArg, MaxListLimit)
 }
 
-// GetPendingExecutions retrieves all pending purchase executions
+// GetPendingExecutions retrieves all pending purchase executions.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1226,6 +1244,8 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 // Running the read inside the same transaction as the subsequent insert makes
 // duplicate-detection and execution creation atomic, closing the TOCTOU race
 // in executePurchase (issue #643).
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
 	const query = `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1256,6 +1276,8 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 // distinguish "not found" (nil execution, nil error) from a real DB failure
 // (nil execution, non-nil error). All callers must check the execution for
 // nil before use (closes issue #976).
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1282,7 +1304,9 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	return &executions[0], nil
 }
 
-// GetExecutionByPlanAndDate retrieves execution for a specific plan and date
+// GetExecutionByPlanAndDate retrieves execution for a specific plan and date.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1358,7 +1382,7 @@ func (s *PostgresStore) ListPendingExecutionIDsForAccount(ctx context.Context, a
 	return ids, nil
 }
 
-// queryExecutions is a helper to query and scan purchase executions
+// queryExecutions is a helper to query and scan purchase executions.
 func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...any) ([]PurchaseExecution, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1467,6 +1491,8 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 // Used by the Gmail-style pre-fire delay scheduler tick (issue #291 wave-2).
 // Results are ordered oldest-due-first so the scheduler fires them in FIFO order.
 // Capped at MaxListLimit per sweep to bound the per-tick blast radius.
+//
+//nolint:misspell // DB status 'cancelled' (status CHECK) and column cancelled_by (migration 000035); rename tracked in PR #1277
 func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1543,7 +1569,7 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 // PURCHASE HISTORY
 // ==========================================
 
-// SavePurchaseHistory saves a purchase history record
+// SavePurchaseHistory saves a purchase history record.
 func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error {
 	query := `
 		INSERT INTO purchase_history (
@@ -1583,7 +1609,7 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 	return nil
 }
 
-// GetPurchaseHistory retrieves purchase history for an account
+// GetPurchaseHistory retrieves purchase history for an account.
 func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string, limit int) ([]PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
@@ -1599,7 +1625,7 @@ func (s *PostgresStore) GetPurchaseHistory(ctx context.Context, accountID string
 	return s.queryPurchaseHistory(ctx, query, accountID, limit)
 }
 
-// GetAllPurchaseHistory retrieves all purchase history
+// GetAllPurchaseHistory retrieves all purchase history.
 func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([]PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
@@ -1655,7 +1681,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
-func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) ([]string, []any) {
+func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
 	}
@@ -1941,7 +1967,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 // the purchase_history row identified by purchaseID. The UPDATE is a no-op
 // when revoked_at is already non-null (idempotency guard). Returns a not-found
 // error when zero rows are affected and revoked_at was previously NULL.
-func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
+func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
 		supportCaseIDPtr = &supportCaseID
@@ -2098,7 +2124,7 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 // RI EXCHANGE HISTORY
 // ==========================================
 
-// SaveRIExchangeRecord saves an RI exchange record
+// SaveRIExchangeRecord saves an RI exchange record.
 func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error {
 	if record.ID == "" {
 		record.ID = uuid.New().String()
@@ -2162,7 +2188,7 @@ func (s *PostgresStore) SaveRIExchangeRecord(ctx context.Context, record *RIExch
 	return nil
 }
 
-// GetRIExchangeRecord retrieves an RI exchange record by ID
+// GetRIExchangeRecord retrieves an RI exchange record by ID.
 func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -2187,7 +2213,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 	return &records[0], nil
 }
 
-// GetRIExchangeRecordByToken retrieves an RI exchange record by approval token
+// GetRIExchangeRecordByToken retrieves an RI exchange record by approval token.
 func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -2212,7 +2238,7 @@ func (s *PostgresStore) GetRIExchangeRecordByToken(ctx context.Context, token st
 	return &records[0], nil
 }
 
-// GetRIExchangeHistory retrieves RI exchange history records
+// GetRIExchangeHistory retrieves RI exchange history records.
 func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -2234,7 +2260,7 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
-func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error) {
+func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = $3, updated_at = NOW(),
@@ -2280,8 +2306,8 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 	return fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
 }
 
-// CompleteRIExchange marks an RI exchange as completed
-func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, exchangeID string) error {
+// CompleteRIExchange marks an RI exchange as completed.
+func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id, exchangeID string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'completed', exchange_id = $2, completed_at = NOW()
@@ -2304,7 +2330,7 @@ func (s *PostgresStore) CompleteRIExchange(ctx context.Context, id string, excha
 // (issue #300). Called after CompleteRIExchange when approval came from a
 // session-authed user. The stamping is best-effort (log + continue on failure
 // so the exchange itself isn't rolled back just because the audit stamp failed).
-func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string, approverEmail string) error {
+func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id, approverEmail string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET approved_by = $2
@@ -2321,8 +2347,8 @@ func (s *PostgresStore) StampRIExchangeApprovedBy(ctx context.Context, id string
 	return nil
 }
 
-// FailRIExchange marks an RI exchange as failed
-func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg string) error {
+// FailRIExchange marks an RI exchange as failed.
+func (s *PostgresStore) FailRIExchange(ctx context.Context, id, errorMsg string) error {
 	query := `
 		UPDATE ri_exchange_history
 		SET status = 'failed', error = $2
@@ -2341,7 +2367,7 @@ func (s *PostgresStore) FailRIExchange(ctx context.Context, id string, errorMsg 
 	return nil
 }
 
-// GetRIExchangeDailySpend returns total payment_due for completed exchanges on a given date (UTC)
+// GetRIExchangeDailySpend returns total payment_due for completed exchanges on a given date (UTC).
 func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error) {
 	query := `
 		SELECT COALESCE(SUM(payment_due), 0)::text
@@ -2360,7 +2386,7 @@ func (s *PostgresStore) GetRIExchangeDailySpend(ctx context.Context, date time.T
 	return total, nil
 }
 
-// CancelAllPendingExchanges cancels all pending RI exchange records
+// CancelAllPendingExchanges cancels all pending RI exchange records.
 func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, error) {
 	query := `
 		UPDATE ri_exchange_history
@@ -2376,7 +2402,7 @@ func (s *PostgresStore) CancelAllPendingExchanges(ctx context.Context) (int64, e
 	return result.RowsAffected(), nil
 }
 
-// GetStaleProcessingExchanges returns processing exchanges older than the given duration
+// GetStaleProcessingExchanges returns processing exchanges older than the given duration.
 func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -2392,7 +2418,7 @@ func (s *PostgresStore) GetStaleProcessingExchanges(ctx context.Context, olderTh
 	return s.queryRIExchangeRecords(ctx, query, fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
 }
 
-// queryRIExchangeRecords is a helper to query and scan RI exchange records
+// queryRIExchangeRecords is a helper to query and scan RI exchange records.
 func (s *PostgresStore) queryRIExchangeRecords(ctx context.Context, query string, args ...any) ([]RIExchangeRecord, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -2690,7 +2716,7 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	}()
 
 	// Reset any linked approved registration first (explicit NULL so we don't
-	// rely on the FK's ON DELETE SET NULL behaviour).
+	// rely on the FK's ON DELETE SET NULL behavior).
 	if _, err = tx.Exec(ctx, `
 		UPDATE account_registrations
 		   SET status           = 'pending',
@@ -3002,8 +3028,8 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 		}
 	}()
 
-	if err = s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); err != nil {
-		return err
+	if errX := s.validatePlanAccountProvidersTx(ctx, tx, planID, accountIDs); errX != nil {
+		return errX
 	}
 
 	if _, err = tx.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, planID); err != nil {
@@ -3080,7 +3106,7 @@ type planAccountProviderMismatch struct {
 	Provider string
 }
 
-func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs []string, expected []string) ([]planAccountProviderMismatch, error) {
+func (s *PostgresStore) findPlanAccountProviderMismatchesTx(ctx context.Context, tx pgx.Tx, accountIDs, expected []string) ([]planAccountProviderMismatch, error) {
 	expectedSet := make(map[string]struct{}, len(expected))
 	for _, provider := range expected {
 		expectedSet[provider] = struct{}{}
@@ -3160,7 +3186,7 @@ func (s *PostgresStore) GetPlanAccounts(ctx context.Context, planID string) ([]C
 // HELPER FUNCTIONS
 // ==========================================
 
-// timeFromTTL converts a Unix timestamp (TTL) to a nullable time.Time
+// timeFromTTL converts a Unix timestamp (TTL) to a nullable time.Time.
 func timeFromTTL(ttl int64) any {
 	if ttl == 0 {
 		return nil
@@ -3169,12 +3195,12 @@ func timeFromTTL(ttl int64) any {
 	return &t
 }
 
-// ttlFromTime converts a time.Time to Unix timestamp
+// ttlFromTime converts a time.Time to Unix timestamp.
 func ttlFromTime(t time.Time) int64 {
 	return t.Unix()
 }
 
-// nullStringFromString converts a string to sql.NullString
+// nullStringFromString converts a string to sql.NullString.
 func nullStringFromString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}

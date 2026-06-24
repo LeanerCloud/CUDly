@@ -23,105 +23,45 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// Handler processes HTTP requests
+// Handler processes HTTP requests.
 type Handler struct {
-	config             config.StoreInterface
-	credStore          credentials.CredentialStore
-	purchase           PurchaseManagerInterface
-	scheduler          SchedulerInterface
-	auth               AuthServiceInterface
-	secretsARN         string
-	apiKey             string // Cached API key
-	corsAllowedOrigin  string // CORS allowed origin
-	rateLimiter        RateLimiterInterface
-	emailNotifier      email.SenderInterface           // Optional: purchase approval emails
-	dashboardURL       string                          // Base URL for approval/cancel links
-	analyticsClient    AnalyticsClientInterface        // Optional: analytics client (Postgres-backed in prod)
-	analyticsCollector AnalyticsCollectorInterface     // Optional: snapshot collector
-	analyticsSnapshots AnalyticsSnapshotStoreInterface // Optional: savings-snapshot time-series store
-	signer             oidc.Signer                     // Optional: OIDC issuer signer (backed by cloud KMS)
-	issuerURL          string                          // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
-
-	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
-	awsCfg     aws.Config // cached base AWS config (no region override)
-	awsCfgErr  error      // error from loading the base config, if any
-
-	sourceIdentityOnce sync.Once       // guards one-time source identity resolution
-	sourceID           *sourceIdentity // cached source cloud identity
-
-	// Postgres-backed TTL cache for Cost Explorer
-	// GetReservationUtilization. Dashboard + RI Exchange page hits
-	// read from the shared cache table so Lambda containers don't each
-	// fan out to a paid CE API call on every page load. See
-	// ri_utilization_cache.go for the rationale; in-memory was ruled
-	// out because Lambda's short container lifetime means each cold
-	// start would bypass the cache entirely.
-	riUtilizationCacheOnce sync.Once
-	riUtilizationCache     *riUtilizationCache
-
-	// Optional AWS-client injection points used by the reshape handler
-	// integration test. When nil (the production default), the
-	// handler falls back to the direct AWS SDK constructors
-	// `awsprovider.NewEC2ClientDirect` and
-	// `awsprovider.NewRecommendationsClientDirect`. Tests set these
-	// to stubs that satisfy the narrow interfaces declared in
-	// `handler_ri_exchange.go` (reshapeEC2Client / reshapeRecsClient)
-	// so the test can exercise the handler end-to-end without live
-	// AWS credentials. Prod behaviour is unchanged because both
-	// fields stay nil.
-	reshapeEC2Factory  func(aws.Config) reshapeEC2Client
-	reshapeRecsFactory func(aws.Config) reshapeRecsClient
-
-	// Optional target-offerings EC2 client factory injected by tests. When nil
-	// (the production default), listTargetOfferings uses awsprovider.NewEC2ClientDirect.
-	targetOfferingsEC2Factory func(aws.Config) targetOfferingsEC2Client
-
-	// Optional Azure exchange client factory injected by tests. When nil
-	// (the production default), buildAzureExchangeClient uses
-	// azidentity.NewDefaultAzureCredential to construct a real
-	// armreservations-backed client.
-	azureExchangeFactory func(subscriptionID string) azureExchangeClient
-
-	// Optional account-resolver injection point used by the reshape
-	// handler integration test. When nil (the production default), the
-	// handler calls h.resolveAWSCloudAccountID which in turn invokes
-	// sts.GetCallerIdentity — fine in Lambda but fails on dev machines
-	// without AWS credentials. Tests set this to a fixed-result fake so
-	// the integration suite runs hermetically.
-	reshapeAccountResolver func(context.Context) (string, error)
-
-	// Optional resolver for the running AWS account number, injected by
-	// the listConvertibleRIs tests so the account-scoping branch can run
-	// without live STS credentials. When nil (production default), the
-	// handler calls h.resolveAWSAccountID. Returns the raw AWS account
-	// number (e.g. "123456789012"), matching the account_id chip value.
+	signer                     oidc.Signer
+	credStore                  credentials.CredentialStore
+	purchase                   PurchaseManagerInterface
+	scheduler                  SchedulerInterface
+	auth                       AuthServiceInterface
+	commitmentOpts             CommitmentOptsInterface
+	lambdaInvoker              LambdaInvokerInterface
+	config                     config.StoreInterface
+	rateLimiter                RateLimiterInterface
+	emailNotifier              email.SenderInterface
+	awsCfgErr                  error
+	analyticsClient            AnalyticsClientInterface
+	analyticsCollector         AnalyticsCollectorInterface
+	analyticsSnapshots         AnalyticsSnapshotStoreInterface
+	reshapeRecsFactory         func(aws.Config) reshapeRecsClient
+	reshapeAccountResolver     func(context.Context) (string, error)
+	discoverOrgFn              func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
 	riInstancesAccountResolver func(context.Context) (string, error)
-
-	// Optional org-discovery factory used by tests to avoid live AWS
-	// Organizations API calls. When nil (production default), the handler
-	// falls back to accounts.DiscoverOrgAccounts which dials Organizations
-	// via the credentials resolved for the org-root account.
-	discoverOrgFn func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
-
-	// lambdaInvoker is the async-invoke client used by postRefreshRecommendations
-	// and triggerColdStartCollect. In production it is constructed lazily from the
-	// cached awsCfg. Tests inject a stub to avoid live Lambda calls.
-	lambdaInvoker LambdaInvokerInterface
-
-	// commitmentOpts discovers which AWS (term, payment) combinations
-	// each service actually sells and validates saves against that data.
-	// Nil is valid: the endpoint returns unavailable and save-side
-	// validation no-ops, deferring to the frontend's hardcoded rules.
-	commitmentOpts CommitmentOptsInterface
-
-	// encryptionKeySource is the env var name that resolved the credential
-	// encryption key. Empty when no credStore is configured. Used by the
-	// /health endpoint only — never logged outside that one place.
-	encryptionKeySource string
+	azureExchangeFactory       func(subscriptionID string) azureExchangeClient
+	targetOfferingsEC2Factory  func(aws.Config) targetOfferingsEC2Client
+	sourceID                   *sourceIdentity
+	reshapeEC2Factory          func(aws.Config) reshapeEC2Client
+	riUtilizationCache         *riUtilizationCache
+	corsAllowedOrigin          string
+	dashboardURL               string
+	issuerURL                  string
+	apiKey                     string
+	secretsARN                 string
+	encryptionKeySource        string
+	awsCfg                     aws.Config
+	riUtilizationCacheOnce     sync.Once
+	sourceIdentityOnce         sync.Once
+	awsCfgOnce                 sync.Once
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
-// Explorer results, lazy-initialised on first call so tests that never
+// Explorer results, lazy-initialized on first call so tests that never
 // exercise the RI Exchange paths don't need to wire it up. Lambda
 // detection happens here (once) via runtime.IsLambda so SWR is gated
 // off on Lambda where background goroutines freeze between
@@ -133,8 +73,8 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 	return h.riUtilizationCache
 }
 
-// NewHandler creates a new API handler
-func NewHandler(cfg HandlerConfig) *Handler {
+// NewHandler creates a new API handler.
+func NewHandler(cfg HandlerConfig) *Handler { //nolint:gocritic // hugeParam: cfg kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured
@@ -256,7 +196,7 @@ func (h *Handler) getAllowedAccounts(ctx context.Context, session *Session) ([]s
 	return h.auth.GetAllowedAccountsAPI(ctx, session.UserID)
 }
 
-// setSecurityHeaders adds comprehensive security headers to the response
+// setSecurityHeaders adds comprehensive security headers to the response.
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
@@ -283,7 +223,7 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 	return headers
 }
 
-// HandleRequest processes a Lambda Function URL request
+// HandleRequest processes a Lambda Function URL request.
 func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	if req == nil {
 		resp, err := h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil)
@@ -312,7 +252,7 @@ func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionU
 	return h.executeRequest(ctx, method, path, req, corsHeaders)
 }
 
-// buildResponseHeaders creates response headers with security and CORS settings
+// buildResponseHeaders creates response headers with security and CORS settings.
 func (h *Handler) buildResponseHeaders() map[string]string {
 	corsHeaders := map[string]string{
 		"Content-Type": "application/json",
@@ -330,7 +270,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 	return corsHeaders
 }
 
-// validateRequest validates the incoming request and returns error response if validation fails
+// validateRequest validates the incoming request and returns error response if validation fails.
 func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
@@ -359,7 +299,7 @@ func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctio
 	return nil
 }
 
-// validateSecurity validates authentication and CSRF token
+// validateSecurity validates authentication and CSRF token.
 func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
 	if h.isPublicEndpoint(path) {
 		return nil
@@ -387,7 +327,7 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 	return nil
 }
 
-// executeRequest routes and executes the API request
+// executeRequest routes and executes the API request.
 func (h *Handler) executeRequest(ctx context.Context, method, path string, req *events.LambdaFunctionURLRequest, corsHeaders map[string]string) (*events.LambdaFunctionURLResponse, error) {
 	response, err := h.routeRequest(ctx, method, path, req)
 
@@ -399,8 +339,8 @@ func (h *Handler) executeRequest(ctx context.Context, method, path string, req *
 	return h.buildResponse(statusCode, corsHeaders, response, nil)
 }
 
-// handleRequestError converts an error to status code and response
-func (h *Handler) handleRequestError(err error) (int, any) {
+// handleRequestError converts an error to status code and response.
+func (h *Handler) handleRequestError(err error) (status int, body any) {
 	if IsNotFoundError(err) {
 		return 404, map[string]string{"error": "Not found"}
 	}
@@ -443,7 +383,7 @@ type rawResponse struct {
 	csp         string
 }
 
-// buildResponse creates a Lambda Function URL response
+// buildResponse creates a Lambda Function URL response.
 func (h *Handler) buildResponse(statusCode int, headers map[string]string, body any, err error) (*events.LambdaFunctionURLResponse, error) {
 	if err != nil {
 		return &events.LambdaFunctionURLResponse{
@@ -650,7 +590,7 @@ func (h *Handler) resolveAWSAccountID(ctx context.Context) (string, error) {
 // hosts with a broken SDK config surface the load error so the
 // multi-tenant scope filter in resolveAWSCloudAccountID fails closed
 // instead of degrading into an unscoped read.
-func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string, error) {
+func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (accountID, partition string, err error) {
 	if sourceCloud() != "aws" {
 		// Azure/GCP host: short-circuit before any AWS SDK work.
 		return "", "", nil
@@ -664,12 +604,11 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 		return "", "", fmt.Errorf("aws sdk config load: %w", h.awsCfgErr)
 	}
 	client := sts.NewFromConfig(h.awsCfg)
-	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		logging.Warnf("Failed to resolve source account ID via STS: %v", err)
-		return "", "", fmt.Errorf("sts get-caller-identity: %w", err)
+	identity, idErr := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if idErr != nil {
+		logging.Warnf("Failed to resolve source account ID via STS: %v", idErr)
+		return "", "", fmt.Errorf("sts get-caller-identity: %w", idErr)
 	}
-	var accountID, partition string
 	if identity.Account != nil {
 		accountID = *identity.Account
 	}
@@ -681,7 +620,7 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 
 // parseArnPartition extracts the partition segment from an AWS ARN.
 // ARN format: arn:<partition>:<service>:<region>:<account>:<resource>.
-// Returns "" for inputs that aren't recognisable ARNs so the caller can
+// Returns "" for inputs that aren't recognizable ARNs so the caller can
 // fall back to a default. Only the three known AWS partitions are
 // accepted — anything else is treated as malformed to avoid forwarding
 // attacker-controlled tokens into a JSON snippet the operator copy-

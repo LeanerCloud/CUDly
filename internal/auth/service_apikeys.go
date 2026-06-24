@@ -15,7 +15,7 @@ import (
 )
 
 // CreateAPIKey creates a new user API key with scoped permissions
-// Returns the full API key (shown only once), key info, and error
+// Returns the full API key (shown only once), key info, and error.
 func (s *Service) CreateAPIKey(ctx context.Context, userID, name string, permissions []Permission, expiresAt *time.Time) (string, *UserAPIKey, error) {
 	// Validate user exists and is active
 	user, err := s.store.GetUserByID(ctx, userID)
@@ -111,7 +111,7 @@ func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, per
 	return nil
 }
 
-// ListUserAPIKeys retrieves all API keys for a user
+// ListUserAPIKeys retrieves all API keys for a user.
 func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAPIKey, error) {
 	// Validate user exists
 	user, err := s.store.GetUserByID(ctx, userID)
@@ -133,7 +133,7 @@ func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAP
 	return keys, nil
 }
 
-// GetAPIKeyByHash retrieves an API key by its hash (for authentication)
+// GetAPIKeyByHash retrieves an API key by its hash (for authentication).
 func (s *Service) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error) {
 	key, err := s.store.GetAPIKeyByHash(ctx, keyHash)
 	if err != nil {
@@ -188,7 +188,7 @@ func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, acti
 	return key, nil
 }
 
-// RevokeAPIKey deactivates an API key (soft delete)
+// RevokeAPIKey deactivates an API key (soft delete).
 func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
 	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "revoke")
 	if err != nil {
@@ -206,7 +206,7 @@ func (s *Service) RevokeAPIKey(ctx context.Context, userID, keyID string) error 
 	return nil
 }
 
-// DeleteAPIKey permanently deletes an API key
+// DeleteAPIKey permanently deletes an API key.
 func (s *Service) DeleteAPIKey(ctx context.Context, userID, keyID string) error {
 	key, err := s.authorizeAPIKeyAccess(ctx, userID, keyID, "delete")
 	if err != nil {
@@ -252,7 +252,7 @@ func (s *Service) lookupAPIKeyUser(ctx context.Context, userID string) (*User, e
 	return user, nil
 }
 
-// ValidateUserAPIKey validates an API key and returns the key info and associated user
+// ValidateUserAPIKey validates an API key and returns the key info and associated user.
 func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserAPIKey, *User, error) {
 	hash := sha256.Sum256([]byte(apiKey))
 	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
@@ -265,8 +265,8 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
-	if err := validateAPIKeyStatus(key); err != nil {
-		return nil, nil, err
+	if errX := validateAPIKeyStatus(key); errX != nil {
+		return nil, nil, errX
 	}
 
 	user, err := s.lookupAPIKeyUser(ctx, key.UserID)
@@ -299,7 +299,7 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	return key, user, nil
 }
 
-// UpdateLastUsed updates the last used timestamp for an API key atomically
+// UpdateLastUsed updates the last used timestamp for an API key atomically.
 func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
 }
@@ -310,7 +310,7 @@ func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
 // Administrators-group members carry {admin, *}: with no key-specific
 // permissions their full {admin, *} context is returned, and a scoped admin
 // key's permissions all pass the HasPermission intersection below, so the
-// group-derived path preserves the previous role == admin behaviour without a
+// group-derived path preserves the previous role == admin behavior without a
 // special case.
 func (s *Service) ComputeEffectivePermissions(ctx context.Context, apiKey *UserAPIKey, user *User) ([]Permission, error) {
 	// Get user's auth context

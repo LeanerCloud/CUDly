@@ -121,7 +121,7 @@ func (app *Application) handleOIDCHTTP(w http.ResponseWriter, r *http.Request) {
 	lambdaReq := httpToLambdaRequest(r)
 	resp, handled := app.API.HandleOIDC(ctx, lambdaReq)
 	if !handled {
-		// Path matched /oidc/ prefix but is not a recognised OIDC endpoint.
+		// Path matched /oidc/ prefix but is not a recognized OIDC endpoint.
 		http.NotFound(w, r)
 		return
 	}
@@ -152,7 +152,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// handleHTTPRequest converts standard HTTP requests to Lambda Function URL format
+// handleHTTPRequest converts standard HTTP requests to Lambda Function URL format.
 func (app *Application) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	// Add request timeout to prevent hanging requests
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -263,7 +263,7 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// httpToLambdaRequest converts a standard HTTP request to Lambda Function URL request format
+// httpToLambdaRequest converts a standard HTTP request to Lambda Function URL request format.
 func httpToLambdaRequest(r *http.Request) *events.LambdaFunctionURLRequest {
 	// Read body with size limit to prevent memory exhaustion
 	body := ""
@@ -354,12 +354,12 @@ var safeHeaderNames = map[string]bool{
 	"permissions-policy":        true,
 }
 
-// isSafeHeaderValue checks that a header value doesn't contain CRLF injection characters
+// isSafeHeaderValue checks that a header value doesn't contain CRLF injection characters.
 func isSafeHeaderValue(value string) bool {
 	return !strings.ContainsAny(value, "\r\n")
 }
 
-// lambdaResponseToHTTP converts a Lambda Function URL response to standard HTTP response
+// lambdaResponseToHTTP converts a Lambda Function URL response to standard HTTP response.
 func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFunctionURLResponse) {
 	// Decode body before writing headers/status to avoid double WriteHeader on error
 	var body []byte
@@ -398,9 +398,13 @@ func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFuncti
 		w.Header().Add("Set-Cookie", cookie)
 	}
 
-	// Set status code and write body
+	// Set status code and write body. The body is the already-rendered Lambda
+	// response (JSON, or HTML pre-escaped at the handler layer per the
+	// escapeHtml convention) and its Content-Type travels through the
+	// validated-headers loop above; this adapter only relays it verbatim, so
+	// re-escaping here would corrupt legitimate JSON/binary payloads.
 	w.WriteHeader(lambdaResp.StatusCode)
-	if _, err := w.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil { //nolint:gosec // G705: body is produced/escaped by the upstream handler; this Lambda->HTTP adapter relays it unchanged
 		log.Printf("http: failed to write response body: %v", err)
 	}
 }

@@ -40,9 +40,9 @@ func main() {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-
-	if err := run(ctx); err != nil {
+	err := run(ctx)
+	cancel()
+	if err != nil {
 		log.Fatalf("rekey: %v", err)
 	}
 }
