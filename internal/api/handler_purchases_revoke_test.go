@@ -581,7 +581,8 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	// CancelExecutionAtomic and DeleteSuppressionsByExecutionTx use mock defaults
-	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"canceled"/nil).
+	// (WithTx calls fn(nil), CancelExecutionAtomic returns canceled=true plus the
+	// persisted cancel status and a nil error).
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	result, err := h.revokePurchase(ctx, sessionReq(), execID)

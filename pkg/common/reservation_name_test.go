@@ -14,6 +14,15 @@ var testFixedNow = time.Date(2026, 5, 21, 0, 20, 19, 0, time.UTC)
 
 func testFixedRand() []byte { return []byte{0xa1, 0xb2, 0xc3, 0xd4} }
 
+// TestBuildReservationName_NilFieldsReturnsFallback is the CR #1276 guard: the
+// exported helper must return the fallback prefix (a safe, non-empty no-op) on
+// a nil pointer argument rather than panicking.
+func TestBuildReservationName_NilFieldsReturnsFallback(t *testing.T) {
+	got := BuildReservationName(nil, "rds-reserved-")
+	assert.NotEmpty(t, got, "nil fields must not panic and must yield a non-empty name")
+	assert.Equal(t, SanitizeReservationID("", "rds-reserved-"), got)
+}
+
 func TestBuildReservationName_HappyPath(t *testing.T) {
 	tmp := ReservationNameFields{
 		Service:      "opensearch",

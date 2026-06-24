@@ -94,10 +94,11 @@ type StoreInterface interface {
 	// canceled, setting canceled_by. The 'scheduled' status is NOT handled here
 	// -- it is canceled via CancelScheduledExecutionAtomic, which surfaces a
 	// distinct CAS race outcome for the Gmail-style pre-fire delay revoke path.
-	// Returns (true, "canceled", nil) on success and (false, currentStatus,
-	// nil) when zero rows were affected (the execution had already been
-	// approved or otherwise transitioned). Must be called inside a WithTx
-	// block so the suppression cleanup and the status flip commit atomically.
+	// Returns (true, currentStatus, nil) on success -- currentStatus is the
+	// persisted post-cancel DB value -- and (false, currentStatus, nil) when
+	// zero rows were affected (the execution had already been approved or
+	// otherwise transitioned). Must be called inside a WithTx block so the
+	// suppression cleanup and the status flip commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'canceled', setting canceled_by. Used by the Gmail-style pre-fire delay
@@ -107,7 +108,7 @@ type StoreInterface interface {
 	// flows surface distinct CAS race outcomes -- a scheduled row that the
 	// scheduler has already transitioned to 'approved' / 'running' must surface as
 	// a 410 ("window closed") rather than a 409 ("not pending"). Returns
-	// (true, "canceled", nil) on success and (false, currentStatus, nil) when
+	// (true, currentStatus, nil) on success and (false, currentStatus, nil) when
 	// zero rows were affected. Must be called inside a WithTx block.
 	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error)
 	// ListStuckExecutions returns executions in any of the given statuses

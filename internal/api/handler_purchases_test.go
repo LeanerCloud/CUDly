@@ -2260,7 +2260,8 @@ func sessionCancelReq() *events.LambdaFunctionURLRequest {
 // cancel commits in a single tx via CancelExecutionAtomic +
 // DeleteSuppressionsByExecutionTx; the mock store's WithTx default
 // forwards fn(nil) and CancelExecutionAtomic default returns
-// (true, "canceled", nil) when no explicit expectation is registered.
+// (canceled=true, the persisted cancel status, nil) when no explicit
+// expectation is registered.
 //
 // Asserts the audit-stamp invariant: when session.Email is non-empty
 // the canceledBy pointer passed to CancelExecutionAtomic must carry

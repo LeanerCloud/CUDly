@@ -180,7 +180,10 @@ type ServiceDetails interface {
 // four-field scaling pattern was duplicated at every sizing site.
 func ScaleRecommendationCosts(rec *Recommendation, ratio float64) Recommendation {
 	if rec == nil {
-		panic("ScaleRecommendationCosts: rec is nil")
+		// Nil input is a programmer error, not a value to scale. Return the
+		// zero Recommendation as a safe no-op so an exported helper never
+		// panics on a nil pointer argument.
+		return Recommendation{}
 	}
 	scaled := *rec
 	scaled.CommitmentCost *= ratio
