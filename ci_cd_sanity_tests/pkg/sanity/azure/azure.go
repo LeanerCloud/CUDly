@@ -260,7 +260,10 @@ func runAccountShowCheck(ctx context.Context, subscriptionID string, cred azcore
 	}
 
 	sub := resp.Subscription
-	info := azureSubscriptionInfo{State: string(*sub.State)}
+	info := azureSubscriptionInfo{}
+	if sub.State != nil {
+		info.State = string(*sub.State)
+	}
 	if sub.SubscriptionID != nil {
 		info.ID = *sub.SubscriptionID
 	}
