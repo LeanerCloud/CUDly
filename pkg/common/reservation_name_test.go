@@ -16,12 +16,17 @@ func testFixedRand() []byte { return []byte{0xa1, 0xb2, 0xc3, 0xd4} }
 
 // TestBuildReservationName_NilFieldsReturnsFallback is the CR #1276 guard: the
 // exported helper must return the fallback prefix (a safe, non-empty no-op) on
-// a nil pointer argument rather than panicking.
+// a nil pointer argument rather than panicking. Asserts structural properties
+// (prefix + timestamp shape + cap) rather than equality against a value rebuilt
+// with a second time.Now() call, which would flake on a second-boundary cross.
 func TestBuildReservationName_NilFieldsReturnsFallback(t *testing.T) {
 	got := BuildReservationName(nil, "rds-reserved-")
 	assert.NotEmpty(t, got, "nil fields must not panic and must yield a non-empty name")
-	// Under the cap, the nil path equals the plain sanitized fallback.
-	assert.Equal(t, SanitizeReservationID("", "rds-reserved-"), got)
+	// SanitizeReservationID("", prefix) returns prefix + unix-seconds, so the
+	// output is the sanitized prefix followed by digits only.
+	assert.Regexp(t, `^rds-reserved-[0-9]+$`, got,
+		"nil path must yield the sanitized fallback prefix plus a unix timestamp")
+	assert.False(t, strings.HasSuffix(got, "-"), "name must not end in a hyphen")
 	assert.LessOrEqual(t, len(got), awsReservationNameMaxLen)
 }
 
