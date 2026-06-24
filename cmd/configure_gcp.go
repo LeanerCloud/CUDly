@@ -157,7 +157,7 @@ func runConfigureGCP(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	printGCPConfigurationSuccess(creds)
+	printGCPConfigurationSuccess(&creds)
 	return nil
 }
 
@@ -247,7 +247,7 @@ func expandHomeDirectory(path string) string {
 }
 
 // printGCPConfigurationSuccess prints success message with credentials info.
-func printGCPConfigurationSuccess(creds GCPCredentials) { //nolint:gocritic // hugeParam: creds kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func printGCPConfigurationSuccess(creds *GCPCredentials) {
 	log.Printf("GCP credentials stored successfully in Secrets Manager")
 	fmt.Println("\nGCP configuration complete!")
 	fmt.Printf("Service Account: %s\n", creds.ClientEmail)
@@ -278,7 +278,7 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	fmt.Println("This will open a browser window for GCP authentication.")
 	fmt.Println()
 
-	if err := promptAndRunGCPCommand(reader, "GCP Login", "gcloud auth login", "gcloud", "auth", "login"); err != nil {
+	if err := promptAndRunGCPCommand(reader, "GCP Login", "gcloud auth login", "auth", "login"); err != nil {
 		return "", err
 	}
 
@@ -288,7 +288,7 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	fmt.Println("List your GCP projects:")
 	fmt.Println()
 
-	if err := promptAndRunGCPCommand(reader, "List Projects", "gcloud projects list", "gcloud", "projects", "list"); err != nil {
+	if err := promptAndRunGCPCommand(reader, "List Projects", "gcloud projects list", "projects", "list"); err != nil {
 		return "", err
 	}
 
@@ -320,7 +320,7 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	createSaDisplay := fmt.Sprintf(`gcloud iam service-accounts create %s --display-name="CUDly Service Account" --description="Service account for CUDly commitment management"`, saName)
 
 	if errXX := promptAndRunGCPCommand(reader, "Create Service Account", createSaDisplay,
-		"gcloud", "iam", "service-accounts", "create", saName,
+		"iam", "service-accounts", "create", saName,
 		"--display-name=CUDly Service Account",
 		"--description=Service account for CUDly commitment management"); errXX != nil {
 		return "", errXX
@@ -338,7 +338,7 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	grantRoleDisplay := fmt.Sprintf(`gcloud projects add-iam-policy-binding %s --member="serviceAccount:%s" --role="roles/compute.admin"`, projectID, saEmail)
 
 	if errX := promptAndRunGCPCommand(reader, "Grant Compute Admin Role", grantRoleDisplay,
-		"gcloud", "projects", "add-iam-policy-binding", projectID,
+		"projects", "add-iam-policy-binding", projectID,
 		fmt.Sprintf("--member=serviceAccount:%s", saEmail),
 		"--role=roles/compute.admin"); errX != nil {
 		return "", errX
@@ -360,7 +360,7 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	createKeyDisplay := fmt.Sprintf(`gcloud iam service-accounts keys create %s --iam-account=%s`, keyFile, saEmail)
 
 	if err := promptAndRunGCPCommand(reader, "Create Key File", createKeyDisplay,
-		"gcloud", "iam", "service-accounts", "keys", "create", keyFile,
+		"iam", "service-accounts", "keys", "create", keyFile,
 		fmt.Sprintf("--iam-account=%s", saEmail)); err != nil {
 		return "", err
 	}
@@ -373,10 +373,9 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 }
 
 // promptAndRunGCPCommand shows a command and asks to run or skip.
-// Takes explicit program and args to avoid command injection via string splitting.
-//
-//nolint:unparam // program is passed explicitly (always "gcloud" today) by design: the explicit program+args split is the command-injection guard documented above
-func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd, program string, args ...string) error {
+// The program is always "gcloud"; args are passed as discrete elements (no
+// shell) so there is no command-injection surface via string splitting.
+func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd string, args ...string) error {
 	fmt.Printf("Command: %s\n", displayCmd)
 	fmt.Println()
 	fmt.Printf("[R]un, [S]kip? ")
@@ -389,7 +388,7 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd, program stri
 
 	switch choice {
 	case "r", "run", "":
-		return executeGCPCommand(displayCmd, program, args...)
+		return executeGCPCommand(displayCmd, args...)
 	case "s", "skip":
 		fmt.Printf("Skipping %s\n", name)
 		return nil
@@ -399,14 +398,14 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd, program stri
 	}
 }
 
-// executeGCPCommand runs a gcloud command with explicit program and arguments.
-func executeGCPCommand(displayCmd, program string, args ...string) error {
+// executeGCPCommand runs a "gcloud" command with explicit arguments.
+func executeGCPCommand(displayCmd string, args ...string) error {
 	fmt.Println()
 	fmt.Printf("Executing: %s\n", displayCmd)
 	fmt.Println(strings.Repeat("-", 60))
 
-	//nolint:gosec // G702: program is always "gcloud" and args are hardcoded subcommands plus values validated upstream (validateGCPProjectID); passed as discrete argv elements, no shell
-	cmd := exec.CommandContext(context.Background(), program, args...)
+	//nolint:gosec // G702: program is the hardcoded "gcloud" and args are hardcoded subcommands plus values validated upstream (validateGCPProjectID); passed as discrete argv elements, no shell
+	cmd := exec.CommandContext(context.Background(), "gcloud", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

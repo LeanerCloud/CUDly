@@ -199,7 +199,7 @@ func TestNewScheduler(t *testing.T) {
 		DashboardURL: "https://dashboard.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	assert.NotNil(t, scheduler)
 	assert.Equal(t, "https://dashboard.example.com", scheduler.dashboardURL)
@@ -570,7 +570,7 @@ func TestScheduler_Interface(t *testing.T) {
 		DashboardURL: "https://test.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	// Verify scheduler has required fields
 	assert.NotNil(t, scheduler.config)
@@ -948,7 +948,7 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
 		// Small sleep so concurrent workers genuinely overlap.
@@ -976,7 +976,7 @@ func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
 		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
 		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return nil, fmt.Errorf("cred error for %s", acct.ID)
 	}
 
@@ -1000,7 +1000,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
 		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		if acct.ID == "acct-bad" {
 			return nil, fmt.Errorf("transient")
 		}
@@ -1020,7 +1020,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 // correctly skips the all-failed error path.
 func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
-		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 			t.Fatalf("fn must not be called for zero-accounts input")
 			return nil, nil
 		})
@@ -1276,8 +1276,8 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 	// "only Details.Engine differs" property holds at every level
 	// (Service / ResourceType already match across the pair).
 	cases := []struct {
-		name string
 		recs func() (common.Recommendation, common.Recommendation)
+		name string
 	}{
 		{
 			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
@@ -1606,8 +1606,8 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 // fields are set by each test case to drive the GetCallerIdentity response
 // shape (success with an account ID, or an error).
 type fakeSTSClient struct {
-	accountID string
 	err       error
+	accountID string
 }
 
 func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {

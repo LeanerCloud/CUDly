@@ -819,7 +819,7 @@ func TestNewHandler_WithDependencies(t *testing.T) {
 		CORSAllowedOrigin: "https://example.com",
 	}
 
-	handler := NewHandler(cfg)
+	handler := NewHandler(&cfg)
 
 	assert.NotNil(t, handler)
 	assert.Equal(t, "https://example.com", handler.corsAllowedOrigin)

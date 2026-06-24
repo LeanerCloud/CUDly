@@ -150,7 +150,8 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 	// Non-nil empty slice: a sentinel meaning "scoped to zero accounts" so the
 	// dual-column predicate matches no rows (never falls back to all-accounts).
 	allowedUUIDs := []string{}
-	for _, a := range accounts { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range accounts {
+		a := &accounts[i]
 		if auth.MatchesAccount(allowed, a.ID, a.Name) {
 			allowedUUIDs = append(allowedUUIDs, a.ID)
 		}
@@ -173,13 +174,14 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := recs[:0]
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range recs {
+		rec := &recs[i]
 		if rec.CloudAccountID == nil {
 			continue
 		}
 		id := *rec.CloudAccountID
 		if auth.MatchesAccount(allowed, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, *rec)
 		}
 	}
 	return filtered, nil
@@ -235,7 +237,8 @@ func summarizeRecommendationsWithCoverage(
 	representatives := bestVariantPerCell(recs, coverageByKey)
 
 	byService = make(map[string]ServiceSavings)
-	for _, rep := range representatives { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range representatives {
+		rep := &representatives[i]
 		scaled := rep.scaled
 		totalSavings += scaled
 		svc := byService[rep.rec.Service]
@@ -276,7 +279,7 @@ type cellRepresentative struct {
 // variants so the backend by_service rollup and the frontend per-cell grouping
 // agree. A nil CloudAccountID maps to the empty segment, matching the
 // frontend's nullish-coalescing of cloud_account_id to an empty string.
-func recCellKey(rec config.RecommendationRecord) string { //nolint:gocritic // hugeParam: rec kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func recCellKey(rec *config.RecommendationRecord) string {
 	account := ""
 	if rec.CloudAccountID != nil {
 		account = *rec.CloudAccountID
@@ -302,17 +305,18 @@ func bestVariantPerCell(
 ) []cellRepresentative {
 	indexByCell := make(map[string]int, len(recs))
 	reps := make([]cellRepresentative, 0, len(recs))
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range recs {
+		rec := &recs[i]
 		scaled := scaledSavings(rec, coverageByKey)
 		key := recCellKey(rec)
 		if idx, ok := indexByCell[key]; ok {
 			if scaled > reps[idx].scaled {
-				reps[idx] = cellRepresentative{rec: rec, scaled: scaled}
+				reps[idx] = cellRepresentative{rec: *rec, scaled: scaled}
 			}
 			continue
 		}
 		indexByCell[key] = len(reps)
-		reps = append(reps, cellRepresentative{rec: rec, scaled: scaled})
+		reps = append(reps, cellRepresentative{rec: *rec, scaled: scaled})
 	}
 	return reps
 }
@@ -320,7 +324,7 @@ func bestVariantPerCell(
 // scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
 // a coverage entry exists for the rec's (account, provider, service) triple.
 // Otherwise returns rec.Savings unchanged.
-func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 { //nolint:gocritic // hugeParam: rec kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func scaledSavings(rec *config.RecommendationRecord, coverageByKey map[string]float64) float64 {
 	if rec.CloudAccountID == nil || coverageByKey == nil {
 		return rec.Savings
 	}
@@ -458,9 +462,9 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
 	var provider, service string
-	for _, svcCfg := range plan.Services { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
-		provider = svcCfg.Provider
-		service = svcCfg.Service
+	for i := range plan.Services {
+		provider = plan.Services[i].Provider
+		service = plan.Services[i].Service
 		break
 	}
 	return UpcomingPurchase{
@@ -481,9 +485,7 @@ func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecu
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
 // Sensitive identifiers (API key secret URL, deployment AWS account ID) are intentionally
 // absent here; they live on the authenticated GET /api/info/deployment endpoint (#633).
-//
-//nolint:unparam // error return is part of the uniform router handler contract (getXxx -> (T, error)); kept even though this implementation currently cannot fail
-func (h *Handler) getPublicInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
+func (h *Handler) getPublicInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) *PublicInfoResponse {
 	// Check if admin exists
 	adminExists := false
 	if h.auth != nil {
@@ -496,16 +498,14 @@ func (h *Handler) getPublicInfo(ctx context.Context, _ *events.LambdaFunctionURL
 	return &PublicInfoResponse{
 		Version:     "1.0.0",
 		AdminExists: adminExists,
-	}, nil
+	}
 }
 
 // getDeploymentInfo returns sensitive deployment identifiers for authenticated callers.
 // Requires at least AuthUser (enforced by the router). The two fields it returns
 // expose the AWS account ID and the Secrets Manager ARN path — neither should be
 // reachable without a valid session (#633).
-//
-//nolint:unparam // error return is part of the uniform router handler contract (getXxx -> (T, error)); kept even though this implementation currently cannot fail
-func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*DeploymentInfoResponse, error) {
+func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) *DeploymentInfoResponse {
 	// Build the AWS Console deep-link to the Secrets Manager secret.
 	var apiKeySecretURL string
 	if h.secretsARN != "" {
@@ -534,7 +534,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 	return &DeploymentInfoResponse{
 		APIKeySecretURL:        apiKeySecretURL,
 		DeploymentAWSAccountID: deploymentAWSAccountID,
-	}, nil
+	}
 }
 
 // commitmentExpiry returns the moment a purchase's commitment term ends.
@@ -545,7 +545,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 // place). One year is approximated as 365 days — matches the original
 // dashboard arithmetic verbatim; leap-year precision isn't material for
 // a multi-year RI/SP/CUD term.
-func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time { //nolint:gocritic // hugeParam: p kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func commitmentExpiry(p *config.PurchaseHistoryRecord) time.Time {
 	termDuration := time.Duration(p.Term) * 365 * 24 * time.Hour
 	return p.Timestamp.Add(termDuration)
 }
@@ -562,7 +562,7 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time { //nolint:gocri
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
 //
 //nolint:misspell // documents DB status literals incl. 'cancelled' (status CHECK constraint); rename tracked in PR #1277
-func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool { //nolint:gocritic // hugeParam: p kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func isActiveCommitment(p *config.PurchaseHistoryRecord, now time.Time) bool {
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
 	// Synthesized rows set it to "failed", "expired", "cancelled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
@@ -580,7 +580,8 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool { //
 // same "active" definition.
 func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryRecord, now time.Time) map[string]float64 {
 	byService := make(map[string]float64)
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -664,7 +665,8 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		committedMonthly += v
 	}
 
-	for _, p := range purchases { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, currentTime) {
 			continue
 		}

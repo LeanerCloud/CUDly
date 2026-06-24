@@ -284,7 +284,7 @@ func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 }
 
 // BeginTx starts a new transaction with options.
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // hugeParam: txOptions kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // hugeParam: txOptions mirrors pgx's own Tx.BeginTx(ctx, pgx.TxOptions) value signature; a pointer here would diverge from the wrapped SDK API
 	return c.pool.BeginTx(ctx, txOptions)
 }
 

@@ -27,11 +27,10 @@ import (
 // PurchaseExecution record tagged with cloud_account_id.
 // If no accounts are configured or no credential store is available, it falls back
 // to single-account execution using ambient credentials.
-// executePurchase runs the purchase for a single execution. Returns wasMultiAccount=true when
-// fan-out was used (per-account records are already saved; caller should skip root record save).
-//
-//nolint:unparam // wasMultiAccount is a documented part of the contract (fan-out vs root-save signal); current callers discard it but the value is meaningful and asserted by tests
-func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) (wasMultiAccount bool, err error) {
+// executePurchase runs the purchase for a single execution. It fans out across
+// the plan's accounts when they are configured (each account saves its own
+// per-account record), otherwise it runs the legacy single-account path.
+func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) error {
 	logging.Infof("Executing purchase for plan %q, step %d", exec.PlanID, exec.StepNumber)
 
 	// Direct-execute purchases (Opportunities "Purchase" button) arrive
@@ -45,28 +44,29 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	if exec.PlanID == "" {
 		plan = &config.PurchasePlan{Name: "Direct purchase"}
 	} else {
+		var err error
 		plan, err = m.config.GetPurchasePlan(ctx, exec.PlanID)
 		if err != nil {
-			return false, fmt.Errorf("failed to get plan: %w", err)
+			return fmt.Errorf("failed to get plan: %w", err)
 		}
 		if plan == nil {
-			return false, fmt.Errorf("plan not found: %s", exec.PlanID)
+			return fmt.Errorf("plan not found: %s", exec.PlanID)
 		}
 
 		// Fan out across plan accounts when accounts are configured.
 		if exec.CloudAccountID == nil {
 			accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 			if err != nil {
-				return false, fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
+				return fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 			}
 			if len(accounts) > 0 {
-				return true, m.executeMultiAccount(ctx, exec, plan, accounts)
+				return m.executeMultiAccount(ctx, exec, plan, accounts)
 			}
 		}
 	}
 
 	// Single-account (legacy) path.
-	return false, m.executeSingleAccount(ctx, exec, plan)
+	return m.executeSingleAccount(ctx, exec, plan)
 }
 
 // executeSingleAccount runs the legacy single-account purchase path: resolve
@@ -170,7 +170,7 @@ var errAllAccountsFailed = errors.New("multi-account execution: all accounts fai
 // (wrapping the per-account errors) when no account committed anything.
 func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, accounts []config.CloudAccount) error {
 	results := execution.RunForAccountsWithConcurrency(ctx, accounts, func(ctx context.Context, account config.CloudAccount) (bool, error) {
-		return m.executeForAccount(ctx, baseExec, plan, account)
+		return m.executeForAccount(ctx, baseExec, plan, &account)
 	}, getMaxAccountParallelism())
 
 	committed := 0
@@ -207,7 +207,7 @@ func (m *Manager) executeMultiAccount(ctx context.Context, baseExec *config.Purc
 // right sentinel (issue #1014). The returned error is non-nil whenever any rec
 // failed, but the authoritative per-account row has already been saved with the
 // correct status (partially_completed / failed) before it surfaces.
-func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, account config.CloudAccount) (committed bool, err error) { //nolint:gocritic // hugeParam: account kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.PurchaseExecution, plan *config.PurchasePlan, account *config.CloudAccount) (committed bool, err error) {
 	// Create a per-account copy of the execution record with an independent
 	// Recommendations slice so concurrent goroutines don't race on writes.
 	acctID := account.ID
@@ -339,7 +339,7 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 		// fallback once a target account ID is known.
 		return nil, "", fmt.Errorf("credential resolution failed for account %s: account not found", *cloudAccountID)
 	}
-	provCfg, err := m.resolveAccountProvider(ctx, *account)
+	provCfg, err := m.resolveAccountProvider(ctx, account)
 	if err != nil {
 		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
@@ -363,7 +363,7 @@ func (e *partialPurchaseError) Error() string {
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
 // for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
-func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) { //nolint:gocritic // hugeParam: account kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) resolveAccountProvider(ctx context.Context, account *config.CloudAccount) (*provider.ProviderConfig, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAccountProvider]: resolving credentials for provider=%s account=%s",
 		account.Provider, account.ID)
@@ -389,14 +389,14 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 	return cfg, nil
 }
 
-func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) { //nolint:gocritic // hugeParam: account kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) resolveAWSProvider(ctx context.Context, account *config.CloudAccount) (*provider.ProviderConfig, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAWSProvider]: resolving AWS credentials for account=%s authMode=%s",
 		account.ID, account.AWSAuthMode)
 	if account.AWSAuthMode != "access_keys" && m.assumeRoleSTS == nil {
 		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &account, m.credStore, m.assumeRoleSTS,
+	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, m.credStore, m.assumeRoleSTS,
 		credentials.AWSResolveOptions{AmbientProvider: m.ambientAWSCreds})
 	if err != nil {
 		logging.Errorf("purchase[resolveAWSProvider]: failed for account=%s after %s: %v",
@@ -408,14 +408,14 @@ func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAc
 	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
-func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) { //nolint:gocritic // hugeParam: account kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) resolveAzureProvider(ctx context.Context, account *config.CloudAccount) (*provider.ProviderConfig, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAzureProvider]: resolving Azure credentials for account=%s authMode=%s",
 		account.ID, account.AzureAuthMode)
 	if account.AzureAuthMode != "managed_identity" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-managed_identity Azure account %s", account.ID)
 	}
-	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &account, m.credStore, credentials.AzureResolveOptions{
+	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, account, m.credStore, credentials.AzureResolveOptions{
 		Signer:    m.oidcSigner,
 		IssuerURL: m.oidcIssuerURL,
 	})
@@ -436,14 +436,14 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
 }
 
-func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) { //nolint:gocritic // hugeParam: account kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) resolveGCPProvider(ctx context.Context, account *config.CloudAccount) (*provider.ProviderConfig, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveGCPProvider]: resolving GCP credentials for account=%s authMode=%s",
 		account.ID, account.GCPAuthMode)
 	if account.GCPAuthMode != "application_default" && m.credStore == nil {
 		return nil, fmt.Errorf("credentials: credential store required for non-ADC GCP account %s", account.ID)
 	}
-	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &account, m.credStore, credentials.GCPResolveOptions{
+	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, account, m.credStore, credentials.GCPResolveOptions{
 		Signer:    m.oidcSigner,
 		IssuerURL: m.oidcIssuerURL,
 	})
@@ -526,7 +526,7 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 			if i < 0 || i >= len(exec.Recommendations) {
 				return recPurchaseOutcome{}, fmt.Errorf("fan-out index %d out of range for %d recommendations", i, len(exec.Recommendations))
 			}
-			rec := exec.Recommendations[i]
+			rec := &exec.Recommendations[i]
 			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
 			// Derive a deterministic per-rec idempotency token from the
 			// execution's STABLE lineage key (not its mutable ExecutionID)
@@ -580,7 +580,7 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 			purchaseErrors = append(purchaseErrors, fmt.Sprintf("aggregator index %d out of range", i))
 			continue
 		}
-		rec := exec.Recommendations[i]
+		rec := &exec.Recommendations[i]
 		if v.err != nil {
 			logging.Errorf("Failed to purchase %s: %v", rec.ResourceType, v.err)
 			exec.Recommendations[i].Error = v.err.Error()
@@ -591,7 +591,7 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 		exec.Recommendations[i].PurchaseID = v.purchase.CommitmentID
 		totalSavings += rec.Savings
 		totalUpfront += rec.UpfrontCost
-		if histErr := m.savePurchaseHistory(ctx, exec, plan, rec, v.purchase, accountID); histErr != nil {
+		if histErr := m.savePurchaseHistory(ctx, exec, plan, rec, &v.purchase, accountID); histErr != nil {
 			// The purchase SUCCEEDED but its purchase_history row failed to
 			// persist. Do NOT add this to purchaseErrors — that would flip the
 			// execution to "failed" and tempt the user to re-approve a purchase
@@ -693,8 +693,8 @@ func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string
 // results writes back to exec.Recommendations deterministically.
 func selectedIndices(recs []config.RecommendationRecord) []int {
 	out := make([]int, 0, len(recs))
-	for i, rec := range recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
-		if rec.Selected {
+	for i := range recs {
+		if recs[i].Selected {
 			out = append(out, i)
 		}
 	}
@@ -746,7 +746,7 @@ func (m *Manager) saveExecWithLog(ctx context.Context, exec *config.PurchaseExec
 	}
 }
 
-func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec config.RecommendationRecord, result common.PurchaseResult, accountID string) error { //nolint:gocritic // hugeParam: rec kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, rec *config.RecommendationRecord, result *common.PurchaseResult, accountID string) error {
 	purchasedAt := time.Now()
 	historyRecord := &config.PurchaseHistoryRecord{
 		AccountID:        accountID,
@@ -795,7 +795,8 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 		data.ArcheraEducationURL = dashboardBase + "/archera-insurance"
 	}
 
-	for _, rec := range exec.Recommendations { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range exec.Recommendations {
+		rec := &exec.Recommendations[i]
 		if rec.Purchased {
 			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 				Service:        rec.Service,
@@ -833,7 +834,7 @@ func logRecCtxErr(executionID, recTuple string, elapsed time.Duration, recCtxErr
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
 // opts carries execution-level metadata (the source surface) that providers stamp
 // onto the commitment they create.
-func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) { //nolint:gocritic // hugeParam: rec kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (m *Manager) executeSinglePurchase(ctx context.Context, rec *config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Per-purchase Info logs tagged with the owning execution ID so a
 	// CloudWatch filter on the execution UUID surfaces every step of the
 	// purchase attempt -- provider construction, service-client lookup,

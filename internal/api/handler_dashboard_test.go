@@ -703,8 +703,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 			secretsARN: "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key-abc123",
 		}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 
 		assert.Equal(t, "1.0.0", result.Version)
 		assert.True(t, result.AdminExists)
@@ -718,8 +717,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 			auth: mockAuth,
 		}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 
 		assert.False(t, result.AdminExists)
 	})
@@ -732,8 +730,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 			auth: mockAuth,
 		}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 
 		// Error should be swallowed, adminExists defaults to false
 		assert.False(t, result.AdminExists)
@@ -742,8 +739,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 	t.Run("without auth service", func(t *testing.T) {
 		handler := &Handler{}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 
 		assert.False(t, result.AdminExists)
 	})
@@ -759,8 +755,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 			rateLimiter: mockRateLimiter,
 		}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("192.168.1.1"))
 		assert.True(t, result.AdminExists)
 	})
 
@@ -775,8 +770,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 			secretsARN: "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key-abc123",
 		}
 
-		result, err := handler.getPublicInfo(ctx, createMockLambdaRequest("10.0.0.1"))
-		require.NoError(t, err)
+		result := handler.getPublicInfo(ctx, createMockLambdaRequest("10.0.0.1"))
 
 		// PublicInfoResponse no longer carries these fields — the struct itself is
 		// the compile-time guard. The JSON assertion catches any future re-addition
@@ -799,8 +793,7 @@ func TestHandler_getDeploymentInfo(t *testing.T) {
 			secretsARN: "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key-abc123",
 		}
 
-		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
-		require.NoError(t, err)
+		result := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
 
 		assert.Contains(t, result.APIKeySecretURL, "us-east-1")
 		assert.Contains(t, result.APIKeySecretURL, "secretsmanager")
@@ -811,8 +804,7 @@ func TestHandler_getDeploymentInfo(t *testing.T) {
 			secretsARN: "arn:aws:secretsmanager:eu-west-1:987654321098:secret:my-secret-xyz789",
 		}
 
-		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
-		require.NoError(t, err)
+		result := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
 
 		assert.Contains(t, result.APIKeySecretURL, "eu-west-1")
 	})
@@ -822,8 +814,7 @@ func TestHandler_getDeploymentInfo(t *testing.T) {
 			secretsARN: "invalid-arn",
 		}
 
-		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
-		require.NoError(t, err)
+		result := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
 
 		assert.Empty(t, result.APIKeySecretURL)
 	})
@@ -831,8 +822,7 @@ func TestHandler_getDeploymentInfo(t *testing.T) {
 	t.Run("empty secretsARN returns empty URL", func(t *testing.T) {
 		handler := &Handler{}
 
-		result, err := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
-		require.NoError(t, err)
+		result := handler.getDeploymentInfo(ctx, createMockLambdaRequest("10.0.0.1"))
 
 		assert.Empty(t, result.APIKeySecretURL)
 	})

@@ -74,7 +74,7 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(cfg HandlerConfig) *Handler { //nolint:gocritic // hugeParam: cfg kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func NewHandler(cfg *HandlerConfig) *Handler {
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured

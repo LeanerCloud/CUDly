@@ -313,14 +313,14 @@ func TestHandler_isActiveCommitment_Predicate(t *testing.T) {
 	// on the calendar day, so on a leap-year boundary the predicate
 	// returns true (active) — we accept that; the dashboard's aggregate
 	// uses the same arithmetic.
-	assert.True(t, isActiveCommitment(p, now.Add(-time.Hour)),
+	assert.True(t, isActiveCommitment(&p, now.Add(-time.Hour)),
 		"a commitment one hour before its expiry must still be active")
 
 	expired := config.PurchaseHistoryRecord{
 		Timestamp: now.AddDate(-2, 0, 0),
 		Term:      1,
 	}
-	assert.False(t, isActiveCommitment(expired, now),
+	assert.False(t, isActiveCommitment(&expired, now),
 		"a commitment whose term ended a year ago must be inactive")
 }
 

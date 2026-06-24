@@ -237,11 +237,11 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) { //nolint:gocritic // hugeParam: data kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data *email.RegistrationDecisionData) {
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, data); err != nil {
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, *data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)
 	}
 }
@@ -259,7 +259,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
 		return nil, NewClientError(400, "invalid account request body")
 	}
-	if err := validateCloudAccountRequest(acctReq); err != nil {
+	if err := validateCloudAccountRequest(&acctReq); err != nil {
 		return nil, err
 	}
 
@@ -276,7 +276,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 
 	// Create the cloud account (only one request reaches here).
 	now := time.Now()
-	account := cloudAccountFromRequest(acctReq)
+	account := cloudAccountFromRequest(&acctReq)
 	account.ID = uuid.New().String()
 	// Auto-enable when the operator either embedded a credential in
 	// the registration (legacy key-based flow) OR when the account
@@ -303,7 +303,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "approved",
 	})
@@ -364,7 +364,7 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 		return nil, fmt.Errorf("registrations: transition: %w", err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "rejected",
 		RejectionReason: body.Reason,

@@ -115,7 +115,7 @@ func TestHandleLambdaHTTPEvent(t *testing.T) {
 
 			// Create minimal app with mocked API handler
 			app := &Application{
-				API: api.NewHandler(api.HandlerConfig{}),
+				API: api.NewHandler(&api.HandlerConfig{}),
 			}
 
 			resp, err := app.handleLambdaHTTPEvent(ctx, json.RawMessage(tt.rawEvent))
@@ -278,7 +278,7 @@ func TestHandleLambdaEvent_UnknownEventReturnsError(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	_, err := app.HandleLambdaEvent(ctx, json.RawMessage(`{"unknown": "event"}`))
@@ -342,7 +342,7 @@ func TestHandleLambdaEvent(t *testing.T) {
 			ctx := testutil.TestContext(t)
 
 			app := &Application{
-				API: api.NewHandler(api.HandlerConfig{}),
+				API: api.NewHandler(&api.HandlerConfig{}),
 			}
 			if tt.setupApp != nil {
 				tt.setupApp(app)

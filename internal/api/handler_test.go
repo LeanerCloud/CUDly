@@ -37,21 +37,21 @@ func TestNewHandler(t *testing.T) {
 		EnableDashboard: true,
 	}
 
-	handler := NewHandler(cfg)
+	handler := NewHandler(&cfg)
 
 	assert.NotNil(t, handler)
 }
 
 func TestNewHandler_CORSDefault(t *testing.T) {
 	// Test that empty CORS origin defaults to empty (no CORS headers)
-	handler := NewHandler(HandlerConfig{})
+	handler := NewHandler(&HandlerConfig{})
 	assert.Equal(t, "", handler.corsAllowedOrigin)
 }
 
 func TestNewHandler_CORSCustom(t *testing.T) {
 	// Test that custom CORS origin is used
 	customOrigin := "https://myapp.example.com"
-	handler := NewHandler(HandlerConfig{
+	handler := NewHandler(&HandlerConfig{
 		CORSAllowedOrigin: customOrigin,
 	})
 	assert.Equal(t, customOrigin, handler.corsAllowedOrigin)

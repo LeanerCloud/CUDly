@@ -111,9 +111,10 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	if !auth.IsUnrestrictedAccess(allowedAccounts) {
 		filtered := acctList[:0]
-		for _, acct := range acctList { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+		for i := range acctList {
+			acct := &acctList[i]
 			if auth.MatchesAccount(allowedAccounts, acct.ID, acct.Name) {
-				filtered = append(filtered, acct)
+				filtered = append(filtered, *acct)
 			}
 		}
 		acctList = filtered
@@ -238,12 +239,12 @@ func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaF
 	}
 
 	req := buildSelfAccountRequest(si)
-	if err := validateCloudAccountRequest(req); err != nil {
+	if err := validateCloudAccountRequest(&req); err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	account := cloudAccountFromRequest(req)
+	account := cloudAccountFromRequest(&req)
 	account.ID = uuid.New().String()
 	account.CreatedAt = now
 	account.UpdatedAt = now
@@ -313,12 +314,12 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := validateCloudAccountRequest(req); err != nil {
+	if err := validateCloudAccountRequest(&req); err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	account := cloudAccountFromRequest(req)
+	account := cloudAccountFromRequest(&req)
 	account.ID = uuid.New().String()
 	account.CreatedAt = now
 	account.UpdatedAt = now
@@ -348,7 +349,7 @@ var validAccountProviders = map[string]bool{
 }
 
 // validateCloudAccountRequest checks required fields and allowed values.
-func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func validateCloudAccountRequest(req *CloudAccountRequest) error {
 	if req.Name == "" {
 		return NewClientError(400, "name is required")
 	}
@@ -369,7 +370,7 @@ func validateCloudAccountRequest(req CloudAccountRequest) error { //nolint:gocri
 }
 
 // validateAuthMode checks that the provider-specific auth mode is a known value.
-func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func validateAuthMode(req *CloudAccountRequest) error {
 	switch req.Provider {
 	case "aws":
 		return validateAWSAuthMode(req)
@@ -409,7 +410,7 @@ func validateAuthMode(req CloudAccountRequest) error { //nolint:gocritic // huge
 // identity via the token subject claim (see resolveWebIdentityProvider
 // in internal/credentials/resolver.go), and stscreds.WebIdentityRoleOptions
 // has no ExternalID field. access_keys doesn't assume a role at all.
-func validateAWSAuthMode(req CloudAccountRequest) error { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func validateAWSAuthMode(req *CloudAccountRequest) error {
 	if req.AWSAuthMode != "" && !validAWSAuthModes[req.AWSAuthMode] {
 		return NewClientError(400, "invalid aws_auth_mode")
 	}
@@ -489,7 +490,7 @@ func isValidAWSExternalIDCharset(s string) bool {
 }
 
 // cloudAccountFromRequest maps a CloudAccountRequest to a config.CloudAccount.
-func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func cloudAccountFromRequest(req *CloudAccountRequest) *config.CloudAccount {
 	a := &config.CloudAccount{
 		Name:                    req.Name,
 		Description:             req.Description,
@@ -554,7 +555,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if errXX := validateCloudAccountRequest(req); errXX != nil {
+	if errXX := validateCloudAccountRequest(&req); errXX != nil {
 		return nil, errXX
 	}
 
@@ -563,7 +564,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
-	account := cloudAccountFromRequest(req)
+	account := cloudAccountFromRequest(&req)
 	account.ID = id
 	account.CreatedAt = existing.CreatedAt
 	account.CreatedBy = existing.CreatedBy
@@ -1068,7 +1069,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, fmt.Errorf("accounts: get existing override: %w", err)
 	}
 
-	override := buildServiceOverride(accountID, provider, service, req, existing, now)
+	override := buildServiceOverride(accountID, provider, service, &req, existing, now)
 
 	// Defense-in-depth: reject invalid (term, payment) combos before persisting.
 	// checkCommitmentOptionCombo is permissive when commitmentOpts is nil or
@@ -1091,7 +1092,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 }
 
 // buildServiceOverride constructs an AccountServiceOverride from request and existing data.
-func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func buildServiceOverride(accountID, provider, service string, req *AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride {
 	override := &config.AccountServiceOverride{
 		AccountID: accountID,
 		Provider:  provider,
@@ -1113,12 +1114,12 @@ func buildServiceOverride(accountID, provider, service string, req AccountServic
 }
 
 // applyServiceOverrideFields copies sparse request fields onto an override.
-func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func applyServiceOverrideFields(o *config.AccountServiceOverride, req *AccountServiceOverrideRequest) {
 	applyOverrideScalars(o, req)
 	applyOverrideSlices(o, req)
 }
 
-func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func applyOverrideScalars(o *config.AccountServiceOverride, req *AccountServiceOverrideRequest) {
 	if req.Enabled != nil {
 		o.Enabled = req.Enabled
 	}
@@ -1136,7 +1137,7 @@ func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOv
 	}
 }
 
-func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) { //nolint:gocritic // hugeParam: req kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func applyOverrideSlices(o *config.AccountServiceOverride, req *AccountServiceOverrideRequest) {
 	if req.IncludeEngines != nil {
 		o.IncludeEngines = req.IncludeEngines
 	}
@@ -1472,7 +1473,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 // runOrgDiscovery dispatches to the configured discovery function — the
 // injectable seam Handler.discoverOrgFn for tests, falling back to the real
 // accounts.DiscoverOrgAccounts in production.
-func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: cfg kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: cfg is the aws.Config SDK value type; this matches accounts.DiscoverOrgAccounts and the discoverOrgFn seam, which mirror the AWS SDK's by-value convention
 	discoverFn := h.discoverOrgFn
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts

@@ -101,7 +101,7 @@ type Scheduler struct {
 const defaultCacheTTL = 6 * time.Hour
 
 // NewScheduler creates a new scheduler.
-func NewScheduler(cfg SchedulerConfig) *Scheduler { //nolint:gocritic // hugeParam: cfg kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func NewScheduler(cfg *SchedulerConfig) *Scheduler {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -201,10 +201,15 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	// deterministic regardless of goroutine completion order. After Wait, ctx
 	// cancellation is propagated. No concurrency cap — the universe is at
 	// most 3 providers.
-	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, err := s.collectAllProviders(ctx, globalCfg)
+	collected, err := s.collectAllProviders(ctx, globalCfg)
 	if err != nil {
 		return nil, err
 	}
+	allRecommendations := collected.allRecommendations
+	totalSavings := collected.totalSavings
+	successfulProviders := collected.successfulProviders
+	successfulCollects := collected.successfulCollects
+	failedProviders := collected.failedProviders
 
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
 		len(allRecommendations), totalSavings)
@@ -222,10 +227,11 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 			DashboardURL: s.dashboardURL,
 			TotalSavings: totalSavings,
 		}
-		for _, rec := range allRecommendations { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+		for i := range allRecommendations {
 			if len(data.Recommendations) >= 10 { // Limit to top 10 in email
 				break
 			}
+			rec := &allRecommendations[i]
 			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 				Service:        rec.Service,
 				ResourceType:   rec.ResourceType,
@@ -288,16 +294,19 @@ type providerOutcome struct {
 // project's gocyclo gate (.golangci.yml min-complexity: 15) after the
 // errgroup + post-Wait ctx.Err() block was added.
 //
-//nolint:gocritic // tooManyResults: returns the 6 per-provider aggregate outputs by value; bundling into a result struct is a larger refactor that touches the single caller and its tests, out of scope for this lint pass
-func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (
-	allRecommendations []config.RecommendationRecord,
-	totalSavings float64,
-	successfulProviders []string,
-	successfulCollects []config.SuccessfulCollect,
-	failedProviders map[string]string,
-	err error,
-) {
-	failedProviders = map[string]string{}
+// collectAllResult bundles the per-provider aggregate outputs so
+// collectAllProviders returns a single value (avoids the >5-result signature).
+type collectAllResult struct {
+	failedProviders     map[string]string
+	allRecommendations  []config.RecommendationRecord
+	successfulProviders []string
+	successfulCollects  []config.SuccessfulCollect
+	totalSavings        float64
+}
+
+func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (collectAllResult, error) {
+	var out collectAllResult
+	out.failedProviders = map[string]string{}
 
 	var (
 		mu       sync.Mutex
@@ -330,33 +339,33 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 	// cancellation when every goroutine returns nil, so check ctx.Err()
 	// separately afterwards.
 	if waitErr := g.Wait(); waitErr != nil {
-		return nil, 0, nil, nil, nil, fmt.Errorf("scheduler: collectAllProviders wait failed: %w", waitErr)
+		return collectAllResult{}, fmt.Errorf("scheduler: collectAllProviders wait failed: %w", waitErr)
 	}
 	if cerr := ctx.Err(); cerr != nil {
-		return nil, 0, nil, nil, nil, cerr
+		return collectAllResult{}, cerr
 	}
 
 	// Deterministic merge: walk EnabledProviders in config order so
 	// successfulProviders ordering is independent of goroutine completion
 	// order — keeps existing tests stable.
 	for _, providerName := range globalCfg.EnabledProviders {
-		out, ok := outcomes[providerName]
+		oc, ok := outcomes[providerName]
 		if !ok {
 			continue
 		}
-		if out.err != nil {
-			logging.Errorf("Failed to collect %s recommendations: %v", providerName, out.err)
-			failedProviders[providerName] = out.err.Error()
+		if oc.err != nil {
+			logging.Errorf("Failed to collect %s recommendations: %v", providerName, oc.err)
+			out.failedProviders[providerName] = oc.err.Error()
 			continue
 		}
-		successfulProviders = append(successfulProviders, providerName)
-		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
-		for _, rec := range out.recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
-			totalSavings += rec.Savings
+		out.successfulProviders = append(out.successfulProviders, providerName)
+		out.successfulCollects = append(out.successfulCollects, expandSuccessfulCollects(providerName, oc.succeededAccountIDs)...)
+		for i := range oc.recs {
+			out.totalSavings += oc.recs[i].Savings
 		}
-		allRecommendations = append(allRecommendations, out.recs...)
+		out.allRecommendations = append(out.allRecommendations, oc.recs...)
 	}
-	return allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, nil
+	return out, nil
 }
 
 // clearCollectionStartedBestEffort clears last_collection_started_at on the
@@ -463,7 +472,7 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return recs, []string{""}, nil
 	}
 
-	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return s.collectAWSForAccount(ctx, globalCfg, acct)
 	})
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
@@ -508,7 +517,7 @@ func fanOutPerAccount(
 	ctx context.Context,
 	providerLabel string,
 	accounts []config.CloudAccount,
-	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error),
+	fn func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error),
 ) ([]config.RecommendationRecord, accountOutcome) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(execution.ConcurrencyFromEnv())
@@ -520,7 +529,7 @@ func fanOutPerAccount(
 	var outcome accountOutcome
 
 	for i := range accounts {
-		acct := accounts[i] // per-iteration copy for the goroutine closure
+		acct := &accounts[i] // per-iteration pointer for the goroutine closure
 		g.Go(func() error {
 			recs, err := fn(gctx, acct)
 			if err != nil {
@@ -705,7 +714,7 @@ func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.Recommendat
 	return s.convertRecommendations(recs, "gcp"), nil
 }
 
-func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: acct kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 	// Self-account (role_arn with no role ARN) or ambient modes use ambient credentials
 	if acct.AWSRoleARN == "" {
 		prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
@@ -714,7 +723,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
@@ -762,8 +771,8 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: acct kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
-	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
+func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
+	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, acct, s.credStore, credentials.AzureResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
 	})
@@ -823,8 +832,8 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: acct kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
-	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &acct, s.credStore, credentials.GCPResolveOptions{
+func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
+	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, acct, s.credStore, credentials.GCPResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
 	})
@@ -925,7 +934,7 @@ func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID str
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
-func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: filter kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: filter is value-typed to match the server SchedulerInterface contract (pointer-izing requires the cross-cutting interface + mocks cascade tracked for #1276)
 	logging.Info("Reading recommendations from cache...")
 
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
@@ -1143,7 +1152,8 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 	// Allocate a fresh backing array so callers that hold a reference to
 	// the original recs slice do not see mutations (05-M1).
 	out := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range recs {
+		rec := recs[i] // explicit working copy: this loop mutates rec before appending
 		accountID := ""
 		if rec.CloudAccountID != nil {
 			accountID = *rec.CloudAccountID
@@ -1264,7 +1274,7 @@ func extractEngine(details common.ServiceDetails) string {
 // without Details and falls through to the graceful-degradation path in
 // common.DecodeServiceDetailsFor. Extracted from convertRecommendations
 // to keep that function under the gocyclo budget.
-func marshalRecDetails(rec common.Recommendation, providerName string) []byte { //nolint:gocritic // hugeParam: rec kept by value (interface/contract shape or range-fed family); pointer conversion is broad aliasing-prone churn for a marginal copy saving
+func marshalRecDetails(rec *common.Recommendation, providerName string) []byte {
 	blob, err := common.MarshalServiceDetails(rec.Details)
 	if err != nil {
 		logging.Warnf("Failed to marshal service details for %s/%s rec (%s): %v — persisting without Details",
@@ -1278,9 +1288,10 @@ func marshalRecDetails(rec common.Recommendation, providerName string) []byte { 
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 
-	for _, rec := range recs { //nolint:gocritic // rangeValCopy: read-only loop over a large element; index-based iteration is a micro-optimization not worth the readability cost here
+	for i := range recs {
+		rec := recs[i] // explicit working copy: this loop mutates rec.PaymentOption below
 		engine := extractEngine(rec.Details)
-		detailsBlob := marshalRecDetails(rec, providerName)
+		detailsBlob := marshalRecDetails(&rec, providerName)
 
 		// Canonicalize PaymentOption at the emission boundary so a downstream
 		// plan-validator round-trip never sees a cross-provider/AWS-style

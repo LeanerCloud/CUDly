@@ -72,7 +72,7 @@ func TestNewHandler_CommitmentOptsWired(t *testing.T) {
 	// (via a field rename or accidental removal) would re-introduce the
 	// "endpoint always returns unavailable" bug we already fixed once.
 	stub := &stubCommitmentOpts{}
-	h := NewHandler(HandlerConfig{CommitmentOpts: stub})
+	h := NewHandler(&HandlerConfig{CommitmentOpts: stub})
 	require.Same(t, stub, h.commitmentOpts)
 }
 

@@ -52,11 +52,12 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	now := time.Now()
 
 	commitments := make([]InventoryCommitment, 0, len(purchases))
-	for _, p := range purchases {
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
-		commitments = append(commitments, buildInventoryCommitment(p, nameByID[p.AccountID]))
+		commitments = append(commitments, buildInventoryCommitment(*p, nameByID[p.AccountID]))
 	}
 
 	// Soonest-expiring first. The dashboard framing is "what do I need to
@@ -136,7 +137,7 @@ func buildInventoryCommitment(p config.PurchaseHistoryRecord, accountName string
 		TermYears:        p.Term,
 		PaymentOption:    p.Payment,
 		StartDate:        p.Timestamp,
-		EndDate:          commitmentExpiry(p),
+		EndDate:          commitmentExpiry(&p),
 		UpfrontCost:      p.UpfrontCost,
 		MonthlyCost:      p.MonthlyCost,
 		EstimatedSavings: p.EstimatedSavings,
@@ -184,11 +185,12 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	// registers as covered instead of being silently dropped (issue: Azure
 	// showed $0 coverage while the dashboard reported active commitments).
 	coveredByKey := make(map[string]float64)
-	for _, p := range purchases {
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
-		coveredByKey[p.Provider+":"+p.Service] += commitmentCoveredMonthly(p)
+		coveredByKey[p.Provider+":"+p.Service] += commitmentCoveredMonthly(*p)
 	}
 
 	// --- on-demand gap: recommendations -------------------------------------
