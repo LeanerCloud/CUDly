@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,6 +17,10 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/spf13/cobra"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/cloudresourcemanager/v1"
+	iamv1 "google.golang.org/api/iam/v1"
+	"google.golang.org/api/option"
 )
 
 // gcpProjectIDRegex validates GCP project IDs (lowercase letters, digits, hyphens, 6-30 chars)
@@ -135,7 +140,7 @@ func runConfigureGCP(cmd *cobra.Command, args []string) error {
 	fmt.Println("===================================================")
 	fmt.Println()
 
-	credsFile, err := getGCPCredentialsFilePath(reader)
+	credsFile, err := getGCPCredentialsFilePath(ctx, reader)
 	if err != nil {
 		return err
 	}
@@ -162,14 +167,14 @@ func runConfigureGCP(cmd *cobra.Command, args []string) error {
 }
 
 // getGCPCredentialsFilePath determines the credentials file path from options or user input
-func getGCPCredentialsFilePath(reader *bufio.Reader) (string, error) {
+func getGCPCredentialsFilePath(ctx context.Context, reader *bufio.Reader) (string, error) {
 	var credsFile string
 
 	if gcpOpts.CredentialsFile != "" {
 		credsFile = gcpOpts.CredentialsFile
 	} else if !gcpOpts.SkipSetup {
 		var err error
-		credsFile, err = runGCPSetupCommands(reader)
+		credsFile, err = runGCPSetupCommands(ctx, reader)
 		if err != nil {
 			return "", err
 		}
@@ -251,25 +256,240 @@ func printGCPConfigurationSuccess(creds GCPCredentials) {
 	fmt.Println("\nCUDly can now manage GCP Committed Use Discounts.")
 }
 
-// runGCPSetupCommands runs the GCP CLI commands interactively
-func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
-	fmt.Println("Step 1: GCP Login")
-	fmt.Println("-----------------")
-	fmt.Println("This will open a browser window for GCP authentication.")
-	fmt.Println()
+// newGCPAPIOption returns an oauth2 token source option for the google.golang.org
+// API client, using Application Default Credentials. ADC resolves credentials in
+// priority order: GOOGLE_APPLICATION_CREDENTIALS env var, gcloud ADC cache
+// (populated by "gcloud auth application-default login"), Workload Identity,
+// Metadata Server.
+//
+// NOTE: "gcloud auth login" (wizard Step 1) updates the gcloud user session but
+// does NOT automatically populate the ADC cache. If the operator intends to use
+// these SDK calls after Step 1, they should also run:
+//
+//	gcloud auth application-default login
+//
+// The wizard Step 3 onwards will call this function; if ADC is not available the
+// calls will fail and the wizard suggests the manual gcloud CLI fallback.
+func newGCPAPIOption(ctx context.Context) (option.ClientOption, error) {
+	ts, err := google.DefaultTokenSource(ctx,
+		"https://www.googleapis.com/auth/cloud-platform",
+		"https://www.googleapis.com/auth/iam",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain GCP Application Default Credentials: %w\n"+
+			"Hint: run 'gcloud auth application-default login' first", err)
+	}
+	return option.WithTokenSource(ts), nil
+}
 
-	if err := promptAndRunGCPCommand(reader, "GCP Login", "gcloud auth login", "gcloud", "auth", "login"); err != nil {
+// listGCPProjects lists GCP projects accessible to the operator via the Cloud
+// Resource Manager API v1 and prints them in a table. This replaces the
+// "gcloud projects list" CLI call.
+func listGCPProjects(ctx context.Context) error {
+	opt, err := newGCPAPIOption(ctx)
+	if err != nil {
+		return err
+	}
+
+	svc, err := cloudresourcemanager.NewService(ctx, opt)
+	if err != nil {
+		return fmt.Errorf("failed to create resource manager client: %w", err)
+	}
+
+	fmt.Printf("%-30s  %-25s  %s\n", "NAME", "PROJECT_ID", "PROJECT_NUMBER")
+	fmt.Println(strings.Repeat("-", 80))
+
+	req := svc.Projects.List()
+	if err := req.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
+		for _, p := range page.Projects {
+			fmt.Printf("%-30s  %-25s  %d\n", p.Name, p.ProjectId, p.ProjectNumber)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to list GCP projects: %w", err)
+	}
+	return nil
+}
+
+// createGCPServiceAccount creates a GCP IAM service account via the IAM API v1.
+// This replaces "gcloud iam service-accounts create".
+func createGCPServiceAccount(ctx context.Context, projectID, saName string) (string, error) {
+	opt, err := newGCPAPIOption(ctx)
+	if err != nil {
 		return "", err
 	}
 
+	svc, err := iamv1.NewService(ctx, opt)
+	if err != nil {
+		return "", fmt.Errorf("failed to create IAM client: %w", err)
+	}
+
+	req := &iamv1.CreateServiceAccountRequest{
+		AccountId: saName,
+		ServiceAccount: &iamv1.ServiceAccount{
+			DisplayName: "CUDly Service Account",
+			Description: "Service account for CUDly commitment management",
+		},
+	}
+
+	sa, err := svc.Projects.ServiceAccounts.Create("projects/"+projectID, req).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to create service account: %w", err)
+	}
+
+	return sa.Email, nil
+}
+
+// grantGCPIAMRole grants an IAM role to a service account on a project via the
+// Cloud Resource Manager API v1. This replaces
+// "gcloud projects add-iam-policy-binding".
+func grantGCPIAMRole(ctx context.Context, projectID, member, role string) error {
+	opt, err := newGCPAPIOption(ctx)
+	if err != nil {
+		return err
+	}
+
+	svc, err := cloudresourcemanager.NewService(ctx, opt)
+	if err != nil {
+		return fmt.Errorf("failed to create resource manager client: %w", err)
+	}
+
+	// Get current policy.
+	policy, err := svc.Projects.GetIamPolicy(projectID, &cloudresourcemanager.GetIamPolicyRequest{}).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("failed to get IAM policy for project %s: %w", projectID, err)
+	}
+
+	// Append the binding (or extend existing one).
+	found := false
+	for _, b := range policy.Bindings {
+		if b.Role == role {
+			for _, m := range b.Members {
+				if m == member {
+					// Already bound; nothing to do.
+					return nil
+				}
+			}
+			b.Members = append(b.Members, member)
+			found = true
+			break
+		}
+	}
+	if !found {
+		policy.Bindings = append(policy.Bindings, &cloudresourcemanager.Binding{
+			Role:    role,
+			Members: []string{member},
+		})
+	}
+	_, err = svc.Projects.SetIamPolicy(projectID, &cloudresourcemanager.SetIamPolicyRequest{
+		Policy: policy,
+	}).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("failed to set IAM policy on project %s: %w", projectID, err)
+	}
+	return nil
+}
+
+// createGCPServiceAccountKey creates a JSON key for the given service account
+// and writes it to keyFile. Returns the path written. This replaces
+// "gcloud iam service-accounts keys create <file> --iam-account=<sa>".
+func createGCPServiceAccountKey(ctx context.Context, saEmail, keyFile string) error {
+	opt, err := newGCPAPIOption(ctx)
+	if err != nil {
+		return err
+	}
+
+	svc, err := iamv1.NewService(ctx, opt)
+	if err != nil {
+		return fmt.Errorf("failed to create IAM client: %w", err)
+	}
+
+	resource := fmt.Sprintf("projects/-/serviceAccounts/%s", saEmail)
+	key, err := svc.Projects.ServiceAccounts.Keys.Create(resource, &iamv1.CreateServiceAccountKeyRequest{
+		PrivateKeyType: "TYPE_GOOGLE_CREDENTIALS_FILE",
+	}).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("failed to create service account key: %w", err)
+	}
+
+	// PrivateKeyData is base64-encoded JSON.
+	decoded, err := base64.StdEncoding.DecodeString(key.PrivateKeyData)
+	if err != nil {
+		return fmt.Errorf("failed to decode key data: %w", err)
+	}
+
+	if err := os.WriteFile(keyFile, decoded, 0600); err != nil {
+		return fmt.Errorf("failed to write key file %s: %w", keyFile, err)
+	}
+	return nil
+}
+
+// runGCPSetupCommands guides the operator through GCP setup.
+//
+// Step 1 (gcloud auth login): performed via the GCP CLI. This is an
+// interactive browser-based OAuth flow that cannot be replicated through SDK
+// calls on behalf of an operator who does not yet have a credential. It
+// updates the gcloud user session but does NOT populate the ADC cache needed
+// by subsequent SDK calls. Operators must also run
+// "gcloud auth application-default login" if they want to use ADC.
+//
+// Step 2 (list projects): performed via the Cloud Resource Manager SDK v1,
+// using Application Default Credentials (ADC). Falls back to "gcloud projects
+// list" if ADC is not available.
+//
+// Step 3 (gcloud config set project): sets local gcloud config state. There is
+// no cloud-API equivalent for writing to the local gcloud configuration file,
+// so this step remains a CLI call.
+//
+// Steps 4-6 (create SA, grant role, create key): performed via GCP IAM and
+// Cloud Resource Manager SDK v1 APIs using ADC. Fall back to the gcloud CLI
+// if ADC is not available.
+func runGCPSetupCommands(ctx context.Context, reader *bufio.Reader) (string, error) {
+	if err := gcpStepLogin(reader); err != nil {
+		return "", err
+	}
+
+	projectID, err := gcpStepSelectProject(ctx, reader)
+	if err != nil {
+		return "", err
+	}
+
+	saEmail, err := gcpStepCreateServiceAccount(ctx, reader, projectID)
+	if err != nil {
+		return "", err
+	}
+
+	if err := gcpStepGrantRole(ctx, reader, projectID, saEmail); err != nil {
+		return "", err
+	}
+
+	return gcpStepCreateKey(ctx, reader, saEmail)
+}
+
+// gcpStepLogin runs "gcloud auth login" interactively.
+func gcpStepLogin(reader *bufio.Reader) error {
+	fmt.Println("Step 1: GCP Login")
+	fmt.Println("-----------------")
+	fmt.Println("This will open a browser window for GCP authentication.")
+	fmt.Println("After logging in, also run: gcloud auth application-default login")
+	fmt.Println("(required for the SDK-based steps below)")
+	fmt.Println()
+	return promptAndRunGCPCommand(reader, "GCP Login", "gcloud auth login", "gcloud", "auth", "login")
+}
+
+// gcpStepSelectProject lists projects and prompts for a project ID.
+func gcpStepSelectProject(ctx context.Context, reader *bufio.Reader) (string, error) {
 	fmt.Println()
 	fmt.Println("Step 2: Select Project")
 	fmt.Println("----------------------")
-	fmt.Println("List your GCP projects:")
+	fmt.Println("Listing your GCP projects via SDK (Application Default Credentials)...")
 	fmt.Println()
 
-	if err := promptAndRunGCPCommand(reader, "List Projects", "gcloud projects list", "gcloud", "projects", "list"); err != nil {
-		return "", err
+	if err := listGCPProjects(ctx); err != nil {
+		fmt.Printf("SDK project list failed (%v); falling back to gcloud.\n\n", err)
+		if cliErr := promptAndRunGCPCommand(reader, "List Projects", "gcloud projects list", "gcloud", "projects", "list"); cliErr != nil {
+			return "", cliErr
+		}
 	}
 
 	fmt.Println()
@@ -280,81 +500,131 @@ func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	if projectID == "" {
 		return "", fmt.Errorf("project ID is required")
 	}
-
-	// Validate project ID to prevent command injection
 	if err := validateGCPProjectID(projectID); err != nil {
 		return "", err
 	}
 
-	// Set the project - use exec.Command with arguments instead of shell
+	// Set the project in the local gcloud config. This is a local operation
+	// (writes to ~/.config/gcloud/properties) with no cloud-API equivalent.
 	fmt.Println()
-	fmt.Println("Setting project...")
+	fmt.Println("Setting gcloud project context (local config)...")
 	cmd := exec.Command("gcloud", "config", "set", "project", projectID)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("failed to set project: %w", err)
 	}
+	return projectID, nil
+}
+
+// gcpStepCreateServiceAccount creates the CUDly service account via SDK with
+// a gcloud CLI fallback.
+func gcpStepCreateServiceAccount(ctx context.Context, reader *bufio.Reader, projectID string) (string, error) {
+	saName := "cudly-service-account"
+	saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, projectID)
 
 	fmt.Println()
 	fmt.Println("Step 3: Create Service Account")
 	fmt.Println("------------------------------")
-	fmt.Println("This creates a GCP Service Account for CUDly.")
+	fmt.Println("This creates a GCP Service Account for CUDly via the IAM API.")
 	fmt.Println()
+	fmt.Printf("[R]un, [S]kip? (creates service account '%s' via SDK) ", saName)
 
-	saName := "cudly-service-account"
-	createSaDisplay := fmt.Sprintf(`gcloud iam service-accounts create %s --display-name="CUDly Service Account" --description="Service account for CUDly commitment management"`, saName)
-
-	if err := promptAndRunGCPCommand(reader, "Create Service Account", createSaDisplay,
-		"gcloud", "iam", "service-accounts", "create", saName,
-		"--display-name=CUDly Service Account",
-		"--description=Service account for CUDly commitment management"); err != nil {
-		return "", err
+	choice, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "r", "run", "":
+		email, sdkErr := createGCPServiceAccount(ctx, projectID, saName)
+		if sdkErr != nil {
+			fmt.Printf("SDK call failed (%v); falling back to gcloud.\n", sdkErr)
+			display := fmt.Sprintf(`gcloud iam service-accounts create %s --display-name="CUDly Service Account" --description="Service account for CUDly commitment management"`, saName)
+			if err := promptAndRunGCPCommand(reader, "Create Service Account", display,
+				"gcloud", "iam", "service-accounts", "create", saName,
+				"--display-name=CUDly Service Account",
+				"--description=Service account for CUDly commitment management"); err != nil {
+				return "", err
+			}
+		} else {
+			saEmail = email
+			fmt.Printf("Service account created: %s\n", saEmail)
+		}
+	case "s", "skip":
+		fmt.Println("Skipping Create Service Account")
+	default:
+		fmt.Printf("Unknown option, skipping\n")
 	}
+	return saEmail, nil
+}
+
+// gcpStepGrantRole grants the compute.admin role to the service account.
+func gcpStepGrantRole(ctx context.Context, reader *bufio.Reader, projectID, saEmail string) error {
+	member := fmt.Sprintf("serviceAccount:%s", saEmail)
+	role := "roles/compute.admin"
 
 	fmt.Println()
 	fmt.Println("Step 4: Grant IAM Roles")
 	fmt.Println("-----------------------")
 	fmt.Println("Grant the required roles to the service account.")
 	fmt.Println()
+	fmt.Printf("[R]un, [S]kip? (grants %s to %s on project %s via SDK) ", role, saEmail, projectID)
 
-	saEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", saName, projectID)
-
-	// Grant Compute Admin role for commitment management
-	grantRoleDisplay := fmt.Sprintf(`gcloud projects add-iam-policy-binding %s --member="serviceAccount:%s" --role="roles/compute.admin"`, projectID, saEmail)
-
-	if err := promptAndRunGCPCommand(reader, "Grant Compute Admin Role", grantRoleDisplay,
-		"gcloud", "projects", "add-iam-policy-binding", projectID,
-		fmt.Sprintf("--member=serviceAccount:%s", saEmail),
-		"--role=roles/compute.admin"); err != nil {
-		return "", err
+	choice, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "r", "run", "":
+		if sdkErr := grantGCPIAMRole(ctx, projectID, member, role); sdkErr != nil {
+			fmt.Printf("SDK call failed (%v); falling back to gcloud.\n", sdkErr)
+			display := fmt.Sprintf(`gcloud projects add-iam-policy-binding %s --member="%s" --role="%s"`, projectID, member, role)
+			return promptAndRunGCPCommand(reader, "Grant Compute Admin Role", display,
+				"gcloud", "projects", "add-iam-policy-binding", projectID,
+				fmt.Sprintf("--member=%s", member),
+				fmt.Sprintf("--role=%s", role))
+		}
+		fmt.Printf("Role %s granted to %s on project %s.\n", role, saEmail, projectID)
+	case "s", "skip":
+		fmt.Println("Skipping Grant IAM Roles")
+	default:
+		fmt.Printf("Unknown option, skipping\n")
 	}
+	return nil
+}
 
-	fmt.Println()
-	fmt.Println("Step 5: Create and Download Key")
-	fmt.Println("-------------------------------")
-	fmt.Println("Create a JSON key file for the service account.")
-	fmt.Println()
-
-	// Get home directory for default key path
+// gcpStepCreateKey creates a JSON key file for the service account.
+func gcpStepCreateKey(ctx context.Context, reader *bufio.Reader, saEmail string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 	keyFile := filepath.Join(home, "cudly-gcp-key.json")
 
-	createKeyDisplay := fmt.Sprintf(`gcloud iam service-accounts keys create %s --iam-account=%s`, keyFile, saEmail)
+	fmt.Println()
+	fmt.Println("Step 5: Create and Download Key")
+	fmt.Println("-------------------------------")
+	fmt.Println("Create a JSON key file for the service account.")
+	fmt.Println()
+	fmt.Printf("[R]un, [S]kip? (creates key for %s, writes to %s via SDK) ", saEmail, keyFile)
 
-	if err := promptAndRunGCPCommand(reader, "Create Key File", createKeyDisplay,
-		"gcloud", "iam", "service-accounts", "keys", "create", keyFile,
-		fmt.Sprintf("--iam-account=%s", saEmail)); err != nil {
-		return "", err
+	choice, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "r", "run", "":
+		if sdkErr := createGCPServiceAccountKey(ctx, saEmail, keyFile); sdkErr != nil {
+			fmt.Printf("SDK call failed (%v); falling back to gcloud.\n", sdkErr)
+			display := fmt.Sprintf(`gcloud iam service-accounts keys create %s --iam-account=%s`, keyFile, saEmail)
+			if err := promptAndRunGCPCommand(reader, "Create Key File", display,
+				"gcloud", "iam", "service-accounts", "keys", "create", keyFile,
+				fmt.Sprintf("--iam-account=%s", saEmail)); err != nil {
+				return "", err
+			}
+		} else {
+			fmt.Printf("Key file written to: %s\n", keyFile)
+		}
+	case "s", "skip":
+		fmt.Println("Skipping Create Key")
+	default:
+		fmt.Printf("Unknown option, skipping\n")
 	}
 
 	fmt.Println()
-	fmt.Printf("Key file created at: %s\n", keyFile)
+	fmt.Printf("Key file at: %s\n", keyFile)
 	fmt.Println()
-
 	return keyFile, nil
 }
 

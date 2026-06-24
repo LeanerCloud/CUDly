@@ -12,6 +12,10 @@ import (
 	"strings"
 	"syscall"
 
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -63,7 +67,7 @@ You can provide credentials via flags or interactively:
   cudly configure-azure --stack-name my-cudly --tenant-id xxx --client-id xxx --client-secret xxx --subscription-id xxx
   cudly configure-azure --stack-name my-cudly --interactive
 
-To create an Azure Service Principal:
+To create an Azure Service Principal manually:
   az login
   az ad sp create-for-rbac --name "CUDly" --role "Reservation Administrator" --scopes /subscriptions/<subscription-id>`,
 	RunE: runConfigureAzure,
@@ -140,7 +144,7 @@ func runConfigureAzure(cmd *cobra.Command, args []string) error {
 
 	// Run Azure CLI setup if not skipped
 	if !azureOpts.SkipSetup {
-		if err := runAzureSetupCommands(reader); err != nil {
+		if err := runAzureSetupCommands(ctx, reader); err != nil {
 			return err
 		}
 	}
@@ -254,25 +258,106 @@ func promptForAzureCredentialFields(reader *bufio.Reader, creds *AzureCredential
 	return nil
 }
 
-// runAzureSetupCommands runs the Azure CLI commands interactively
-func runAzureSetupCommands(reader *bufio.Reader) error {
+// listAzureSubscriptions retrieves the operator's subscriptions via the ARM
+// Subscriptions SDK and prints them in a table matching "az account list"
+// output. DefaultAzureCredential picks up the "az login" session via its
+// AzureCLICredential leg so the operator's active session is reused.
+func listAzureSubscriptions(ctx context.Context) error {
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return fmt.Errorf("failed to build credential: %w", err)
+	}
+
+	client, err := armsubscriptions.NewClient(cred, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create subscriptions client: %w", err)
+	}
+
+	fmt.Printf("%-40s  %-38s  %s\n", "Name", "SubscriptionId", "State")
+	fmt.Println(strings.Repeat("-", 95))
+
+	pager := client.NewListPager(nil)
+	for pager.More() {
+		page, pageErr := pager.NextPage(ctx)
+		if pageErr != nil {
+			return fmt.Errorf("failed to list subscriptions: %w", pageErr)
+		}
+		for _, sub := range page.Value {
+			name := ""
+			subID := ""
+			state := ""
+			if sub.DisplayName != nil {
+				name = *sub.DisplayName
+			}
+			if sub.SubscriptionID != nil {
+				subID = *sub.SubscriptionID
+			}
+			if sub.State != nil {
+				state = string(*sub.State)
+			}
+			fmt.Printf("%-40s  %-38s  %s\n", name, subID, state)
+		}
+	}
+	return nil
+}
+
+// runAzureSetupCommands guides the operator through the Azure setup wizard.
+//
+// Step 1 (az login): performed via the Azure CLI. "az login" launches an
+// interactive browser-based OAuth flow that cannot be replicated through the
+// SDK on behalf of a human operator who does not yet have a credential.
+//
+// Step 2 (list subscriptions): performed via the ARM Subscriptions SDK.
+// DefaultAzureCredential automatically picks up the session that "az login"
+// just established (via its AzureCLICredential leg), so no extra auth step is
+// required.
+//
+// Step 3 (create service principal): performed via the Azure CLI
+// (az ad sp create-for-rbac). Creating an AAD application + service principal
+// + password credential via the Microsoft Graph SDK would require adding the
+// msgraph-sdk-go and armauthorization/v2 packages (currently not in the module
+// graph). The CLI path is safe because arguments are passed directly to
+// exec.Command without shell interpolation, and the subscription ID is
+// validated as a UUID before use.
+func runAzureSetupCommands(ctx context.Context, reader *bufio.Reader) error {
+	if err := azureStepLogin(reader); err != nil {
+		return err
+	}
+
+	subscriptionID, err := azureStepListSubscriptions(ctx, reader)
+	if err != nil {
+		return err
+	}
+
+	return azureStepCreateServicePrincipal(reader, subscriptionID)
+}
+
+// azureStepLogin prompts to run "az login".
+func azureStepLogin(reader *bufio.Reader) error {
 	fmt.Println("Step 1: Azure Login")
 	fmt.Println("-------------------")
 	fmt.Println("This will open a browser window for Azure authentication.")
 	fmt.Println()
+	return promptAndRunExplicitCommand(reader, "Azure Login", "az login", "az", "login")
+}
 
-	if err := promptAndRunExplicitCommand(reader, "Azure Login", "az login", "az", "login"); err != nil {
-		return err
-	}
-
+// azureStepListSubscriptions lists subscriptions via SDK (with CLI fallback)
+// and prompts the operator to enter their subscription ID.
+func azureStepListSubscriptions(ctx context.Context, reader *bufio.Reader) (string, error) {
 	fmt.Println()
 	fmt.Println("Step 2: Get Subscription ID")
 	fmt.Println("---------------------------")
-	fmt.Println("List your Azure subscriptions to find the Subscription ID:")
+	fmt.Println("Listing your Azure subscriptions via SDK (DefaultAzureCredential)...")
 	fmt.Println()
 
-	if err := promptAndRunExplicitCommand(reader, "List Subscriptions", "az account list --output table", "az", "account", "list", "--output", "table"); err != nil {
-		return err
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := listAzureSubscriptions(listCtx); err != nil {
+		fmt.Printf("SDK subscription list failed (%v); falling back to az account list.\n\n", err)
+		if cliErr := promptAndRunExplicitCommand(reader, "List Subscriptions", "az account list --output table", "az", "account", "list", "--output", "table"); cliErr != nil {
+			return "", cliErr
+		}
 	}
 
 	fmt.Println()
@@ -281,22 +366,23 @@ func runAzureSetupCommands(reader *bufio.Reader) error {
 	subscriptionID = strings.TrimSpace(subscriptionID)
 
 	if subscriptionID == "" {
-		return fmt.Errorf("subscription ID is required")
+		return "", fmt.Errorf("subscription ID is required")
 	}
-
-	// Validate subscription ID to prevent command injection
 	if err := validateAzureUUID(subscriptionID, "Subscription ID"); err != nil {
-		return err
+		return "", err
 	}
+	return subscriptionID, nil
+}
 
+// azureStepCreateServicePrincipal prompts to run az ad sp create-for-rbac.
+func azureStepCreateServicePrincipal(reader *bufio.Reader, subscriptionID string) error {
 	fmt.Println()
 	fmt.Println("Step 3: Create Service Principal")
 	fmt.Println("---------------------------------")
 	fmt.Println("This creates an Azure Service Principal with Reservation Administrator role.")
 	fmt.Println()
 
-	// Build the create SP command - run directly without shell to avoid injection
-	// Using exec.Command directly with proper arguments
+	// Run directly without shell to avoid injection; subscription ID is UUID-validated above.
 	fmt.Printf("Command: az ad sp create-for-rbac --name CUDly --role \"Reservations Administrator\" --scopes /subscriptions/%s\n", subscriptionID)
 	fmt.Println()
 	fmt.Printf("[R]un, [S]kip? ")
@@ -305,24 +391,9 @@ func runAzureSetupCommands(reader *bufio.Reader) error {
 	choice = strings.ToLower(strings.TrimSpace(choice))
 
 	if choice == "r" || choice == "run" || choice == "" {
-		fmt.Println()
-		fmt.Println(strings.Repeat("-", 60))
-		cmd := exec.Command("az", "ad", "sp", "create-for-rbac",
-			"--name", "CUDly",
-			"--role", "Reservations Administrator",
-			"--scopes", fmt.Sprintf("/subscriptions/%s", subscriptionID))
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Command failed: %v\n", err)
-			fmt.Print("Continue anyway? [y/N]: ")
-			response, _ := reader.ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(response)) != "y" {
-				return fmt.Errorf("failed to create service principal: %w", err)
-			}
+		if err := runCreateSPCommand(reader, subscriptionID); err != nil {
+			return err
 		}
-		fmt.Println(strings.Repeat("-", 60))
 	} else {
 		fmt.Println("Skipping Create Service Principal")
 	}
@@ -335,6 +406,30 @@ func runAzureSetupCommands(reader *bufio.Reader) error {
 	fmt.Printf("  - Subscription ID: %s\n", subscriptionID)
 	fmt.Println()
 
+	return nil
+}
+
+// runCreateSPCommand executes az ad sp create-for-rbac with a continue-anyway
+// prompt on failure.
+func runCreateSPCommand(reader *bufio.Reader, subscriptionID string) error {
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 60))
+	cmd := exec.Command("az", "ad", "sp", "create-for-rbac",
+		"--name", "CUDly",
+		"--role", "Reservations Administrator",
+		"--scopes", fmt.Sprintf("/subscriptions/%s", subscriptionID))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Command failed: %v\n", err)
+		fmt.Print("Continue anyway? [y/N]: ")
+		response, _ := reader.ReadString('\n')
+		if strings.ToLower(strings.TrimSpace(response)) != "y" {
+			return fmt.Errorf("failed to create service principal: %w", err)
+		}
+	}
+	fmt.Println(strings.Repeat("-", 60))
 	return nil
 }
 

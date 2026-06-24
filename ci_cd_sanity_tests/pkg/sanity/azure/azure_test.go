@@ -9,6 +9,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestEncodeAccountJSON verifies that encodeAccountJSON produces bytes that are
+// accepted by validateAccountExpectations without error, and that the ID /
+// TenantID fields survive the round-trip.  This guards the SDK->JSON->validate
+// path introduced when replacing the "az account show" CLI call.
+func TestEncodeAccountJSON(t *testing.T) {
+	info := azureSubscriptionInfo{
+		ID:       "aaaabbbb-1111-2222-3333-ccccddddeeee",
+		TenantID: "ffffgggg-5555-6666-7777-hhhh88889999",
+		Name:     "My Test Sub",
+		State:    "Enabled",
+	}
+
+	encoded := encodeAccountJSON(info)
+	require.NotEmpty(t, encoded, "encoded JSON must not be empty")
+
+	// Must parse back as azAccountShow without error.
+	var parsed azAccountShow
+	require.NoError(t, json.Unmarshal(encoded, &parsed))
+	assert.Equal(t, info.ID, parsed.ID)
+	assert.Equal(t, info.TenantID, parsed.TenantID)
+	assert.Equal(t, info.Name, parsed.Name)
+	assert.Equal(t, info.State, parsed.State)
+
+	// Round-trip through validateAccountExpectations with matching expectations.
+	opts := Options{
+		ExpectedSubID:    info.ID,
+		ExpectedTenantID: info.TenantID,
+	}
+	result := validateAccountExpectations(opts, encoded)
+	assert.Equal(t, report.StatusPass, result.Status, "expected PASS for matching IDs, got: %s", result.Message)
+}
+
+// TestTruncate verifies truncate boundary conditions.
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "ab", truncate("ab", 5))
+	assert.Equal(t, "abcde", truncate("abcde", 5))
+	assert.Equal(t, "abcde...(truncated)", truncate("abcdef", 5))
+}
+
 func accountJSON(id, tenantID, name, state string) []byte {
 	b, err := json.Marshal(azAccountShow{
 		ID:       id,
