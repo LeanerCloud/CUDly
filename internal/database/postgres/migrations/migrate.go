@@ -42,8 +42,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 	defer m.Close()
 
 	// Run migrations
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	if upErr := m.Up(); upErr != nil && !errors.Is(upErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to run migrations: %w", upErr)
 	}
 
 	// Get current version
@@ -447,8 +447,8 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	logMigrateVersion(m, steps)
 
 	// Rollback steps
-	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("failed to rollback migrations: %w", err)
+	if stepErr := m.Steps(-steps); stepErr != nil && !errors.Is(stepErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to rollback migrations: %w", stepErr)
 	}
 
 	version, dirty, err := m.Version()
@@ -482,8 +482,8 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 	}
 	defer m.Close()
 
-	if err := m.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
+	if migErr := m.Migrate(version); migErr != nil && !errors.Is(migErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to migrate to version %d: %w", version, migErr)
 	}
 
 	current, dirty, err := m.Version()
