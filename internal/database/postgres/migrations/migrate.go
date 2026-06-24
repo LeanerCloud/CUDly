@@ -42,13 +42,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 	defer m.Close()
 
 	// Run migrations
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
 	// Get current version
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("failed to get migration version: %w", err)
 	}
 
@@ -373,7 +373,7 @@ func maybeAutoHealDirty(m *migrate.Migrate) error {
 	}
 
 	version, dirty, err := m.Version()
-	if err == migrate.ErrNilVersion {
+	if errors.Is(err, migrate.ErrNilVersion) {
 		// No migrations recorded yet -> nothing to heal.
 		return nil
 	}
@@ -447,12 +447,12 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	logMigrateVersion(m, steps)
 
 	// Rollback steps
-	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
+	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to rollback migrations: %w", err)
 	}
 
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("failed to get migration version: %w", err)
 	}
 
@@ -482,7 +482,7 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 	}
 	defer m.Close()
 
-	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
+	if err := m.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
 	}
 
@@ -515,7 +515,7 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 	defer m.Close()
 
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return 0, false, fmt.Errorf("failed to get migration version: %w", err)
 	}
 

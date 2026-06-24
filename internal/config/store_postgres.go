@@ -86,7 +86,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Return default config if none exists.
 			// Values must align with DefaultSettings in defaults.go and DB DEFAULT clauses.
 			return &GlobalConfig{
@@ -260,7 +260,7 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("service config not found for %s:%s", provider, service)
 		}
 		return nil, fmt.Errorf("failed to get service config: %w", err)
@@ -2268,7 +2268,7 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 	err := s.db.QueryRow(ctx,
 		`SELECT status, (expires_at IS NOT NULL AND expires_at <= NOW()) FROM ri_exchange_history WHERE id = $1`, id,
 	).Scan(&currentStatus, &expired)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("ri exchange record not found: %s", id)
 	}
 	if err != nil {
@@ -2556,7 +2556,7 @@ func (s *PostgresStore) GetCloudAccount(ctx context.Context, id string) (*CloudA
 		&account.CredentialsConfigured,
 	)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get cloud account: %w", err)
@@ -2606,7 +2606,7 @@ func (s *PostgresStore) GetCloudAccountByExternalID(ctx context.Context, provide
 		&account.CredentialsConfigured,
 	)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get cloud account by external id: %w", err)
@@ -2824,7 +2824,7 @@ func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, cre
 		accountID, credentialType,
 	).Scan(&blob)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 		return "", fmt.Errorf("failed to get account credential: %w", err)
@@ -2878,7 +2878,7 @@ func (s *PostgresStore) GetAccountServiceOverride(ctx context.Context, accountID
 		&o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get service override: %w", err)
