@@ -580,9 +580,13 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	// CancelExecutionAtomic and DeleteSuppressionsByExecutionTx use mock defaults
-	// (WithTx calls fn(nil), CancelExecutionAtomic returns canceled=true plus the
-	// persisted cancel status and a nil error).
+	// A scheduled row is canceled via CancelScheduledExecutionAtomic. Stub its
+	// return explicitly (matching the assertion below) rather than leaning on the
+	// shared mock default, so the setup and the asserted status can never drift.
+	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
+		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		Return(true, "cancelled", nil).Once()
+	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	result, err := h.revokePurchase(ctx, sessionReq(), execID)
