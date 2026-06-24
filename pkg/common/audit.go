@@ -41,9 +41,11 @@ func WriteAuditRecord(record *AuditRecord, path string) error {
 // status must be one of: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
 // source is the CUDly surface that triggered the run -- copied into the JSONL so CLI
 // audit logs can be reconciled against the DB's purchase_history.source column.
-func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, status string, dryRun bool, source string) AuditRecord {
+// It returns an error when rec or result is nil rather than panicking, so an
+// exported constructor never crashes on a nil pointer argument.
+func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, status string, dryRun bool, source string) (AuditRecord, error) {
 	if rec == nil || result == nil {
-		panic("NewAuditRecord: rec and result must be non-nil")
+		return AuditRecord{}, fmt.Errorf("NewAuditRecord: rec and result must be non-nil")
 	}
 	errMsg := ""
 	if result.Error != nil {
@@ -69,7 +71,7 @@ func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, s
 		DryRun:            dryRun,
 		RawRecommendation: rec.RawRecommendation,
 		Source:            source,
-	}
+	}, nil
 }
 
 // termMonths converts a term string ("1yr", "3yr") to months.

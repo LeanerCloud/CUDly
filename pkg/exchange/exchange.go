@@ -169,12 +169,13 @@ type Client struct {
 	ec2 EC2ExchangeAPI
 }
 
-// NewClient creates an Client from an AWS config.
-func NewClient(cfg *sdkaws.Config) *Client {
+// NewClient creates an Client from an AWS config. It returns an error when cfg
+// is nil rather than panicking, so callers fail through the normal error path.
+func NewClient(cfg *sdkaws.Config) (*Client, error) {
 	if cfg == nil {
-		panic("exchange.NewClient: aws config is nil")
+		return nil, fmt.Errorf("exchange.NewClient: aws config is nil")
 	}
-	return &Client{ec2: ec2.NewFromConfig(*cfg)}
+	return &Client{ec2: ec2.NewFromConfig(*cfg)}, nil
 }
 
 // NewClientFromAPI creates an Client from an existing

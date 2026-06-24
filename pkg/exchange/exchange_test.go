@@ -72,6 +72,19 @@ func TestPaymentDueUSDStr_InJSON(t *testing.T) {
 	}
 }
 
+// TestNewClient_NilConfigReturnsError is the CR #1276 guard: the exported
+// constructor must return an error on a nil config rather than panicking.
+func TestNewClient_NilConfigReturnsError(t *testing.T) {
+	t.Parallel()
+	c, err := NewClient(nil)
+	if err == nil {
+		t.Fatalf("expected error for nil config, got nil")
+	}
+	if c != nil {
+		t.Fatalf("expected nil client on error, got %v", c)
+	}
+}
+
 func TestSpendCapComparison(t *testing.T) {
 	t.Parallel()
 	// paymentDue > cap => reject
