@@ -363,8 +363,9 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		}
 	}
 
-	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
-	return &StatusResponse{Status: "cancelled"}, nil
+	// Report the status the store actually persisted rather than a hardcoded
+	// literal, so the response can never drift from the DB value.
+	return &StatusResponse{Status: exec.Status}, nil
 }
 
 // cancelOrRecoverExecution transitions the execution to "canceled" if it is
@@ -970,8 +971,9 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
-	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
-	return map[string]string{"status": "cancelled"}, nil
+	// Report the status the CAS actually persisted (currentStatus) rather than a
+	// hardcoded literal, so the response can never drift from the DB value.
+	return map[string]string{"status": currentStatus}, nil
 }
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
