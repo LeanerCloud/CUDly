@@ -393,7 +393,13 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 // rejected with no write to the store — approved/running rows in particular
 // are mid-execution and cancelling them would desync the DB from the cloud.
 func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
-	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled"}
+	// "scheduled" is included: it is cancelable only via the Gmail-style revoke
+	// flow (CancelScheduledExecutionAtomic), NOT this email-token path which
+	// drives CancelExecutionAtomic (pending/notified-only CAS). The
+	// loadCancelableExecution gate uses IsImmediatelyCancelable so a scheduled
+	// row is rejected here rather than misrouted into a misleading
+	// "concurrent operation" error (CodeRabbit finding #6, PR #1277).
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled", "scheduled"}
 	for _, status := range rejected {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()

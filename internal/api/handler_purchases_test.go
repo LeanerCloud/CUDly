@@ -2420,6 +2420,39 @@ func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testin
 	}
 }
 
+// TestHandler_cancelPurchase_Session_ScheduledRoutedToRevoke is the regression
+// guard for CodeRabbit finding #6 on PR #1277. A "scheduled" row is cancelable
+// (IsCancelable returns true) but ONLY via the /revoke flow
+// (CancelScheduledExecutionAtomic). The /cancel path must NOT pass it to
+// CancelExecutionAtomic (pending/notified-only CAS) -- doing so would fail the
+// CAS and surface a misleading "concurrent operation already transitioned it"
+// 409. Instead the handler returns a clear 409 directing the caller to the
+// revoke endpoint, and never enters the cancel tx.
+func TestHandler_cancelPurchase_Session_ScheduledRoutedToRevoke(t *testing.T) {
+	creator := cancelCallerID
+	exec := &config.PurchaseExecution{
+		ExecutionID:     cancelExecID,
+		Status:          "scheduled",
+		CreatedByUserID: &creator,
+	}
+	session := &Session{UserID: cancelCallerID, Email: "admin@example.com"}
+
+	// Caller owns the row; cancel-own would authorise it if status allowed.
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
+
+	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "scheduled-on-cancel must be a ClientError")
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "scheduled")
+	assert.Contains(t, err.Error(), "revoke", "error must direct the caller to the revoke endpoint")
+	// Must NOT misroute through the pending/notified-only CAS.
+	mockConfig.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockConfig.AssertNotCalled(t, "WithTx")
+	mockAuth.AssertExpectations(t)
+}
+
 // TestHandler_cancelPurchase_Session_AllowsEachCancelableStatus confirms the
 // inverse: pending and notified rows remain cancelable on the session path,
 // guarding against an over-restriction that would break the dashboard cancel

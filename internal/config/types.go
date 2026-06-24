@@ -362,6 +362,20 @@ func (e *PurchaseExecution) IsCancelable() bool {
 	return e.Status == "pending" || e.Status == "notified" || e.Status == "scheduled"
 }
 
+// IsImmediatelyCancelable reports whether an execution can be canceled by the
+// plain CancelExecutionAtomic CAS (WHERE status IN ('pending','notified')),
+// i.e. via the /cancel endpoints. The "scheduled" state is deliberately
+// excluded: it is cancelable (IsCancelable returns true) but only through the
+// Gmail-style pre-fire revoke flow (CancelScheduledExecutionAtomic, the
+// /revoke endpoint), which surfaces a distinct 410 "window closed" CAS race
+// outcome. Gating the /cancel paths on this predicate -- rather than the
+// broader IsCancelable -- prevents a "scheduled" row from passing the gate,
+// failing the pending/notified-only CAS, and surfacing the misleading
+// "concurrent operation already transitioned it" error (issue #290).
+func (e *PurchaseExecution) IsImmediatelyCancelable() bool {
+	return e.Status == "pending" || e.Status == "notified"
+}
+
 // RecommendationRecord stores a recommendation with purchase status
 type RecommendationRecord struct {
 	ID           string `json:"id" dynamodbav:"id"`

@@ -387,7 +387,11 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if existing == nil {
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
-	if existing.Status != "canceled" {
+	// Accept both spellings: during the expand-contract rename (migration
+	// 000078) a concurrent legacy cancel may have written "cancelled" before
+	// the rolling deploy completes. The contract migration (#1278) backfills
+	// and drops the legacy spelling, after which "cancelled" can be removed.
+	if existing.Status != "canceled" && existing.Status != "cancelled" {
 		return nil, NewClientError(409, fmt.Sprintf(
 			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))
@@ -897,6 +901,24 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	return h.cancelPurchaseViaSession(ctx, req, execution)
 }
 
+// guardImmediatelyCancelable returns a 409 ClientError unless the execution is
+// in a state the plain cancel CAS (CancelExecutionAtomic, pending/notified)
+// handles, and nil when it is cancelable. A "scheduled" row is cancelable but
+// only via the /revoke flow (CancelScheduledExecutionAtomic); routing it
+// through the cancel path would pass IsCancelable, fail the pending/notified-only
+// CAS, and surface a misleading "concurrent operation" 409 -- so it gets a
+// clear message directing it to the revoke endpoint instead (issue #290).
+// Shared by the session and email-token cancel gates so the policy can't drift.
+func guardImmediatelyCancelable(execution *config.PurchaseExecution) error {
+	if execution.Status == "scheduled" {
+		return NewClientError(409, fmt.Sprintf("execution %s is scheduled; use the revoke endpoint to cancel it before it fires", execution.ExecutionID))
+	}
+	if !execution.IsImmediatelyCancelable() {
+		return NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
+	}
+	return nil
+}
+
 // cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
 // Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
 // is in a cancelable state (pending|notified), atomically flips the row
@@ -924,8 +946,8 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	if !execution.IsCancelable() {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
+	if err := guardImmediatelyCancelable(execution); err != nil {
+		return nil, err
 	}
 
 	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {

@@ -261,17 +261,18 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 		return nil, fmt.Errorf("approval token has expired")
 	}
 
-	// Only pending/notified rows are cancelable -- shares the single
-	// PurchaseExecution.IsCancelable predicate with the session path in
-	// cancelPurchaseViaSession so the policy can never drift between the two
-	// flows (issue #645). The previous predicate rejected only
-	// completed/canceled, which let an email-link holder cancel an
-	// approved/running/paused/failed/expired execution that the dashboard
-	// user cannot. Restricting to the pre-purchase states is also the
+	// Only pending/notified rows are cancelable via this email-token flow,
+	// which drives the CancelExecutionAtomic CAS (WHERE status IN
+	// ('pending','notified')). Gate on IsImmediatelyCancelable rather than the
+	// broader IsCancelable: a "scheduled" row is cancelable, but only through
+	// the Gmail-style pre-fire revoke flow (CancelScheduledExecutionAtomic).
+	// Letting "scheduled" pass here would fail the pending/notified-only CAS
+	// and surface the misleading "concurrent operation already transitioned
+	// it" error (issue #290). Restricting to pending/notified is also the
 	// in-flight guard: approved/running rows are mid-execution (the AWS
 	// commitment is being or has been created), so canceling them would
 	// leave the DB and the cloud out of sync.
-	if !execution.IsCancelable() {
+	if !execution.IsImmediatelyCancelable() {
 		return nil, fmt.Errorf("execution cannot be canceled, current status: %s", execution.Status)
 	}
 	return execution, nil
