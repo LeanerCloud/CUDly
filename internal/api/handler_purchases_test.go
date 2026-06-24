@@ -110,7 +110,8 @@ func TestHandler_cancelPurchase(t *testing.T) {
 	require.NoError(t, err)
 
 	resultMap := result.(map[string]string)
-	assert.Equal(t, "canceled", resultMap["status"])
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", resultMap["status"])
 }
 
 func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
@@ -1135,7 +1136,8 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 	result, err := handler.deletePlannedPurchase(ctx, req, "11111111-1111-1111-1111-111111111111")
 	require.NoError(t, err)
 
-	assert.Equal(t, "canceled", result.Status)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.Status)
 }
 
 // TestHandler_deletePlannedPurchase_DisablesPlan is a regression test for
@@ -1184,7 +1186,8 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 	}
 	result, err := handler.deletePlannedPurchase(ctx, req, execID)
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.Status)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.Status)
 	// Plan struct is mutated in place; confirm the flag was flipped.
 	assert.False(t, plan.Enabled, "plan.Enabled must be false after disable")
 }
@@ -1232,7 +1235,8 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 	}
 	result, err := handler.deletePlannedPurchase(ctx, req, execID)
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.Status)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.Status)
 }
 
 // TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan covers the
@@ -1285,7 +1289,8 @@ func TestHandler_deletePlannedPurchase_ConflictRetryDisablesPlan(t *testing.T) {
 	}
 	result, err := handler.deletePlannedPurchase(ctx, req, execID)
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.Status)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.Status)
 	assert.False(t, plan.Enabled, "plan.Enabled must be false after conflict-retry disable")
 }
 
@@ -1335,7 +1340,8 @@ func TestHandler_deletePlannedPurchase_ConflictRetryAlreadyDisabled(t *testing.T
 	}
 	result, err := handler.deletePlannedPurchase(ctx, req, execID)
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.Status)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.Status)
 }
 
 // TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409 is a
@@ -2280,7 +2286,8 @@ func runSessionCancelAllowed(t *testing.T, exec *config.PurchaseExecution, sessi
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.(map[string]string)["status"])
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
 	// Verify the atomic cancel was called — this is the primary guard against
 	// regressions that skip the conditional UPDATE.
 	mockConfig.AssertCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything)
@@ -2576,7 +2583,8 @@ func TestHandler_cancelPurchase_DeepLink_AdminBypassesContactEmailGate(t *testin
 	// session-authed branch instead of routing through the token path.
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
 	require.NoError(t, err, "admin clicking Cancel from notification email must succeed even when no contact_email is configured")
-	assert.Equal(t, "canceled", result.(map[string]string)["status"])
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
 
 	require.NotNil(t, capturedCanceledBy, "session-authed branch must stamp canceledBy")
 	assert.Equal(t, session.Email, *capturedCanceledBy)
@@ -2615,7 +2623,8 @@ func TestHandler_cancelPurchase_DeepLink_CancelOwnBypassesContactEmailGate(t *te
 
 	result, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", result.(map[string]string)["status"])
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", result.(map[string]string)["status"])
 	mockConfig.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
 	mockAuth.AssertExpectations(t)
 }

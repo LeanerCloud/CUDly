@@ -171,6 +171,9 @@ type Client struct {
 
 // NewClient creates an Client from an AWS config.
 func NewClient(cfg *sdkaws.Config) *Client {
+	if cfg == nil {
+		panic("exchange.NewClient: aws config is nil")
+	}
 	return &Client{ec2: ec2.NewFromConfig(*cfg)}
 }
 

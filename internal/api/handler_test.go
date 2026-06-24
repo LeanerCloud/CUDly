@@ -839,7 +839,8 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
-	assert.Equal(t, "canceled", body["status"])
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	assert.Equal(t, "cancelled", body["status"])
 }
 
 func TestHandler_HandleRequest_GetHistory(t *testing.T) {
