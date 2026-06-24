@@ -64,6 +64,9 @@ func (f *ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 // the prior call-site behavior at every service when the builder ever
 // emits an unsanitizable input.
 func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) string {
+	if f == nil {
+		panic("BuildReservationName: fields are nil")
+	}
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)
 	sku := normalizeReservationSegment(f.ResourceType)

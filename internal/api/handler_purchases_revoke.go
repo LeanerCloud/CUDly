@@ -281,7 +281,8 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
 	return map[string]string{
-		"status":  "canceled",
+		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		"status":  "cancelled",
 		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }

@@ -42,6 +42,9 @@ func WriteAuditRecord(record *AuditRecord, path string) error {
 // source is the CUDly surface that triggered the run -- copied into the JSONL so CLI
 // audit logs can be reconciled against the DB's purchase_history.source column.
 func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, status string, dryRun bool, source string) AuditRecord {
+	if rec == nil || result == nil {
+		panic("NewAuditRecord: rec and result must be non-nil")
+	}
 	errMsg := ""
 	if result.Error != nil {
 		errMsg = result.Error.Error()

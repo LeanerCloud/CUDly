@@ -213,7 +213,7 @@ func TestBuildRecommendationFilter_MinSavingsUSD(t *testing.T) {
 		assert.Equal(t, float64(50), args[0])
 	})
 
-	t.Run("MinSavingsPct zero is never pushed into SQL (no WHERE fragment)", func(t *testing.T) {
+	t.Run("MinSavingsPct (e.g. 30) is never pushed into SQL (no WHERE fragment)", func(t *testing.T) {
 		// Pct filter is applied in-process, never in SQL.
 		f := RecommendationFilter{MinSavingsPct: 30}
 		clause, args := buildRecommendationFilter(&f)

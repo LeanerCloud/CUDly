@@ -179,6 +179,9 @@ type ServiceDetails interface {
 // sized down (or up) from AWS's proposal -- without this helper the same
 // four-field scaling pattern was duplicated at every sizing site.
 func ScaleRecommendationCosts(rec *Recommendation, ratio float64) Recommendation {
+	if rec == nil {
+		panic("ScaleRecommendationCosts: rec is nil")
+	}
 	scaled := *rec
 	scaled.CommitmentCost *= ratio
 	scaled.OnDemandCost *= ratio
