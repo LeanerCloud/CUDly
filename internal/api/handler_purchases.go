@@ -363,7 +363,8 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		}
 	}
 
-	return &StatusResponse{Status: "canceled"}, nil
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	return &StatusResponse{Status: "cancelled"}, nil
 }
 
 // cancelOrRecoverExecution transitions the execution to "canceled" if it is
@@ -379,7 +380,11 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 		return result, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: %v", executionID, err))
+		// A non-conflict failure (e.g. a transient DB error) is an unexpected
+		// server-side fault, not a 409 status conflict. Return a plain error so
+		// handleRequestError maps it to 500 with a generic body and the raw
+		// backend text stays in the server log instead of the client response.
+		return nil, fmt.Errorf("failed to cancel execution %s: %w", executionID, err)
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(getErr, config.ErrNotFound) {
@@ -896,7 +901,8 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
 			return nil, err
 		}
-		return map[string]string{"status": "canceled"}, nil
+		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		return map[string]string{"status": "cancelled"}, nil
 	}
 
 	return h.cancelPurchaseViaSession(ctx, req, execution)
@@ -967,7 +973,8 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
-	return map[string]string{"status": "canceled"}, nil
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	return map[string]string{"status": "cancelled"}, nil
 }
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel

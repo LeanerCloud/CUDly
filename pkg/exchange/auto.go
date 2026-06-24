@@ -121,6 +121,9 @@ const staleProcessingThreshold = 15 * time.Minute
 
 // RunAutoExchange orchestrates automated RI exchanges.
 func RunAutoExchange(ctx context.Context, params *RunAutoExchangeParams) (*AutoExchangeResult, error) {
+	if params == nil {
+		return nil, fmt.Errorf("run auto exchange: params is nil")
+	}
 	result := &AutoExchangeResult{Mode: params.Config.Mode}
 
 	// 1. Cancel all stale pending records.

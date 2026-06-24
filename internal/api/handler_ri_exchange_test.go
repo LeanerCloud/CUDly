@@ -288,7 +288,7 @@ func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID:            id,
 		ApprovalToken: token,
-		Status:        "canceled",
+		Status:        "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	}, nil)
 
 	// Transition from pending→processing fails (record is canceled)

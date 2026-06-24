@@ -31,6 +31,9 @@ type orgListAccountsClient interface {
 // The caller is responsible for using the appropriate credentials for the
 // management account (e.g., resolved via the credentials package).
 func DiscoverOrgAccounts(ctx context.Context, cfg *aws.Config) (*OrgDiscoveryResult, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("discover org accounts: aws config is nil")
+	}
 	return discoverWithClient(ctx, organizations.NewFromConfig(*cfg))
 }
 

@@ -206,6 +206,9 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 
 // NewSenderWithConfig creates an email sender with explicit configuration.
 func NewSenderWithConfig(ctx context.Context, cfg *FactoryConfig) (SenderInterface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("email factory config is nil")
+	}
 	switch cfg.Provider {
 	case ProviderAWS:
 		return NewSender(SenderConfig{
