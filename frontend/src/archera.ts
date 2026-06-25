@@ -18,13 +18,13 @@
  * email links).
  *
  * Signup link is carried in both surfaces:
- *   https://archera.ai/signup?mode=cudly
+ *   https://www.archera.ai/cudly
  *
  * No backend, routing, or IaC changes (frontend-only).
  */
 
 /** Canonical Archera signup URL with CUDly attribution. */
-export const ARCHERA_SIGNUP_URL = 'https://archera.ai/signup?mode=cudly';
+export const ARCHERA_SIGNUP_URL = 'https://www.archera.ai/cudly';
 
 /**
  * Frontend URL path for the Archera education page.
