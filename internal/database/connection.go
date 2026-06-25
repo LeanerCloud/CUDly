@@ -283,8 +283,13 @@ func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 	return c.pool.Begin(ctx)
 }
 
-// BeginTx starts a new transaction with options.
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) { //nolint:gocritic // hugeParam: txOptions mirrors pgx's own Tx.BeginTx(ctx, pgx.TxOptions) value signature; a pointer here would diverge from the wrapped SDK API
+// BeginTx starts a new transaction with options. The opts pointer may be nil
+// to use the default transaction options (equivalent to pgx.TxOptions{}).
+func (c *Connection) BeginTx(ctx context.Context, opts *pgx.TxOptions) (pgx.Tx, error) {
+	var txOptions pgx.TxOptions
+	if opts != nil {
+		txOptions = *opts
+	}
 	return c.pool.BeginTx(ctx, txOptions)
 }
 

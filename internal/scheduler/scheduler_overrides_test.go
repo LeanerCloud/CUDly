@@ -24,7 +24,7 @@ type mockOverrideStore struct {
 	getOverrideErr error
 }
 
-func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *mockOverrideStore) ListStoredRecommendations(_ context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	if filter.ID == "" {
 		return m.recs, nil
 	}
@@ -106,7 +106,7 @@ func TestApplyAccountOverrides_DisabledOverride_DropsAccountSvcRecs(t *testing.T
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "acct-A's rec dropped; acct-B's kept")
 	assert.Equal(t, "acct-B", *recs[0].CloudAccountID)
@@ -125,7 +125,7 @@ func TestApplyAccountOverrides_GlobalDisabled_DropsAllRecsForService(t *testing.
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, recs, "global Enabled=false drops all per-account recs for the service")
 }
@@ -138,7 +138,7 @@ func TestApplyAccountOverrides_NoGlobalConfig_RecsPassThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "no global config -> no per-account policy applies -> rec passes through")
 }
@@ -158,7 +158,7 @@ func TestApplyAccountOverrides_NilCloudAccountID_PassesThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "nil CloudAccountID recs are not subject to per-account override policy")
 }
@@ -179,7 +179,7 @@ func TestApplyAccountOverrides_IncludeEngineMatch(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "mysql", recs[0].Engine, "non-matching engine filtered out")
@@ -201,7 +201,7 @@ func TestApplyAccountOverrides_ExcludeEngine(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "mysql", recs[0].Engine)
@@ -234,7 +234,7 @@ func TestApplyAccountOverrides_RegionAndTypeFilters(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "us-east-1", recs[0].Region)
@@ -265,7 +265,7 @@ func TestApplyAccountOverrides_MinCount_DropsRecsBelowFloor(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 2, "count=1 must be dropped; count>=2 kept")
 	counts := []int{recs[0].Count, recs[1].Count}
@@ -287,7 +287,7 @@ func TestApplyAccountOverrides_MinCountZero_KeepsAll(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "MinCount=0 disables the floor")
 }
@@ -317,7 +317,7 @@ func TestApplyAccountOverrides_EmptyEngine_NotFilteredByIncludeEngines(t *testin
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1, "engine-less rec not filtered by IncludeEngines")
 }
@@ -332,7 +332,7 @@ func TestApplyAccountOverrides_LookupError_PassesThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err, "ListRecommendations swallows the override-resolver error")
 	assert.Len(t, recs, 1, "un-filtered list returned on lookup failure")
 }
@@ -388,7 +388,7 @@ func TestApplyAccountOverrides_OverrideLookupError_PassesThrough(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err, "ListRecommendations swallows the override-resolver error")
 	assert.Len(t, recs, 1, "un-filtered list returned on override lookup failure")
 }
@@ -413,7 +413,7 @@ func TestApplyAccountOverrides_AcceptanceCriterion_Issue196(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "acct-A's recs hidden by the override")
 	assert.Equal(t, "acct-B", *recs[0].CloudAccountID)

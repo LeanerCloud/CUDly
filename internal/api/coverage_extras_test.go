@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // coverage_extras_test.go — additional micro-tests for the remaining ~0.6% gap.
 

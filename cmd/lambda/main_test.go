@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/server"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/stretchr/testify/assert"

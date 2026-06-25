@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/aws/aws-lambda-go/events"
 )
 

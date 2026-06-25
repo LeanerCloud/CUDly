@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 // reshape lookup needs. Scoped here so the closure stays unit-testable
 // against a tiny fake instead of the full StoreInterface mock.
 type recsLister interface {
-	ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListStoredRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 // purchaseRecLookupFromStore builds an exchange.PurchaseRecLookup that
@@ -48,7 +48,7 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 		if accountID != "" {
 			filter.AccountIDs = []string{accountID}
 		}
-		recs, err := store.ListStoredRecommendations(ctx, filter)
+		recs, err := store.ListStoredRecommendations(ctx, &filter)
 		if err != nil {
 			return nil, err
 		}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestSender_SendNewRecommendationsNotification_Success(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -46,7 +46,7 @@ func TestSender_SendNewRecommendationsNotification_Success(t *testing.T) {
 func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
 	// Scheduled purchase notifications carry approval tokens and must be
 	// delivered via targeted SES, not the SNS broadcast topic.
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
@@ -75,7 +75,7 @@ func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
 }
 
 func TestSender_SendPurchaseConfirmation_Success(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -98,7 +98,7 @@ func TestSender_SendPurchaseConfirmation_Success(t *testing.T) {
 }
 
 func TestSender_SendPurchaseFailedNotification_Success(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -121,7 +121,7 @@ func TestSender_SendPurchaseFailedNotification_Success(t *testing.T) {
 }
 
 func TestSender_SendPasswordResetEmail_Success(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount is called to check sandbox mode - return production mode (not sandbox)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
@@ -140,7 +140,7 @@ func TestSender_SendPasswordResetEmail_Success(t *testing.T) {
 }
 
 func TestSender_SendWelcomeEmail_Success(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount is called to check sandbox mode - return production mode (not sandbox)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
@@ -160,7 +160,7 @@ func TestSender_SendWelcomeEmail_Success(t *testing.T) {
 
 // Test template success paths with no recommendations (edge case)
 func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -271,7 +271,7 @@ func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
 
 // Test error cases for template functions
 func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -294,7 +294,7 @@ func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 
 func TestSender_SendScheduledPurchaseNotification_SESError(t *testing.T) {
 	// SES send error must propagate to the caller.
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
@@ -320,7 +320,7 @@ func TestSender_SendScheduledPurchaseNotification_SESError(t *testing.T) {
 }
 
 func TestSender_SendPurchaseConfirmation_SNSError(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -338,7 +338,7 @@ func TestSender_SendPurchaseConfirmation_SNSError(t *testing.T) {
 }
 
 func TestSender_SendPurchaseFailedNotification_SNSError(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -356,7 +356,7 @@ func TestSender_SendPurchaseFailedNotification_SNSError(t *testing.T) {
 }
 
 func TestSender_SendPasswordResetEmail_SESError(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	sender := &Sender{
 		sesClient: mockSES,
 		fromEmail: "noreply@example.com",
@@ -373,7 +373,7 @@ func TestSender_SendPasswordResetEmail_SESError(t *testing.T) {
 }
 
 func TestSender_SendWelcomeEmail_SESError(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	sender := &Sender{
 		sesClient: mockSES,
 		fromEmail: "noreply@example.com",
@@ -391,7 +391,7 @@ func TestSender_SendWelcomeEmail_SESError(t *testing.T) {
 
 // Test multiple recommendations in templates
 func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -439,7 +439,7 @@ func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *te
 
 func TestSender_SendScheduledPurchaseNotification_WithUpfrontCost(t *testing.T) {
 	// Verify that a well-formed data payload with RecipientEmail succeeds via SES.
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
@@ -478,7 +478,7 @@ func TestSender_SendScheduledPurchaseNotification_WithUpfrontCost(t *testing.T) 
 }
 
 func TestSender_SendPurchaseConfirmation_WithMultipleRecommendations(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -518,7 +518,7 @@ func TestSender_SendPurchaseConfirmation_WithMultipleRecommendations(t *testing.
 }
 
 func TestSender_SendPurchaseFailedNotification_MultipleFailures(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -642,7 +642,7 @@ func containsAnyStr(s string, subs ...string) bool {
 // endpoint) must be stripped before the subject reaches the SES SendEmail API,
 // so it cannot inject additional email headers. Mirrors the SMTP-path test.
 func TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// Production mode so the send proceeds straight to SendEmail.
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)

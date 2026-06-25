@@ -398,7 +398,7 @@ func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time,
 func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
-func (m *mockConfigStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *mockConfigStore) ListStoredRecommendations(_ context.Context, _ *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {

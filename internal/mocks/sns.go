@@ -7,15 +7,13 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockSNSClient is a mock implementation of SNS client.
-//
-//nolint:revive // established exported test-double name across the suite; renaming is gratuitous churn for consumers
-type MockSNSClient struct {
+// SNSClient is a mock implementation of SNS client.
+type SNSClient struct {
 	mock.Mock
 }
 
 // Publish mocks the Publish operation.
-func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, opts ...func(*sns.Options)) (*sns.PublishOutput, error) {
+func (m *SNSClient) Publish(ctx context.Context, input *sns.PublishInput, opts ...func(*sns.Options)) (*sns.PublishOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -32,5 +30,5 @@ type SNSAPI interface {
 	Publish(ctx context.Context, input *sns.PublishInput, opts ...func(*sns.Options)) (*sns.PublishOutput, error)
 }
 
-// Ensure MockSNSClient implements SNSAPI.
-var _ SNSAPI = (*MockSNSClient)(nil)
+// Ensure SNSClient implements SNSAPI.
+var _ SNSAPI = (*SNSClient)(nil)

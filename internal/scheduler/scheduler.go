@@ -38,10 +38,8 @@ type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// SchedulerConfig holds configuration for the scheduler.
-//
-//nolint:revive // established exported type name used across packages; renaming is gratuitous churn for consumers
-type SchedulerConfig struct {
+// Config holds configuration for the scheduler.
+type Config struct {
 	ConfigStore     config.StoreInterface
 	PurchaseManager ManagerInterface
 	EmailSender     email.SenderInterface
@@ -101,7 +99,7 @@ type Scheduler struct {
 const defaultCacheTTL = 6 * time.Hour
 
 // NewScheduler creates a new scheduler.
-func NewScheduler(cfg *SchedulerConfig) *Scheduler {
+func NewScheduler(cfg *Config) *Scheduler {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -934,7 +932,7 @@ func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID str
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
-func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) { //nolint:gocritic // hugeParam: filter is value-typed to match the server SchedulerInterface contract (pointer-izing requires the cross-cutting interface + mocks cascade tracked for #1276)
+func (s *Scheduler) ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
@@ -999,7 +997,7 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 //
 // Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
 func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
-	recs, err := s.config.ListStoredRecommendations(ctx, config.RecommendationFilter{ID: id})
+	recs, err := s.config.ListStoredRecommendations(ctx, &config.RecommendationFilter{ID: id})
 	if err != nil {
 		return nil, nil, fmt.Errorf("GetRecommendationByID: store lookup: %w", err)
 	}

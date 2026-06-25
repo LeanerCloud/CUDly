@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // exchange_helpers_test.go — tests for checkDailyCap and federation IaC helpers.
 

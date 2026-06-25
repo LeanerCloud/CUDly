@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -27,13 +27,13 @@ func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) 
 // so tests can assert region / account / provider scoping landed in the
 // SQL query. Returns a configurable result set or error.
 type fakeRecsLister struct {
-	gotFilter config.RecommendationFilter
+	gotFilter *config.RecommendationFilter
 	calls     int
 	out       []config.RecommendationRecord
 	err       error
 }
 
-func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	f.calls++
 	f.gotFilter = filter
 	return f.out, f.err

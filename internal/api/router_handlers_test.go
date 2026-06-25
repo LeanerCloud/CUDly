@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // router_handlers_test.go — tests for the thin router wrapper methods and
 // additional handler functions to push coverage to ≥ 80%.

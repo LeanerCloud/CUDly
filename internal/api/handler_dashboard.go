@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		}
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {

@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // db_rate_limiter_test.go — tests for DBRateLimiter that don't require a real
 // database connection. Only nil-pool and in-memory paths are exercised.

@@ -1,7 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-//
-//nolint:revive // var-naming: "api" is the established package name used across the whole codebase; renaming is an enormous cross-cutting churn unrelated to this lint pass
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"encoding/base64"

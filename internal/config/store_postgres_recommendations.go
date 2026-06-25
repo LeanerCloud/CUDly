@@ -371,8 +371,8 @@ func recOnDemandBaseline(rec *RecommendationRecord) (float64, bool) {
 // MinSavingsUSD) are applied in SQL so Postgres prunes the rows; the
 // MinSavingsPct filter is applied in-process because the on-demand
 // baseline lives inside the JSONB payload (not a native column).
-func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error) { //nolint:gocritic // hugeParam: filter is value-typed to satisfy the config.StoreInterface contract; see PR judgment note (interface-cascade deferred to #1276)
-	whereClause, args := buildRecommendationFilter(&filter)
+func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter *RecommendationFilter) ([]RecommendationRecord, error) {
+	whereClause, args := buildRecommendationFilter(filter)
 	rows, err := s.db.Query(ctx, `SELECT payload FROM recommendations`+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query recommendations: %w", err)

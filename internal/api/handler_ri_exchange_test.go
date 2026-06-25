@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -615,11 +615,11 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	// the return value. Returning nil/nil from ListStoredRecommendations
 	// means "no recs in this region" which the downstream pipeline
 	// treats as empty alternatives — fine for our purposes.
-	var capturedFilters []config.RecommendationFilter
+	var capturedFilters []*config.RecommendationFilter
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil).
 		Run(func(args mock.Arguments) {
-			capturedFilters = append(capturedFilters, args.Get(1).(config.RecommendationFilter))
+			capturedFilters = append(capturedFilters, args.Get(1).(*config.RecommendationFilter))
 		})
 
 	h := &Handler{

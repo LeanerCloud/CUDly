@@ -451,17 +451,44 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	// The credential JSON comes from CUDly's own encrypted credential store
-	// (operator-supplied at account registration), not an untrusted external
-	// source, so the deprecation's "unvalidated config from an uncontrolled
-	// source" risk does not apply. credType here may be either a service-account
-	// key or a WIF config, so a type-pinned loader is not usable.
-	//nolint:staticcheck // SA1019: input is a trusted, store-encrypted credential; both service-account and WIF JSON must be accepted
-	creds, err := google.CredentialsFromJSONWithParams(ctx, raw, google.CredentialsParams{
+	// Detect the credential type from the JSON's "type" discriminator and load
+	// it with the type-pinned google loader. Both a service-account key
+	// ("service_account") and a workload-identity-federation config
+	// ("external_account") are accepted, since loadStoredGCPTokenSource serves
+	// both the gcp_service_account and legacy WIF credential paths.
+	credKind, err := detectGCPCredentialsType(raw)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: detect gcp credential type for account %s: %w", account.ID, err)
+	}
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(ctx, raw, credKind, google.CredentialsParams{
 		Scopes: []string{gcpCloudPlatformScope},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}
 	return creds.TokenSource, nil
+}
+
+// detectGCPCredentialsType reads the "type" discriminator from a GCP credential
+// JSON blob and maps it to the google.CredentialsType the type-pinned loader
+// expects. Only the two kinds CUDly stores are accepted: a service-account key
+// ("service_account") and a workload-identity-federation config
+// ("external_account"). Any other type is rejected so an unexpected credential
+// shape can never be loaded unintentionally.
+func detectGCPCredentialsType(raw []byte) (google.CredentialsType, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return "", fmt.Errorf("parse credential type field: %w", err)
+	}
+	switch header.Type {
+	case string(google.ServiceAccount):
+		return google.ServiceAccount, nil
+	case string(google.ExternalAccount):
+		return google.ExternalAccount, nil
+	default:
+		return "", fmt.Errorf("unsupported gcp credential type %q (want %q or %q)",
+			header.Type, google.ServiceAccount, google.ExternalAccount)
+	}
 }

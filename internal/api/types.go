@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -160,7 +160,7 @@ type PurchaseManagerInterface interface {
 // SchedulerInterface defines scheduler methods used by handler
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
-	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by

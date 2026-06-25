@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -229,8 +229,8 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 //
 // Extracted from getCoverageBreakdown to keep that function under the
 // gocyclo budget after PR #881's extraction.
-func buildCoverageRecFilter(params map[string]string) config.RecommendationFilter {
-	filter := config.RecommendationFilter{}
+func buildCoverageRecFilter(params map[string]string) *config.RecommendationFilter {
+	filter := &config.RecommendationFilter{}
 	if accountID := params["account_id"]; accountID != "" {
 		filter.AccountIDs = []string{accountID}
 	}

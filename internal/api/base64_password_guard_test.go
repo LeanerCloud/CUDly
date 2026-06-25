@@ -1,4 +1,4 @@
-// Package api — CI guard for the base64-decode requirement on password-bearing
+// Package apihttp — CI guard for the base64-decode requirement on password-bearing
 // handler functions.
 //
 // # Problem (regression class of #356)
@@ -31,7 +31,7 @@
 // (reads .NewPassword from a json.Unmarshal target but never calls
 // decodeBase64Password) as a string and asserts that the same AST scanner
 // detects the violation. This proves the guard would have caught issue #356.
-package api
+package apihttp
 
 import (
 	"go/ast"

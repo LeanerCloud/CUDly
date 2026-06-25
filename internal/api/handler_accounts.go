@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -1401,7 +1401,7 @@ func (h *Handler) discoverOrgAccounts(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	disco, err := h.runOrgDiscovery(ctx, cfg)
+	disco, err := h.runOrgDiscovery(ctx, &cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1473,12 +1473,14 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 // runOrgDiscovery dispatches to the configured discovery function — the
 // injectable seam Handler.discoverOrgFn for tests, falling back to the real
 // accounts.DiscoverOrgAccounts in production.
-func (h *Handler) runOrgDiscovery(ctx context.Context, cfg aws.Config) (*accounts.OrgDiscoveryResult, error) { //nolint:gocritic // hugeParam: cfg is the aws.Config SDK value type; this matches accounts.DiscoverOrgAccounts and the discoverOrgFn seam, which mirror the AWS SDK's by-value convention
+func (h *Handler) runOrgDiscovery(ctx context.Context, cfg *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 	discoverFn := h.discoverOrgFn
 	if discoverFn == nil {
 		discoverFn = accounts.DiscoverOrgAccounts
 	}
-	disco, err := discoverFn(ctx, cfg)
+	// accounts.DiscoverOrgAccounts (and the discoverOrgFn seam) take aws.Config
+	// by value, matching the AWS SDK convention; deref at that boundary.
+	disco, err := discoverFn(ctx, *cfg)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: org discovery failed: %w", err)
 	}

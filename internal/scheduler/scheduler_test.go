@@ -176,7 +176,7 @@ func TestSchedulerConfig(t *testing.T) {
 	mockPurchase := new(MockPurchaseManager)
 	mockEmail := new(MockEmailSender)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:     mockStore,
 		PurchaseManager: nil, // We'd use mockPurchase but types don't match in test
 		EmailSender:     nil, // We'd use mockEmail but types don't match in test
@@ -194,7 +194,7 @@ func TestSchedulerConfig(t *testing.T) {
 func TestNewScheduler(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://dashboard.example.com",
 	}
@@ -565,7 +565,7 @@ func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 func TestScheduler_Interface(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://test.example.com",
 	}
@@ -747,7 +747,7 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -776,7 +776,7 @@ func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 
@@ -800,7 +800,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
-	expected := config.RecommendationFilter{
+	expected := &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -815,7 +815,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -833,7 +833,7 @@ func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
 	scheduler := &Scheduler{config: mockStore}
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -857,7 +857,7 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		cacheTTL: time.Nanosecond,
 	}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Give any (wrongly-spawned) goroutine time to hit the store; none
@@ -914,7 +914,7 @@ func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Assert the cold-start path ran: GetGlobalConfig is only called by

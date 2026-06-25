@@ -7,15 +7,13 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockSESClient is a mock implementation of SES client.
-//
-//nolint:revive // established exported test-double name across the suite; renaming is gratuitous churn for consumers
-type MockSESClient struct {
+// SESClient is a mock implementation of SES client.
+type SESClient struct {
 	mock.Mock
 }
 
 // SendEmail mocks the SendEmail operation.
-func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
+func (m *SESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -32,5 +30,5 @@ type SESAPI interface {
 	SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error)
 }
 
-// Ensure MockSESClient implements SESAPI.
-var _ SESAPI = (*MockSESClient)(nil)
+// Ensure SESClient implements SESAPI.
+var _ SESAPI = (*SESClient)(nil)

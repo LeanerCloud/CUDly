@@ -12,7 +12,7 @@ import (
 // MockScheduler is a mock implementation of server.SchedulerInterface
 type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context) (*scheduler.CollectResult, error)
-	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListRecommendationsFunc    func(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	GetRecommendationByIDFunc  func(ctx context.Context, id string) (*config.RecommendationRecord, []string, error)
 }
 
@@ -23,7 +23,7 @@ func (m *MockScheduler) CollectRecommendations(ctx context.Context) (*scheduler.
 	return &scheduler.CollectResult{}, nil
 }
 
-func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *MockScheduler) ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	if m.ListRecommendationsFunc != nil {
 		return m.ListRecommendationsFunc(ctx, filter)
 	}

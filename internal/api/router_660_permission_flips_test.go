@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // Tests for PR-A of issue #660: mutating-route gate flip from AuthAdmin to
 // AuthUser + handler-level requirePermission as the real gate.

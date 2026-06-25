@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/analytics"
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/LeanerCloud/CUDly/internal/commitmentopts"
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -447,7 +447,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	})
 
 	// Initialize scheduler
-	sched := scheduler.NewScheduler(&scheduler.SchedulerConfig{
+	sched := scheduler.NewScheduler(&scheduler.Config{
 		ConfigStore:     deps.ConfigStore,
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
@@ -788,7 +788,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
 	// Re-initialize scheduler with per-account credential resolution.
-	app.Scheduler = scheduler.NewScheduler(&scheduler.SchedulerConfig{
+	app.Scheduler = scheduler.NewScheduler(&scheduler.Config{
 		ConfigStore:     app.Config,
 		PurchaseManager: app.Purchase,
 		EmailSender:     app.Email,
