@@ -378,7 +378,12 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 		return result, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: %v", executionID, err))
+		// Not a CAS conflict: a real server-side failure (DB error, transient
+		// fault). Surface it as a plain wrapped error so the router logs the
+		// raw detail and returns a generic 500 -- a 409 here would misclassify
+		// a retriable backend failure as the caller's fault and leak backend
+		// text (feedback_http_status_classification; same class as PR #1276).
+		return nil, fmt.Errorf("cancel execution %s: %w", executionID, err)
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
 	if getErr != nil {
@@ -388,10 +393,10 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
 	// Accept both spellings: during the expand-contract rename (migration
-	// 000078) a concurrent legacy cancel may have written "cancelled" before
-	// the rolling deploy completes. The contract migration (#1278) backfills
-	// and drops the legacy spelling, after which "cancelled" can be removed.
-	if existing.Status != "canceled" && existing.Status != "cancelled" {
+	// 000078) a concurrent legacy cancel may have written the legacy value
+	// before the rolling deploy completes. The contract migration (#1278)
+	// normalizes the data, after which LegacyStatusCanceled can be removed.
+	if existing.Status != config.StatusCanceled && existing.Status != config.LegacyStatusCanceled {
 		return nil, NewClientError(409, fmt.Sprintf(
 			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))

@@ -1,6 +1,13 @@
 //go:build integration
 // +build integration
 
+// nolint:misspell // This integration test must reference the real legacy DB
+// column name "cancelled_by" and assert literal legacy "cancelled" status
+// values (the whole point of the rollback regression). Neither can change
+// until the contract migration (#1278) renames/normalizes them, so the
+// US-locale misspell linter is disabled for this file rather than peppering it
+// with per-line directives. Remove this once #1278 lands.
+
 package migrations_test
 
 import (
@@ -24,9 +31,11 @@ const (
 // TestMigration_000078_RollbackWithCanceledRows is the regression guard for
 // the CRITICAL rollback-ordering bug CodeRabbit flagged on PR #1277.
 //
-// The expand-contract rename (000078) backfills purchase_executions.status and
-// ri_exchange_history.status from 'cancelled' to 'canceled', adds a canceled_by
-// column, and widens both status CHECK constraints to accept both spellings.
+// The expand-contract rename (000078) widens both status CHECK constraints to
+// accept both spellings and adds a canceled_by column. It is additive and does
+// NOT normalize status values (that is deferred to #1278). New code running
+// after the migration writes status='canceled' / canceled_by, so the DOWN
+// migration must convert those back and drain canceled_by on rollback.
 //
 // The DOWN migration must:
 //  1. Convert 'canceled' rows back to 'cancelled' BEFORE re-adding the
@@ -146,11 +155,17 @@ func TestMigration_000078_RollbackWithCanceledRows(t *testing.T) {
 	require.NoError(t, err, "after rollback the 'cancelled'-only CHECK must accept 'cancelled'")
 }
 
-// TestMigration_000078_UpAcceptsBothSpellings verifies the EXPAND half:
-// after the up migration both 'cancelled' (legacy) and 'canceled' (new) satisfy
-// the widened CHECK constraints, and pre-existing 'cancelled' rows are
-// backfilled to 'canceled'. This is what makes the rolling deploy safe.
-func TestMigration_000078_UpAcceptsBothSpellings(t *testing.T) {
+// TestMigration_000078_UpIsAdditiveAndDualCompatible verifies the EXPAND half.
+// The UP migration is intentionally NON-destructive: it widens both CHECK
+// constraints to accept 'cancelled' and 'canceled' and copies existing
+// cancelled_by into canceled_by, but it does NOT normalize legacy status
+// values (that is deferred to the CONTRACT migration #1278, which runs after
+// all old code is gone). This test asserts:
+//   - a pre-existing legacy 'cancelled' row KEEPS its status (not normalized);
+//   - its cancelled_by is copied into canceled_by (convenience copy);
+//   - both spellings satisfy the widened CHECK, so old AND new code can write
+//     throughout the rolling deploy window.
+func TestMigration_000078_UpIsAdditiveAndDualCompatible(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -159,8 +174,8 @@ func TestMigration_000078_UpAcceptsBothSpellings(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Pin just below 000078 and seed a legacy 'cancelled' row + cancelled_by
-	// so we can prove the up migration backfills both the status and the column.
+	// Pin just below 000078 and seed a legacy 'cancelled' row + cancelled_by so
+	// we can prove the up migration is additive (status preserved, column copied).
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, renameCanceledPrevVersion))
 
 	const (
@@ -177,22 +192,24 @@ func TestMigration_000078_UpAcceptsBothSpellings(t *testing.T) {
 	`, execID, execActor)
 	require.NoError(t, err, "seeding a legacy 'cancelled' row below 000078 must succeed")
 
-	// Apply 000078 (EXPAND + BACKFILL).
+	// Apply 000078 (EXPAND, additive).
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, renameCanceledVersion))
 
-	// Pre-existing 'cancelled' must have been backfilled to 'canceled'.
+	// The legacy 'cancelled' status must be PRESERVED -- UP must NOT normalize
+	// it (normalization is deferred to #1278; doing it here would be unsafe with
+	// live old code).
 	var status string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT status FROM purchase_executions WHERE execution_id = $1`, execID,
 	).Scan(&status))
-	assert.Equal(t, "canceled", status, "UP must backfill legacy 'cancelled' to 'canceled'")
+	assert.Equal(t, "cancelled", status, "UP must NOT normalize legacy 'cancelled' status (deferred to #1278)")
 
-	// cancelled_by must have been backfilled into canceled_by.
+	// cancelled_by must have been copied into canceled_by (convenience copy).
 	var newActor string
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT canceled_by FROM purchase_executions WHERE execution_id = $1`, execID,
 	).Scan(&newActor))
-	assert.Equal(t, execActor, newActor, "UP must backfill cancelled_by into canceled_by")
+	assert.Equal(t, execActor, newActor, "UP must copy existing cancelled_by into canceled_by")
 
 	// Both spellings must satisfy the widened constraint (dual-write window).
 	_, err = pool.Exec(ctx, `
@@ -214,4 +231,26 @@ func TestMigration_000078_UpAcceptsBothSpellings(t *testing.T) {
 		)
 	`)
 	require.NoError(t, err, "widened CHECK must accept new 'canceled'")
+
+	// Deferred-normalization safety: a row written by *live old code* AFTER the
+	// migration ran (cancelled_by only, no canceled_by) must still be readable
+	// via the COALESCE the application uses on every read path.
+	const lateExecID = "77777777-7777-7777-7777-000000000007"
+	const lateActor = "late-legacy@test.example"
+	_, err = pool.Exec(ctx, `
+		INSERT INTO purchase_executions
+		    (id, execution_id, status, step_number, scheduled_date, cancelled_by)
+		VALUES (
+		  '77777777-7777-7777-7777-000000000008',
+		  $1, 'cancelled', 1, NOW(), $2
+		)
+	`, lateExecID, lateActor)
+	require.NoError(t, err, "old code can still write a cancelled_by-only row after EXPAND")
+
+	var coalescedActor string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COALESCE(canceled_by, cancelled_by) FROM purchase_executions WHERE execution_id = $1`, lateExecID,
+	).Scan(&coalescedActor))
+	assert.Equal(t, lateActor, coalescedActor,
+		"a late cancelled_by-only write must read correctly via COALESCE (the app's read path)")
 }

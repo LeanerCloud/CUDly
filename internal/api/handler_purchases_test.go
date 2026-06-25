@@ -1388,6 +1388,50 @@ func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing
 	assert.Contains(t, ce.message, "running", "error must include actual status")
 }
 
+// TestHandler_deletePlannedPurchase_BackendErrorReturns5xx is the regression
+// guard for CodeRabbit round-2 finding #1 (same class as PR #1276): a
+// TransitionExecutionStatus error that is NOT ErrExecutionNotInExpectedStatus
+// is a real server-side failure (DB down, transient fault), not a CAS
+// conflict. cancelOrRecoverExecution must surface it as a non-ClientError so
+// the router returns a generic 500 (logging the raw detail) rather than a 409
+// that misclassifies a retriable backend failure as the caller's fault and
+// leaks backend text (feedback_http_status_classification).
+func TestHandler_deletePlannedPurchase_BackendErrorReturns5xx(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+
+	execID := "bcbcbcbc-bcbc-bcbc-bcbc-bcbcbcbcbcbc"
+
+	// A real backend failure, NOT a CAS conflict.
+	dbErr := fmt.Errorf("connection refused: database unavailable")
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).Return(nil, dbErr)
+	// On a real backend error we must NOT fall into the recovery path:
+	// GetExecutionByID must not be called. AssertExpectations verifies this.
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.Error(t, err, "a backend failure must surface as an error")
+	assert.Nil(t, result)
+
+	// Must NOT be a ClientError -- the router maps a plain error to a generic 500.
+	_, isClientErr := IsClientError(err)
+	assert.False(t, isClientErr, "backend failure must not be a 4xx/409 ClientError; got %v", err)
+}
+
 func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

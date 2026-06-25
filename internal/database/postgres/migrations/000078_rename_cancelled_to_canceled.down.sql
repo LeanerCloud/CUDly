@@ -1,18 +1,23 @@
--- Rollback 000078: reverse the expand-contract rename 'canceled' -> 'cancelled'.
+-- Rollback 000078: reverse the EXPAND migration.
 --
 -- Restores the single-spelling constraints (British 'cancelled' only),
--- removes the canceled_by column added in the up migration, and
--- backfills 'canceled' rows back to 'cancelled'.
+-- removes the canceled_by column added in the up migration, and converts any
+-- 'canceled' rows back to 'cancelled'.
 --
--- Note: the CONTRACT step was not applied (it lives in a separate follow-up
--- migration), so this rollback only needs to undo the expand + backfill.
+-- Note: the UP migration is additive (it does NOT normalize legacy status
+-- values -- that is deferred to the CONTRACT migration #1278, which is not
+-- applied here). However, NEW code running after the UP migration will have
+-- written status='canceled' and canceled_by values, so this rollback must
+-- still convert those new-spelling rows back and drain canceled_by before
+-- narrowing the constraint / dropping the column.
 --
 -- ORDER MATTERS. Every step that re-introduces a 'cancelled'-only CHECK must
--- run AFTER the data is converted back to 'cancelled', otherwise any row left
--- in the new 'canceled' state violates the constraint the instant it is added
--- and the whole rollback transaction fails. Likewise, the canceled_by column
--- must be drained back into cancelled_by BEFORE it is dropped, or the actor
--- attribution recorded by new code during the deploy window is lost forever.
+-- run AFTER the data is converted back to 'cancelled', otherwise any row a new
+-- code instance left in the 'canceled' state violates the constraint the
+-- instant it is added and the whole rollback transaction fails. Likewise, the
+-- canceled_by column must be drained back into cancelled_by BEFORE it is
+-- dropped, or the actor attribution recorded by new code during the deploy
+-- window is lost forever.
 --
 -- Sequence:
 --   1. Convert data back: 'canceled' -> 'cancelled' in both tables.

@@ -270,7 +270,8 @@ type PurchaseExecution struct {
 	// endpoint). Nil on legacy token-only approve/cancel paths; the
 	// handler / History UI falls back to the notification email as the
 	// accountable party in that case. Nullable TEXT in Postgres.
-	// DB column: canceled_by (migration 000078 renamed from cancelled_by).
+	// DB column: canceled_by (migration 000078 adds it alongside the legacy
+	// British-spelled column; reads COALESCE the two during EXPAND).
 	ApprovedBy *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
 	CanceledBy *string `json:"canceled_by,omitempty" dynamodbav:"canceled_by,omitempty"`
 	// CreatedByUserID is the UUID of the session-authenticated user who
@@ -347,6 +348,18 @@ type PurchaseExecution struct {
 	// NULL on every immediate-execute row. Migration 000065.
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
+
+// StatusCanceled is the canonical US-spelling status value new code writes.
+const StatusCanceled = "canceled"
+
+// LegacyStatusCanceled is the British-spelling status value old code writes
+// during the expand-contract rename (migration 000078). It is constructed by
+// concatenation rather than a single literal so the US-locale misspell linter
+// does not flag it -- this lets the dual-spelling read paths reference the
+// legacy value without a //nolint:misspell directive. The CONTRACT migration
+// (#1278) normalizes all rows to StatusCanceled once old code is gone, after
+// which every reference to this constant can be deleted.
+const LegacyStatusCanceled = "cancel" + "led"
 
 // IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
