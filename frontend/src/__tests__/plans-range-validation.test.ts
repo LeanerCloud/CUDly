@@ -627,6 +627,17 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
  * is today so a same-day purchase remains possible.
  */
 describe('Add Purchases modal: start-date picker enforces future-only dates (QA 5.6)', () => {
+  // Local-calendar ISO YYYY-MM-DD. Mirrors plans.ts toLocalDateInputValue.
+  // The production code must derive both `value` and `min` from local-time
+  // components (not toISOString, which is UTC) so a user west of UTC at
+  // 6pm local doesn't see "today" greyed out in the picker.
+  function toLocalDateInputValue(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   beforeEach(async () => {
     jest.clearAllMocks();
     const plansList = document.createElement('div');
@@ -642,15 +653,26 @@ describe('Add Purchases modal: start-date picker enforces future-only dates (QA 
     const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
     expect(input).not.toBeNull();
 
-    const todayIso = new Date().toISOString().split('T')[0];
-    expect(input.min).toBe(todayIso);
+    expect(input.min).toBe(toLocalDateInputValue(new Date()));
   });
 
   it('keeps the default value set to tomorrow, not today', () => {
     const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowIso = tomorrow.toISOString().split('T')[0];
-    expect(input.value).toBe(tomorrowIso);
+    expect(input.value).toBe(toLocalDateInputValue(tomorrow));
+  });
+
+  it('uses the local calendar day, not UTC, so users west of UTC can still pick today', () => {
+    // Regression check for the UTC-vs-local bug: at 23:00 in (e.g.) Los
+    // Angeles on Dec 31, `new Date().toISOString().split('T')[0]` returns
+    // Jan 1 (UTC), which would make today.min = Jan 1 and reject Dec 31 —
+    // contradicting "today remains selectable". Assert min uses the same
+    // calendar day Date() reports via local getters (the values diverge
+    // only in non-UTC timezones, but the bug shape is the function call).
+    const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    const now = new Date();
+    const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    expect(input.min).toBe(localDay);
   });
 });

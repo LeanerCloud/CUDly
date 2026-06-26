@@ -899,6 +899,18 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
   return { provider: null, service: '—', term: null, coverage: null };
 }
 
+// Format a Date as YYYY-MM-DD in the user's *local* calendar — the format
+// expected by <input type="date"> .value and .min. Built from local
+// year/month/day components so we don't shift by the user's UTC offset
+// (e.g. a US user at 6pm local already crosses into UTC's next day, so
+// toISOString() would return the wrong calendar day for a date-picker).
+function toLocalDateInputValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // Returns true when the plan's next_execution_date is strictly before today.
 function isPlanOverdue(plan: BackendPlan): boolean {
   if (!plan.next_execution_date) return false;
@@ -2055,12 +2067,19 @@ export async function openAddPurchasesModal(planId: string, planName: string): P
   `;
   document.body.appendChild(modal);
 
-  // Set default start date to tomorrow
+  // Set default start date to tomorrow.
+  //
+  // Date inputs use the user's *local* calendar day, so we must build the
+  // ISO string from local components (toISOString returns UTC). For a user
+  // west of UTC on the evening of day D, `new Date().toISOString()` returns
+  // D+1's calendar date, which would make `min` reject "today" in the
+  // picker and contradict the QA 5.6 promise that same-day purchases stay
+  // selectable. Mirrors isPlanOverdue's local-midnight pattern above.
+  const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
-  startDateInput.value = tomorrow.toISOString().split('T')[0] ?? '';
-  startDateInput.min = new Date().toISOString().split('T')[0] ?? '';
+  startDateInput.value = toLocalDateInputValue(tomorrow);
+  startDateInput.min = toLocalDateInputValue(new Date());
 
   // Add event listeners
   document.getElementById('add-purchases-cancel')?.addEventListener('click', closeAddPurchasesModal);
