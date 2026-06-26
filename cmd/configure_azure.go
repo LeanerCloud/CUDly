@@ -391,7 +391,7 @@ func promptAndRunExplicitCommand(reader *bufio.Reader, name, displayCmd, program
 
 	switch choice {
 	case "r", "run", "":
-		return executeExplicitCommand(displayCmd, program, args...)
+		return executeExplicitCommand(reader, displayCmd, program, args...)
 	case "s", "skip":
 		fmt.Printf("Skipping %s\n", name)
 		return nil
@@ -402,7 +402,9 @@ func promptAndRunExplicitCommand(reader *bufio.Reader, name, displayCmd, program
 }
 
 // executeExplicitCommand runs a command with explicit program and arguments.
-func executeExplicitCommand(displayCmd, program string, args ...string) error {
+// reader must be the same bufio.Reader the caller used for the preceding
+// prompt; reusing it avoids double-buffering scripted/piped stdin.
+func executeExplicitCommand(reader *bufio.Reader, displayCmd, program string, args ...string) error {
 	fmt.Println()
 	fmt.Printf("Executing: %s\n", displayCmd)
 	fmt.Println(strings.Repeat("-", 60))
@@ -418,7 +420,6 @@ func executeExplicitCommand(displayCmd, program string, args ...string) error {
 	if err != nil {
 		fmt.Printf("Command failed: %v\n", err)
 		fmt.Print("Continue anyway? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
 		response, readErr := readLine(reader)
 		if readErr != nil {
 			return fmt.Errorf("failed to read response: %w", readErr)

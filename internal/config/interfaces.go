@@ -245,6 +245,10 @@ type StoreInterface interface {
 	// SuccessfulCollect for the per-row semantics.
 	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
+	// ListStoredRecommendations returns the stored recommendations matching
+	// filter. A nil filter means "no filter" (match every stored row), the
+	// same as passing &RecommendationFilter{}; implementations must accept nil
+	// without panicking.
 	ListStoredRecommendations(ctx context.Context, filter *RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error

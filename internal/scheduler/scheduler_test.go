@@ -205,6 +205,15 @@ func TestNewScheduler(t *testing.T) {
 	assert.Equal(t, "https://dashboard.example.com", scheduler.dashboardURL)
 }
 
+func TestNewScheduler_NilConfigPanics(t *testing.T) {
+	// A nil config is a programming error: building a Scheduler with every
+	// dependency unset would only surface as a confusing nil deref later, so
+	// NewScheduler fails loud at construction.
+	assert.PanicsWithValue(t,
+		"scheduler: NewScheduler requires a non-nil *Config",
+		func() { NewScheduler(nil) })
+}
+
 func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

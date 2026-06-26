@@ -42,6 +42,15 @@ func TestNewHandler(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
+func TestNewHandler_NilConfigPanics(t *testing.T) {
+	// A nil config is a programming error: building a Handler with every
+	// dependency unset would only surface as a confusing nil deref on the
+	// first request, so NewHandler fails loud at construction.
+	assert.PanicsWithValue(t,
+		"apihttp: NewHandler requires a non-nil *HandlerConfig",
+		func() { NewHandler(nil) })
+}
+
 func TestNewHandler_CORSDefault(t *testing.T) {
 	// Test that empty CORS origin defaults to empty (no CORS headers)
 	handler := NewHandler(&HandlerConfig{})

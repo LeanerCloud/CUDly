@@ -241,7 +241,11 @@ func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data *email.
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Best-effort, fire-after-commit notification: the registration state has
+	// already changed, so bound the synchronous send with its own timeout
+	// (not the request ctx, which may already be done) so a stalled notifier
+	// can never hold the approval/rejection path open indefinitely.
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := h.emailNotifier.SendRegistrationDecisionNotification(notifyCtx, reg.ContactEmail, *data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)

@@ -14,6 +14,7 @@ import (
 // reshape lookup needs. Scoped here so the closure stays unit-testable
 // against a tiny fake instead of the full StoreInterface mock.
 type recsLister interface {
+	// A nil filter means "no filter" (match all); see config.StoreInterface.
 	ListStoredRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
