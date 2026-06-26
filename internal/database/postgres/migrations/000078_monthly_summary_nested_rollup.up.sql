@@ -1,4 +1,4 @@
--- 000077: monthly_savings_summary nested SUM-then-AVG rollup (COR-02).
+-- 000078: monthly_savings_summary nested SUM-then-AVG rollup (COR-02).
 --
 -- Snapshot rows are run-rates written at (account, provider, service, region,
 -- commitment_type, timestamp) grain, so a (month, account, provider, service)
