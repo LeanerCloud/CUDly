@@ -184,8 +184,8 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 
 // isStaleExecution reports whether the execution is a pending/notified
 // approval older than approvalExpiryWindow that should be transitioned to
-// "expired". Extracted so both fetchExecutionsAsHistory and the async sweep
-// share one staleness check.
+// "expired". Extracted so both fetchExecutionsAsHistory and the expire
+// sweep (sync on Lambda, async on servers) share one staleness check.
 func isStaleExecution(exec config.PurchaseExecution) bool {
 	if exec.Status != "pending" && exec.Status != "notified" {
 		return false
