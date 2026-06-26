@@ -95,6 +95,9 @@ type RecommendationsClientAdapter struct {
 // providers/azure/recommendations.go (closes #258, commit b10326c5) and the
 // AWS service-loop parallelisation (closes #266).
 func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	if p == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
 	params := *p
 	// Get list of regions to check
 	regions, err := r.getRegions(ctx)
