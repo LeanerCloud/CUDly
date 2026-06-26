@@ -884,13 +884,12 @@ describe('Dashboard Module', () => {
       bAll.textContent = 'All';
       document.body.appendChild(bAll);
       setupSavingsTrendHandlers();
+      // Override the beforeEach default of empty data_points so the chart
+      // actually renders -- the test asserts the empty-state stays hidden.
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
         data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 }],
       });
       (api.getSavingsAnalytics as jest.Mock).mockClear();
-      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 }],
-      });
 
       bAll.click();
       await new Promise(r => setTimeout(r, 0));

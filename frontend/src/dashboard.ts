@@ -1003,11 +1003,14 @@ export function formatTrendAxisTick(tsMs: number, intervalHint: 'hourly' | 'dail
 
 /**
  * Load the savings-over-time trend chart for the dashboard. Fetches the
- * history analytics endpoint with the currently-selected range and
- * renders a line chart of cumulative savings spanning the full selected
- * window on the x-axis (QA row 405, step 3.1). Empty windows render
- * labelled axes rather than a "no data" stub; only fetch failures use
- * the error stub.
+ * history analytics endpoint with the currently-selected range and renders
+ * a line chart of cumulative savings spanning the full selected window on
+ * the x-axis (QA row 405, step 3.1). When the response is empty (QA 2.3
+ * supersedes QA 3.1's earlier empty-axes suggestion), the canvas is hidden
+ * and an empty-state banner is shown: a filter-aware "No savings history
+ * for <filter>" when a provider or account chip is active, otherwise the
+ * generic "No purchase history yet." Fetch failures hide the canvas and
+ * show the "Savings history is not available yet." stub instead.
  */
 export async function loadSavingsTrendChart(): Promise<void> {
   const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
