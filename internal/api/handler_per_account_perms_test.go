@@ -1029,6 +1029,10 @@ func TestPerAccountPerms_InventoryCommitments_ZeroAllowedAccountsNoQuery(t *test
 		Return([]string{"dddddddd-dddd-4ddd-dddd-dddddddddddd"}, nil)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() {
+		mockStore.AssertExpectations(t)
+		mockAuth.AssertExpectations(t)
+	})
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}

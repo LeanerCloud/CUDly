@@ -711,6 +711,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 func TestHandler_listActiveCommitments_NoTruncationBeyond1000(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	now := time.Now()
 
 	// Oldest row: 3-year commitment purchased ~2.5 years ago, still active.
@@ -740,9 +741,12 @@ func TestHandler_listActiveCommitments_NoTruncationBeyond1000(t *testing.T) {
 		})
 	}
 
-	// Old capped read: ORDER BY timestamp DESC LIMIT MaxListLimit keeps only
-	// the newer (expired) rows; the still-active oldest row is truncated away.
-	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(newestFirst, nil)
+	// Old capped read (documentation-only): ORDER BY timestamp DESC LIMIT
+	// MaxListLimit kept only the newer (expired) rows; the still-active oldest
+	// row was truncated away. Maybe() so AssertExpectations does not require it
+	// to be called — the whole point of the test is that it must NOT be called
+	// post-fix. AssertNotCalled below pins that explicitly.
+	mockStore.On("GetAllPurchaseHistory", ctx, config.MaxListLimit).Return(newestFirst, nil).Maybe()
 	// SQL active-only read: no cap, returns exactly the live commitments.
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{oldActive}, nil)
