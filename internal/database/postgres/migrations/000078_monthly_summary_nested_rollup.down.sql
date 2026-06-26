@@ -1,4 +1,4 @@
--- 000077 down: restore the flat-AVG monthly_savings_summary definition from
+-- 000078 down: restore the flat-AVG monthly_savings_summary definition from
 -- 000067/000074 (which understates multi-row buckets, per COR-02), and
 -- recreate the unique index using NULLS NOT DISTINCT (as 000076 left it).
 DROP MATERIALIZED VIEW IF EXISTS monthly_savings_summary CASCADE;
