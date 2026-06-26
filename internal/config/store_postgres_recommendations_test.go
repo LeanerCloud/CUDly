@@ -272,6 +272,14 @@ func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T)
 	acct1 := "11111111-1111-1111-1111-111111111111"
 	acct2 := "22222222-2222-2222-2222-222222222222"
 
+	// Seed cloud_accounts so the FK on recommendations.cloud_account_id is satisfied.
+	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{
+		ID: acct1, Name: "Eviction-Test-Acct-1", Enabled: true, Provider: "azure", ExternalID: "eviction-test-acct-1",
+	}))
+	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{
+		ID: acct2, Name: "Eviction-Test-Acct-2", Enabled: true, Provider: "azure", ExternalID: "eviction-test-acct-2",
+	}))
+
 	t0 := time.Now().UTC().Truncate(time.Second)
 
 	seed := []config.RecommendationRecord{
@@ -325,6 +333,11 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 	defer cleanup()
 
 	registeredAcctID := "33333333-3333-3333-3333-333333333333"
+
+	// Seed cloud_accounts so the FK on recommendations.cloud_account_id is satisfied.
+	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{
+		ID: registeredAcctID, Name: "Coexist-Test-Acct", Enabled: true, Provider: "aws", ExternalID: "coexist-test-acct-1",
+	}))
 
 	t0 := time.Now().UTC().Truncate(time.Second)
 
