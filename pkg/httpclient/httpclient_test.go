@@ -31,6 +31,11 @@ func TestNew_BlocksIMDS(t *testing.T) {
 	}{
 		{name: "ipv4 link-local IMDS", url: "http://169.254.169.254/latest/meta-data/"},
 		{name: "ipv6 AWS IMDS", url: "http://[fd00:ec2::254]/latest/meta-data/"},
+		// Same IPv6 address as above written in fully-expanded form.
+		// A literal-string blocklist (pre-PR shape) would miss this
+		// and let the request through; the net.IP.Equal comparison in
+		// isIMDS catches it.
+		{name: "ipv6 AWS IMDS expanded form", url: "http://[fd00:ec2:0:0:0:0:0:254]/latest/meta-data/"},
 	}
 
 	c := New()

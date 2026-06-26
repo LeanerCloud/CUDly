@@ -26,11 +26,32 @@ const (
 	requestTimeout      = 30 * time.Second
 )
 
-// imdsAddresses are the well-known metadata service addresses that must never
-// be reachable from application-level HTTP clients.
-var imdsAddresses = map[string]bool{
-	"169.254.169.254": true, // AWS/Azure/GCP link-local IMDS (IPv4)
-	"fd00:ec2::254":   true, // AWS IMDS (IPv6)
+// imdsAddresses are the well-known metadata service addresses that must
+// never be reachable from application-level HTTP clients. Compared by
+// net.IP.Equal so alternative textual encodings of the same address
+// (e.g. the expanded IPv6 form "fd00:ec2:0:0:0:0:0:254") are blocked
+// equally: a literal-string match against the canonical short form
+// would let the expanded form through.
+var imdsAddresses = []net.IP{
+	net.ParseIP("169.254.169.254"), // AWS/Azure/GCP link-local IMDS (IPv4)
+	net.ParseIP("fd00:ec2::254"),   // AWS IMDS (IPv6)
+}
+
+// isIMDS reports whether host (a literal IP, as parsed off the dial
+// address) is one of the blocked metadata endpoints. Returns false for
+// hostnames — those are out of scope for this block-list because dial-
+// time DNS resolution happens inside the inner dialer.
+func isIMDS(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, blocked := range imdsAddresses {
+		if ip.Equal(blocked) {
+			return true
+		}
+	}
+	return false
 }
 
 // blockIMDSDialer wraps net.Dialer and rejects connections to IMDS addresses.
@@ -43,7 +64,7 @@ func (d *blockIMDSDialer) DialContext(ctx context.Context, network, addr string)
 	if err != nil {
 		host = addr
 	}
-	if imdsAddresses[host] {
+	if isIMDS(host) {
 		return nil, fmt.Errorf("connection to metadata endpoint %s is blocked", host)
 	}
 	return d.inner.DialContext(ctx, network, addr)
