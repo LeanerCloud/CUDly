@@ -1388,6 +1388,67 @@ func TestHandler_deletePlannedPurchase_ConflictRetryRunningReturns409(t *testing
 	assert.Contains(t, ce.message, "running", "error must include actual status")
 }
 
+// TestHandler_deletePlannedPurchase_ConflictRetryLegacyCanceledNormalizes is
+// the regression guard for the CR outside-diff comment on PR #1277: when the
+// CAS conflict recovery branch finds the row in the LEGACY British spelling
+// (the row was canceled by old code during the rolling deploy window), the
+// API response Status must be normalized to the canonical US spelling so a
+// caller doesn't observe two different status values for the same execution
+// depending on which code instance handled the request. The stored row is
+// untouched -- only the in-memory copy returned to the handler is normalized.
+func TestHandler_deletePlannedPurchase_ConflictRetryLegacyCanceledNormalizes(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	adminSession := &Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}
+
+	planID := "12121212-1212-1212-1212-121212121212"
+	execID := "13131313-1313-1313-1313-131313131313"
+
+	conflictErr := fmt.Errorf("%w: execution %s cannot transition", config.ErrExecutionNotInExpectedStatus, execID)
+
+	// Old code already canceled this row during the deploy window: the DB
+	// holds the legacy British spelling. The handler must accept it (idempotent
+	// recovery) but normalize the response to the canonical US spelling.
+	existingExec := &config.PurchaseExecution{
+		ExecutionID: execID,
+		PlanID:      planID,
+		Status:      config.LegacyStatusCanceled,
+	}
+	plan := &config.PurchasePlan{
+		ID:      planID,
+		Name:    "Legacy Cancel Plan",
+		Enabled: true,
+	}
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).Return(nil, conflictErr)
+	mockStore.On("GetExecutionByID", ctx, execID).Return(existingExec, nil)
+	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.MatchedBy(func(p *config.PurchasePlan) bool {
+		return p.ID == planID && !p.Enabled
+	})).Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+	}
+	result, err := handler.deletePlannedPurchase(ctx, req, execID)
+	require.NoError(t, err)
+	assert.Equal(t, config.StatusCanceled, result.Status,
+		"legacy 'cancelled' must be normalized to the canonical US 'canceled' in the response")
+	assert.NotEqual(t, config.LegacyStatusCanceled, result.Status,
+		"the response must never leak the legacy spelling once the recovery branch ran")
+}
+
 // TestHandler_deletePlannedPurchase_BackendErrorReturns5xx is the regression
 // guard for CodeRabbit round-2 finding #1 (same class as PR #1276): a
 // TransitionExecutionStatus error that is NOT ErrExecutionNotInExpectedStatus

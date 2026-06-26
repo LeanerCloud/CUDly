@@ -401,6 +401,18 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))
 	}
+	// Normalize the response Status so the idempotent recovery path returns the
+	// canonical US spelling even when the DB row still carries the legacy value.
+	// Without this, a caller that received an in-flight 200 from this branch
+	// would see status="cancelled" while a caller that hit the happy-path
+	// transition above would see status="canceled" for the same execution_id
+	// during the rolling deploy. The legacy value is preserved in storage --
+	// only the in-memory copy returned to the handler is normalized -- so the
+	// contract migration's authoritative status backfill still observes every
+	// legacy row.
+	if existing.Status == config.LegacyStatusCanceled {
+		existing.Status = config.StatusCanceled
+	}
 	return existing, nil
 }
 

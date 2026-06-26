@@ -39,10 +39,24 @@
 --      including rows old code writes after the copy runs.)
 --   3. (Deferred to #1278) normalize status values + drain late cancelled_by.
 --
--- DEPLOY ORDER: this migration MUST complete before new code can write
--- 'canceled'. Once the widened constraints are installed, old code writing
--- 'cancelled' and new code writing 'canceled' are both accepted throughout
--- the rolling deploy window.
+-- DEPLOY ORDER (strict, do not reorder):
+--   1. Apply this migration (000078) while the OLD code is still running.
+--      Old code keeps writing 'cancelled' / cancelled_by; the widened
+--      constraints accept that and the COALESCE-based reads cover both
+--      columns. No new-spelling row exists yet, by construction.
+--   2. Roll out the new code. New code writes 'canceled' / canceled_by;
+--      old code still rolling out writes 'cancelled' / cancelled_by; both
+--      are accepted and both are read correctly by every instance.
+--   3. After the rollout is verified stable and every old-code instance is
+--      gone, apply the CONTRACT migration (#1278) to normalize the data
+--      and drop the legacy spellings.
+--
+-- New code MUST NOT be deployed before step 1 completes. Writes from new
+-- code against the original 'cancelled'-only CHECK will fail with PG
+-- check_violation (SQLSTATE 23514) and crash every cancel path. The
+-- migrator runs synchronously at app startup, so the correct sequence is:
+-- (a) hold the new release at the queue; (b) run migrations against the old
+-- codebase pinned at the prior version; (c) only then release the new code.
 --
 -- The follow-up CONTRACT migration (#1278) will normalize all legacy values
 -- and drop 'cancelled' from constraints + drop cancelled_by, only after this
