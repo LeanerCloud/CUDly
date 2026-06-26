@@ -501,8 +501,8 @@ describe('providerBadgeHtml', () => {
 
 // ---------------------------------------------------------------------------
 // Regression tests for finding 11-N1: deepClone defaults to structuredClone.
-// The jsdom test environment polyfills structuredClone via Node's
-// MessageChannel serializer (see setup.ts), which implements the real HTML
+// The jsdom test environment polyfills structuredClone via
+// `@ungap/structured-clone` (see setup.ts), which implements the real HTML
 // structured clone algorithm, so full browser semantics are asserted here.
 // ---------------------------------------------------------------------------
 describe('deepClone (11-N1: structuredClone default)', () => {
