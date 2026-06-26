@@ -62,7 +62,11 @@ export function getAccountName(accountId: string): string {
 
 // issues #225 + #226: expand/collapse state for cell grouping.
 // Contains the cellKey strings of cells the user has explicitly expanded.
-// Cleared on page load / full refresh; survives per-column filter/sort re-renders.
+// Cleared on every loadRecommendations() entry (page load, tab switch back
+// to Opportunities, provider/account Global filter change, manual refresh,
+// lookback change, stale auto-refresh — see resetExpandedCells() call at
+// the top of loadRecommendations). Survives per-column filter/sort/period
+// re-renders, which go through rerenderRecommendations() instead.
 const expandedCells = new Set<string>();
 // Last computed group keys for the visible filtered set — used by the
 // Expand-All button handler to populate expandedCells without re-computing.
@@ -70,7 +74,8 @@ let lastVisibleGroupKeys: string[] = [];
 
 // issue #135: expand/collapse state for SP plan-type group rows.
 // Contains the spGroupKey strings the user has explicitly expanded.
-// Cleared together with expandedCells on page load / full refresh.
+// Cleared together with expandedCells on every loadRecommendations() entry
+// (see resetExpandedCells); survives column-filter/sort/period re-renders.
 const expandedSpGroups = new Set<string>();
 
 // #272 (CR follow-up): cache of the most-recent API-derived summary so
