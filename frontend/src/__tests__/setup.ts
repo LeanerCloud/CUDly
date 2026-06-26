@@ -68,9 +68,11 @@ Object.defineProperty(global, 'Chart', {
 // implementation of the HTML structured clone algorithm (preserves
 // undefined-valued properties, Date, Map, Set, RegExp, cycles; throws
 // TypeError on functions), unlike the previous JSON round-trip which
-// validated weaker semantics than production browsers (TEST-07). It must run
-// inside the jsdom sandbox (not Node's realm) so cloned objects keep
-// sandbox-realm prototypes and instanceof checks keep working.
+// validated weaker semantics than production browsers (TEST-07). When the
+// host Node has a native structuredClone, @ungap delegates to it; otherwise
+// it uses its own serialize/deserialize. In jsdom-on-jest, Date/Map/Set
+// primordials are shared with Node so `instanceof` keeps working on cloned
+// values regardless of which path runs.
 if (typeof globalThis.structuredClone === 'undefined') {
   globalThis.structuredClone = (<T>(value: T, options?: StructuredSerializeOptions): T => {
     if (options?.transfer?.length) {
