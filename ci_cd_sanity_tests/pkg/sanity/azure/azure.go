@@ -99,7 +99,10 @@ func validateAccountExpectations(opts Options, accountOut []byte) report.CheckRe
 
 // encodeAccountJSON serialises azureSubscriptionInfo into the same JSON shape
 // that "az account show -o json" produced so that validateAccountExpectations
-// can be reused without modification.
+// can be reused without modification. The struct is composed of plain strings
+// so json.Marshal cannot realistically fail; a nil return on the impossible
+// error path lets the caller skip the expected-checks step rather than feed
+// validateAccountExpectations a partially-encoded payload.
 func encodeAccountJSON(info azureSubscriptionInfo) []byte {
 	a := azAccountShow{
 		ID:       info.ID,
@@ -107,7 +110,10 @@ func encodeAccountJSON(info azureSubscriptionInfo) []byte {
 		Name:     info.Name,
 		State:    info.State,
 	}
-	b, _ := json.Marshal(a)
+	b, err := json.Marshal(a)
+	if err != nil {
+		return nil
+	}
 	return b
 }
 

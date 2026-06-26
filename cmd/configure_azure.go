@@ -423,7 +423,10 @@ func azureStepCreateServicePrincipal(ctx context.Context, reader *bufio.Reader, 
 	fmt.Printf("Create service principal %q with role %q at /subscriptions/%s?\n", azureSPName, azureSPRoleName, subscriptionID)
 	fmt.Printf("[R]un, [S]kip? ")
 
-	choice, _ := reader.ReadString('\n')
+	choice, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read service-principal choice: %w", err)
+	}
 	choice = strings.ToLower(strings.TrimSpace(choice))
 	if choice != "r" && choice != "run" && choice != "" {
 		fmt.Println("Skipping Create Service Principal")
