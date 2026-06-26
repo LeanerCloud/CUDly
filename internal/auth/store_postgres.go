@@ -433,12 +433,13 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 		return false, fmt.Errorf("failed to begin admin bootstrap transaction: %w", err)
 	}
 	// Rollback is a no-op after a successful Commit; on any earlier return
-	// it also releases the advisory lock.
-	defer func() { _ = tx.Rollback(ctx) }()
+	// it also releases the advisory lock. Matches the project convention
+	// (e.g. internal/config/store_postgres.go) for deferred rollback.
+	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Serialize against concurrent bootstrap calls and against the
 	// min-one-admin deferred trigger (see adminInvariantAdvisoryLockKey).
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminInvariantAdvisoryLockKey); err != nil {
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminInvariantAdvisoryLockKey); err != nil {
 		return false, fmt.Errorf("failed to acquire admin bootstrap lock: %w", err)
 	}
 
