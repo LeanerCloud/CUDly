@@ -1456,8 +1456,15 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
-// Test successful Azure recommendations
-func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
+// TestScheduler_CollectAzureRecommendations_AllAccountsFail pins the
+// fail-loud contract introduced by the recent provider changes: when every
+// enabled Azure account fails (here: DefaultAzureCredential is unavailable
+// in the test environment), collectAzureRecommendations must surface an
+// "all accounts failed" error rather than silently returning a partial /
+// empty result that would be merged into the aggregate as success.
+// The test validates the per-account loop runs without crashing AND that
+// the aggregate error contract holds.
+func TestScheduler_CollectAzureRecommendations_AllAccountsFail(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -1478,17 +1485,17 @@ func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
 	}
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return(azureAccounts, nil)
 
-	// The managed_identity path will try DefaultAzureCredential which will
-	// fail in tests, so we expect an error log but no crash.
+	// The managed_identity path will try DefaultAzureCredential which fails
+	// in tests; with 1 enabled account, FailedCount == len(accounts) so the
+	// fan-out must return errAllAccountsFailed (no silent partial success).
 	scheduler := &Scheduler{
 		config: mockStore,
 	}
 
 	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
-	require.NoError(t, err)
-	// In test environment without Azure credentials, 0 recommendations is expected
-	// (the error is logged and skipped). The test validates the per-account loop runs.
-	_ = recs
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all 1 accounts failed")
+	assert.Nil(t, recs)
 }
 
 // Test GCP recommendations with no accounts — should skip gracefully
