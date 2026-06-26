@@ -230,16 +230,11 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		acctExec.Status = "failed"
 		acctExec.Error = err.Error()
 		credErr := fmt.Errorf("credential resolution failed for account %s: %w", account.ID, err)
-		// The failed row is as much a part of the audit trail as a success
-		// row: if persisting it fails, surface that loss exactly like the
-		// post-purchase save below does instead of silently dropping it.
-		if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
-			return false, errors.Join(
-				fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr),
-				credErr,
-			)
-		}
-		return false, credErr
+		// Audit-trail save: the failed row is as much a part of the audit
+		// trail as a success row, so a save failure must surface (AUDIT LOSS)
+		// instead of being silently dropped. Extracted to a helper to keep
+		// executeForAccount under the gocyclo:10 budget.
+		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, credErr)
 	}
 
 	accountID := account.ExternalID
@@ -295,6 +290,22 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return committed, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 	return committed, nil
+}
+
+// persistFailedAccountExecution writes a per-account execution row that the
+// caller has already stamped with Status="failed" + Error, and joins any save
+// failure with the originating cause via errors.Join so neither error is
+// silently dropped (the row is as much audit trail as a success row; issue
+// #1184 / COR-10). Extracted from executeForAccount so the new branch keeps
+// that function under the gocyclo:10 budget.
+func (m *Manager) persistFailedAccountExecution(ctx context.Context, acctExec *config.PurchaseExecution, account config.CloudAccount, cause error) error {
+	if saveErr := m.config.SavePurchaseExecution(ctx, acctExec); saveErr != nil {
+		return errors.Join(
+			fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr),
+			cause,
+		)
+	}
+	return cause
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
