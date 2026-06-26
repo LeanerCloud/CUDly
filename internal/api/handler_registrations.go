@@ -241,7 +241,9 @@ func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data *email.
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, *data); err != nil {
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(notifyCtx, reg.ContactEmail, *data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)
 	}
 }

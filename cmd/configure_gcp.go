@@ -388,7 +388,7 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd string, args 
 
 	switch choice {
 	case "r", "run", "":
-		return executeGCPCommand(displayCmd, args...)
+		return executeGCPCommand(reader, displayCmd, args...)
 	case "s", "skip":
 		fmt.Printf("Skipping %s\n", name)
 		return nil
@@ -399,7 +399,9 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd string, args 
 }
 
 // executeGCPCommand runs a "gcloud" command with explicit arguments.
-func executeGCPCommand(displayCmd string, args ...string) error {
+// reader must be the same bufio.Reader the caller used for the preceding
+// prompt; reusing it avoids double-buffering scripted/piped stdin.
+func executeGCPCommand(reader *bufio.Reader, displayCmd string, args ...string) error {
 	fmt.Println()
 	fmt.Printf("Executing: %s\n", displayCmd)
 	fmt.Println(strings.Repeat("-", 60))
@@ -416,7 +418,6 @@ func executeGCPCommand(displayCmd string, args ...string) error {
 	if err != nil {
 		fmt.Printf("Command failed: %v\n", err)
 		fmt.Print("Continue anyway? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
 		response, rfErr := readLine(reader)
 		if rfErr != nil {
 			return fmt.Errorf("failed to read response: %w", rfErr)

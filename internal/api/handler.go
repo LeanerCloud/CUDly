@@ -75,6 +75,9 @@ func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 
 // NewHandler creates a new API handler.
 func NewHandler(cfg *HandlerConfig) *Handler {
+	if cfg == nil {
+		cfg = &HandlerConfig{}
+	}
 	corsOrigin := cfg.CORSAllowedOrigin
 	if corsOrigin == "" {
 		// Security: CORS must be explicitly configured

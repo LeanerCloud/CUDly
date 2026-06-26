@@ -245,6 +245,9 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 // gocyclo threshold; also makes the SQL builder testable in isolation if
 // needed.
 func buildRecommendationFilter(filter *RecommendationFilter) (whereClause string, args []any) {
+	if filter == nil {
+		return "", nil
+	}
 	var conds []string
 	add := func(cond string, val any) {
 		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
