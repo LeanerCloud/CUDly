@@ -416,10 +416,21 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 		t.Fatalf("kid A: %v", err)
 	}
 
+	// Sign tokB before issuing the swap so that the RSA operation
+	// (CPU-bound, ~1 ms) gives the go-oidc cleanup goroutine time to
+	// set inflight=nil under the mutex. Without this, fast loopback
+	// HTTP on Linux CI completes the swap POST without a goroutine
+	// switch, leaving the stale inflight visible to the next Validate
+	// call and causing it to reuse the pre-rotation key set.
+	tokB := signToken(t, keyB, baseClaims(time.Now(),
+		testSchedulerSubject,
+		"https://api.example.com",
+		"https://accounts.example.com"))
+
 	// Swap the JWKS to publish kid B.
 	//
 	// Both the request build and the response status are checked: if the
-	// /swap handler 5xx's (or — more subtly — returns a non-200 because
+	// /swap handler 5xx's (or -- more subtly -- returns a non-200 because
 	// the body short-read), the JWKS would silently NOT update. The test
 	// would then fail later at "unknown kid" instead of pointing at the
 	// real cause. Surfacing the swap failure here keeps the diagnostic
@@ -441,10 +452,6 @@ func TestValidate_OIDC_KeyRotation_RefreshOnUnknownKid(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	tokB := signToken(t, keyB, baseClaims(time.Now(),
-		testSchedulerSubject,
-		"https://api.example.com",
-		"https://accounts.example.com"))
 	if err := v.Validate(context.Background(), "Bearer "+tokB); err != nil {
 		t.Fatalf("kid B (post-rotation): %v", err)
 	}

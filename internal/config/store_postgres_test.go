@@ -307,10 +307,11 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	})
 
 	t.Run("Get execution by ID - not found", func(t *testing.T) {
-		// Use a valid UUID format that doesn't exist
-		_, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		// GetExecutionByID returns (nil, nil) when no row matches; the
+		// caller is responsible for distinguishing not-found from error.
+		exec, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
+		require.NoError(t, err)
+		assert.Nil(t, exec)
 	})
 
 	t.Run("Get execution by plan and date - not found", func(t *testing.T) {
