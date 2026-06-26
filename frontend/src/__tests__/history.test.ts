@@ -430,6 +430,58 @@ describe('History Module', () => {
         provider: undefined
       });
     });
+
+    // Migration 000089 (expand-contract rename cancelled -> canceled): during
+    // the rolling deploy window the backend returns BOTH spellings on
+    // /api/history. Each must render as the muted "Cancelled" badge, be
+    // counted under the Cancelled chip, and be visible when that chip is
+    // clicked. Pre-fix the FE only matched 'cancelled', so 'canceled' rows
+    // fell through to the green Completed badge and were silently bucketed
+    // into the Completed total -- a user-facing regression that defeats the
+    // purpose of the rename.
+    test('Cancelled badge + chip surface BOTH spellings during deploy window (migration 000089)', async () => {
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [
+          // Row written by new code post-deploy: US spelling.
+          { purchase_id: 'cx-new', status: 'canceled', provider: 'aws', region: 'us-east-1' },
+          // Row written by old code mid-deploy: legacy British spelling.
+          { purchase_id: 'cx-legacy', status: 'cancelled', provider: 'aws', region: 'us-east-1' },
+          // Sanity baseline: a real completed row -- must NOT bucket into Cancelled.
+          { purchase_id: 'comp-1', status: 'completed', provider: 'aws', region: 'us-east-1' },
+        ],
+      });
+
+      await loadHistory();
+
+      const list = document.getElementById('history-list');
+      const html = list?.innerHTML || '';
+
+      // Both rows must render the muted Cancelled badge, NOT the green
+      // Completed default. Two of the three rows are canceled, so we expect
+      // exactly two Cancelled badges.
+      const cancelledBadges = (html.match(/>Cancelled</g) || []).length;
+      expect(cancelledBadges).toBe(2);
+
+      // The Cancelled chip must count 2 (both spellings), and it must render
+      // at all (it only renders when its count > 0).
+      const cancelledChip = list?.querySelector<HTMLButtonElement>('[data-history-status="cancelled"]');
+      expect(cancelledChip).not.toBeNull();
+      expect(cancelledChip?.textContent).toContain('2');
+
+      // The Completed chip must count 1 (only the real completed row); the
+      // pre-fix bug bucketed canceled rows into completed, yielding 3.
+      const completedChip = list?.querySelector<HTMLButtonElement>('[data-history-status="completed"]');
+      expect(completedChip?.textContent).toContain('1');
+
+      // Clicking the Cancelled chip must reveal BOTH spellings, not just the
+      // British one (s === activeStatusFilter would only match 'cancelled').
+      cancelledChip?.click();
+      const filteredHtml = list?.innerHTML || '';
+      expect(filteredHtml).toContain('cx-new');
+      expect(filteredHtml).toContain('cx-legacy');
+      expect(filteredHtml).not.toContain('comp-1');
+    });
   });
 
   // Issue #701: setupHistoryHandlers must subscribe to the global topbar

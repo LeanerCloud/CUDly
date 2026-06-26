@@ -362,7 +362,7 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 		return nil, fmt.Errorf("approval token has expired")
 	}
 
-	// Only pre-purchase rows (pending/notified/scheduled) are cancelable —
+	// Only pre-purchase rows (pending/notified/scheduled) are cancelable --
 	// shares the single PurchaseExecution.IsCancelable predicate with the
 	// session path in cancelPurchaseViaSession so the policy can never drift
 	// between the two flows (issue #645). The "scheduled" state is also

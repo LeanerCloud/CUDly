@@ -1708,10 +1708,17 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 		{Status: "", UpfrontCost: 50.0, EstimatedSavings: 5.0}, // legacy row, no status
 		// One pending row that should be counted as pending, not completed.
 		{Status: "pending", UpfrontCost: 999.0, EstimatedSavings: 99.0},
-		// Two canceled rows — the regression case from issue #736.
-		// Neither must appear in the dollar KPIs or TotalCompleted.
-		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
-		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0}, //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		// Two canceled rows — the regression case from issue #736. Neither must
+		// appear in the dollar KPIs or TotalCompleted. One uses the new US
+		// spelling (config.StatusCanceled) and one the legacy British spelling
+		// (config.LegacyStatusCanceled): during the expand-contract rename
+		// (migration 000089) a mixed fleet still emits the legacy spelling, so
+		// the dual-spelling read path must exclude BOTH. The constant carries
+		// the legacy value without a literal the US-locale misspell linter would
+		// flag (and without a nolint). Drop the legacy fixture once the contract
+		// migration (#1278) normalizes the data.
+		{Status: config.StatusCanceled, UpfrontCost: 500.0, EstimatedSavings: 50.0},
+		{Status: config.LegacyStatusCanceled, UpfrontCost: 750.0, EstimatedSavings: 75.0},
 	}
 
 	summary := summarizePurchaseHistory(purchases)
