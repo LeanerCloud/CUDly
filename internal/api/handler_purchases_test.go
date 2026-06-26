@@ -2422,7 +2422,9 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 	}
 	session := &Session{UserID: cancelCallerID}
 
-	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+	// Grant cancel-own so auth passes (caller owns the row); the status guard
+	// must still reject with a 409 before any write.
+	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 	require.Error(t, err)
@@ -2436,9 +2438,9 @@ func TestHandler_cancelPurchase_Session_RejectsTerminalStatus(t *testing.T) {
 // TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus is the
 // session-path companion to the token-path #645 regression guard: every
 // status outside pending/notified must be rejected with a 409 and no write,
-// for parity with purchase.Manager.CancelExecution. The admin session keeps
-// the focus on the status guard (which fires before authorizeSessionCancel)
-// rather than the RBAC matrix, already covered by the matrix tests above.
+// for parity with purchase.Manager.CancelExecution. The caller is granted
+// cancel-own (owns the row) so authorization passes, keeping the focus on
+// the status guard rather than the RBAC matrix (already covered above).
 func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testing.T) {
 	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled"}
 	for _, status := range rejected {
@@ -2451,7 +2453,8 @@ func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testin
 			}
 			session := &Session{UserID: cancelCallerID}
 
-			handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
+			// Grant cancel-own so auth passes; the status guard must still reject.
+			handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
 			_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
 			require.Error(t, err)

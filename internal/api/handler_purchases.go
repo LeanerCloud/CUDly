@@ -951,11 +951,11 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	if err := guardImmediatelyCancelable(execution); err != nil {
+	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
-	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
+	if err := guardImmediatelyCancelable(execution); err != nil {
 		return nil, err
 	}
 

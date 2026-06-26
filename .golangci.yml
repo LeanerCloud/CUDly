@@ -84,6 +84,9 @@ linters:
       - linters:
           - all
         path: .*_gen\.go
+      - linters:
+          - misspell
+        path: internal/database/postgres/migrations/000078_rename_cancelled_to_canceled_test\.go
     paths:
       - third_party$
       - builtin$

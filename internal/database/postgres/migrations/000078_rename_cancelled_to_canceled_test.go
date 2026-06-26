@@ -1,13 +1,6 @@
 //go:build integration
 // +build integration
 
-// nolint:misspell // This integration test must reference the real legacy DB
-// column name "cancelled_by" and assert literal legacy "cancelled" status
-// values (the whole point of the rollback regression). Neither can change
-// until the contract migration (#1278) renames/normalizes them, so the
-// US-locale misspell linter is disabled for this file rather than peppering it
-// with per-line directives. Remove this once #1278 lands.
-
 package migrations_test
 
 import (
@@ -57,9 +50,9 @@ func TestMigration_000078_RollbackWithCanceledRows(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	// Apply the full migration set, ending at 000078 (or later head). The
-	// dual-accept constraint and canceled_by column are now in place.
-	require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
+	// Apply exactly 000078. The dual-accept constraint and canceled_by column
+	// are now in place.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, renameCanceledVersion))
 
 	// Seed a purchase_executions row in the NEW canceled state with an actor
 	// recorded in canceled_by (what new code writes during the deploy window).

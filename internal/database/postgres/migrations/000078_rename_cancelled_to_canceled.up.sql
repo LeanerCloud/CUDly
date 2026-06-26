@@ -39,11 +39,10 @@
 --      including rows old code writes after the copy runs.)
 --   3. (Deferred to #1278) normalize status values + drain late cancelled_by.
 --
--- DEPLOY ORDER: this migration MUST run before or with the code deploy.
--- Because the constraints accept both spellings the order is forgiving: if
--- the code deploy races ahead briefly, it will write 'canceled' into the
--- already-widened constraint.  If the migration runs first and old code is
--- still live, 'cancelled' continues to satisfy the widened constraint.
+-- DEPLOY ORDER: this migration MUST complete before new code can write
+-- 'canceled'. Once the widened constraints are installed, old code writing
+-- 'cancelled' and new code writing 'canceled' are both accepted throughout
+-- the rolling deploy window.
 --
 -- The follow-up CONTRACT migration (#1278) will normalize all legacy values
 -- and drop 'cancelled' from constraints + drop cancelled_by, only after this
