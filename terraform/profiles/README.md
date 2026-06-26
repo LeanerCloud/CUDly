@@ -60,13 +60,14 @@ terraform apply -var-file="../../../profiles/aws/prod.tfvars"
 ### Copy from Example
 
 ```bash
-# Copy example profile
-cp profiles/aws/dev.tfvars profiles/aws/my-profile.tfvars
+# Copy example profile (run from repo root)
+cp terraform/profiles/aws/dev.tfvars terraform/profiles/aws/my-profile.tfvars
 
 # Edit with your settings
-vim profiles/aws/my-profile.tfvars
+vim terraform/profiles/aws/my-profile.tfvars
 
-# Use it
+# Use it (run from the matching environment directory)
+cd terraform/environments/aws/dev
 terraform apply -var-file="../../../profiles/aws/my-profile.tfvars"
 ```
 
