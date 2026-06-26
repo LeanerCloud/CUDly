@@ -894,6 +894,66 @@ func TestService_HasAPIKeyPermissionAPI(t *testing.T) {
 		assert.Empty(t, userID)
 		assert.False(t, has)
 	})
+
+	// Revoked + expired keys must hit the fail-closed path through the
+	// request-time entry point too (not just through ValidateUserAPIKey
+	// in isolation). This is the security boundary an attacker holding a
+	// revoked / expired key would probe; keep it explicitly covered so
+	// any future refactor of HasAPIKeyPermissionAPI that bypasses the
+	// validation step is caught here rather than at the auth perimeter.
+	t.Run("revoked key fails closed with an error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		revoked := &UserAPIKey{
+			ID: "key-1", UserID: "user-123", KeyHash: keyHash, IsActive: false,
+		}
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(revoked, nil)
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "revoked")
+		assert.Empty(t, userID)
+		assert.False(t, has)
+	})
+
+	t.Run("expired key fails closed with an error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		past := time.Now().Add(-1 * time.Hour)
+		expired := &UserAPIKey{
+			ID: "key-1", UserID: "user-123", KeyHash: keyHash, IsActive: true, ExpiresAt: &past,
+		}
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(expired, nil)
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expired")
+		assert.Empty(t, userID)
+		assert.False(t, has)
+	})
+
+	t.Run("key owned by inactive user fails closed with an error", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := &Service{store: mockStore}
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+		inactiveUser := &User{ID: "user-123", Email: "test@example.com", Active: false}
+		keyRecord := &UserAPIKey{
+			ID: "key-1", UserID: "user-123", KeyHash: keyHash, IsActive: true,
+		}
+		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(keyRecord, nil)
+		mockStore.On("GetUserByID", ctx, "user-123").Return(inactiveUser, nil)
+
+		userID, has, err := service.HasAPIKeyPermissionAPI(ctx, rawKey, ActionView, ResourceRecommendations)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not active")
+		assert.Empty(t, userID)
+		assert.False(t, has)
+	})
 }
 
 func TestService_validateAPIKeyPermissions(t *testing.T) {

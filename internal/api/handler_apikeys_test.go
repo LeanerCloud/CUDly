@@ -749,6 +749,39 @@ func TestRequirePermission_UserAPIKey(t *testing.T) {
 		assert.Equal(t, apiKeyAdminUserID, session.UserID)
 		mockAuth.AssertNotCalled(t, "HasAPIKeyPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
+
+	// Precedence lock: when a valid user API key is present and lacks the
+	// requested permission, requirePermission must 403 immediately WITHOUT
+	// consulting any bearer token also sent in the same request. The frontend
+	// sends one or the other, never both (per the PR docstring), but a
+	// malicious or buggy client could send both and expect the bearer to
+	// "rescue" the key's denial — that would silently widen the key's scope
+	// to the owner's full session perms. Guard the documented precedence so
+	// any future refactor that flips the fall-through order is caught here.
+	t.Run("valid scoped key denied 403 even if a valid bearer is also sent", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("HasAPIKeyPermissionAPI", ctx, "scoped-key", "execute", "purchases").
+			Return("user-123", false, nil)
+
+		handler := &Handler{auth: mockAuth}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{
+				"x-api-key":     "scoped-key",
+				"Authorization": "Bearer would-have-been-valid",
+			},
+		}
+		session, err := handler.requirePermission(ctx, req, "execute", "purchases")
+		require.Error(t, err)
+		assert.Nil(t, session)
+		ce, ok := IsClientError(err)
+		require.True(t, ok)
+		assert.Equal(t, 403, ce.code)
+		// Bearer path must not be consulted — locking in key precedence so the
+		// scope cannot be silently widened by also presenting a session token.
+		mockAuth.AssertNotCalled(t, "ValidateSession", mock.Anything, mock.Anything)
+		mockAuth.AssertNotCalled(t, "HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 // TestGetRecommendations_UserAPIKey exercises the real failing scenario from
