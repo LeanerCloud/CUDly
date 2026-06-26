@@ -22,6 +22,16 @@ import (
 // payer org we have seen. Exceeding the cap returns a diagnostic error (issue #692).
 const maxRecommendationPages = 20
 
+// DefaultRecLookbackPeriod is the LookbackPeriod string forwarded to
+// GetReservationPurchaseRecommendation when --rec-lookback-period is not
+// specified. Kept in the recommendations package so the cmd flag default,
+// the cmd-side fallback, and the client-side fallback all refer to a single
+// source of truth (avoids the magic-value duplication called out by
+// feedback_no_hardcoded_magic_values.md). Valid CE values are 7d/30d/60d
+// (see convertLookbackPeriodE); 7d matches the prior hardcoded behaviour
+// from before --rec-lookback-period existed.
+const DefaultRecLookbackPeriod = "7d"
+
 // CostExplorerAPI defines the interface for Cost Explorer operations
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
@@ -248,7 +258,7 @@ func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.Servic
 	}
 	lookback := c.recLookbackPeriod
 	if lookback == "" {
-		lookback = "7d"
+		lookback = DefaultRecLookbackPeriod
 	}
 	params := common.RecommendationParams{
 		Service:        service,

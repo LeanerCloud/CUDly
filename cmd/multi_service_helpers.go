@@ -423,7 +423,7 @@ func fetchRecommendationsForRegion(
 
 	lookback := cfg.RecLookbackPeriod
 	if lookback == "" {
-		lookback = "7d"
+		lookback = recommendations.DefaultRecLookbackPeriod
 	}
 	params := common.RecommendationParams{
 		Service:        service,
