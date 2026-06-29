@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Config holds database configuration
+// Config holds database configuration.
 type Config struct {
 	// Connection details
 	Host     string
@@ -38,7 +38,7 @@ type Config struct {
 	LogLevel string // error, warn, info, debug
 }
 
-// LoadFromEnv loads database configuration from environment variables
+// LoadFromEnv loads database configuration from environment variables.
 func LoadFromEnv() (*Config, error) {
 	config := &Config{
 		// Required fields
@@ -78,7 +78,7 @@ func LoadFromEnv() (*Config, error) {
 	return config, nil
 }
 
-// Validate checks if the configuration is valid
+// Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if err := c.validateRequiredFields(); err != nil {
 		return err
@@ -89,7 +89,7 @@ func (c *Config) Validate() error {
 	return c.validatePoolSettings()
 }
 
-// validateRequiredFields checks that all required configuration fields are set
+// validateRequiredFields checks that all required configuration fields are set.
 func (c *Config) validateRequiredFields() error {
 	if c.Host == "" {
 		return fmt.Errorf("DB_HOST is required")
@@ -114,7 +114,7 @@ func (c *Config) validateRequiredFields() error {
 	return nil
 }
 
-// validateSSLMode checks that SSL mode is valid and warns about insecure production settings
+// validateSSLMode checks that SSL mode is valid and warns about insecure production settings.
 func (c *Config) validateSSLMode() error {
 	validSSLModes := map[string]bool{
 		"disable":     true,
@@ -133,7 +133,7 @@ func (c *Config) validateSSLMode() error {
 	return nil
 }
 
-// validatePoolSettings validates connection pool configuration
+// validatePoolSettings validates connection pool configuration.
 func (c *Config) validatePoolSettings() error {
 	if c.MaxConnections < 1 {
 		return fmt.Errorf("DB_MAX_CONNECTIONS must be at least 1")
@@ -164,7 +164,7 @@ func (c *Config) dsn(password string) string {
 }
 
 // DSN generates a PostgreSQL connection string
-// If passwordOverride is provided, it's used instead of config.Password
+// If passwordOverride is provided, it's used instead of config.Password.
 func (c *Config) DSN(passwordOverride string) string {
 	password := c.Password
 	if passwordOverride != "" {
@@ -173,7 +173,7 @@ func (c *Config) DSN(passwordOverride string) string {
 	return c.dsn(password)
 }
 
-// RedactedDSN returns a DSN string with the password masked, safe for logging
+// RedactedDSN returns a DSN string with the password masked, safe for logging.
 func (c *Config) RedactedDSN() string {
 	return c.dsn("*****")
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CreateGroup creates a new permission group
+// CreateGroup creates a new permission group.
 func (s *Service) CreateGroup(ctx context.Context, group *Group, createdBy string) error {
 	now := time.Now()
 	// Generate a plain UUID. The previous "group-<uuid>" prefix produced
@@ -25,22 +25,22 @@ func (s *Service) CreateGroup(ctx context.Context, group *Group, createdBy strin
 	return s.store.CreateGroup(ctx, group)
 }
 
-// UpdateGroup updates a permission group
+// UpdateGroup updates a permission group.
 func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 	return s.store.UpdateGroup(ctx, group)
 }
 
-// DeleteGroup removes a permission group
+// DeleteGroup removes a permission group.
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 	return s.store.DeleteGroup(ctx, groupID)
 }
 
-// GetGroup returns a group by ID
+// GetGroup returns a group by ID.
 func (s *Service) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	return s.store.GetGroup(ctx, groupID)
 }
 
-// ListGroups returns all groups
+// ListGroups returns all groups.
 func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 	return s.store.ListGroups(ctx)
 }
@@ -149,12 +149,12 @@ func (s *Service) collectGroupsAndAccounts(ctx context.Context, authCtx *AuthCon
 	return nil
 }
 
-// GetAuthContext is an alias for BuildAuthContext for backward compatibility
+// GetAuthContext is an alias for BuildAuthContext for backward compatibility.
 func (s *Service) GetAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
 	return s.BuildAuthContext(ctx, userID)
 }
 
-// HasPermission checks if a user has a specific permission
+// HasPermission checks if a user has a specific permission.
 func (s *Service) HasPermission(ctx context.Context, userID, action, resource string, constraints *PermissionConstraints) (bool, error) {
 	permissions, err := s.GetUserPermissions(ctx, userID)
 	if err != nil {
@@ -220,7 +220,7 @@ func checkPermissionConstraints(s *Service, perm Permission, constraints *Permis
 	return true
 }
 
-// matchConstraints checks if permission constraints match request constraints
+// matchConstraints checks if permission constraints match request constraints.
 func (s *Service) matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bool {
 	return s.matchStringListConstraints(permConstraints.AccountIDs, reqConstraints.AccountIDs) &&
 		s.matchStringListConstraints(permConstraints.Providers, reqConstraints.Providers) &&
@@ -249,7 +249,7 @@ func (s *Service) matchStringListConstraints(permList, reqList []string) bool {
 	return true
 }
 
-// matchPurchaseAmountConstraint checks if requested amount is within permitted limit
+// matchPurchaseAmountConstraint checks if requested amount is within permitted limit.
 func (s *Service) matchPurchaseAmountConstraint(permMax, reqMax float64) bool {
 	if permMax > 0 && reqMax > permMax {
 		return false

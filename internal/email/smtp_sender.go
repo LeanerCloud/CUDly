@@ -14,7 +14,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// SMTPConfig holds configuration for SMTP email sender
+// SMTPConfig holds configuration for SMTP email sender.
 type SMTPConfig struct {
 	Host        string // SMTP server host (e.g., "smtp.sendgrid.net" or "smtp.azurecomm.net")
 	Port        int    // SMTP server port (usually 587 for TLS, 465 for SSL)
@@ -32,7 +32,7 @@ type SMTPConfig struct {
 	AllowInsecure bool
 }
 
-// SMTPSender handles sending email via SMTP (works for SendGrid, Azure ACS, and others)
+// SMTPSender handles sending email via SMTP (works for SendGrid, Azure ACS, and others).
 type SMTPSender struct {
 	host          string
 	port          int
@@ -45,7 +45,7 @@ type SMTPSender struct {
 	allowInsecure bool
 }
 
-// NewSMTPSender creates a new SMTP email sender
+// NewSMTPSender creates a new SMTP email sender.
 func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 	if cfg.Host == "" {
 		return nil, fmt.Errorf("SMTP host is required")
@@ -85,7 +85,7 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 // no subscriber list to fan out to. As a result, GCP (SendGrid) and Azure
 // (ACS SMTP) deployments do not receive broadcast notifications (new-recs,
 // scheduled-purchase reminders without a recipient email, etc.). Callers that
-// need broadcast behaviour on non-AWS deployments must wire their own fan-out
+// need broadcast behavior on non-AWS deployments must wire their own fan-out
 // or configure an SNS-compatible endpoint. Targeted approval emails
 // (SendPurchaseApprovalRequest, SendScheduledPurchaseNotification) are
 // unaffected because they use SendToEmailWithCC directly.
@@ -99,7 +99,7 @@ func sanitizeHeader(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
-// SendToEmail sends an email directly to a specific email address via SMTP
+// SendToEmail sends an email directly to a specific email address via SMTP.
 func (s *SMTPSender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
 	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
 }
@@ -308,7 +308,7 @@ func smtpSendBody(c *smtp.Client, from string, to []string, msg []byte) error {
 	return w.Close()
 }
 
-// sendMailTLS sends email using STARTTLS (required for most modern SMTP servers)
+// sendMailTLS sends email using STARTTLS (required for most modern SMTP servers).
 func (s *SMTPSender) sendMailTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
 	c, err := smtp.Dial(addr)
 	if err != nil {
@@ -368,7 +368,7 @@ func (s *SMTPSender) SendUserInviteEmail(ctx context.Context, email, setupURL st
 	)
 }
 
-// SendNewRecommendationsNotification sends a notification about new recommendations
+// SendNewRecommendationsNotification sends a notification about new recommendations.
 func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
 	subject := "New CUDly Recommendations Available"
 	body, err := RenderNewRecommendationsEmail(data)
@@ -378,7 +378,7 @@ func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, dat
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendScheduledPurchaseNotification sends a notification about scheduled purchase
+// SendScheduledPurchaseNotification sends a notification about scheduled purchase.
 func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error {
 	subject := fmt.Sprintf("CUDly Purchase Scheduled: %s", data.PlanName)
 	body, err := RenderScheduledPurchaseEmail(data)
@@ -388,7 +388,7 @@ func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendPurchaseConfirmation sends a confirmation email after successful purchase
+// SendPurchaseConfirmation sends a confirmation email after successful purchase.
 func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error {
 	subject := "CUDly Purchase Confirmation"
 	body, err := RenderPurchaseConfirmationEmail(data)
@@ -398,7 +398,7 @@ func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data Notifica
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendPurchaseFailedNotification sends a notification when a purchase fails
+// SendPurchaseFailedNotification sends a notification when a purchase fails.
 func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
 	subject := "CUDly Purchase Failed"
 	body, err := RenderPurchaseFailedEmail(data)
@@ -408,7 +408,7 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendRIExchangePendingApproval sends an RI exchange approval email via SMTP
+// SendRIExchangePendingApproval sends an RI exchange approval email via SMTP.
 func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
 	subject := fmt.Sprintf("CUDly - RI Exchange Approval Required (%d exchanges)", len(data.Exchanges))
 	body, err := RenderRIExchangePendingApprovalEmail(data)
@@ -418,7 +418,7 @@ func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIE
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendRIExchangeCompleted sends an RI exchange completion email via SMTP
+// SendRIExchangeCompleted sends an RI exchange completion email via SMTP.
 func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
 	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
 	body, err := RenderRIExchangeCompletedEmail(data)
@@ -445,7 +445,7 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 }
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
-// notification email via SMTP. Mirrors the Sender implementation's behaviour.
+// notification email via SMTP. Mirrors the Sender implementation's behavior.
 func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
 	body, err := RenderPurchaseScheduledDelayEmail(data)
 	if err != nil {
@@ -465,7 +465,7 @@ func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data
 // SendRegistrationReceivedNotification sends an email to CUDly administrators
 // for a new registration via SMTP. Prefers the caller-resolved
 // data.RecipientEmail + CCEmails (admin emails + global notify) so the To /
-// Cc semantics match the "authorised reviewers" block in the body; falls
+// Cc semantics match the "authorized reviewers" block in the body; falls
 // back to the legacy static s.notifyEmail when the caller didn't resolve
 // recipients (e.g. no admin users configured yet).
 func (s *SMTPSender) SendRegistrationReceivedNotification(ctx context.Context, data RegistrationNotificationData) error {
@@ -494,5 +494,5 @@ func (s *SMTPSender) SendRegistrationDecisionNotification(ctx context.Context, t
 	return s.SendToEmail(ctx, toEmail, subject, body)
 }
 
-// Verify that SMTPSender implements SenderInterface
+// Verify that SMTPSender implements SenderInterface.
 var _ SenderInterface = (*SMTPSender)(nil)

@@ -14,10 +14,10 @@ import (
 
 // MockConfigStore is the shared testify mock for config.StoreInterface.
 // All Fn-override fields (GetPlanAccountsFn, SavePurchaseExecutionFn, etc.)
-// and default behaviours live in internal/mocks.
+// and default behaviors live in internal/mocks.
 type MockConfigStore = mocks.MockConfigStore
 
-// MockProviderFactory is a mock implementation of ProviderFactoryInterface
+// MockProviderFactory is a mock implementation of ProviderFactoryInterface.
 type MockProviderFactory struct {
 	mock.Mock
 }
@@ -30,7 +30,7 @@ func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, nam
 	return args.Get(0).(provider.Provider), args.Error(1)
 }
 
-// MockProvider is a mock implementation of provider.Provider
+// MockProvider is a mock implementation of provider.Provider.
 type MockProvider struct {
 	mock.Mock
 }
@@ -100,7 +100,7 @@ func (m *MockProvider) GetRecommendationsClient(ctx context.Context) (provider.R
 	return args.Get(0).(provider.RecommendationsClient), args.Error(1)
 }
 
-// MockServiceClient is a mock implementation of provider.ServiceClient
+// MockServiceClient is a mock implementation of provider.ServiceClient.
 type MockServiceClient struct {
 	mock.Mock
 }
@@ -157,7 +157,7 @@ func (m *MockServiceClient) GetValidResourceTypes(ctx context.Context) ([]string
 	return args.Get(0).([]string), args.Error(1)
 }
 
-// MockEmailSender is a mock implementation of email.SenderInterface
+// MockEmailSender is a mock implementation of email.SenderInterface.
 type MockEmailSender struct {
 	mock.Mock
 }
@@ -235,10 +235,10 @@ func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context
 	return nil
 }
 
-// Verify MockEmailSender implements email.SenderInterface
+// Verify MockEmailSender implements email.SenderInterface.
 var _ email.SenderInterface = (*MockEmailSender)(nil)
 
-// MockSTSClient is a mock implementation of STSClient
+// MockSTSClient is a mock implementation of STSClient.
 type MockSTSClient struct {
 	mock.Mock
 }
@@ -251,11 +251,11 @@ func (m *MockSTSClient) GetCallerIdentity(ctx context.Context, params *sts.GetCa
 	return args.Get(0).(*sts.GetCallerIdentityOutput), args.Error(1)
 }
 
-// Verify MockSTSClient implements STSClient
+// Verify MockSTSClient implements STSClient.
 var _ STSClient = (*MockSTSClient)(nil)
 
 // MockCredentialStore is a stub credentials.CredentialStore used in tests.
-// All methods are no-ops; individual tests may override behaviour via fields.
+// All methods are no-ops; individual tests may override behavior via fields.
 type MockCredentialStore struct {
 	LoadRawFn func(ctx context.Context, accountID, credType string) ([]byte, error)
 }

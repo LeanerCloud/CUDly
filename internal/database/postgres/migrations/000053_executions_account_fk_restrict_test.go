@@ -55,7 +55,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 	assert.Equal(t, "c", recsDeleteAction,
 		"recommendations FK must stay CASCADE after 000053, got %q", recsDeleteAction)
 
-	// Behavioural test: insert an account + a pending execution that
+	// Behavioral test: insert an account + a pending execution that
 	// references it, then attempt to delete the account. Postgres must
 	// raise a foreign-key-violation (SQLSTATE 23503).
 	_, err = pool.Exec(ctx, `
@@ -93,9 +93,9 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 }
 
 // TestMigration_ExecutionsAccountFKRestrict_Rollback asserts that the
-// 000053 down migration restores the original SET NULL behaviour, so an
+// 000053 down migration restores the original SET NULL behavior, so an
 // emergency rollback re-introduces the (documented) silent-orphan
-// behaviour rather than leaving the database in an indeterminate state.
+// behavior rather than leaving the database in an indeterminate state.
 func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()

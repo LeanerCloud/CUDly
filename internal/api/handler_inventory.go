@@ -70,7 +70,7 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 	return InventoryCommitmentsResponse{Commitments: commitments}, nil
 }
 
-// fetchCommitmentRecords reads purchase history from the store, honouring
+// fetchCommitmentRecords reads purchase history from the store, honoring
 // optional `account_id` and `provider` query params the same way
 // fetchPurchaseHistory does for /api/history. Limit defaults to
 // MaxListLimit — commitments are a strict subset of purchase history (we
@@ -149,7 +149,7 @@ func buildInventoryCommitment(p config.PurchaseHistoryRecord, accountName string
 // Returns per-provider, per-service coverage breakdowns computed from
 // two data sources already available in the system:
 //   - Active commitments (purchase history): their effective covered
-//     monthly spend (recurring MonthlyCost plus amortised upfront — see
+//     monthly spend (recurring MonthlyCost plus amortized upfront — see
 //     commitmentCoveredMonthly) is the "covered" portion of monthly spend.
 //   - Recommendations (scheduler): their Savings represent the remaining
 //     on-demand gap that could still be committed.
@@ -179,7 +179,7 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	now := time.Now()
 	// coveredByKey accumulates the effective covered monthly spend by
 	// "provider:service". A commitment's covered monthly is its recurring
-	// MonthlyCost plus the amortised upfront, so an all-upfront commitment
+	// MonthlyCost plus the amortized upfront, so an all-upfront commitment
 	// (MonthlyCost nil, UpfrontCost > 0 — typical for Azure RIs) still
 	// registers as covered instead of being silently dropped (issue: Azure
 	// showed $0 coverage while the dashboard reported active commitments).
@@ -195,7 +195,7 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	// Recommendations represent uncommitted demand that could be purchased.
 	// Their Savings field is the monthly on-demand cost of the uncovered gap.
 	// Scope recs to the account chip the same way fetchCommitmentRecords scopes
-	// commitments above — otherwise the covered side honours the chip but the
+	// commitments above — otherwise the covered side honors the chip but the
 	// on-demand side bleeds in other accounts' gaps, producing misleading
 	// per-service coverage (issue #866 follow-up: CR pass on PR #881).
 	recs, err := h.scheduler.ListRecommendations(ctx, buildCoverageRecFilter(params))
@@ -252,8 +252,8 @@ func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter s
 
 // commitmentCoveredMonthly returns the effective covered monthly spend of a
 // single active commitment: its recurring MonthlyCost (when present) plus the
-// upfront amortised over the term. This mirrors the canonical effective-monthly
-// formula used elsewhere in the codebase (analytics.Collector amortises
+// upfront amortized over the term. This mirrors the canonical effective-monthly
+// formula used elsewhere in the codebase (analytics.Collector amortizes
 // UpfrontCost/(Term*MonthsPerYear); exchange_lookup adds MonthlyCost +
 // UpfrontCost/termMonths) so the Coverage tab and the savings analytics agree
 // on what "covered" means.
@@ -265,11 +265,11 @@ func aggregateOnDemandByKey(recs []config.RecommendationRecord, providerFilter s
 // commitments are all upfront rendered as $0 / "No usage detected" even though
 // the dashboard counted the same commitments. A nil MonthlyCost is treated as a
 // real $0 recurring component (not a fabricated total) and the upfront still
-// contributes its amortised share, so the covered figure is never silently 0.
+// contributes its amortized share, so the covered figure is never silently 0.
 //
-// Term <= 0 cannot be amortised (division by zero); such a row contributes only
+// Term <= 0 cannot be amortized (division by zero); such a row contributes only
 // its recurring MonthlyCost. The scheduler only writes Term >= 1 rows, so this
-// guard matches analytics.Collector's skip-bad-term defence rather than papering
+// guard matches analytics.Collector's skip-bad-term defense rather than papering
 // over real data.
 func commitmentCoveredMonthly(p config.PurchaseHistoryRecord) float64 {
 	var covered float64

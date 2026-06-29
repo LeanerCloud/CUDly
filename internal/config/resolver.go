@@ -6,7 +6,7 @@ package config
 // replaced wholesale when non-empty in the override.
 //
 // If override is nil the global is returned unchanged (no copy is made).
-// If global is nil but override is non-nil, a baseline ServiceConfig is synthesised
+// If global is nil but override is non-nil, a baseline ServiceConfig is synthesized
 // with safe defaults (Enabled: true, Provider/Service from the override context via
 // the provider and service parameters) and the override is merged into it. This
 // lets a per-account override take effect even when no global ServiceConfig row
@@ -21,7 +21,7 @@ func ResolveServiceConfig(provider, service string, global *ServiceConfig, overr
 
 	baseline := global
 	if baseline == nil {
-		// No global row — synthesise a safe default so the override can be applied.
+		// No global row — synthesize a safe default so the override can be applied.
 		// Enabled defaults to true (consistent with "service is on unless told otherwise").
 		baseline = &ServiceConfig{
 			Provider: provider,

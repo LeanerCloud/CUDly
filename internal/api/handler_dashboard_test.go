@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createMockLambdaRequest creates a mock Lambda function URL request for testing
+// createMockLambdaRequest creates a mock Lambda function URL request for testing.
 func createMockLambdaRequest(sourceIP string) *events.LambdaFunctionURLRequest {
 	return &events.LambdaFunctionURLRequest{
 		RequestContext: events.LambdaFunctionURLRequestContext{
@@ -521,10 +521,10 @@ func TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID(t *testing.T) {
 			CreatedByUserID: &creator,
 		},
 		{
-			// Legacy / scheduler-tick row: NULL creator. Must serialise as
+			// Legacy / scheduler-tick row: NULL creator. Must serialize as
 			// no created_by_user_id field (omitempty on the JSON tag) so
 			// the frontend treats it as out-of-reach for non-update-any
-			// users -- the documented #950 behaviour.
+			// users -- the documented #950 behavior.
 			ExecutionID:     "99998888-7777-6666-5555-444433332222",
 			PlanID:          plan.ID,
 			Status:          "pending",
@@ -1077,7 +1077,7 @@ func TestAggregateActiveCommitmentsPerService(t *testing.T) {
 	})
 
 	t.Run("one failed (expired) + one succeeded stays correct", func(t *testing.T) {
-		// Only the active row should count — the expired row is the "failed" analogue.
+		// Only the active row should count — the expired row is the "failed" analog.
 		purchases := []config.PurchaseHistoryRecord{
 			expired("EC2", 999.0),
 			active("EC2", 200.0),
@@ -1196,7 +1196,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	// Verify through the ServiceSavings struct that the JSON tag is present and
 	// the value round-trips correctly.  We assert on the struct field because
 	// json.Marshal / Unmarshal would be redundant — the tag is on the declared
-	// type and Go's encoding/json honours it.
+	// type and Go's encoding/json honors it.
 	require.Contains(t, result.ByService, "EC2")
 	assert.InDelta(t, 120.0, result.ByService["EC2"].CurrentSavings, 0.001,
 		"current_savings field must carry the active purchase's EstimatedSavings")

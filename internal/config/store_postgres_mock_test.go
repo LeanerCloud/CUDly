@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,14 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockDBInterface defines the interface that matches database.Connection methods
+// MockDBInterface defines the interface that matches database.Connection methods.
 type MockDBInterface interface {
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
 	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
 }
 
-// testablePostgresStore is a test-only wrapper that allows mocking
+// testablePostgresStore is a test-only wrapper that allows mocking.
 type testablePostgresStore struct {
 	mock pgxmock.PgxPoolIface
 }
@@ -49,7 +50,7 @@ func (s *testablePostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalCon
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return &GlobalConfig{
 				EnabledProviders:    []string{},
 				ApprovalRequired:    true,
@@ -129,7 +130,7 @@ func (s *testablePostgresStore) GetServiceConfig(ctx context.Context, provider, 
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("service config not found")
 		}
 		return nil, err
@@ -282,8 +283,8 @@ func (s *testablePostgresStore) GetPurchasePlan(ctx context.Context, planID stri
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, errors.New("purchase plan not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
 		}
 		return nil, err
 	}
@@ -309,7 +310,7 @@ func (s *testablePostgresStore) GetPurchasePlan(ctx context.Context, planID stri
 	return &plan, nil
 }
 
-// TestGetGlobalConfig_NoRows tests that default config is returned when no rows exist
+// TestGetGlobalConfig_NoRows tests that default config is returned when no rows exist.
 func TestGetGlobalConfig_NoRows(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -333,7 +334,7 @@ func TestGetGlobalConfig_NoRows(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetGlobalConfig_Success tests successful retrieval of global config
+// TestGetGlobalConfig_Success tests successful retrieval of global config.
 func TestGetGlobalConfig_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -366,7 +367,7 @@ func TestGetGlobalConfig_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetGlobalConfig_Error tests error handling
+// TestGetGlobalConfig_Error tests error handling.
 func TestGetGlobalConfig_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -385,7 +386,7 @@ func TestGetGlobalConfig_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSaveGlobalConfig_Success tests successful save of global config
+// TestSaveGlobalConfig_Success tests successful save of global config.
 func TestSaveGlobalConfig_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -422,7 +423,7 @@ func TestSaveGlobalConfig_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSaveGlobalConfig_NilEnabledProviders tests that nil EnabledProviders gets converted to empty slice
+// TestSaveGlobalConfig_NilEnabledProviders tests that nil EnabledProviders gets converted to empty slice.
 func TestSaveGlobalConfig_NilEnabledProviders(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -457,7 +458,7 @@ func TestSaveGlobalConfig_NilEnabledProviders(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSaveGlobalConfig_Error tests error handling
+// TestSaveGlobalConfig_Error tests error handling.
 func TestSaveGlobalConfig_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -488,7 +489,7 @@ func TestSaveGlobalConfig_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetServiceConfig_Success tests successful retrieval of service config
+// TestGetServiceConfig_Success tests successful retrieval of service config.
 func TestGetServiceConfig_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -525,7 +526,7 @@ func TestGetServiceConfig_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetServiceConfig_NotFound tests service config not found
+// TestGetServiceConfig_NotFound tests service config not found.
 func TestGetServiceConfig_NotFound(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -545,7 +546,7 @@ func TestGetServiceConfig_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetServiceConfig_Error tests error handling
+// TestGetServiceConfig_Error tests error handling.
 func TestGetServiceConfig_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -565,7 +566,7 @@ func TestGetServiceConfig_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSaveServiceConfig_Success tests successful save of service config
+// TestSaveServiceConfig_Success tests successful save of service config.
 func TestSaveServiceConfig_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -605,7 +606,7 @@ func TestSaveServiceConfig_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSaveServiceConfig_Error tests error handling
+// TestSaveServiceConfig_Error tests error handling.
 func TestSaveServiceConfig_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -634,7 +635,7 @@ func TestSaveServiceConfig_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestListServiceConfigs_Success tests successful listing of service configs
+// TestListServiceConfigs_Success tests successful listing of service configs.
 func TestListServiceConfigs_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -665,7 +666,7 @@ func TestListServiceConfigs_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestListServiceConfigs_Empty tests listing when no configs exist
+// TestListServiceConfigs_Empty tests listing when no configs exist.
 func TestListServiceConfigs_Empty(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -690,7 +691,7 @@ func TestListServiceConfigs_Empty(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestListServiceConfigs_Error tests error handling
+// TestListServiceConfigs_Error tests error handling.
 func TestListServiceConfigs_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -709,7 +710,7 @@ func TestListServiceConfigs_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDeletePurchasePlan_Success tests successful deletion
+// TestDeletePurchasePlan_Success tests successful deletion.
 func TestDeletePurchasePlan_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -727,7 +728,7 @@ func TestDeletePurchasePlan_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDeletePurchasePlan_NotFound tests deletion of non-existent plan
+// TestDeletePurchasePlan_NotFound tests deletion of non-existent plan.
 func TestDeletePurchasePlan_NotFound(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -746,7 +747,7 @@ func TestDeletePurchasePlan_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDeletePurchasePlan_Error tests error handling
+// TestDeletePurchasePlan_Error tests error handling.
 func TestDeletePurchasePlan_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -765,7 +766,7 @@ func TestDeletePurchasePlan_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_Success tests successful retrieval of purchase plan
+// TestGetPurchasePlan_Success tests successful retrieval of purchase plan.
 func TestGetPurchasePlan_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -809,7 +810,7 @@ func TestGetPurchasePlan_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_NotFound tests retrieval of non-existent plan
+// TestGetPurchasePlan_NotFound tests retrieval of non-existent plan.
 func TestGetPurchasePlan_NotFound(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -829,7 +830,7 @@ func TestGetPurchasePlan_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_Error tests error handling
+// TestGetPurchasePlan_Error tests error handling.
 func TestGetPurchasePlan_Error(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -849,7 +850,7 @@ func TestGetPurchasePlan_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_InvalidJSON tests handling of invalid JSON in services field
+// TestGetPurchasePlan_InvalidJSON tests handling of invalid JSON in services field.
 func TestGetPurchasePlan_InvalidServicesJSON(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -881,7 +882,7 @@ func TestGetPurchasePlan_InvalidServicesJSON(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_InvalidRampScheduleJSON tests handling of invalid JSON in ramp_schedule field
+// TestGetPurchasePlan_InvalidRampScheduleJSON tests handling of invalid JSON in ramp_schedule field.
 func TestGetPurchasePlan_InvalidRampScheduleJSON(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -913,7 +914,7 @@ func TestGetPurchasePlan_InvalidRampScheduleJSON(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestGetPurchasePlan_AllNullableTimestampsSet tests when all nullable timestamps are set
+// TestGetPurchasePlan_AllNullableTimestampsSet tests when all nullable timestamps are set.
 func TestGetPurchasePlan_AllNullableTimestampsSet(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

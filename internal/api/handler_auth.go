@@ -43,7 +43,7 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 		// frontend can detect "MFA required" / "invalid MFA code"
 		// without substring-matching the human message (issue #497).
 		// Both keep the 401 status — the password leg passed, but
-		// the request is not authorised until the MFA leg is too.
+		// the request is not authorized until the MFA leg is too.
 		if errors.Is(err, auth.ErrMFARequired) {
 			return nil, NewClientError(401, "mfa_required")
 		}
@@ -461,7 +461,7 @@ func decodeChangePasswordRequest(pwdReq ChangePasswordRequest) (current, next st
 	return current, next, nil
 }
 
-// changePassword handles POST /api/auth/change-password
+// changePassword handles POST /api/auth/change-password.
 func (h *Handler) changePassword(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
@@ -621,7 +621,7 @@ func (h *Handler) mfaRegenerateRecoveryCodes(ctx context.Context, req *events.La
 }
 
 // redactEmail returns a redacted version of an email address for safe logging.
-// e.g. "user@example.com" -> "us***@example.com"
+// e.g. "user@example.com" -> "us***@example.com".
 func redactEmail(email string) string {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {

@@ -39,7 +39,7 @@ func queryAdminGroupIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, e
 // TestEnsureAdminUser_GroupAssignment covers the five scenarios from
 // issue #351: every code path that inserts an admin row must produce
 // group_ids containing the Administrators group, post-migration
-// drift must self-heal on the next boot, and operator-customised
+// drift must self-heal on the next boot, and operator-customized
 // group_ids must be preserved.
 func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	ctx := context.Background()
@@ -150,11 +150,11 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 
 		// Second pass: re-run RunMigrations. ensureAdminUser fires
 		// again, but the backfill's WHERE cardinality=0 clause skips
-		// the customised row.
+		// the customized row.
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, adminEmail, ""))
 
 		got := queryAdminGroupIDs(t, ctx, pool, adminEmail)
 		assert.Equal(t, []string{customGroupID}, got,
-			"operator-customised group_ids (non-empty, no default admin group) must be preserved across boots")
+			"operator-customized group_ids (non-empty, no default admin group) must be preserved across boots")
 	})
 }

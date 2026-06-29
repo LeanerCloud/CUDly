@@ -29,7 +29,7 @@ type recsLister interface {
 //   - CurrencyCode   = currencyCode            (propagated; recs don't carry it)
 //
 // Where termMonths = rec.Term × 12 (rec.Term is in years, AWS standard
-// for RIs / Savings Plans). Term ≤ 0 means we can't amortise upfront,
+// for RIs / Savings Plans). Term ≤ 0 means we can't amortize upfront,
 // so we fall back to MonthlyCost alone — the dollar-units check will
 // then accept or reject based on monthly recurring vs. source.
 //
@@ -88,7 +88,7 @@ func recommendationToOffering(rec config.RecommendationRecord, currencyCode stri
 	}
 	monthly := monthlyCost / count
 	if rec.Term > 0 {
-		// rec.Term is in years; canonical AWS RI/SP amortisation uses
+		// rec.Term is in years; canonical AWS RI/SP amortization uses
 		// 12 months per year regardless of leap years.
 		termMonths := float64(rec.Term * 12)
 		if termMonths > 0 {

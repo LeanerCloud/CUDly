@@ -85,7 +85,7 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 		require.Equal(t, 2, countActiveAdmins(t, ctx, pool), "test setup: two active admins expected")
 
 		// Release both goroutines into their COMMIT only after both have
-		// completed their mutating statement, maximising the overlap the
+		// completed their mutating statement, maximizing the overlap the
 		// deferred triggers must arbitrate.
 		var writesReady sync.WaitGroup
 		writesReady.Add(2)
@@ -137,7 +137,7 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 	// commits == 1 would be wrong: depending on commit interleaving the advisory
 	// lock can legitimately reject BOTH transactions (commits == 0, two admins
 	// untouched), which is still safe. The bug this guards against is the
-	// pre-trigger behaviour where both committed and zero admins remained.
+	// pre-trigger behavior where both committed and zero admins remained.
 	assertRaceSafe := func(t *testing.T, commits, remainingAdmins int, op string) {
 		t.Helper()
 		assert.LessOrEqual(t, commits, 1,

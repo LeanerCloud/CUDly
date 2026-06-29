@@ -13,13 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// additionalMockStore is a test wrapper for additional coverage tests
+// additionalMockStore is a test wrapper for additional coverage tests.
 type additionalMockStore struct {
 	mock pgxmock.PgxPoolIface
 }
 
 // queryExecutions is the same implementation as PostgresStore.queryExecutions
-// for testing purposes
+// for testing purposes.
 func (s *additionalMockStore) queryExecutions(ctx context.Context, query string, args ...interface{}) ([]PurchaseExecution, error) {
 	rows, err := s.mock.Query(ctx, query, args...)
 	if err != nil {

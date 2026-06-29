@@ -315,7 +315,7 @@ func (m *mockConfigStoreForExchangeStale) GetStaleProcessingExchanges(ctx contex
 	return nil, nil
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeComplete) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }
@@ -338,7 +338,7 @@ func (m *mockConfigStoreForExchangeComplete) WithTx(_ context.Context, fn func(t
 	return fn(nil)
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeFail) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }
@@ -361,7 +361,7 @@ func (m *mockConfigStoreForExchangeFail) WithTx(_ context.Context, fn func(tx pg
 	return fn(nil)
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeStale) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

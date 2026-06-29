@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockSESClient is a mock implementation of SES client
+// MockSESClient is a mock implementation of SES client.
 type MockSESClient struct {
 	mock.Mock
 }
 
-// SendEmail mocks the SendEmail operation
+// SendEmail mocks the SendEmail operation.
 func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
@@ -26,10 +26,10 @@ func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInp
 	return v, args.Error(1)
 }
 
-// SESAPI defines the interface for SES operations used by our code
+// SESAPI defines the interface for SES operations used by our code.
 type SESAPI interface {
 	SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error)
 }
 
-// Ensure MockSESClient implements SESAPI
+// Ensure MockSESClient implements SESAPI.
 var _ SESAPI = (*MockSESClient)(nil)

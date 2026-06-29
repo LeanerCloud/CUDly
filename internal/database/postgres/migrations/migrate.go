@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -15,7 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// bcryptCost matches the cost used in internal/auth/service_password.go
+// bcryptCost matches the cost used in internal/auth/service_password.go.
 const bcryptCost = 12
 
 // defaultAdminGroupID is the fixed UUID of the Administrators group
@@ -29,7 +30,7 @@ const defaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 
 // RunMigrations runs database migrations using golang-migrate
 // adminEmail is optional - if provided, admin user will be created after migrations complete
-// adminPassword is optional - if provided, admin is created with hashed password and active=true
+// adminPassword is optional - if provided, admin is created with hashed password and active=true.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, adminEmail string, adminPassword string) error {
 	// Create the migrator and run the pre-Up recovery hooks (operator force,
 	// then default-on dirty auto-heal). Kept in a helper so RunMigrations stays
@@ -41,13 +42,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 	defer m.Close()
 
 	// Run migrations
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
 	// Get current version
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("failed to get migration version: %w", err)
 	}
 
@@ -237,14 +238,14 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email 
 //
 // Post-migration-000057: the `users_min_one_group` CHECK constraint
 // prevents group_ids from being NULL or zero-length, so this backfill
-// is a no-op in normal operation. It remains as defence-in-depth for
+// is a no-op in normal operation. It remains as defense-in-depth for
 // pre-057 schemas (rollback scenarios) and any future drift. The `role`
 // column was removed by migration 000057 (issue #945) and must not be
 // referenced here.
 //
 // The EXISTS guard on the groups table makes the backfill a no-op
 // when migration 000024 hasn't yet seeded the Administrators group -
-// defence-in-depth, since in practice this function is invoked
+// defense-in-depth, since in practice this function is invoked
 // after RunMigrations -> m.Up() completes.
 func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID string, adminEmail string) error {
 	res, err := pool.Exec(ctx, `
@@ -372,7 +373,7 @@ func maybeAutoHealDirty(m *migrate.Migrate) error {
 	}
 
 	version, dirty, err := m.Version()
-	if err == migrate.ErrNilVersion {
+	if errors.Is(err, migrate.ErrNilVersion) {
 		// No migrations recorded yet -> nothing to heal.
 		return nil
 	}
@@ -412,7 +413,7 @@ func autoHealEnabled() bool {
 	return b
 }
 
-// RollbackMigrations rolls back N migrations
+// RollbackMigrations rolls back N migrations.
 func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, steps int) error {
 	if steps <= 0 {
 		return fmt.Errorf("rollback steps must be positive, got %d", steps)
@@ -436,12 +437,12 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	log.Printf("Rolling back %d migration(s)...", steps)
 
 	// Rollback steps
-	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
+	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to rollback migrations: %w", err)
 	}
 
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return fmt.Errorf("failed to get migration version: %w", err)
 	}
 
@@ -471,7 +472,7 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 	}
 	defer m.Close()
 
-	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
+	if err := m.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
 	}
 
@@ -490,7 +491,7 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 	return nil
 }
 
-// GetMigrationVersion returns the current migration version
+// GetMigrationVersion returns the current migration version.
 func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string) (uint, bool, error) {
 	dsn := buildMigrateDSN(pool.Config(), "")
 
@@ -504,7 +505,7 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 	defer m.Close()
 
 	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
 		return 0, false, fmt.Errorf("failed to get migration version: %w", err)
 	}
 
@@ -547,7 +548,7 @@ func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string {
 	)
 }
 
-// ValidateMigrationsPath checks if migrations directory exists
+// ValidateMigrationsPath checks if migrations directory exists.
 func ValidateMigrationsPath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {

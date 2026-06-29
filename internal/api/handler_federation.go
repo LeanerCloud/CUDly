@@ -384,7 +384,7 @@ func federationIaCParams(q map[string]string) (target, source, format string, er
 }
 
 // shellEscape escapes a string for safe use inside a double-quoted bash argument.
-// It escapes characters that have special meaning in double-quoted strings: \, $, `, "
+// It escapes characters that have special meaning in double-quoted strings: \, $, `, ".
 func shellEscape(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
 	return r.Replace(s)
@@ -560,7 +560,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 		sb.WriteString("ARM deployment\n")
 		sb.WriteString("================================\n\n")
 	}
-	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID))
+	fmt.Fprintf(&sb, "Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID)
 	sb.WriteString("The deploy script creates an Azure AD App Registration with a federated\n")
 	sb.WriteString("identity credential bound to CUDly's OIDC issuer, then deploys the role\n")
 	sb.WriteString("assignment template. No certificate or secret is created.\n\n")
@@ -693,9 +693,9 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 	var sb strings.Builder
 	sb.WriteString("CUDly Federation IaC Bundle\n")
 	sb.WriteString("===========================\n\n")
-	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n", data.AccountName, data.AccountExternalID))
-	sb.WriteString(fmt.Sprintf("Target  : %s\n", target))
-	sb.WriteString(fmt.Sprintf("Source  : %s\n\n", source))
+	fmt.Fprintf(&sb, "Account : %s (%s)\n", data.AccountName, data.AccountExternalID)
+	fmt.Fprintf(&sb, "Target  : %s\n", target)
+	fmt.Fprintf(&sb, "Source  : %s\n\n", source)
 
 	switch {
 	case target == "aws" && source == "aws":

@@ -1436,7 +1436,7 @@ func TestHandler_getCurrentUserPermissions_UnexpectedPayload(t *testing.T) {
 
 // TestHandler_getCurrentUserPermissions_AdminAPIKey guards CR #922 F2:
 // the AuthUser route admits the stateless admin API key as well as bearer
-// sessions, so the handler must honour an X-API-Key-authenticated request
+// sessions, so the handler must honor an X-API-Key-authenticated request
 // instead of forcing a bearer session a second time and returning 401.
 func TestHandler_getCurrentUserPermissions_AdminAPIKey(t *testing.T) {
 	ctx := context.Background()

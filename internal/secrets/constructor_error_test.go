@@ -137,12 +137,12 @@ func TestNewAzureResolver_ConfigError(t *testing.T) {
 	}
 }
 
-// TestNewAWSResolver_CancelledContext tests constructor with cancelled context
+// TestNewAWSResolver_CancelledContext tests constructor with canceled context
 func TestNewAWSResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	// AWS SDK might still succeed with cancelled context for config loading
+	// AWS SDK might still succeed with canceled context for config loading
 	resolver, err := NewAWSResolver(ctx, "us-east-1")
 
 	if err != nil {
@@ -153,14 +153,14 @@ func TestNewAWSResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewGCPResolver_CancelledContext tests constructor with cancelled context
+// TestNewGCPResolver_CancelledContext tests constructor with canceled context
 func TestNewGCPResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	resolver, err := NewGCPResolver(ctx, "test-project")
 
-	// Cancelled context might cause client creation to fail
+	// Canceled context might cause client creation to fail
 	if err != nil {
 		assert.Nil(t, resolver)
 	} else {
@@ -170,7 +170,7 @@ func TestNewGCPResolver_CancelledContext(t *testing.T) {
 	}
 }
 
-// TestNewAzureResolver_CancelledContext tests constructor with cancelled context
+// TestNewAzureResolver_CancelledContext tests constructor with canceled context
 func TestNewAzureResolver_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -113,7 +113,7 @@ func TestRetryReusesIdempotencyToken(t *testing.T) {
 
 // TestLegacyRowFallsBackToExecutionID guards the migration-000066 legacy path:
 // a row with no IdempotencyKey (NULL column) must derive its token from the
-// ExecutionID, identical to the pre-fix behaviour for a single un-retried
+// ExecutionID, identical to the pre-fix behavior for a single un-retried
 // execution, so old in-flight rows keep working.
 func TestLegacyRowFallsBackToExecutionID(t *testing.T) {
 	legacy := &config.PurchaseExecution{
@@ -228,7 +228,7 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	// Both deliveries read the row as "pending" from the DB (at-least-once SQS:
 	// pre-fix nothing CASes it to running before the cloud call, so a redelivery
 	// re-reads a still-claimable row). Each GetExecutionByID returns a FRESH
-	// pending copy, faithfully modelling the real double-delivery scenario.
+	// pending copy, faithfully modeling the real double-delivery scenario.
 	mockStore.On("GetExecutionByID", ctx, "exec-dup").Return(newPending(), nil).Once()
 	mockStore.On("GetExecutionByID", ctx, "exec-dup").Return(newPending(), nil).Once()
 
@@ -290,7 +290,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 		{ID: "acct-ok", Name: "OK", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
 		// acct-bad uses a non-access_keys auth mode with no STS client wired, so
 		// its credential resolution fails deterministically (committed=false) —
-		// modelling "one account in the fan-out fails" without racing the mock.
+		// modeling "one account in the fan-out fails" without racing the mock.
 		{ID: "acct-bad", Name: "BAD", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "role_arn"},
 	}
 

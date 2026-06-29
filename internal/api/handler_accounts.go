@@ -443,7 +443,7 @@ const (
 )
 
 // validateAWSExternalID enforces the issue #128 backend invariants:
-//   - non-empty (defence-in-depth: the frontend always populates this,
+//   - non-empty (defense-in-depth: the frontend always populates this,
 //     but a hostile or buggy client posting "" would make AssumeRole
 //     bypass the sts:ExternalId condition entirely if the customer's
 //     trust policy lacks the StringEquals constraint).
@@ -618,14 +618,14 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 			// the raw FK error from the eventual DB delete. The list payload
 			// is omitted; the frontend falls back to a generic message.
 			return nil, NewClientErrorWithDetails(409,
-				fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+				fmt.Sprintf("cannot delete account: %d pending purchase(s) must be canceled first", pendingCount),
 				map[string]any{
 					"pending_count": pendingCount,
 					"reason":        "pending_executions",
 				})
 		}
 		return nil, NewClientErrorWithDetails(409,
-			fmt.Sprintf("cannot delete account: %d pending purchase(s) must be cancelled first", pendingCount),
+			fmt.Sprintf("cannot delete account: %d pending purchase(s) must be canceled first", pendingCount),
 			map[string]any{
 				"pending_count":         pendingCount,
 				"pending_execution_ids": execIDs,
@@ -644,7 +644,7 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return nil, NewClientErrorWithDetails(409,
-				"cannot delete account: pending purchase(s) must be cancelled first",
+				"cannot delete account: pending purchase(s) must be canceled first",
 				map[string]any{
 					"reason": "pending_executions",
 				})
@@ -1074,7 +1074,7 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 
 	override := buildServiceOverride(accountID, provider, service, req, existing, now)
 
-	// Defence-in-depth: reject invalid (term, payment) combos before persisting.
+	// Defense-in-depth: reject invalid (term, payment) combos before persisting.
 	// checkCommitmentOptionCombo is permissive when commitmentOpts is nil or
 	// probe data is absent (ErrNoData) — the frontend's hardcoded rules are the
 	// primary gate in those cases.

@@ -36,7 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Application holds all components of the CUDly server
+// Application holds all components of the CUDly server.
 type Application struct {
 	Config      config.StoreInterface
 	API         *api.Handler
@@ -97,13 +97,13 @@ type Application struct {
 
 	// migrationsTimeout and runMigrationsFunc are per-instance instead of
 	// package-level variables so that tests can set them on a specific
-	// Application instance without serialising parallel tests (04-M3).
+	// Application instance without serializing parallel tests (04-M3).
 	// NewApplicationFromDeps sets them to the package defaults.
 	migrationsTimeout time.Duration
 	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
-// ApplicationConfig holds all env-based configuration for the application
+// ApplicationConfig holds all env-based configuration for the application.
 type ApplicationConfig struct {
 	Version                string
 	NotificationDaysBefore int
@@ -138,7 +138,7 @@ type ApplicationConfig struct {
 	Analytics AnalyticsConfig
 }
 
-// ExternalDeps holds pre-built external dependencies that require infrastructure
+// ExternalDeps holds pre-built external dependencies that require infrastructure.
 type ExternalDeps struct {
 	EmailSender    email.SenderInterface
 	ConfigStore    config.StoreInterface
@@ -158,10 +158,10 @@ type ExternalDeps struct {
 const defaultMigrationsTimeout = 120 * time.Second
 
 // resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
-// It is called once in NewApplicationFromDeps to initialise
+// It is called once in NewApplicationFromDeps to initialize
 // Application.migrationsTimeout. Because the timeout lives on the struct
 // (not a package-level var), tests can set it on a specific Application
-// instance without serialising parallel tests (04-M3).
+// instance without serializing parallel tests (04-M3).
 func resolveMigrationsTimeout() time.Duration {
 	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
 	if v == "" {
@@ -199,7 +199,7 @@ func (app *Application) snapshotMigrationState() (err error, finishedAt time.Tim
 // a panic wrapped as an error, or a timeout error -- never a
 // nil-with-goroutine-still-alive. The goroutine is guaranteed to have exited
 // before this function returns (the timeout branch waits on <-done after
-// cancelling the ctx), so no orphan goroutine survives past this call --
+// canceling the ctx), so no orphan goroutine survives past this call --
 // critical on Lambda where goroutines freeze between invocations.
 //
 // Using instance fields (not package globals) makes it safe to call
@@ -250,7 +250,7 @@ func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
 	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
-// LoadApplicationConfig reads all configuration from environment variables
+// LoadApplicationConfig reads all configuration from environment variables.
 func LoadApplicationConfig() ApplicationConfig {
 	version := os.Getenv("VERSION")
 	if version == "" {
@@ -405,7 +405,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
 	// OIDC-dependent paths (handler_oidc.go, purchase manager Azure
-	// federated credential) fall back to their legacy behaviours.
+	// federated credential) fall back to their legacy behaviors.
 	signer, signerErr := oidc.NewSignerFromEnv(ctx)
 	if signerErr != nil {
 		log.Printf("oidc signer init failed (federated flow disabled): %v", signerErr)
@@ -888,7 +888,7 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 	}
 }
 
-// Close gracefully shuts down the application
+// Close gracefully shuts down the application.
 func (app *Application) Close() error {
 	log.Println("Shutting down CUDly Server...")
 
@@ -903,7 +903,7 @@ func (app *Application) Close() error {
 }
 
 // initConfigStore initializes the configuration store using PostgreSQL
-// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues
+// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues.
 func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Config, secrets.Resolver, error) {
 	// Require PostgreSQL configuration
 	if os.Getenv("DB_HOST") == "" {
@@ -957,7 +957,7 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 	return defaultVal
 }
 
-// authServiceAdapter adapts auth.Service to api.AuthServiceInterface
+// authServiceAdapter adapts auth.Service to api.AuthServiceInterface.
 type authServiceAdapter struct {
 	service *auth.Service
 }
@@ -1067,7 +1067,7 @@ func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID strin
 	return a.service.UpdateUserProfile(ctx, userID, email, currentPassword, newPassword)
 }
 
-// User management methods - delegate to auth service API methods
+// User management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateUserAPI(ctx, req)
 }
@@ -1105,7 +1105,7 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 	return a.service.MFARegenerateRecoveryCodesAPI(ctx, userID, code)
 }
 
-// Group management methods - delegate to auth service API methods
+// Group management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateGroupAPI(ctx, req)
 }
@@ -1126,7 +1126,7 @@ func (a *authServiceAdapter) ListGroupsAPI(ctx context.Context) (any, error) {
 	return a.service.ListGroupsAPI(ctx)
 }
 
-// Permission checking
+// Permission checking.
 func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
@@ -1135,7 +1135,7 @@ func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID s
 	return a.service.GetUserPermissionsAPI(ctx, userID)
 }
 
-// Account access
+// Account access.
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := a.service.BuildAuthContext(ctx, userID)
 	if err != nil {
@@ -1144,12 +1144,12 @@ func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID s
 	return authCtx.AllowedAccounts, nil
 }
 
-// CSRF validation
+// CSRF validation.
 func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken string) error {
 	return a.service.ValidateCSRFToken(ctx, sessionToken, csrfToken)
 }
 
-// API Key management
+// API Key management.
 func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }

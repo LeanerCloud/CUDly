@@ -51,7 +51,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public key: %v", err)
 	}
-	if pub.N.Cmp(key.PublicKey.N) != 0 {
+	if pub.N.Cmp(key.N) != 0 {
 		t.Fatal("public key modulus mismatch")
 	}
 
@@ -80,7 +80,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 	}
 }
 
-// helpers — unit tests only, kept private
+// helpers — unit tests only, kept private.
 func splitJWS(t *testing.T, jws string) [3]string {
 	t.Helper()
 	var out [3]string

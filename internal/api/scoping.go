@@ -67,7 +67,7 @@ func (h *Handler) canAccessAccountID(ctx context.Context, session *Session, acco
 // default when we can't attribute the plan to a specific account.
 //
 // requirePermission must fire first; the session it returns is what the
-// caller passes here. This is the plan-level analogue of requireAccountAccess
+// caller passes here. This is the plan-level analog of requireAccountAccess
 // and is used by the plans/purchases/ri-exchange per-record scoping.
 func (h *Handler) requirePlanAccess(ctx context.Context, session *Session, planID string) error {
 	allowed, err := h.getAllowedAccounts(ctx, session)
@@ -166,7 +166,7 @@ func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, 
 //
 // Returns (uuids, nil) when uuids is empty or the account load fails — the
 // dual-column predicate then degrades to UUID-only matching, no worse than the
-// pre-fix behaviour.
+// pre-fix behavior.
 func (h *Handler) resolveAccountFilterIDs(ctx context.Context, uuids []string) (resolvedUUIDs []string, externalIDsByProvider map[string][]string) {
 	if len(uuids) == 0 {
 		return uuids, nil
@@ -220,11 +220,11 @@ func addExternalIDForProvider(m map[string][]string, provider, externalID string
 //     callers keep working; it is NOT placed in the uuid set so a raw external
 //     number is never compared against cloud_account_id UUIDs. Its provider is
 //     unknown, so it is grouped under the "" key, which the predicate treats as
-//     an unconstrained-provider match (legacy behaviour preserved).
+//     an unconstrained-provider match (legacy behavior preserved).
 //
 // Empty input returns nil maps (no account filter). A cloud_accounts load
 // failure falls back to treating the value as an external id (no worse than the
-// pre-fix behaviour); per-record allowed_accounts scoping still applies
+// pre-fix behavior); per-record allowed_accounts scoping still applies
 // downstream.
 func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID string) (uuids []string, externalIDsByProvider map[string][]string) {
 	if accountID == "" {

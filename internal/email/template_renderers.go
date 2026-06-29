@@ -16,7 +16,7 @@ var templateFuncs = template.FuncMap{
 }
 
 // textTemplateFuncs mirrors templateFuncs for text/template so plain-text
-// renderers share the same urlquery behaviour without crossing package types.
+// renderers share the same urlquery behavior without crossing package types.
 var textTemplateFuncs = texttemplate.FuncMap{
 	"urlquery": url.QueryEscape,
 }

@@ -12,7 +12,7 @@ import (
 
 // LambdaFunctionURLClient is the subset of the AWS Lambda API the
 // issuer-cache primer needs. Exposed as an interface so tests can
-// inject a fake without dialling AWS.
+// inject a fake without dialing AWS.
 type LambdaFunctionURLClient interface {
 	GetFunctionUrlConfig(ctx context.Context, params *lambda.GetFunctionUrlConfigInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error)
 }

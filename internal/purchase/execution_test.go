@@ -170,7 +170,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 }
 
 // TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged verifies the
-// NormalizeSource defence-in-depth: a DB row with an unexpected source value
+// NormalizeSource defense-in-depth: a DB row with an unexpected source value
 // proceeds with an empty source (untagged) rather than failing the already-
 // approved execution or poisoning cloud tags with arbitrary strings.
 func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {

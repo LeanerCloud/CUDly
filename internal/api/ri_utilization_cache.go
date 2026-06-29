@@ -65,7 +65,7 @@ type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]recomme
 // revalidate semantics on non-Lambda runtimes. Lambda containers can't
 // safely run background goroutines (they freeze between invocations)
 // so on Lambda the cache falls back to synchronous fetch-on-stale —
-// today's behaviour. Non-Lambda runtimes get SWR: stale rows are
+// today's behavior. Non-Lambda runtimes get SWR: stale rows are
 // served immediately while a detached goroutine refreshes the row for
 // the next reader.
 //
@@ -145,7 +145,7 @@ func (c *riUtilizationCache) getOrFetch(
 // kickBackgroundRefresh runs a single-flighted refetch in a detached
 // goroutine. sf.Do with the same key collapses concurrent calls to
 // one in-flight refresh. The refresh uses a fresh context (not the
-// caller's) because the caller's ctx may be cancelled when the HTTP
+// caller's) because the caller's ctx may be canceled when the HTTP
 // response completes, which would abort the refresh prematurely.
 func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackDays int, fetch riUtilizationFetcher) {
 	go func() {

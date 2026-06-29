@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// DBConnection defines the interface for database operations needed by PostgresStore
+// DBConnection defines the interface for database operations needed by PostgresStore.
 type DBConnection interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -23,24 +23,24 @@ type DBConnection interface {
 	Ping(ctx context.Context) error
 }
 
-// PostgresStore implements StoreInterface using PostgreSQL
+// PostgresStore implements StoreInterface using PostgreSQL.
 type PostgresStore struct {
 	db DBConnection
 }
 
-// NewPostgresStore creates a new PostgreSQL-backed auth store
+// NewPostgresStore creates a new PostgreSQL-backed auth store.
 func NewPostgresStore(db DBConnection) *PostgresStore {
 	return &PostgresStore{db: db}
 }
 
-// Verify PostgresStore implements StoreInterface
+// Verify PostgresStore implements StoreInterface.
 var _ StoreInterface = (*PostgresStore)(nil)
 
 // ==========================================
 // USER OPERATIONS
 // ==========================================
 
-// GetUserByID retrieves a user by ID
+// GetUserByID retrieves a user by ID.
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, group_ids, active,
@@ -55,7 +55,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, 
 	return s.scanUser(s.db.QueryRow(ctx, query, userID))
 }
 
-// GetUserByEmail retrieves a user by email
+// GetUserByEmail retrieves a user by email.
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	query := `
 		SELECT id, email, password_hash, salt, group_ids, active,
@@ -74,7 +74,7 @@ func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User
 	return user, nil
 }
 
-// CreateUser creates a new user
+// CreateUser creates a new user.
 func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	// Generate UUID if not provided
 	if user.ID == "" {
@@ -140,7 +140,7 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	return nil
 }
 
-// isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation (code 23505)
+// isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation (code 23505).
 func isDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -185,7 +185,7 @@ func isLastAdminConstraintViolation(err error) bool {
 	return strings.HasPrefix(err.Error(), sentinel)
 }
 
-// UpdateUser updates an existing user
+// UpdateUser updates an existing user.
 func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 	user.UpdatedAt = time.Now()
 
@@ -249,7 +249,7 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
 	return nil
 }
 
-// DeleteUser deletes a user
+// DeleteUser deletes a user.
 func (s *PostgresStore) DeleteUser(ctx context.Context, userID string) error {
 	query := `DELETE FROM users WHERE id = $1`
 
@@ -265,7 +265,7 @@ func (s *PostgresStore) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// ListUsers lists all users
+// ListUsers lists all users.
 func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	// LIMIT provides a safety cap against unbounded memory allocation on large installations.
 	// Pagination support should be added if this limit proves insufficient.
@@ -438,7 +438,7 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 // GROUP OPERATIONS
 // ==========================================
 
-// GetGroup retrieves a group by ID
+// GetGroup retrieves a group by ID.
 func (s *PostgresStore) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	query := `
 		SELECT id, name, description, permissions, allowed_accounts,
@@ -450,7 +450,7 @@ func (s *PostgresStore) GetGroup(ctx context.Context, groupID string) (*Group, e
 	return s.scanGroup(s.db.QueryRow(ctx, query, groupID))
 }
 
-// CreateGroup creates a new group
+// CreateGroup creates a new group.
 func (s *PostgresStore) CreateGroup(ctx context.Context, group *Group) error {
 	// Generate UUID if not provided
 	if group.ID == "" {
@@ -501,7 +501,7 @@ func (s *PostgresStore) CreateGroup(ctx context.Context, group *Group) error {
 	return nil
 }
 
-// UpdateGroup updates an existing group
+// UpdateGroup updates an existing group.
 func (s *PostgresStore) UpdateGroup(ctx context.Context, group *Group) error {
 	group.UpdatedAt = time.Now()
 
@@ -541,7 +541,7 @@ func (s *PostgresStore) UpdateGroup(ctx context.Context, group *Group) error {
 	return nil
 }
 
-// DeleteGroup deletes a group
+// DeleteGroup deletes a group.
 func (s *PostgresStore) DeleteGroup(ctx context.Context, groupID string) error {
 	query := `DELETE FROM groups WHERE id = $1`
 
@@ -557,7 +557,7 @@ func (s *PostgresStore) DeleteGroup(ctx context.Context, groupID string) error {
 	return nil
 }
 
-// ListGroups lists all groups
+// ListGroups lists all groups.
 func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 	// LIMIT provides a safety cap against unbounded memory allocation.
 	// Pagination support should be added if this limit proves insufficient.
@@ -594,7 +594,7 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 // SESSION OPERATIONS
 // ==========================================
 
-// CreateSession creates a new session
+// CreateSession creates a new session.
 func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) error {
 	query := `
 		INSERT INTO sessions (
@@ -621,7 +621,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 	return nil
 }
 
-// GetSession retrieves a session by token
+// GetSession retrieves a session by token.
 func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session, error) {
 	query := `
 		SELECT token, user_id, email, expires_at, created_at,
@@ -652,7 +652,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session,
 	return &session, nil
 }
 
-// DeleteSession deletes a session
+// DeleteSession deletes a session.
 func (s *PostgresStore) DeleteSession(ctx context.Context, token string) error {
 	query := `DELETE FROM sessions WHERE token = $1`
 
@@ -664,7 +664,7 @@ func (s *PostgresStore) DeleteSession(ctx context.Context, token string) error {
 	return nil
 }
 
-// DeleteUserSessions deletes all sessions for a user
+// DeleteUserSessions deletes all sessions for a user.
 func (s *PostgresStore) DeleteUserSessions(ctx context.Context, userID string) error {
 	query := `DELETE FROM sessions WHERE user_id = $1`
 
@@ -676,7 +676,7 @@ func (s *PostgresStore) DeleteUserSessions(ctx context.Context, userID string) e
 	return nil
 }
 
-// CleanupExpiredSessions deletes expired sessions
+// CleanupExpiredSessions deletes expired sessions.
 func (s *PostgresStore) CleanupExpiredSessions(ctx context.Context) error {
 	query := `DELETE FROM sessions WHERE expires_at <= NOW()`
 
@@ -693,7 +693,7 @@ func (s *PostgresStore) CleanupExpiredSessions(ctx context.Context) error {
 // API KEY OPERATIONS
 // ==========================================
 
-// CreateAPIKey creates a new API key
+// CreateAPIKey creates a new API key.
 func (s *PostgresStore) CreateAPIKey(ctx context.Context, key *UserAPIKey) error {
 	// Generate UUID if not provided
 	if key.ID == "" {
@@ -736,7 +736,7 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, key *UserAPIKey) error
 	return nil
 }
 
-// GetAPIKeyByID retrieves an API key by ID
+// GetAPIKeyByID retrieves an API key by ID.
 func (s *PostgresStore) GetAPIKeyByID(ctx context.Context, keyID string) (*UserAPIKey, error) {
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
@@ -748,7 +748,7 @@ func (s *PostgresStore) GetAPIKeyByID(ctx context.Context, keyID string) (*UserA
 	return s.scanAPIKey(s.db.QueryRow(ctx, query, keyID))
 }
 
-// GetAPIKeyByHash retrieves an API key by hash
+// GetAPIKeyByHash retrieves an API key by hash.
 func (s *PostgresStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error) {
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
@@ -761,7 +761,7 @@ func (s *PostgresStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*U
 	return s.scanAPIKey(s.db.QueryRow(ctx, query, keyHash))
 }
 
-// ListAPIKeysByUser lists all API keys for a user
+// ListAPIKeysByUser lists all API keys for a user.
 func (s *PostgresStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error) {
 	query := `
 		SELECT id, user_id, name, key_prefix, key_hash, permissions,
@@ -792,7 +792,7 @@ func (s *PostgresStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 	return keys, rows.Err()
 }
 
-// UpdateAPIKey updates an API key
+// UpdateAPIKey updates an API key.
 func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error {
 	// Marshal permissions to JSONB
 	permissionsJSON, err := json.Marshal(key.Permissions)
@@ -830,7 +830,7 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	return nil
 }
 
-// UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an API key
+// UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an API key.
 func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
 	result, err := s.db.Exec(ctx, query, keyID)
@@ -843,7 +843,7 @@ func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) 
 	return nil
 }
 
-// DeleteAPIKey deletes an API key
+// DeleteAPIKey deletes an API key.
 func (s *PostgresStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 	query := `DELETE FROM api_keys WHERE id = $1`
 
@@ -863,12 +863,12 @@ func (s *PostgresStore) DeleteAPIKey(ctx context.Context, keyID string) error {
 // HELPER FUNCTIONS
 // ==========================================
 
-// Scanner interface for both Row and Rows
+// Scanner interface for both Row and Rows.
 type Scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanUser scans a user from a database row
+// scanUser scans a user from a database row.
 func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 	var user User
 	var groupIDs []string
@@ -938,7 +938,7 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 	return &user, nil
 }
 
-// scanGroup scans a group from a database row
+// scanGroup scans a group from a database row.
 func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 	var group Group
 	var permissionsJSON []byte
@@ -980,7 +980,7 @@ func (s *PostgresStore) scanGroup(scanner Scanner) (*Group, error) {
 	return &group, nil
 }
 
-// scanAPIKey scans an API key from a database row
+// scanAPIKey scans an API key from a database row.
 func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	var key UserAPIKey
 	var permissionsJSON []byte
@@ -1024,7 +1024,7 @@ func (s *PostgresStore) scanAPIKey(scanner Scanner) (*UserAPIKey, error) {
 	return &key, nil
 }
 
-// Ping checks the database connection health
+// Ping checks the database connection health.
 func (s *PostgresStore) Ping(ctx context.Context) error {
 	return s.db.Ping(ctx)
 }

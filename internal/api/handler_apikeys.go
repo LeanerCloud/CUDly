@@ -20,7 +20,7 @@ import (
 // to the calling user. There is no separate "revoke" action in the permission
 // model, so revoke reuses "delete".
 
-// listAPIKeys handles GET /api/api-keys
+// listAPIKeys handles GET /api/api-keys.
 func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "view", "api-keys")
 	if err != nil {
@@ -35,7 +35,7 @@ func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURL
 	return keys, nil
 }
 
-// createAPIKey handles POST /api/api-keys
+// createAPIKey handles POST /api/api-keys.
 func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "create", "api-keys")
 	if err != nil {
@@ -69,7 +69,7 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	return result, nil
 }
 
-// deleteAPIKey handles DELETE /api/api-keys/{id}
+// deleteAPIKey handles DELETE /api/api-keys/{id}.
 func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
 	if err != nil {
@@ -88,7 +88,7 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	return map[string]string{"status": "deleted"}, nil
 }
 
-// revokeAPIKey handles POST /api/api-keys/{id}/revoke
+// revokeAPIKey handles POST /api/api-keys/{id}/revoke.
 func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// No "revoke" verb in the permission model — reuse "delete".
 	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
@@ -130,7 +130,7 @@ func apiKeyIDFromPath(path string, hasTrailingAction bool) (string, error) {
 	return keyID, nil
 }
 
-// Helper function to format time pointer as string
+// Helper function to format time pointer as string.
 func formatTimePtr(t *time.Time) string {
 	if t == nil {
 		return ""
