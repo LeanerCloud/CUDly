@@ -49,7 +49,6 @@ jobs:
         with:
           version: v2.10.1
           args: --timeout=5m
-          only-new-issues: true
 
       - name: Run go vet
         run: go vet ./...
@@ -315,7 +314,7 @@ jobs:
       - name: Run npm audit (frontend)
         run: |
           if [ -f frontend/package.json ]; then
-            cd frontend && npm audit --audit-level=high --omit=dev
+            cd frontend && npm audit --audit-level=high
           fi
 
       - name: Run gosec Security Scanner
