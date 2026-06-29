@@ -12,17 +12,17 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// MessageType defines the types of async messages that can be processed
+// MessageType defines the types of async messages that can be processed.
 type MessageType string
 
 const (
-	// MessageTypeExecutePurchase triggers execution of a scheduled purchase
+	// MessageTypeExecutePurchase triggers execution of a scheduled purchase.
 	MessageTypeExecutePurchase MessageType = "execute_purchase"
-	// MessageTypeApprove approves a pending execution
+	// MessageTypeApprove approves a pending execution.
 	MessageTypeApprove MessageType = "approve"
-	// MessageTypeCancel cancels a pending execution
+	// MessageTypeCancel cancels a pending execution.
 	MessageTypeCancel MessageType = "cancel"
-	// MessageTypeSendNotification sends a notification for upcoming purchase
+	// MessageTypeSendNotification sends a notification for upcoming purchase.
 	MessageTypeSendNotification MessageType = "send_notification"
 )
 
@@ -64,11 +64,11 @@ func (m *Manager) ProcessMessage(ctx context.Context, body string) error {
 
 	switch msg.Type {
 	case MessageTypeExecutePurchase:
-		return m.handleExecutePurchase(ctx, msg)
+		return m.handleExecutePurchase(ctx, &msg)
 	case MessageTypeApprove:
-		return m.handleApproveMessage(ctx, msg)
+		return m.handleApproveMessage(ctx, &msg)
 	case MessageTypeCancel:
-		return m.handleCancelMessage(ctx, msg)
+		return m.handleCancelMessage(ctx, &msg)
 	case MessageTypeSendNotification:
 		_, err := m.SendUpcomingPurchaseNotifications(ctx)
 		return err
@@ -78,8 +78,8 @@ func (m *Manager) ProcessMessage(ctx context.Context, body string) error {
 	}
 }
 
-// handleExecutePurchase processes an execute_purchase message
-func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) error {
+// handleExecutePurchase processes an execute_purchase message.
+func (m *Manager) handleExecutePurchase(ctx context.Context, msg *AsyncMessage) error {
 	if msg.ExecutionID == "" {
 		return fmt.Errorf("execution_id required for execute_purchase message")
 	}
@@ -140,11 +140,11 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 // for any reason is exactly the threat model this fix addresses. Any
 // legitimate stranded action can be re-issued via the HTTP route gated
 // by authorizeApprovalAction.
-func (m *Manager) handleApproveMessage(ctx context.Context, msg AsyncMessage) error {
+func (m *Manager) handleApproveMessage(ctx context.Context, msg *AsyncMessage) error {
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for approve message")
 	}
-	if err := m.verifyAsyncApprovalActor(ctx, &msg); err != nil {
+	if err := m.verifyAsyncApprovalActor(ctx, msg); err != nil {
 		return err
 	}
 	return m.ApproveExecution(ctx, msg.ExecutionID, msg.Token, msg.ActorEmail)
@@ -153,11 +153,11 @@ func (m *Manager) handleApproveMessage(ctx context.Context, msg AsyncMessage) er
 // handleCancelMessage processes a cancel message. Same hardening as
 // handleApproveMessage: token + actor_email + approver-list match are
 // all required.
-func (m *Manager) handleCancelMessage(ctx context.Context, msg AsyncMessage) error {
+func (m *Manager) handleCancelMessage(ctx context.Context, msg *AsyncMessage) error {
 	if msg.ExecutionID == "" || msg.Token == "" {
 		return fmt.Errorf("execution_id and token required for cancel message")
 	}
-	if err := m.verifyAsyncApprovalActor(ctx, &msg); err != nil {
+	if err := m.verifyAsyncApprovalActor(ctx, msg); err != nil {
 		return err
 	}
 	return m.CancelExecution(ctx, msg.ExecutionID, msg.Token, msg.ActorEmail)
@@ -233,7 +233,7 @@ func (m *Manager) matchActorAgainstApprovers(ctx context.Context, actor string, 
 			return nil
 		}
 	}
-	return fmt.Errorf("actor email is not an authorised approver for this purchase")
+	return fmt.Errorf("actor email is not an authorized approver for this purchase")
 }
 
 // gatherApproverContactEmails mirrors the algorithm in
@@ -253,7 +253,8 @@ func (m *Manager) gatherApproverContactEmails(ctx context.Context, recs []config
 	seenAccount := map[string]bool{}
 	seenEmail := map[string]bool{}
 	var out []string
-	for _, rec := range recs {
+	for i := range recs {
+		rec := &recs[i]
 		if rec.CloudAccountID == nil || *rec.CloudAccountID == "" {
 			continue
 		}

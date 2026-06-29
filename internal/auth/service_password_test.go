@@ -591,15 +591,15 @@ func TestService_ResetTokenStatus(t *testing.T) {
 	})
 }
 
-// Test password validation rules
+// Test password validation rules.
 func TestValidatePassword(t *testing.T) {
 	service := &Service{}
 
 	tests := []struct {
 		name     string
 		password string
-		wantErr  bool
 		errMsg   string
+		wantErr  bool
 	}{
 		{
 			name:     "valid strong password",
@@ -708,7 +708,7 @@ func TestValidatePassword(t *testing.T) {
 	}
 }
 
-// Test checkCommonPasswords uses exact match (not substring)
+// Test checkCommonPasswords uses exact match (not substring).
 func TestCheckCommonPasswords(t *testing.T) {
 	service := &Service{}
 
@@ -722,7 +722,7 @@ func TestCheckCommonPasswords(t *testing.T) {
 	assert.NoError(t, service.checkCommonPasswords("SuperAdmin2024"))
 }
 
-// Test containsRepeatedChars function
+// Test containsRepeatedChars function.
 func TestContainsSequentialChars(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -788,14 +788,14 @@ func TestContainsSequentialChars(t *testing.T) {
 	}
 }
 
-// Test addToPasswordHistory function
+// Test addToPasswordHistory function.
 func TestAddToPasswordHistory(t *testing.T) {
 	tests := []struct {
 		name            string
 		currentHash     string
+		expectedFirst   string
 		existingHistory []string
 		expectedLen     int
-		expectedFirst   string
 	}{
 		{
 			name:            "empty history",
@@ -838,7 +838,7 @@ func TestAddToPasswordHistory(t *testing.T) {
 	}
 }
 
-// Test checkPasswordHistory
+// Test checkPasswordHistory.
 func TestCheckPasswordHistory(t *testing.T) {
 	service := newTestService()
 

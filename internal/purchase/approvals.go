@@ -51,10 +51,10 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
 	// the cloud SDK is reached. See OrphanExecutionError for the full rationale.
-	if err := OrphanExecutionError(execution); err != nil {
+	if checkErr := OrphanExecutionError(execution); checkErr != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution preflight rejected after %s: %v",
-			executionID, time.Since(t0), err)
-		return err
+			executionID, time.Since(t0), checkErr)
+		return checkErr
 	}
 
 	// Token/SQS path: no authenticated session UUID is available, so the
@@ -190,7 +190,7 @@ func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor stri
 // status IN ('pending','notified') so a concurrent approve that wins
 // the race causes zero rows to be affected and the caller receives a
 // clean error with the current status rather than silently overwriting
-// the approved row. This is the token/email-link cancel analogue of
+// the approved row. This is the token/email-link cancel analog of
 // the atomic guard TransitionExecutionStatus provides for ApproveAndExecute.
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Cancelling execution: %s", executionID)
