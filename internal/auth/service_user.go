@@ -31,7 +31,7 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 	}
 
 	if err := s.validatePassword(req.Password); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
+		return nil, fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
 	}
 
 	passwordHash, err := s.hashPassword(req.Password)
@@ -93,7 +93,7 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 
 // mapStoreCreateUserError maps a Store.CreateUser error into the auth
 // package's sentinel set so the API handler can surface 4xx instead of
-// 500 for known recoverable failures. Defence-in-depth: the validator
+// 500 for known recoverable failures. Defense-in-depth: the validator
 // pre-checks email-in-use, but two callers can race past it and hit the
 // users_email_key unique constraint. Extracted from CreateUser /
 // SetupAdmin call sites to keep both functions under gocyclo's
@@ -108,7 +108,7 @@ func mapStoreCreateUserError(err error) error {
 	return fmt.Errorf("failed to create user: %w", err)
 }
 
-// CheckAdminExists returns whether an admin user exists
+// CheckAdminExists returns whether an admin user exists.
 func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 	return s.store.AdminExists(ctx)
 }
@@ -141,7 +141,7 @@ func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserR
 		// validatePassword returns specific messages ("must be at least N
 		// characters", "common password", etc.); wrap so the handler can
 		// detect the category while keeping the message detail.
-		return fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
+		return fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
 	}
 	return nil
 }
@@ -295,7 +295,7 @@ func (s *Service) loadUser(ctx context.Context, userID string) (*User, error) {
 // session, never client-supplied). It is used to enforce the self-escalation
 // guard: a user may not add a group they are not already a member of unless
 // they hold the manage-users permission. Pass "" for trusted internal callers
-// (e.g. the stateless admin API key) that have already been authorised.
+// (e.g. the stateless admin API key) that have already been authorized.
 func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, req UpdateUserRequest) (*User, error) {
 	user, err := s.loadUser(ctx, userID)
 	if err != nil {
@@ -487,7 +487,7 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 	return s.store.GetUserByID(ctx, userID)
 }
 
-// UpdateUserProfile allows a user to update their own email and password
+// UpdateUserProfile allows a user to update their own email and password.
 func (s *Service) UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
@@ -577,12 +577,12 @@ func (s *Service) updateUserPassword(user *User, newPassword string) (bool, erro
 	return true, nil
 }
 
-// ListUsers returns all users (admin only)
+// ListUsers returns all users (admin only).
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	return s.store.ListUsers(ctx)
 }
 
-// recordFailedLogin increments failed login attempts and locks the account if necessary
+// recordFailedLogin increments failed login attempts and locks the account if necessary.
 func (s *Service) recordFailedLogin(ctx context.Context, user *User) {
 	user.FailedLoginAttempts++
 	now := time.Now()

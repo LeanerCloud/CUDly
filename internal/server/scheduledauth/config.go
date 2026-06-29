@@ -17,7 +17,7 @@ type EnvMap map[string]string
 // Get returns the value for key, or "" if absent.
 func (m EnvMap) Get(key string) string { return m[key] }
 
-// Environment variable names. Centralised so tests and Terraform stay
+// Environment variable names. Centralized so tests and Terraform stay
 // aligned with the Go code.
 const (
 	EnvAuthMode     = "SCHEDULED_TASK_AUTH_MODE"     // "oidc" | "bearer" | "disabled"

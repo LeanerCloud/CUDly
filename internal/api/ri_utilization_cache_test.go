@@ -16,7 +16,7 @@ import (
 // fakeRIUtilCacheStore is a minimal in-test implementation of
 // riUtilizationCacheStore. Keyed by (region, lookbackDays); stores the
 // raw JSON payload + fetched_at so the cache layer exercises the same
-// marshalling path as the real Postgres store.
+// marshaling path as the real Postgres store.
 type fakeRIUtilCacheStore struct {
 	mu      sync.Mutex
 	entries map[string]config.RIUtilizationCacheEntry
@@ -184,7 +184,7 @@ func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Lambda must return the FRESH data synchronously (today's behaviour).
+	// Lambda must return the FRESH data synchronously (today's behavior).
 	if len(got) != 1 || got[0].ReservedInstanceID != "ri-fresh" {
 		t.Fatalf("Lambda mode should synchronously refetch; got %+v", got)
 	}

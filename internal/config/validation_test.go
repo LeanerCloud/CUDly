@@ -978,7 +978,7 @@ func TestIsValidRampScheduleType(t *testing.T) {
 	assert.False(t, isValidRampScheduleType(""))
 }
 
-// Helper function for creating string pointers in tests
+// Helper function for creating string pointers in tests.
 func stringPtr(s string) *string {
 	return &s
 }

@@ -26,7 +26,7 @@ func TestListConvertibleRIs_RequiresAdmin(t *testing.T) {
 	assert.Contains(t, err.Error(), "authentication")
 }
 
-// issue #871: the AWS convertible-RI list must honour the Main Header global
+// issue #871: the AWS convertible-RI list must honor the Main Header global
 // account filter. When the ?account_id= chip selects an account other than the
 // running (ambient) AWS account, none of these RIs belong to it, so the
 // handler returns an empty list without touching AWS config.
@@ -262,8 +262,8 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 		ExchangeID:    "exch-already-done",
 	}, nil)
 
-	// Transition from pending→cancelled fails (record is not pending)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
+	// Transition from pending→canceled fails (record is not pending)
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "canceled", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
 	_, err := h.rejectRIExchange(ctx, id, token)
@@ -283,14 +283,14 @@ func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
 	id := "550e8400-e29b-41d4-a716-446655440001"
 	token := "valid-token-456"
 
-	// Record exists but was cancelled by a newer analysis run
+	// Record exists but was canceled by a newer analysis run
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID:            id,
 		ApprovalToken: token,
-		Status:        "cancelled",
+		Status:        "canceled",
 	}, nil)
 
-	// Transition from pending→processing fails (record is cancelled)
+	// Transition from pending→processing fails (record is canceled)
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
@@ -529,7 +529,7 @@ func TestRejectRIExchange_MissingToken(t *testing.T) {
 
 // TestRejectRIExchange_EmptyStoredToken is a regression test for issue #399.
 // A record with an empty ApprovalToken must be rejected with 403 rather than
-// being cancelled by any caller passing an empty token string, because
+// being canceled by any caller passing an empty token string, because
 // crypto/subtle.ConstantTimeCompare([]byte(""), []byte("")) == 1.
 func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
 	mockStore := new(MockConfigStore)
@@ -693,7 +693,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	}
 }
 
-// Suppress unused import warnings
+// Suppress unused import warnings.
 var _ = mock.Anything
 var _ = time.Now
 var _ = config.RIExchangeRecord{}
@@ -1251,7 +1251,7 @@ func TestMapAWSExchangeError_ClientFault4xx(t *testing.T) {
 }
 
 func TestMapAWSExchangeError_ServerFault5xx(t *testing.T) {
-	// An AWS error with an unrecognised code must stay 500
+	// An AWS error with an unrecognized code must stay 500
 	apiErr := &fakeAPIError{code: "InternalError", message: "AWS is having a bad day"}
 	mapped := mapAWSExchangeError("exchange quote failed", apiErr)
 	ce, ok := IsClientError(mapped)
@@ -1449,9 +1449,9 @@ func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
 		ID: id, Status: "pending", ApprovalToken: "tok",
 	}, nil)
 	// Token path: actor must be nil.
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled",
+	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "canceled",
 		(*string)(nil),
-	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil)
+	).Return(&config.RIExchangeRecord{ID: id, Status: "canceled"}, nil)
 
 	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
 	require.NoError(t, err)

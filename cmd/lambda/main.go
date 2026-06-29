@@ -17,7 +17,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// Version is set at build time
+// Version is set at build time.
 var Version = "dev"
 
 var (
@@ -56,7 +56,7 @@ func initApp(ctx context.Context) (*server.Application, error) {
 }
 
 // Handler is the main Lambda handler function
-// This delegates to Application.HandleLambdaEvent which handles all event types
+// This delegates to Application.HandleLambdaEvent which handles all event types.
 func Handler(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
 	// Initialize app on first request (lazy initialization)
 	application, err := initApp(ctx)

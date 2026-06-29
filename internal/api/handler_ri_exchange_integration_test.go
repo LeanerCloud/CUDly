@@ -36,7 +36,7 @@ func (f *fakeReshapeEC2) ListConvertibleReservedInstances(_ context.Context) ([]
 }
 
 // fakeReshapeRecs is a stub for reshapeRecsClient. Counts calls so the
-// test can assert cache-hit behaviour on the second request.
+// test can assert cache-hit behavior on the second request.
 type fakeReshapeRecs struct {
 	utilization []recommendations.RIUtilization
 	calls       atomic.Int32
@@ -305,7 +305,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 	accountBID := seedCloudAccount(ctx, t, store, "222222222222", "Tenant B")
 
 	// Seed one cross-family rec per tenant in the same region. If the
-	// scope filter is honoured, only Tenant A's c5.large surfaces;
+	// scope filter is honored, only Tenant A's c5.large surfaces;
 	// otherwise both alternatives leak through (the regression we're
 	// guarding against).
 	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), []config.RecommendationRecord{

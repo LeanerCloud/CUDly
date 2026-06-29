@@ -108,7 +108,7 @@ type BreakdownResponse struct {
 	Data      map[string]BreakdownValue `json:"data"`
 }
 
-// getHistoryAnalytics handles GET /history/analytics
+// getHistoryAnalytics handles GET /history/analytics.
 func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	// Analytics aggregate across purchase history — gate on view:purchases and
 	// scope by allowed_accounts.
@@ -119,7 +119,7 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 
 	// Analytics is Postgres-backed (api.PostgresAnalyticsClient) and wired
 	// in server.Application.reinitializeAfterConnect, so analyticsClient
-	// is non-nil whenever the DB is up. The guard stays as defence-in-depth
+	// is non-nil whenever the DB is up. The guard stays as defense-in-depth
 	// for test builds and misconfigured callers — the frontend treats 503
 	// as "feature intentionally unavailable" and renders the corresponding
 	// empty-state instead of a generic error.
@@ -180,7 +180,7 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	}, nil
 }
 
-// getHistoryBreakdown handles GET /history/breakdown
+// getHistoryBreakdown handles GET /history/breakdown.
 func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	session, err := h.requirePermission(ctx, req, "view", "purchases")
 	if err != nil {

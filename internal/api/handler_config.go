@@ -22,7 +22,7 @@ func sourceCloud() string {
 	return "aws"
 }
 
-// Configuration handlers
+// Configuration handlers.
 func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*ConfigResponse, error) {
 	// Require view:config permission. Every other read handler in the package
 	// pairs the route-level AuthUser gate with this explicit permission check;
@@ -65,7 +65,7 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 // which all have meaningful 0-vs-omitted semantics that json.Unmarshal can't
 // represent directly. Errors from GetGlobalConfig fall through: the request body's
 // zero values then flow into Validate() which rejects out-of-range values,
-// matching the pre-fix behaviour. Extracted from updateConfig to keep that
+// matching the pre-fix behavior. Extracted from updateConfig to keep that
 // function under the cyclomatic-complexity gate after the merge logic was
 // added (PR #308 CodeRabbit pass-2 review).
 func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {

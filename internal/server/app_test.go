@@ -266,7 +266,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 }
 
-// noopEmailSender is a minimal email.SenderInterface for unit tests
+// noopEmailSender is a minimal email.SenderInterface for unit tests.
 var _ email.SenderInterface = (*noopEmailSender)(nil)
 
 type noopEmailSender struct{}
@@ -806,7 +806,7 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 
 // TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver verifies the
 // dev-only path: when no resolver is available, the plaintext value is
-// used (expected behaviour for local development).
+// used (expected behavior for local development).
 func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 	ctx := context.Background()
 

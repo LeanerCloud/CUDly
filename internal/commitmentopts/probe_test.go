@@ -97,7 +97,7 @@ func TestRDSProber_ErrorPropagates(t *testing.T) {
 }
 
 func TestRDSProber_PageCap(t *testing.T) {
-	// Integration-level check that the RDS prober honours the page cap
+	// Integration-level check that the RDS prober honors the page cap
 	// when wired through walkPaginated. The cap itself is exercised in
 	// detail by TestWalkPaginated_StopsAtPageCap; this test guards the
 	// wiring (RDS uses Marker rather than NextToken) so a refactor that
@@ -352,7 +352,7 @@ func TestDefaultProbers(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // walkPaginated — the shared pagination helper every prober runs through.
-// Testing the helper once covers the page-cap behaviour for all six
+// Testing the helper once covers the page-cap behavior for all six
 // services in lieu of six near-identical Test{Service}Prober_PageCap tests.
 // The per-prober Probe tests above still exercise the wiring (which token
 // field each AWS API uses, per-item conversion, optional client-side

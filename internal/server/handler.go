@@ -17,7 +17,7 @@ type TaskLocker interface {
 	ReleaseAdvisoryLock(ctx context.Context, lockID int64)
 }
 
-// ScheduledTaskType represents different types of scheduled tasks
+// ScheduledTaskType represents different types of scheduled tasks.
 type ScheduledTaskType string
 
 const (
@@ -140,7 +140,7 @@ func taskLockID(taskType ScheduledTaskType) int64 {
 	return int64(h.Sum64())
 }
 
-// handleCollectRecommendations collects cost optimization recommendations
+// handleCollectRecommendations collects cost optimization recommendations.
 func (app *Application) handleCollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error) {
 	log.Println("Collecting recommendations...")
 	result, err := app.Scheduler.CollectRecommendations(ctx)
@@ -152,7 +152,7 @@ func (app *Application) handleCollectRecommendations(ctx context.Context) (*sche
 	return result, nil
 }
 
-// handleProcessScheduledPurchases processes scheduled purchases
+// handleProcessScheduledPurchases processes scheduled purchases.
 func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error) {
 	log.Println("Processing scheduled purchases...")
 	result, err := app.Purchase.ProcessScheduledPurchases(ctx)
@@ -164,7 +164,7 @@ func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*p
 	return result, nil
 }
 
-// handleSendNotifications sends upcoming purchase notifications
+// handleSendNotifications sends upcoming purchase notifications.
 func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.NotificationResult, error) {
 	log.Println("Sending notifications...")
 	result, err := app.Purchase.SendUpcomingPurchaseNotifications(ctx)
@@ -176,7 +176,7 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 	return result, nil
 }
 
-// handleCleanupExpiredRecords cleans up expired sessions and execution records
+// handleCleanupExpiredRecords cleans up expired sessions and execution records.
 func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
 	log.Println("Cleaning up expired records...")
 
@@ -266,7 +266,7 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 	return result, nil
 }
 
-// handleRefreshAnalytics refreshes materialized views and analytics data
+// handleRefreshAnalytics refreshes materialized views and analytics data.
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 
@@ -298,7 +298,7 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 	return result, nil
 }
 
-// HandleSQSMessage processes an SQS message for async purchase processing
+// HandleSQSMessage processes an SQS message for async purchase processing.
 func (app *Application) HandleSQSMessage(ctx context.Context, body string) error {
 	log.Printf("Processing SQS message (size: %d bytes)", len(body))
 	if err := app.Purchase.ProcessMessage(ctx, body); err != nil {
@@ -309,7 +309,7 @@ func (app *Application) HandleSQSMessage(ctx context.Context, body string) error
 	return nil
 }
 
-// ScheduledEvent represents a generic scheduled event
+// ScheduledEvent represents a generic scheduled event.
 type ScheduledEvent struct {
 	Source     string          `json:"source"`
 	DetailType string          `json:"detail-type"`
@@ -317,7 +317,7 @@ type ScheduledEvent struct {
 	Detail     json.RawMessage `json:"detail"`
 }
 
-// ParseScheduledEvent parses a scheduled event and returns the task type
+// ParseScheduledEvent parses a scheduled event and returns the task type.
 func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, error) {
 	var event ScheduledEvent
 	if err := json.Unmarshal(rawEvent, &event); err != nil {

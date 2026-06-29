@@ -313,7 +313,7 @@ func TestExtractMajorVersion_Additional(t *testing.T) {
 	}
 }
 
-// Comprehensive tests for extractMajorVersion function
+// Comprehensive tests for extractMajorVersion function.
 func TestExtractMajorVersion_Comprehensive(t *testing.T) {
 	tests := []struct {
 		name     string

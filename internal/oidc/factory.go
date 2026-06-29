@@ -19,7 +19,7 @@ const (
 	envAzureKeyName  = "CUDLY_SIGNING_KEY_NAME"
 
 	// GCP: full resource name of the asymmetric key version, e.g.
-	// projects/.../locations/global/keyRings/.../cryptoKeys/.../cryptoKeyVersions/1
+	// projects/.../locations/global/keyRings/.../cryptoKeys/.../cryptoKeyVersions/1.
 	envGCPKeyResource = "CUDLY_SIGNING_KEY_RESOURCE"
 )
 

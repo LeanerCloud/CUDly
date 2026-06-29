@@ -10,13 +10,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
 )
 
-// AzureResolver implements Resolver for Azure Key Vault
+// AzureResolver implements Resolver for Azure Key Vault.
 type AzureResolver struct {
 	client   *azsecrets.Client
 	vaultURL string
 }
 
-// NewAzureResolver creates a new Azure Key Vault resolver
+// NewAzureResolver creates a new Azure Key Vault resolver.
 func NewAzureResolver(ctx context.Context, vaultURL string) (*AzureResolver, error) {
 	// Create a credential using DefaultAzureCredential.
 	// Note: azidentity.NewDefaultAzureCredential does not accept a context parameter,
@@ -39,7 +39,7 @@ func NewAzureResolver(ctx context.Context, vaultURL string) (*AzureResolver, err
 	}, nil
 }
 
-// GetSecret retrieves a secret from Azure Key Vault
+// GetSecret retrieves a secret from Azure Key Vault.
 func (r *AzureResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
 	// Get the latest version of the secret
 	resp, err := r.client.GetSecret(ctx, secretID, "", nil)
@@ -54,7 +54,7 @@ func (r *AzureResolver) GetSecret(ctx context.Context, secretID string) (string,
 	return *resp.Value, nil
 }
 
-// PutSecret creates or updates a secret in Azure Key Vault
+// PutSecret creates or updates a secret in Azure Key Vault.
 func (r *AzureResolver) PutSecret(ctx context.Context, secretID string, value string) error {
 	params := azsecrets.SetSecretParameters{
 		Value: &value,
@@ -68,7 +68,7 @@ func (r *AzureResolver) PutSecret(ctx context.Context, secretID string, value st
 	return nil
 }
 
-// GetSecretJSON retrieves and parses a JSON secret
+// GetSecretJSON retrieves and parses a JSON secret.
 func (r *AzureResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
@@ -83,7 +83,7 @@ func (r *AzureResolver) GetSecretJSON(ctx context.Context, secretID string) (map
 	return result, nil
 }
 
-// ListSecrets lists secrets in Azure Key Vault
+// ListSecrets lists secrets in Azure Key Vault.
 func (r *AzureResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
 	secrets := make([]string, 0)
 
@@ -111,7 +111,7 @@ func (r *AzureResolver) ListSecrets(ctx context.Context, filter string) ([]strin
 	return secrets, nil
 }
 
-// Close cleans up resources (no-op for Azure)
+// Close cleans up resources (no-op for Azure).
 func (r *AzureResolver) Close() error {
 	return nil
 }

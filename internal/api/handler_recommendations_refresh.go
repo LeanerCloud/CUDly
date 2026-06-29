@@ -130,7 +130,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 
 // asyncInvokeSelf fires an InvocationType=Event invoke of the given Lambda
 // function ARN with the EventBridge-style payload that handleLambdaScheduledEvent
-// recognises as a "collect recommendations" job. The call returns immediately;
+// recognizes as a "collect recommendations" job. The call returns immediately;
 // the Lambda runtime delivers the event to the next available container
 // (which may be this same container's next invocation).
 func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error {

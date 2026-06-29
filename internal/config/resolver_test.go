@@ -115,7 +115,7 @@ func TestResolveServiceConfig_NilGlobalWithOverride(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, "aws", result.Provider, "Provider taken from parameters")
 	assert.Equal(t, "rds", result.Service, "Service taken from parameters")
-	assert.False(t, result.Enabled, "override Enabled=false applied against synthesised baseline")
+	assert.False(t, result.Enabled, "override Enabled=false applied against synthesized baseline")
 	assert.Equal(t, 60.0, result.Coverage, "override Coverage applied")
 }
 

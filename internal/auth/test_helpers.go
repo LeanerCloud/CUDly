@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// MockStore is a mock implementation of the auth store for testing
+// MockStore is a mock implementation of the auth store for testing.
 type MockStore struct {
 	mock.Mock
 }
@@ -136,7 +136,7 @@ func (m *MockStore) CleanupExpiredSessions(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// API Key operations
+// API Key operations.
 func (m *MockStore) CreateAPIKey(ctx context.Context, key *UserAPIKey) error {
 	args := m.Called(ctx, key)
 	return args.Error(0)
@@ -186,7 +186,7 @@ func (m *MockStore) Ping(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// MockEmailSender is a mock implementation of the email sender for testing
+// MockEmailSender is a mock implementation of the email sender for testing.
 type MockEmailSender struct {
 	mock.Mock
 }
@@ -206,10 +206,10 @@ func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupU
 	return args.Error(0)
 }
 
-// Verify that MockStore implements StoreInterface
+// Verify that MockStore implements StoreInterface.
 var _ StoreInterface = (*MockStore)(nil)
 
-// Verify that MockEmailSender implements EmailSenderInterface
+// Verify that MockEmailSender implements EmailSenderInterface.
 var _ EmailSenderInterface = (*MockEmailSender)(nil)
 
 // testCSRFKey is a fixed 32-byte key used across all test services so that
@@ -245,7 +245,7 @@ func newTestService() *Service {
 	}
 }
 
-// createTestService creates a service with mocks for testing
+// createTestService creates a service with mocks for testing.
 func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Service {
 	return &Service{
 		store:              mockStore,
@@ -257,7 +257,7 @@ func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Servic
 	}
 }
 
-// createTestUser creates a user with hashed password for testing
+// createTestUser creates a user with hashed password for testing.
 func createTestUser(t *testing.T, password string) *User {
 	t.Helper()
 

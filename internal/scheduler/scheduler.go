@@ -38,7 +38,7 @@ type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// SchedulerConfig holds configuration for the scheduler
+// SchedulerConfig holds configuration for the scheduler.
 type SchedulerConfig struct {
 	ConfigStore     config.StoreInterface
 	PurchaseManager ManagerInterface
@@ -58,7 +58,7 @@ type SchedulerConfig struct {
 	// external_id), the ambient path stamps that account's UUID onto
 	// every rec it returns so the approve modal shows the registered
 	// name instead of `(ambient)`. Optional — when nil, the ambient
-	// path keeps its pre-fix behaviour (CloudAccountID = nil), which
+	// path keeps its pre-fix behavior (CloudAccountID = nil), which
 	// preserves the truly-orphan case.
 	STSClient STSClient
 
@@ -83,7 +83,7 @@ type CollectResult struct {
 	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
 }
 
-// ManagerInterface defines the purchase manager methods used by scheduler
+// ManagerInterface defines the purchase manager methods used by scheduler.
 type ManagerInterface interface {
 	ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
@@ -93,7 +93,7 @@ type ManagerInterface interface {
 	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
 }
 
-// Scheduler handles scheduled tasks
+// Scheduler handles scheduled tasks.
 type Scheduler struct {
 	config          config.StoreInterface
 	purchase        ManagerInterface
@@ -125,7 +125,7 @@ type Scheduler struct {
 // opportunistic refresh closes the gap when users are active.
 const defaultCacheTTL = 6 * time.Hour
 
-// NewScheduler creates a new scheduler
+// NewScheduler creates a new scheduler.
 func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	factory := cfg.ProviderFactory
 	if factory == nil {
@@ -220,7 +220,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	//
 	// Provider-level fan-out under errgroup. Each goroutine returns nil to the
 	// group so a single provider's failure does not cancel siblings — matches
-	// the previous loop's `continue`-on-error behaviour. Per-provider results
+	// the previous loop's `continue`-on-error behavior. Per-provider results
 	// are written into a map under a single mutex; the merge then walks
 	// EnabledProviders in config order so successfulProviders ordering is
 	// deterministic regardless of goroutine completion order. After Wait, ctx
@@ -457,7 +457,7 @@ func expandSuccessfulCollects(providerName string, accountIDs []string) []config
 // If no accounts are registered and CUDly runs on AWS, it falls back to
 // ambient credentials (backward compatibility with single-account setups).
 // Returns the merged recommendations + the IDs of accounts that succeeded
-// (or [""] for the ambient path so the caller can synthesise a nil
+// (or [""] for the ambient path so the caller can synthesize a nil
 // CloudAccountID for eviction).
 func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "aws")
@@ -580,7 +580,7 @@ func fanOutPerAccount(
 //
 // Currently dispatches per provider:
 //   - "GCP": gcpprovider.IsPermissionError (HTTP 403 / gRPC PermissionDenied)
-//   - other providers: false (existing ERROR behaviour preserved until
+//   - other providers: false (existing ERROR behavior preserved until
 //     analogous predicates are added for AWS/Azure)
 func isAccountPermissionError(providerLabel string, err error) bool {
 	if err == nil {
@@ -652,7 +652,7 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 // resolveAmbientHostAccountID: given the host's external identifier (subscription
 // ID for Azure, project ID for GCP) it checks whether a registered cloud_accounts
 // row exists for (provider, externalID) and returns its UUID. Returns "" on any
-// error or when no row matches, preserving the pre-fix nil-tagging behaviour so
+// error or when no row matches, preserving the pre-fix nil-tagging behavior so
 // truly-orphan deployments are unaffected. All errors are intentionally swallowed
 // (logged at warn) — this is a best-effort UX improvement on the ambient path
 // and must not break the collection.
@@ -1279,7 +1279,7 @@ func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
 	return blob
 }
 
-// convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice
+// convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice.
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 

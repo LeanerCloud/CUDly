@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// History handlers
+// History handlers.
 func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	// Purchase history can leak across accounts — gate on view:purchases AND
 	// filter the returned records by the session's allowed_accounts list.
@@ -51,7 +51,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// (purchase_executions) from the completed purchase_history rows, so we
 	// merge after the fact. A failure to list executions must not hide
 	// completed history — log, skip, continue. The same filter set is applied
-	// here (in-memory against the synthesised row's recommendations and
+	// here (in-memory against the synthesized row's recommendations and
 	// scheduled_date) so the two halves of the merged response are
 	// consistently scoped (issue #701).
 	//
@@ -95,7 +95,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // states too, rendered with a clear "in progress" badge rather than as a
 // (misleading) completed row.
 //
-// "completed" is also loaded, but fetchExecutionsAsHistory synthesises a
+// "completed" is also loaded, but fetchExecutionsAsHistory synthesizes a
 // row for it ONLY when the execution carries a non-empty Error — the
 // audit-gap case where the purchase succeeded but its purchase_history
 // write failed (issue #621 secondary path). A normal completed execution
@@ -104,9 +104,9 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // the ExecutionID while a purchase_history row's is the CommitmentID, so
 // the keys never collide even when both happen to render.
 //
-// "partially_completed" (issue #642) is loaded and ALWAYS synthesised: a
+// "partially_completed" (issue #642) is loaded and ALWAYS synthesized: a
 // partial run committed some recs to purchase_history (those render from the
-// DB rows) and failed others. The synthesised execution row carries the
+// DB rows) and failed others. The synthesized execution row carries the
 // partial-failure marker and is flagged IsAuditGap so its execution-level
 // dollars are excluded from the dashboard totals — the committed dollars are
 // already counted via the per-rec purchase_history rows that succeeded.
@@ -114,7 +114,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // wave-2) appear in the History view with a Revoke button before the cloud SDK
 // call fires. Without this entry the row is invisible to the History UI, making
 // the Revoke button unreachable (issue #290, second-wave CR Finding E).
-var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
+var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "canceled"}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -155,7 +155,7 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		// Dedup: a normal completed execution is already represented by its
 		// purchase_history rows. Skip it here so it shows exactly once. Only
 		// completed executions carrying an audit-gap Error (history write
-		// failed after a successful purchase, issue #621) are synthesised —
+		// failed after a successful purchase, issue #621) are synthesized —
 		// those have no purchase_history row to collide with.
 		if exec.Status == "completed" && exec.Error == "" {
 			continue
@@ -192,7 +192,7 @@ func isStaleExecution(exec config.PurchaseExecution) bool {
 
 // expireStaleExecutionsAsync fires TransitionExecutionStatus for each stale
 // execution in a best-effort goroutine that outlives the request context.
-// Using context.Background() ensures the transitions are not cancelled when
+// Using context.Background() ensures the transitions are not canceled when
 // the HTTP handler returns. Errors are logged and skipped — a missed
 // transition leaves the row "pending" until the next History load, which is
 // better than blocking the read response.
@@ -345,7 +345,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = exec.Error
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
-	case "cancelled":
+	case "canceled":
 		annotateCancelled(row, exec, approver)
 	default:
 		// In-flight (approved/running/scheduled/paused) and audit-gap
@@ -386,7 +386,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		row.StatusDescription = "purchase paused — resume or cancel from the plan"
 	case "partially_completed":
 		// #642: some recs committed, some failed. The committed recs are
-		// surfaced via their own purchase_history rows; this synthesised row
+		// surfaced via their own purchase_history rows; this synthesized row
 		// is the audit flag for the failures. Flag IsAuditGap so the dashboard
 		// excludes its execution-level dollars (the committed dollars are
 		// counted on the per-rec purchase_history rows, not here) — same
@@ -410,7 +410,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 	}
 }
 
-// annotateCancelled resolves who cancelled the execution:
+// annotateCancelled resolves who canceled the execution:
 //  1. exec.CancelledBy — populated by the session-authed deep-link flow;
 //     exact session-authed click attribution.
 //  2. approver — the notification inbox that received the cancel token;
@@ -419,15 +419,15 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
 	if exec.CancelledBy != nil && *exec.CancelledBy != "" {
 		row.Approver = *exec.CancelledBy
-		row.StatusDescription = "cancelled by " + *exec.CancelledBy
+		row.StatusDescription = "canceled by " + *exec.CancelledBy
 		return
 	}
 	if approver != "" {
 		row.Approver = approver
-		row.StatusDescription = "cancelled by " + approver + " (via approval link)"
+		row.StatusDescription = "canceled by " + approver + " (via approval link)"
 		return
 	}
-	row.StatusDescription = "cancelled via approval link"
+	row.StatusDescription = "canceled via approval link"
 }
 
 // annotateApproved resolves who approved the execution using the same
@@ -606,7 +606,7 @@ const MaxHistoryDateRangeDays = 366
 
 // historyFilters carries the shared filter set used by both halves of the
 // merged /api/history response: the SQL path (purchase_history rows in
-// fetchPurchaseHistory) and the in-memory path (synthesised execution rows
+// fetchPurchaseHistory) and the in-memory path (synthesized execution rows
 // in fetchExecutionsAsHistory). Keeping them in one struct guarantees the
 // two halves stay scoped consistently — the bug behind issue #701 was that
 // the executions path ignored the filters the SQL path was supposed to apply.
@@ -637,7 +637,7 @@ type historyFilters struct {
 	// ANY) and the in-memory matchesExecution use them so a row/execution that
 	// carries only the external id (cloud_account_id NULL) is still matched
 	// (issue #701/#498). The "" provider key means "provider unknown" and
-	// matches the external id regardless of provider (legacy behaviour).
+	// matches the external id regardless of provider (legacy behavior).
 	ExternalIDsByProvider map[string][]string
 	HasDate               bool
 	Start                 time.Time
@@ -816,7 +816,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 //
 // The external-id match is provider-scoped: an external number matches only when
 // it is listed under the execution's own provider, or under the "" key (unknown
-// provider, legacy behaviour). This mirrors the SQL (provider = $p AND
+// provider, legacy behavior). This mirrors the SQL (provider = $p AND
 // account_id = ANY(...)) and keeps a reused external number across providers
 // (aws/123 vs azure/123) from matching the wrong execution.
 //
@@ -928,7 +928,7 @@ func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilte
 // is a top-bar chip UUID for current callers (resolved to UUID + external) or a
 // raw external number for pre-UUID callers (grouped under the "" provider key).
 // Best-effort: resolution failures leave the UUID-only set in place (no worse
-// than the pre-fix behaviour), and the per-record allowed_accounts filter still
+// than the pre-fix behavior), and the per-record allowed_accounts filter still
 // enforces scoping downstream.
 func (h *Handler) resolveHistoryAccountFilter(ctx context.Context, filters *historyFilters) {
 	uuids, externalsByProvider := h.resolveAccountFilterIDs(ctx, filters.AccountIDs)
@@ -1002,7 +1002,7 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 	summary := HistorySummary{TotalPurchases: len(purchases)}
 	for _, p := range purchases {
 		// Non-completed rows count toward TotalPurchases and their specific
-		// bucket (pending / in-progress / failed / expired / cancelled) but
+		// bucket (pending / in-progress / failed / expired / canceled) but
 		// are excluded from the dollar totals — the money hasn't been committed
 		// for any of those states. "completed" and unset (legacy DB rows that
 		// pre-date the status field) both count as completed.
@@ -1022,21 +1022,21 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		case "expired":
 			summary.TotalExpired++
 			continue
-		case "cancelled":
-			// A cancelled purchase represents zero committed spend and zero
+		case "canceled":
+			// A canceled purchase represents zero committed spend and zero
 			// realized savings (issue #736). Exclude from all dollar KPIs and
 			// from TotalCompleted — the money was never committed.
 			continue
 		}
 		summary.TotalCompleted++
-		// Audit-gap completed rows (issue #621) are synthesised execution rows
+		// Audit-gap completed rows (issue #621) are synthesized execution rows
 		// whose purchase_history write failed. Count them as completed (the
 		// money WAS committed and they must stay visible) but exclude their
 		// execution-level dollars: a partially-saved multi-rec execution can
-		// have BOTH some purchase_history rows AND this synthesised row, and
+		// have BOTH some purchase_history rows AND this synthesized row, and
 		// adding the full execution total here would double-count the recs that
 		// did save. The dollars are surfaced via the individual purchase_history
-		// rows that succeeded; the synthesised row is the audit flag, not a
+		// rows that succeeded; the synthesized row is the audit flag, not a
 		// money source. IsAuditGap is the explicit marker: real purchase_history
 		// rows loaded from the DB always leave it false, so a future change that
 		// annotates completed DB rows can't silently drop them from the totals.

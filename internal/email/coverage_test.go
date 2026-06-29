@@ -13,7 +13,7 @@ import (
 // Additional coverage tests for internal/email package
 // These tests target untested code paths and edge cases to increase coverage above 80%
 
-// TestSMTPSender_SendToEmail_WithFromName tests SendToEmail with a from name set
+// TestSMTPSender_SendToEmail_WithFromName tests SendToEmail with a from name set.
 func TestSMTPSender_SendToEmail_WithFromName(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "smtp.example.com",
@@ -30,7 +30,7 @@ func TestSMTPSender_SendToEmail_WithFromName(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendToEmail_BuildsMessageCorrectly tests that the message is built correctly
+// TestSMTPSender_SendToEmail_BuildsMessageCorrectly tests that the message is built correctly.
 func TestSMTPSender_SendToEmail_WithFromNameConfigured(t *testing.T) {
 	// This tests the message building path when fromName is set
 	// Since we can't actually send email without a real SMTP server,
@@ -48,7 +48,7 @@ func TestSMTPSender_SendToEmail_WithFromNameConfigured(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendPasswordResetEmail_WithFromEmail tests the full path with from email
+// TestSMTPSender_SendPasswordResetEmail_WithFromEmail tests the full path with from email.
 func TestSMTPSender_SendPasswordResetEmail_RenderingSuccess(t *testing.T) {
 	// Tests the rendering success path - error only occurs when trying to send
 	// Since fromEmail is empty, this tests the rendering path and early return
@@ -65,7 +65,7 @@ func TestSMTPSender_SendPasswordResetEmail_RenderingSuccess(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendWelcomeEmail_RenderingSuccess tests rendering success path
+// TestSMTPSender_SendWelcomeEmail_RenderingSuccess tests rendering success path.
 func TestSMTPSender_SendWelcomeEmail_RenderingSuccess(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "smtp.example.com",
@@ -80,7 +80,7 @@ func TestSMTPSender_SendWelcomeEmail_RenderingSuccess(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_AllNotificationMethods_NoFromEmail tests all notification methods with empty fromEmail
+// TestSMTPSender_AllNotificationMethods_NoFromEmail tests all notification methods with empty fromEmail.
 func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "smtp.example.com",
@@ -125,7 +125,7 @@ func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_ConfigVariations tests various SMTP configuration scenarios
+// TestSMTPSender_ConfigVariations tests various SMTP configuration scenarios.
 func TestSMTPSender_ConfigVariations(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -195,7 +195,7 @@ func TestSMTPSender_ConfigVariations(t *testing.T) {
 	}
 }
 
-// TestRenderFunctions_EdgeCases tests edge cases in template rendering
+// TestRenderFunctions_EdgeCases tests edge cases in template rendering.
 func TestRenderFunctions_EdgeCases(t *testing.T) {
 	t.Run("RenderPasswordResetEmail with empty fields", func(t *testing.T) {
 		result, err := RenderPasswordResetEmail("", "")
@@ -258,7 +258,7 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 	})
 }
 
-// TestRecommendationSummary_AllFields tests recommendation summary with all fields populated
+// TestRecommendationSummary_AllFields tests recommendation summary with all fields populated.
 func TestRecommendationSummary_AllFields(t *testing.T) {
 	summary := RecommendationSummary{
 		Service:        "rds",
@@ -312,13 +312,13 @@ func TestRecommendationSummary_AllFields(t *testing.T) {
 	})
 }
 
-// TestSender_Implements_SenderInterface verifies interface implementation
+// TestSender_Implements_SenderInterface verifies interface implementation.
 func TestSender_Implements_SenderInterface(t *testing.T) {
 	var sender SenderInterface = &Sender{}
 	assert.NotNil(t, sender)
 }
 
-// TestSMTPSender_FieldAccess tests that all SMTPSender fields are accessible
+// TestSMTPSender_FieldAccess tests that all SMTPSender fields are accessible.
 func TestSMTPSender_FieldAccess(t *testing.T) {
 	cfg := SMTPConfig{
 		Host:      "smtp.test.com",
@@ -342,7 +342,7 @@ func TestSMTPSender_FieldAccess(t *testing.T) {
 	assert.True(t, sender.useTLS)
 }
 
-// TestNotificationData_AllFields tests NotificationData with all fields
+// TestNotificationData_AllFields tests NotificationData with all fields.
 func TestNotificationData_AllFields(t *testing.T) {
 	recommendations := []RecommendationSummary{
 		{
@@ -384,7 +384,7 @@ func TestNotificationData_AllFields(t *testing.T) {
 	assert.Equal(t, "Annual Savings Plan", data.PlanName)
 }
 
-// TestPasswordResetData_Fields tests PasswordResetData structure
+// TestPasswordResetData_Fields tests PasswordResetData structure.
 func TestPasswordResetData_AllFields(t *testing.T) {
 	data := PasswordResetData{
 		Email:    "user@example.com",
@@ -395,7 +395,7 @@ func TestPasswordResetData_AllFields(t *testing.T) {
 	assert.Equal(t, "https://example.com/reset?token=abc123", data.ResetURL)
 }
 
-// TestWelcomeUserData_AllFields tests WelcomeUserData structure
+// TestWelcomeUserData_AllFields tests WelcomeUserData structure.
 func TestWelcomeUserData_AllFields(t *testing.T) {
 	data := WelcomeUserData{
 		Email:        "newuser@example.com",
@@ -408,7 +408,7 @@ func TestWelcomeUserData_AllFields(t *testing.T) {
 	assert.Equal(t, "operator", data.Role)
 }
 
-// TestWelcomeUserData_ViewerRole tests WelcomeUserData with viewer role
+// TestWelcomeUserData_ViewerRole tests WelcomeUserData with viewer role.
 func TestWelcomeUserData_ViewerRole(t *testing.T) {
 	data := WelcomeUserData{
 		Email:        "test@example.com",
@@ -421,7 +421,7 @@ func TestWelcomeUserData_ViewerRole(t *testing.T) {
 	assert.Equal(t, "viewer", data.Role)
 }
 
-// TestProviderTypes tests provider type constants
+// TestProviderTypes tests provider type constants.
 func TestProviderTypes_Values(t *testing.T) {
 	assert.Equal(t, ProviderType("aws"), ProviderAWS)
 	assert.Equal(t, ProviderType("gcp"), ProviderGCP)
@@ -433,7 +433,7 @@ func TestProviderTypes_Values(t *testing.T) {
 	assert.Equal(t, "azure", string(ProviderAzure))
 }
 
-// TestFactoryConfig_AllFields tests all FactoryConfig fields
+// TestFactoryConfig_AllFields tests all FactoryConfig fields.
 func TestFactoryConfig_AllFields(t *testing.T) {
 	cfg := FactoryConfig{
 		FromEmail:         "noreply@example.com",
@@ -454,7 +454,7 @@ func TestFactoryConfig_AllFields(t *testing.T) {
 	assert.Equal(t, "azure_pass", cfg.AzureSMTPPassword)
 }
 
-// TestSMTPSender_TLSBehavior tests TLS configuration behavior
+// TestSMTPSender_TLSBehavior tests TLS configuration behavior.
 func TestSMTPSender_TLSBehavior(t *testing.T) {
 	t.Run("port 587 enables TLS by default", func(t *testing.T) {
 		cfg := SMTPConfig{
@@ -492,7 +492,7 @@ func TestSMTPSender_TLSBehavior(t *testing.T) {
 	})
 }
 
-// TestSenderConfig_DefaultValues tests SenderConfig with various default scenarios
+// TestSenderConfig_DefaultValues tests SenderConfig with various default scenarios.
 func TestSenderConfig_DefaultValues(t *testing.T) {
 	cfg := SenderConfig{}
 
@@ -501,7 +501,7 @@ func TestSenderConfig_DefaultValues(t *testing.T) {
 	assert.Empty(t, cfg.EmailAddress)
 }
 
-// TestTemplateContent_HasRequiredSections tests that templates contain required sections
+// TestTemplateContent_HasRequiredSections tests that templates contain required sections.
 func TestTemplateContent_HasRequiredSections(t *testing.T) {
 	t.Run("newRecommendationsTemplate has key sections", func(t *testing.T) {
 		assert.Contains(t, newRecommendationsTemplate, "CUDly")
@@ -552,7 +552,7 @@ func TestTemplateContent_HasRequiredSections(t *testing.T) {
 	})
 }
 
-// TestRenderFunctions_MultipleRecommendations tests templates with multiple recommendations
+// TestRenderFunctions_MultipleRecommendations tests templates with multiple recommendations.
 func TestRenderFunctions_MultipleRecommendations(t *testing.T) {
 	data := NotificationData{
 		DashboardURL:     "https://example.com",
@@ -585,7 +585,7 @@ func TestRenderFunctions_MultipleRecommendations(t *testing.T) {
 	assert.Contains(t, result, "r5.large.search")
 }
 
-// TestSMTPSender_MethodsWithNoNetwork tests SMTP methods that should work without network
+// TestSMTPSender_MethodsWithNoNetwork tests SMTP methods that should work without network.
 func TestSMTPSender_MethodsWithNoNetwork(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "nonexistent.example.com",
@@ -612,7 +612,7 @@ func TestSMTPSender_MethodsWithNoNetwork(t *testing.T) {
 	assert.NoError(t, sender.SendPurchaseFailedNotification(ctx, data))
 }
 
-// TestSMTPSender_SendToEmail_ConnectionFails tests that SendToEmail returns error when connection fails
+// TestSMTPSender_SendToEmail_ConnectionFails tests that SendToEmail returns error when connection fails.
 func TestSMTPSender_SendToEmail_ConnectionFails(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -655,7 +655,7 @@ func TestSMTPSender_SendToEmail_ConnectionFails_NoTLS(t *testing.T) {
 	assert.Contains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
 }
 
-// TestSMTPSender_SendToEmail_NoAuth tests without authentication
+// TestSMTPSender_SendToEmail_NoAuth tests without authentication.
 func TestSMTPSender_SendToEmail_NoAuth_ConnectionFails(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -675,7 +675,7 @@ func TestSMTPSender_SendToEmail_NoAuth_ConnectionFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send email via SMTP")
 }
 
-// TestSMTPSender_AllMethods_ConnectionFails tests all SMTP methods fail with connection error
+// TestSMTPSender_AllMethods_ConnectionFails tests all SMTP methods fail with connection error.
 func TestSMTPSender_AllMethods_ConnectionFails(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -739,7 +739,7 @@ func TestSMTPSender_AllMethods_ConnectionFails(t *testing.T) {
 	})
 }
 
-// TestSMTPSender_SendToEmail_WithFromName tests that from name is correctly included
+// TestSMTPSender_SendToEmail_WithFromName tests that from name is correctly included.
 func TestSMTPSender_SendToEmail_MessageBuilding(t *testing.T) {
 	// This test exercises the message building code path
 	// Even though it will fail on send, the message building code is executed
@@ -760,7 +760,7 @@ func TestSMTPSender_SendToEmail_MessageBuilding(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_SendToEmail_WithoutFromName tests message building without from name
+// TestSMTPSender_SendToEmail_WithoutFromName tests message building without from name.
 func TestSMTPSender_SendToEmail_MessageBuildingNoName(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -779,7 +779,7 @@ func TestSMTPSender_SendToEmail_MessageBuildingNoName(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_SendToEmail_WithAuth tests the auth path
+// TestSMTPSender_SendToEmail_WithAuth tests the auth path.
 func TestSMTPSender_SendToEmail_WithAuthCredentials(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -798,7 +798,7 @@ func TestSMTPSender_SendToEmail_WithAuthCredentials(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send email via SMTP")
 }
 
-// TestSMTPSender_SendToEmail_NoAuth_NoTLS tests without auth and without TLS
+// TestSMTPSender_SendToEmail_NoAuth_NoTLS tests without auth and without TLS.
 func TestSMTPSender_SendToEmail_NoAuth_NoTLS(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -817,7 +817,7 @@ func TestSMTPSender_SendToEmail_NoAuth_NoTLS(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send email via SMTP")
 }
 
-// TestSMTPSender_SendToEmail_AuthWithOnlyUsername tests with only username (no password)
+// TestSMTPSender_SendToEmail_AuthWithOnlyUsername tests with only username (no password).
 func TestSMTPSender_SendToEmail_AuthWithOnlyUsername(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -835,7 +835,7 @@ func TestSMTPSender_SendToEmail_AuthWithOnlyUsername(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_SendToEmail_AuthWithOnlyPassword tests with only password (no username)
+// TestSMTPSender_SendToEmail_AuthWithOnlyPassword tests with only password (no username).
 func TestSMTPSender_SendToEmail_AuthWithOnlyPassword(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -853,7 +853,7 @@ func TestSMTPSender_SendToEmail_AuthWithOnlyPassword(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_SendToEmail_VariousHosts tests with various host configurations
+// TestSMTPSender_SendToEmail_VariousHosts tests with various host configurations.
 func TestSMTPSender_SendToEmail_VariousHosts(t *testing.T) {
 	// Only use localhost to avoid network timeouts
 	hosts := []struct {
@@ -886,7 +886,7 @@ func TestSMTPSender_SendToEmail_VariousHosts(t *testing.T) {
 	}
 }
 
-// TestSMTPSender_SendMethods_RenderingPaths tests that all send methods properly render templates
+// TestSMTPSender_SendMethods_RenderingPaths tests that all send methods properly render templates.
 func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -958,7 +958,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 	})
 }
 
-// TestSMTPSender_SendToEmail_LongSubjectAndBody tests with long content
+// TestSMTPSender_SendToEmail_LongSubjectAndBody tests with long content.
 func TestSMTPSender_SendToEmail_LongSubjectAndBody(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -983,7 +983,7 @@ func TestSMTPSender_SendToEmail_LongSubjectAndBody(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_SendToEmail_SpecialCharacters tests with special characters
+// TestSMTPSender_SendToEmail_SpecialCharacters tests with special characters.
 func TestSMTPSender_SendToEmail_SpecialCharacters(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1001,7 +1001,7 @@ func TestSMTPSender_SendToEmail_SpecialCharacters(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSMTPSender_Port25NoTLS tests that port 25 without TLS works (fails on connect, but exercises path)
+// TestSMTPSender_Port25NoTLS tests that port 25 without TLS works (fails on connect, but exercises path).
 func TestSMTPSender_Port25NoTLS(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1020,7 +1020,7 @@ func TestSMTPSender_Port25NoTLS(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestSender_VerificationPathWithEmailIdentityError tests the isEmailVerified error path in SendToEmail
+// TestSender_VerificationPathWithEmailIdentityError tests the isEmailVerified error path in SendToEmail.
 func TestSender_SendToEmail_GetEmailIdentityError(t *testing.T) {
 	mockSES := new(MockSESClient)
 	// Return sandbox mode
@@ -1045,7 +1045,7 @@ func TestSender_SendToEmail_GetEmailIdentityError(t *testing.T) {
 	assert.Contains(t, err.Error(), "not verified in SES sandbox mode")
 }
 
-// TestSMTPSenderInterface_Compliance tests that SMTPSender fully implements SenderInterface
+// TestSMTPSenderInterface_Compliance tests that SMTPSender fully implements SenderInterface.
 func TestSMTPSenderInterface_Compliance(t *testing.T) {
 	var _ SenderInterface = (*SMTPSender)(nil)
 
@@ -1066,7 +1066,7 @@ func TestSMTPSenderInterface_Compliance(t *testing.T) {
 	_ = sender.SendWelcomeEmail
 }
 
-// TestSMTPSender_SendToEmail_MultipleRecipientTypes tests various recipient formats
+// TestSMTPSender_SendToEmail_MultipleRecipientTypes tests various recipient formats.
 func TestSMTPSender_SendToEmail_MultipleRecipientTypes(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1094,7 +1094,7 @@ func TestSMTPSender_SendToEmail_MultipleRecipientTypes(t *testing.T) {
 	}
 }
 
-// TestSMTPSender_SendToEmail_EmptySubjectAndBody tests edge case with empty content
+// TestSMTPSender_SendToEmail_EmptySubjectAndBody tests edge case with empty content.
 func TestSMTPSender_SendToEmail_EmptySubjectAndBody(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1111,7 +1111,7 @@ func TestSMTPSender_SendToEmail_EmptySubjectAndBody(t *testing.T) {
 	require.Error(t, err) // Will fail to connect but message was built
 }
 
-// TestRenderAllTemplates exercises all template render functions thoroughly
+// TestRenderAllTemplates exercises all template render functions thoroughly.
 func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 	// Test RenderPasswordResetEmail with various inputs
 	t.Run("PasswordReset_simple", func(t *testing.T) {
@@ -1214,7 +1214,7 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 	})
 }
 
-// TestSMTPSender_AllNotificationMethods_WithRealData tests all methods with realistic data
+// TestSMTPSender_AllNotificationMethods_WithRealData tests all methods with realistic data.
 func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1287,7 +1287,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 	})
 }
 
-// TestSender_SendMethods_ErrorPaths tests error paths in Sender template methods
+// TestSender_SendMethods_ErrorPaths tests error paths in Sender template methods.
 func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(nil, assert.AnError)
@@ -1350,7 +1350,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 	})
 }
 
-// TestSender_SendToEmail_EmailVerificationCheck tests email verification check path
+// TestSender_SendToEmail_EmailVerificationCheck tests email verification check path.
 func TestSender_SendToEmail_EmailVerificationCheck(t *testing.T) {
 	mockSES := new(MockSESClient)
 
@@ -1373,7 +1373,7 @@ func TestSender_SendToEmail_EmailVerificationCheck(t *testing.T) {
 	assert.Contains(t, err.Error(), "not verified in SES sandbox mode")
 }
 
-// TestSMTPSender_SendToEmail_AllBranches tests various branch paths in SendToEmail
+// TestSMTPSender_SendToEmail_AllBranches tests various branch paths in SendToEmail.
 func TestSMTPSender_SendToEmail_AllBranches(t *testing.T) {
 	// Test with TLS and auth
 	t.Run("with_tls_and_auth", func(t *testing.T) {
@@ -1440,7 +1440,7 @@ func TestSMTPSender_SendToEmail_AllBranches(t *testing.T) {
 	})
 }
 
-// TestAllSMTPNotificationMethods_TemplatePaths tests template rendering paths
+// TestAllSMTPNotificationMethods_TemplatePaths tests template rendering paths.
 func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",
@@ -1519,7 +1519,7 @@ func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 	})
 }
 
-// TestSMTPSender_SendToEmail_EmptyBody tests edge case with empty body
+// TestSMTPSender_SendToEmail_EmptyBody tests edge case with empty body.
 func TestSMTPSender_SendToEmail_EmptyContent(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "localhost",

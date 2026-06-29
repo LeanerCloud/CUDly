@@ -358,7 +358,7 @@ func TestGetRecommendations_AccountIDFilter(t *testing.T) {
 
 // TestBuildRecommendationsResponse_CapacityFields is the #219 regression
 // test. It replicates the REAL API shape: VCPU/MemoryGB live nested inside
-// the opaque Details blob (a marshalled common.ComputeDetails), exactly as the
+// the opaque Details blob (a marshaled common.ComputeDetails), exactly as the
 // scheduler persists them via common.MarshalServiceDetails — there are NO
 // top-level vcpu/memory_gb fields on the stored record. The pre-fix code never
 // decoded Details, so it emitted no top-level vcpu/memory_gb and every
@@ -378,7 +378,7 @@ func TestBuildRecommendationsResponse_CapacityFields(t *testing.T) {
 			MemoryGB:     memGB,
 		})
 		require.NoError(t, err)
-		require.NotEmpty(t, raw, "marshalled compute details must not be empty")
+		require.NotEmpty(t, raw, "marshaled compute details must not be empty")
 		return raw
 	}
 
@@ -428,7 +428,7 @@ func TestBuildRecommendationsResponse_CapacityFields(t *testing.T) {
 	assert.Equal(t, 8, *compute.VCPU)
 	assert.Equal(t, float64(32), *compute.MemoryGB)
 
-	// The serialised JSON must expose them at the TOP LEVEL (not nested under
+	// The serialized JSON must expose them at the TOP LEVEL (not nested under
 	// details) — this is the exact contract the frontend reads.
 	blob, err := json.Marshal(compute)
 	require.NoError(t, err)

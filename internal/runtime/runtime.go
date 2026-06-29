@@ -11,7 +11,7 @@ import "os"
 // absent on container images, local dev runs, and the long-running
 // server deploys (Cloud Run / Container Apps).
 //
-// Callers that need to gate non-Lambda-only behaviour (e.g.
+// Callers that need to gate non-Lambda-only behavior (e.g.
 // background goroutines for stale-while-revalidate) should use this
 // helper rather than reading the env var directly so the detection
 // rule stays consistent across call sites.

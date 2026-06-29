@@ -13,7 +13,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 )
 
-// mockAuthStoreForHealth implements auth.StoreInterface for health check tests
+// mockAuthStoreForHealth implements auth.StoreInterface for health check tests.
 type mockAuthStoreForHealth struct{}
 
 func (m *mockAuthStoreForHealth) GetUserByID(ctx context.Context, userID string) (*auth.User, error) {
@@ -128,7 +128,7 @@ func (m *mockAuthStoreForHealth) Ping(ctx context.Context) error {
 	return nil
 }
 
-// createHealthyAuthService creates an auth service with a mock store for health tests
+// createHealthyAuthService creates an auth service with a mock store for health tests.
 func createHealthyAuthService() *auth.Service {
 	return auth.NewService(auth.ServiceConfig{
 		Store: &mockAuthStoreForHealth{},

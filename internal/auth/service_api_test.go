@@ -127,7 +127,7 @@ func TestConversionHelpers(t *testing.T) {
 	})
 }
 
-// Test API adapter methods
+// Test API adapter methods.
 func TestService_CreateUserAPI(t *testing.T) {
 	ctx := context.Background()
 
@@ -640,7 +640,7 @@ func TestService_HasPermissionAPI(t *testing.T) {
 func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 	now := time.Now()
 
-	t.Run("nil GroupIDs serialises as []", func(t *testing.T) {
+	t.Run("nil GroupIDs serializes as []", func(t *testing.T) {
 		user := &User{
 			ID:        "user-1",
 			Email:     "user@example.com",
@@ -661,7 +661,7 @@ func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 		assert.NotContains(t, string(b), `"groups":null`)
 	})
 
-	t.Run("empty-slice GroupIDs serialises as []", func(t *testing.T) {
+	t.Run("empty-slice GroupIDs serializes as []", func(t *testing.T) {
 		user := &User{
 			ID:        "user-2",
 			Email:     "user2@example.com",
@@ -699,7 +699,7 @@ func TestUserToAPIUser_EmptyGroups(t *testing.T) {
 func TestGroupToAPIGroup_EmptyAllowedAccounts(t *testing.T) {
 	now := time.Now()
 
-	t.Run("nil AllowedAccounts serialises as []", func(t *testing.T) {
+	t.Run("nil AllowedAccounts serializes as []", func(t *testing.T) {
 		g := &Group{
 			ID:              "group-1",
 			Name:            "Empty",

@@ -93,7 +93,7 @@ func TestRouterDispatch_DeleteAccount_RoutesCorrectly(t *testing.T) {
 // GET /api/accounts/list reaches listAccountsMinimal and is NOT swallowed by
 // the generic "/api/accounts/" GET prefix route (getAccount), which would treat
 // "list" as a :id and reject it with a 400 invalid-UUID error. A successful
-// (non-error) result proves the more-specific exact-path route won. (#949/#951)
+// (non-error) result proves the more-specific exact-path route won. (#949/#951).
 func TestRouterDispatch_AccountsList_RoutesToMinimalHandler(t *testing.T) {
 	ctx := context.Background()
 	r := setupRouterForDispatch(ctx)

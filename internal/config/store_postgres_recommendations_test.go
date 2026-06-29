@@ -210,7 +210,7 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 }
 
 // TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins
-// the broadened-natural-key behaviour from migration 000032: when
+// the broadened-natural-key behavior from migration 000032: when
 // Azure returns multiple `(term, payment)` variants for the same
 // (account, provider, service, region, resource_type) SKU, all of
 // them must round-trip through the cache as distinct rows. Pre-fix

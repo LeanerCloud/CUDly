@@ -15,7 +15,7 @@ import (
 )
 
 // mockablePostgresStore is a test wrapper that allows direct pgxmock integration
-// This mirrors the actual PostgresStore logic for testing
+// This mirrors the actual PostgresStore logic for testing.
 type mockablePostgresStore struct {
 	mock pgxmock.PgxPoolIface
 }

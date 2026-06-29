@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// GlobalConfig represents the global CUDly configuration
+// GlobalConfig represents the global CUDly configuration.
 type GlobalConfig struct {
 	EnabledProviders       []string `json:"enabled_providers" dynamodbav:"enabled_providers"`
 	NotificationEmail      *string  `json:"notification_email,omitempty" dynamodbav:"notification_email,omitempty"`
@@ -23,7 +23,7 @@ type GlobalConfig struct {
 	// GracePeriodDays is a per-provider window (in days) during which
 	// just-purchased capacity is suppressed from the recommendations
 	// list so users don't re-buy the same capacity while the cloud
-	// provider's utilisation metrics catch up. Keys are provider slugs
+	// provider's utilization metrics catch up. Keys are provider slugs
 	// ("aws", "azure", "gcp"). Missing keys default to DefaultGracePeriodDays
 	// (7). An explicit 0 disables suppression for that provider. Use
 	// GracePeriodFor to read a specific provider's effective value (it
@@ -66,7 +66,7 @@ type GlobalConfig struct {
 // DefaultGracePeriodDays is the fallback window used when a provider
 // has no entry in GlobalConfig.GracePeriodDays. A week gives cloud
 // providers enough time to reflect a fresh commitment in their
-// utilisation metrics before we'd re-propose the same capacity.
+// utilization metrics before we'd re-propose the same capacity.
 const DefaultGracePeriodDays = 7
 
 // MaxGracePeriodDays is the ceiling enforced at read time as a safety
@@ -140,7 +140,7 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 	return days
 }
 
-// ServiceConfig represents per-service configuration
+// ServiceConfig represents per-service configuration.
 type ServiceConfig struct {
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
@@ -164,7 +164,7 @@ type ServiceConfig struct {
 	MinCount int `json:"min_count,omitempty" dynamodbav:"min_count,omitempty"`
 }
 
-// PurchasePlan represents a saved purchase plan for automated execution
+// PurchasePlan represents a saved purchase plan for automated execution.
 type PurchasePlan struct {
 	ID                     string                   `json:"id" dynamodbav:"id"`
 	Name                   string                   `json:"name" dynamodbav:"name"`
@@ -188,7 +188,7 @@ type PurchasePlan struct {
 	Unassigned bool `json:"unassigned,omitempty" dynamodbav:"unassigned,omitempty"`
 }
 
-// RampSchedule defines how purchases are spread over time
+// RampSchedule defines how purchases are spread over time.
 type RampSchedule struct {
 	Type             string    `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
 	PercentPerStep   float64   `json:"percent_per_step" dynamodbav:"percent_per_step"`
@@ -198,7 +198,7 @@ type RampSchedule struct {
 	StartDate        time.Time `json:"start_date" dynamodbav:"start_date"`
 }
 
-// PresetRampSchedules provides common ramp-up configurations
+// PresetRampSchedules provides common ramp-up configurations.
 var PresetRampSchedules = map[string]RampSchedule{
 	"immediate": {
 		Type:           "immediate",
@@ -219,7 +219,7 @@ var PresetRampSchedules = map[string]RampSchedule{
 	},
 }
 
-// GetCurrentCoverage calculates the current effective coverage based on ramp progress
+// GetCurrentCoverage calculates the current effective coverage based on ramp progress.
 func (r *RampSchedule) GetCurrentCoverage(baseCoverage float64) float64 {
 	if r.Type == "immediate" {
 		return baseCoverage
@@ -231,7 +231,7 @@ func (r *RampSchedule) GetCurrentCoverage(baseCoverage float64) float64 {
 	return baseCoverage * completedPercent / 100
 }
 
-// GetNextPurchaseDate calculates when the next purchase step should occur
+// GetNextPurchaseDate calculates when the next purchase step should occur.
 func (r *RampSchedule) GetNextPurchaseDate() time.Time {
 	if r.StartDate.IsZero() {
 		return time.Now()
@@ -239,16 +239,16 @@ func (r *RampSchedule) GetNextPurchaseDate() time.Time {
 	return r.StartDate.AddDate(0, 0, r.CurrentStep*r.StepIntervalDays)
 }
 
-// IsComplete returns true if all ramp steps are done
+// IsComplete returns true if all ramp steps are done.
 func (r *RampSchedule) IsComplete() bool {
 	return r.CurrentStep >= r.TotalSteps
 }
 
-// PurchaseExecution represents a single execution of a purchase plan
+// PurchaseExecution represents a single execution of a purchase plan.
 type PurchaseExecution struct {
 	PlanID           string                 `json:"plan_id" dynamodbav:"plan_id"`
 	ExecutionID      string                 `json:"execution_id" dynamodbav:"execution_id"`
-	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, cancelled, completed, failed
+	Status           string                 `json:"status" dynamodbav:"status"` // pending, notified, approved, canceled, completed, failed
 	StepNumber       int                    `json:"step_number" dynamodbav:"step_number"`
 	ScheduledDate    time.Time              `json:"scheduled_date" dynamodbav:"scheduled_date"`
 	NotificationSent *time.Time             `json:"notification_sent,omitempty" dynamodbav:"notification_sent,omitempty"`
@@ -271,7 +271,7 @@ type PurchaseExecution struct {
 	// handler / History UI falls back to the notification email as the
 	// accountable party in that case. Nullable TEXT in Postgres.
 	ApprovedBy  *string `json:"approved_by,omitempty" dynamodbav:"approved_by,omitempty"`
-	CancelledBy *string `json:"cancelled_by,omitempty" dynamodbav:"cancelled_by,omitempty"`
+	CancelledBy *string `json:"canceled_by,omitempty" dynamodbav:"canceled_by,omitempty"`
 	// CreatedByUserID is the UUID of the session-authenticated user who
 	// triggered this execution (e.g. clicked Execute on the Recommendations
 	// page or submitted the bulk-purchase modal). NULL on rows created
@@ -338,7 +338,7 @@ type PurchaseExecution struct {
 	// token across a strand-and-re-drive so the provider dedupes and the
 	// commitment is never bought twice. Empty on rows created before
 	// migration 000066 — the derivation falls back to ExecutionID for those
-	// (identical to the pre-fix behaviour for a single un-retried execution).
+	// (identical to the pre-fix behavior for a single un-retried execution).
 	IdempotencyKey string `json:"idempotency_key,omitempty" dynamodbav:"idempotency_key,omitempty"`
 	// ScheduledExecutionAt is set by the Gmail-style pre-fire delay path
 	// (issue #291 wave-2) when an approve defers the cloud SDK call. The
@@ -347,11 +347,11 @@ type PurchaseExecution struct {
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
 }
 
-// IsCancelable reports whether an execution may still be cancelled. Only the
+// IsCancelable reports whether an execution may still be canceled. Only the
 // pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
-// created, so cancelling would leave the DB and the cloud out of sync;
-// "cancelled", "completed", "failed", "expired", and "paused" are likewise
+// created, so canceling would leave the DB and the cloud out of sync;
+// "canceled", "completed", "failed", "expired", and "paused" are likewise
 // non-cancelable. The "scheduled" state is cancellable because the cloud SDK
 // has not been called yet (issue #291 wave-2).
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
@@ -361,7 +361,7 @@ func (e *PurchaseExecution) IsCancelable() bool {
 	return e.Status == "pending" || e.Status == "notified" || e.Status == "scheduled"
 }
 
-// RecommendationRecord stores a recommendation with purchase status
+// RecommendationRecord stores a recommendation with purchase status.
 type RecommendationRecord struct {
 	ID           string `json:"id" dynamodbav:"id"`
 	Provider     string `json:"provider" dynamodbav:"provider"`
@@ -478,7 +478,7 @@ type RecommendationRecord struct {
 	// them at the top level where the frontend already reads them.
 	//
 	// Pointers (not plain int/float64) so "absent / non-compute / unknown
-	// size" serialises as omitted rather than a misleading 0: the frontend
+	// size" serializes as omitted rather than a misleading 0: the frontend
 	// renders absent as "—", and a literal 0 would otherwise look like a
 	// real "0 vCPU / 0 GB" capacity. dynamodbav:"-" because they are
 	// derived-on-read, never stored.
@@ -640,7 +640,7 @@ func RevocationWindowClosesAtFor(provider string, purchaseTime time.Time) *time.
 
 // PurchaseHistoryRecord is the response-layer representation for rows on the
 // /api/history page. DB-backed rows always describe *completed* purchases; the
-// handler additionally synthesises rows for pending executions so users can
+// handler additionally synthesizes rows for pending executions so users can
 // see (and cancel) in-flight approvals. Status is the discriminator — the DB
 // layer never writes it (tag `dynamodbav:"-"` keeps it out of persistence),
 // and the API layer populates it as "completed" or "pending" before returning.
@@ -687,7 +687,7 @@ type PurchaseHistoryRecord struct {
 	// CreatedByUserID propagates the originating execution's
 	// created_by_user_id so the History UI can decide whether to render
 	// the inline Cancel button (issue #46): a non-admin user only sees
-	// the button on their own pending rows. Set only for synthesised
+	// the button on their own pending rows. Set only for synthesized
 	// pending/notified rows (executions); empty on completed history
 	// rows (where the action has already completed). Excluded from DB
 	// persistence.
@@ -696,7 +696,7 @@ type PurchaseHistoryRecord struct {
 	// its successor when the user retried it (issue #47). Set only on
 	// the *original* failed row that has been retried; the History UI
 	// renders an inline "Retried as #abc" link to the successor row when
-	// this is non-empty. Excluded from DB persistence (synthesised from
+	// this is non-empty. Excluded from DB persistence (synthesized from
 	// purchase_executions).
 	RetryExecutionID string `json:"retry_execution_id,omitempty" dynamodbav:"-"`
 	// RetryAttemptN propagates the originating execution's retry-chain
@@ -712,22 +712,22 @@ type PurchaseHistoryRecord struct {
 	// empty otherwise. Excluded from DB persistence (computed at read
 	// time so updates to the persistent-failure map land instantly).
 	OpsHint string `json:"ops_hint,omitempty" dynamodbav:"-"`
-	// IsAuditGap marks a synthesised "completed" row whose purchase_history
+	// IsAuditGap marks a synthesized "completed" row whose purchase_history
 	// write failed after a successful purchase (issue #621). Such a row is
 	// reconstructed from the execution so the purchase stays visible, but its
 	// execution-level dollars are excluded from the committed totals: a
 	// partially-saved multi-rec execution can have BOTH some real
-	// purchase_history rows AND this synthesised row, so adding the full
+	// purchase_history rows AND this synthesized row, so adding the full
 	// execution total would double-count the recs that did save. The dollars
 	// are surfaced via the individual purchase_history rows that succeeded;
 	// this row is the audit flag, not a money source. Real purchase_history
 	// rows loaded from the DB always leave this false. Excluded from DB
-	// persistence (set only at read time on synthesised rows).
+	// persistence (set only at read time on synthesized rows).
 	IsAuditGap bool `json:"is_audit_gap,omitempty" dynamodbav:"-"`
 	// CreatedByUserEmail is the email address of the user who created the
 	// underlying execution, resolved from CreatedByUserID via the auth
-	// service. Populated only on synthesised execution rows (pending,
-	// notified, failed, expired, cancelled) when a valid user ID is
+	// service. Populated only on synthesized execution rows (pending,
+	// notified, failed, expired, canceled) when a valid user ID is
 	// present; empty for scheduler-driven executions, legacy NULL-creator
 	// rows, and completed purchase_history rows. Excluded from DB
 	// persistence (resolved at read time). The UI renders this in the
@@ -772,7 +772,7 @@ type PurchaseHistoryRecord struct {
 	RevocationInFlight bool `json:"revocation_in_flight,omitempty" dynamodbav:"revocation_in_flight,omitempty"`
 }
 
-// RIExchangeRecord represents a record in the ri_exchange_history table
+// RIExchangeRecord represents a record in the ri_exchange_history table.
 type RIExchangeRecord struct {
 	ID                 string   `json:"id"`
 	AccountID          string   `json:"account_id"`
@@ -804,7 +804,7 @@ type RIExchangeRecord struct {
 	CloudAccountID *string    `json:"cloud_account_id,omitempty"`
 }
 
-// ConfigSetting represents a configuration setting for the defaults system
+// ConfigSetting represents a configuration setting for the defaults system.
 type ConfigSetting struct {
 	Key         string    `json:"key"`
 	Value       any       `json:"value"`

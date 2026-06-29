@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getTestMigrationsPath returns the absolute path to migrations directory
+// getTestMigrationsPath returns the absolute path to migrations directory.
 func getTestMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
@@ -69,7 +69,7 @@ func setupTestContainerDB(t *testing.T) *database.Connection {
 	return container.DB
 }
 
-// cleanupTestData deletes all data from test tables
+// cleanupTestData deletes all data from test tables.
 func cleanupTestData(t *testing.T, conn *database.Connection) {
 	t.Helper()
 	ctx := context.Background()
@@ -856,7 +856,7 @@ func TestPostgresStoreDB_PurchaseHistory(t *testing.T) {
 }
 
 // TestPostgresStoreDB_QueryExecutions_NullableTimestamps tests the queryExecutions
-// helper's handling of all nullable timestamp fields
+// helper's handling of all nullable timestamp fields.
 func TestPostgresStoreDB_QueryExecutions_NullableTimestamps(t *testing.T) {
 	conn := setupTestContainerDB(t)
 	if conn == nil {
@@ -923,7 +923,7 @@ func TestPostgresStoreDB_QueryExecutions_NullableTimestamps(t *testing.T) {
 }
 
 // TestPostgresStoreDB_PurchaseHistory_NullStrings tests the queryPurchaseHistory
-// helper's handling of nullable string fields (plan_id, plan_name)
+// helper's handling of nullable string fields (plan_id, plan_name).
 func TestPostgresStoreDB_PurchaseHistory_NullStrings(t *testing.T) {
 	conn := setupTestContainerDB(t)
 	if conn == nil {

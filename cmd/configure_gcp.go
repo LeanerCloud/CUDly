@@ -18,10 +18,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// gcpProjectIDRegex validates GCP project IDs (lowercase letters, digits, hyphens, 6-30 chars)
+// gcpProjectIDRegex validates GCP project IDs (lowercase letters, digits, hyphens, 6-30 chars).
 var gcpProjectIDRegex = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
-// validateGCPProjectID validates a GCP project ID to prevent command injection
+// validateGCPProjectID validates a GCP project ID to prevent command injection.
 func validateGCPProjectID(projectID string) error {
 	if !gcpProjectIDRegex.MatchString(projectID) {
 		return fmt.Errorf("invalid GCP project ID format: must be 6-30 lowercase letters, digits, or hyphens, starting with a letter")
@@ -29,7 +29,7 @@ func validateGCPProjectID(projectID string) error {
 	return nil
 }
 
-// GCPCredentials holds the GCP Service Account credentials
+// GCPCredentials holds the GCP Service Account credentials.
 type GCPCredentials struct {
 	Type                    string `json:"type"`
 	ProjectID               string `json:"project_id"`
@@ -43,7 +43,7 @@ type GCPCredentials struct {
 	ClientX509CertURL       string `json:"client_x509_cert_url,omitempty"`
 }
 
-// GCPConfigOptions holds configuration for the GCP config command
+// GCPConfigOptions holds configuration for the GCP config command.
 type GCPConfigOptions struct {
 	StackName       string
 	Profile         string
@@ -81,7 +81,7 @@ func init() {
 	configureGCPCmd.Flags().BoolVar(&gcpOpts.SkipSetup, "skip-setup", false, "Skip GCP CLI setup commands (gcloud login, create service account)")
 }
 
-// storeGCPCredentials stores GCP credentials in the secrets store
+// storeGCPCredentials stores GCP credentials in the secrets store.
 func storeGCPCredentials(ctx context.Context, store SecretsStore, stackName string, credsJSON string) error {
 	// Validate that we have valid JSON
 	var creds GCPCredentials
@@ -161,7 +161,7 @@ func runConfigureGCP(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// getGCPCredentialsFilePath determines the credentials file path from options or user input
+// getGCPCredentialsFilePath determines the credentials file path from options or user input.
 func getGCPCredentialsFilePath(reader *bufio.Reader) (string, error) {
 	var credsFile string
 
@@ -188,7 +188,7 @@ func getGCPCredentialsFilePath(reader *bufio.Reader) (string, error) {
 	return credsFile, nil
 }
 
-// loadAWSConfigForGCP loads AWS configuration with optional profile
+// loadAWSConfigForGCP loads AWS configuration with optional profile.
 func loadAWSConfigForGCP(ctx context.Context) (aws.Config, error) {
 	var opts []func(*awsconfig.LoadOptions) error
 	if gcpOpts.Profile != "" {
@@ -203,7 +203,7 @@ func loadAWSConfigForGCP(ctx context.Context) (aws.Config, error) {
 	return cfg, nil
 }
 
-// loadAndUpdateGCPCredentials loads, parses, and optionally updates GCP credentials
+// loadAndUpdateGCPCredentials loads, parses, and optionally updates GCP credentials.
 func loadAndUpdateGCPCredentials(credsFile string) (GCPCredentials, []byte, error) {
 	expandedPath := expandHomeDirectory(credsFile)
 
@@ -228,7 +228,7 @@ func loadAndUpdateGCPCredentials(credsFile string) (GCPCredentials, []byte, erro
 	return creds, credsData, nil
 }
 
-// expandHomeDirectory expands ~ to the user's home directory
+// expandHomeDirectory expands ~ to the user's home directory.
 func expandHomeDirectory(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
@@ -242,7 +242,7 @@ func expandHomeDirectory(path string) string {
 	return strings.Replace(path, "~", home, 1)
 }
 
-// printGCPConfigurationSuccess prints success message with credentials info
+// printGCPConfigurationSuccess prints success message with credentials info.
 func printGCPConfigurationSuccess(creds GCPCredentials) {
 	log.Printf("GCP credentials stored successfully in Secrets Manager")
 	fmt.Println("\nGCP configuration complete!")
@@ -251,7 +251,7 @@ func printGCPConfigurationSuccess(creds GCPCredentials) {
 	fmt.Println("\nCUDly can now manage GCP Committed Use Discounts.")
 }
 
-// runGCPSetupCommands runs the GCP CLI commands interactively
+// runGCPSetupCommands runs the GCP CLI commands interactively.
 func runGCPSetupCommands(reader *bufio.Reader) (string, error) {
 	fmt.Println("Step 1: GCP Login")
 	fmt.Println("-----------------")
@@ -380,7 +380,7 @@ func promptAndRunGCPCommand(reader *bufio.Reader, name, displayCmd string, progr
 	}
 }
 
-// executeGCPCommand runs a gcloud command with explicit program and arguments
+// executeGCPCommand runs a gcloud command with explicit program and arguments.
 func executeGCPCommand(displayCmd string, program string, args ...string) error {
 	fmt.Println()
 	fmt.Printf("Executing: %s\n", displayCmd)

@@ -8,7 +8,7 @@ import (
 )
 
 // applyFilters applies region, instance type, engine, and engine version filters to recommendations
-// currentRegion is the region being processed in the current loop iteration - if non-empty, only recommendations for that region are included
+// currentRegion is the region being processed in the current loop iteration - if non-empty, only recommendations for that region are included.
 func applyFilters(recs []common.Recommendation, cfg Config, instanceVersions map[string][]InstanceEngineVersion, versionInfo map[string]MajorEngineVersionInfo, currentRegion string) []common.Recommendation {
 	var filtered []common.Recommendation
 
@@ -96,7 +96,7 @@ func shouldIncludePoolSize(rec common.Recommendation, cfg Config) bool {
 	return rec.AverageInstancesUsedPerHour >= cfg.MinPoolSize
 }
 
-// shouldIncludeRegion checks if a region should be included based on filters
+// shouldIncludeRegion checks if a region should be included based on filters.
 func shouldIncludeRegion(region string, cfg Config) bool {
 	// If include list is specified, region must be in it
 	if len(cfg.IncludeRegions) > 0 && !slices.Contains(cfg.IncludeRegions, region) {
@@ -111,7 +111,7 @@ func shouldIncludeRegion(region string, cfg Config) bool {
 	return true
 }
 
-// shouldIncludeInstanceType checks if an instance type should be included based on filters
+// shouldIncludeInstanceType checks if an instance type should be included based on filters.
 func shouldIncludeInstanceType(instanceType string, cfg Config) bool {
 	// If include list is specified, instance type must be in it
 	if len(cfg.IncludeInstanceTypes) > 0 && !slices.Contains(cfg.IncludeInstanceTypes, instanceType) {
@@ -126,7 +126,7 @@ func shouldIncludeInstanceType(instanceType string, cfg Config) bool {
 	return true
 }
 
-// shouldIncludeEngine checks if a recommendation should be included based on engine filters
+// shouldIncludeEngine checks if a recommendation should be included based on engine filters.
 func shouldIncludeEngine(rec common.Recommendation, cfg Config) bool {
 	// Extract engine from recommendation
 	engine := getEngineFromRecommendation(rec)
@@ -142,7 +142,7 @@ func shouldIncludeEngine(rec common.Recommendation, cfg Config) bool {
 	if len(cfg.IncludeEngines) > 0 {
 		found := false
 		for _, e := range cfg.IncludeEngines {
-			if strings.ToLower(e) == engine {
+			if strings.EqualFold(e, engine) {
 				found = true
 				break
 			}
@@ -155,7 +155,7 @@ func shouldIncludeEngine(rec common.Recommendation, cfg Config) bool {
 	// If exclude list is specified, engine must not be in it
 	if len(cfg.ExcludeEngines) > 0 {
 		for _, e := range cfg.ExcludeEngines {
-			if strings.ToLower(e) == engine {
+			if strings.EqualFold(e, engine) {
 				return false
 			}
 		}
@@ -164,7 +164,7 @@ func shouldIncludeEngine(rec common.Recommendation, cfg Config) bool {
 	return true
 }
 
-// shouldIncludeAccount checks if an account should be included based on filters
+// shouldIncludeAccount checks if an account should be included based on filters.
 func shouldIncludeAccount(accountName string, cfg Config) bool {
 	// If account name is empty and there are filters, skip it (unless include list is empty)
 	if accountName == "" {
@@ -186,7 +186,7 @@ func shouldIncludeAccount(accountName string, cfg Config) bool {
 	return true
 }
 
-// checkIncludeList checks if an account matches the include filters
+// checkIncludeList checks if an account matches the include filters.
 func checkIncludeList(accountLower string, includeAccounts []string) bool {
 	if len(includeAccounts) == 0 {
 		return true
@@ -201,7 +201,7 @@ func checkIncludeList(accountLower string, includeAccounts []string) bool {
 	return false
 }
 
-// checkExcludeList checks if an account matches any exclude filters
+// checkExcludeList checks if an account matches any exclude filters.
 func checkExcludeList(accountLower string, excludeAccounts []string) bool {
 	for _, filter := range excludeAccounts {
 		if accountMatchesFilter(accountLower, filter) {
@@ -211,7 +211,7 @@ func checkExcludeList(accountLower string, excludeAccounts []string) bool {
 	return false
 }
 
-// accountMatchesFilter checks if an account matches a filter pattern (exact or substring match)
+// accountMatchesFilter checks if an account matches a filter pattern (exact or substring match).
 func accountMatchesFilter(accountLower, filter string) bool {
 	filterLower := strings.ToLower(filter)
 	return filterLower == accountLower || strings.Contains(accountLower, filterLower)

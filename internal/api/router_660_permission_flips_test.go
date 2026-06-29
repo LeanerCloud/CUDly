@@ -196,7 +196,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 
 	t.Run("creator with update:purchases can pause their own planned purchase", func(t *testing.T) {
 		// Issue #950: a standard user manages only the scheduled purchases
-		// they created. update-any is false; the creator match authorises.
+		// they created. update-any is false; the creator match authorizes.
 		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
@@ -284,7 +284,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 
 	t.Run("creator with delete:purchases can delete their own planned purchase", func(t *testing.T) {
 		// Issue #950: ownership gate also applies to delete; a creator with
-		// delete:purchases (no update-any) is authorised by the creator match.
+		// delete:purchases (no update-any) is authorized by the creator match.
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
@@ -292,8 +292,8 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).
-			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "canceled"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
@@ -400,10 +400,10 @@ func TestUpdateRIExchangeConfig_PermissionGate(t *testing.T) {
 	})
 }
 
-// ---- Router-level gate (defence-in-depth) ---------------------------------
+// ---- Router-level gate (defense-in-depth) ---------------------------------
 
 // TestRouter_MutatingRoutes_RequireAuth confirms that the AuthUser check at
-// the router level (defence-in-depth) still rejects completely unauthenticated
+// the router level (defense-in-depth) still rejects completely unauthenticated
 // callers before they reach the handler — even after the flip from AuthAdmin.
 func TestRouter_MutatingRoutes_RequireAuth(t *testing.T) {
 	ctx := context.Background()

@@ -163,7 +163,7 @@ func TestRecEffectiveSavingsPct_Config(t *testing.T) {
 
 // TestRecommendationFilter_UnitDistinction is the central regression test for
 // issue #1089. It asserts that the SAME numeric value "30" produces different
-// filter behaviour when interpreted as a dollar amount vs. a percentage:
+// filter behavior when interpreted as a dollar amount vs. a percentage:
 //
 //	rec.Savings = $100/mo, on_demand = $500/mo => effective_pct = 20%
 //	min_savings_usd=30  => passes  ($100 >= $30)

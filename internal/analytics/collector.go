@@ -114,9 +114,9 @@ func (c *Collector) Collect(ctx context.Context) error {
 
 	if err := c.store.BulkInsertSnapshots(ctx, snapshots); err != nil {
 		// Surface context cancellation distinctly so the caller doesn't retry a
-		// genuinely cancelled run as a transient failure.
+		// genuinely canceled run as a transient failure.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("collection cancelled during write: %w", err)
+			return fmt.Errorf("collection canceled during write: %w", err)
 		}
 		return fmt.Errorf("failed to save snapshots: %w", err)
 	}
@@ -135,7 +135,7 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 
 	for _, p := range purchases {
 		if err := ctx.Err(); err != nil {
-			return nil, 0, 0, fmt.Errorf("collection cancelled after %d rows: %w", activePurchases, err)
+			return nil, 0, 0, fmt.Errorf("collection canceled after %d rows: %w", activePurchases, err)
 		}
 
 		// H1: a Term <= 0 row would make the amortized-commitment division

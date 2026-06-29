@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ProfileConfig holds configuration for a single deployment profile
+// ProfileConfig holds configuration for a single deployment profile.
 type ProfileConfig struct {
 	Provider          string  `yaml:"provider"`         // Cloud provider: aws, azure, gcp
 	ComputePlatform   string  `yaml:"compute_platform"` // Compute platform: lambda/fargate, container-apps/aks, cloud-run/gke
@@ -34,13 +34,13 @@ type ProfileConfig struct {
 	AdminEmail        string  `yaml:"admin_email,omitempty"`
 }
 
-// DeploymentConfig holds all deployment profiles
+// DeploymentConfig holds all deployment profiles.
 type DeploymentConfig struct {
 	ActiveProfile string                   `yaml:"active_profile"`
 	Profiles      map[string]ProfileConfig `yaml:"profiles"`
 }
 
-// GetConfigPath returns the path to the deployment configuration file
+// GetConfigPath returns the path to the deployment configuration file.
 func GetConfigPath() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -50,7 +50,7 @@ func GetConfigPath() string {
 	return filepath.Join(homeDir, ".cudly", "deployment.yaml")
 }
 
-// GetConfigDir returns the directory containing the deployment configuration
+// GetConfigDir returns the directory containing the deployment configuration.
 func GetConfigDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -60,7 +60,7 @@ func GetConfigDir() string {
 	return filepath.Join(homeDir, ".cudly")
 }
 
-// LoadConfig loads the deployment configuration from disk
+// LoadConfig loads the deployment configuration from disk.
 func LoadConfig() (*DeploymentConfig, error) {
 	configPath := GetConfigPath()
 
@@ -89,7 +89,7 @@ func LoadConfig() (*DeploymentConfig, error) {
 	return &config, nil
 }
 
-// SaveConfig saves the deployment configuration to disk
+// SaveConfig saves the deployment configuration to disk.
 func SaveConfig(config *DeploymentConfig) error {
 	configDir := GetConfigDir()
 	configPath := GetConfigPath()
@@ -111,7 +111,7 @@ func SaveConfig(config *DeploymentConfig) error {
 	return nil
 }
 
-// InitConfig creates a default configuration file
+// InitConfig creates a default configuration file.
 func InitConfig() error {
 	configPath := GetConfigPath()
 
@@ -144,7 +144,7 @@ func InitConfig() error {
 	return SaveConfig(config)
 }
 
-// GetActiveProfile returns the active profile configuration
+// GetActiveProfile returns the active profile configuration.
 func (c *DeploymentConfig) GetActiveProfile() (*ProfileConfig, error) {
 	if c.ActiveProfile == "" {
 		return nil, fmt.Errorf("no active profile set")
@@ -158,7 +158,7 @@ func (c *DeploymentConfig) GetActiveProfile() (*ProfileConfig, error) {
 	return &profile, nil
 }
 
-// GetProfile returns a specific profile by name
+// GetProfile returns a specific profile by name.
 func (c *DeploymentConfig) GetProfile(name string) (*ProfileConfig, error) {
 	profile, ok := c.Profiles[name]
 	if !ok {
@@ -167,7 +167,7 @@ func (c *DeploymentConfig) GetProfile(name string) (*ProfileConfig, error) {
 	return &profile, nil
 }
 
-// SetActiveProfile sets the active profile
+// SetActiveProfile sets the active profile.
 func (c *DeploymentConfig) SetActiveProfile(name string) error {
 	if _, ok := c.Profiles[name]; !ok {
 		return fmt.Errorf("profile %q not found", name)
@@ -176,7 +176,7 @@ func (c *DeploymentConfig) SetActiveProfile(name string) error {
 	return nil
 }
 
-// AddProfile adds a new profile to the configuration
+// AddProfile adds a new profile to the configuration.
 func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error {
 	if name == "" {
 		return fmt.Errorf("profile name cannot be empty")
@@ -196,7 +196,7 @@ func (c *DeploymentConfig) AddProfile(name string, profile ProfileConfig) error 
 	return nil
 }
 
-// UpdateProfile updates an existing profile
+// UpdateProfile updates an existing profile.
 func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) error {
 	if _, exists := c.Profiles[name]; !exists {
 		return fmt.Errorf("profile %q does not exist", name)
@@ -206,7 +206,7 @@ func (c *DeploymentConfig) UpdateProfile(name string, profile ProfileConfig) err
 	return nil
 }
 
-// DeleteProfile removes a profile from the configuration
+// DeleteProfile removes a profile from the configuration.
 func (c *DeploymentConfig) DeleteProfile(name string) error {
 	if _, ok := c.Profiles[name]; !ok {
 		return fmt.Errorf("profile %q not found", name)
@@ -221,7 +221,7 @@ func (c *DeploymentConfig) DeleteProfile(name string) error {
 	return nil
 }
 
-// CopyProfile creates a new profile by copying an existing one
+// CopyProfile creates a new profile by copying an existing one.
 func (c *DeploymentConfig) CopyProfile(from, to string) error {
 	if to == "" {
 		return fmt.Errorf("new profile name cannot be empty")
@@ -241,7 +241,7 @@ func (c *DeploymentConfig) CopyProfile(from, to string) error {
 	return nil
 }
 
-// ListProfiles returns a sorted list of profile names
+// ListProfiles returns a sorted list of profile names.
 func (c *DeploymentConfig) ListProfiles() []string {
 	names := make([]string, 0, len(c.Profiles))
 	for name := range c.Profiles {
@@ -251,13 +251,13 @@ func (c *DeploymentConfig) ListProfiles() []string {
 	return names
 }
 
-// HasProfile checks if a profile exists
+// HasProfile checks if a profile exists.
 func (c *DeploymentConfig) HasProfile(name string) bool {
 	_, ok := c.Profiles[name]
 	return ok
 }
 
-// ProfileCount returns the number of profiles
+// ProfileCount returns the number of profiles.
 func (c *DeploymentConfig) ProfileCount() int {
 	return len(c.Profiles)
 }

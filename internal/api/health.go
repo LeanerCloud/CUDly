@@ -8,20 +8,20 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// HealthResponse represents the health check response
+// HealthResponse represents the health check response.
 type HealthResponse struct {
 	Status    string                 `json:"status"`
 	Timestamp time.Time              `json:"timestamp"`
 	Checks    map[string]HealthCheck `json:"checks"`
 }
 
-// HealthCheck represents a single health check result
+// HealthCheck represents a single health check result.
 type HealthCheck struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 }
 
-// GetHealth performs comprehensive health checks
+// GetHealth performs comprehensive health checks.
 func (h *Handler) GetHealth(ctx context.Context) (*HealthResponse, error) {
 	response := &HealthResponse{
 		Status:    "healthy",
@@ -53,7 +53,7 @@ func (h *Handler) GetHealth(ctx context.Context) (*HealthResponse, error) {
 	return response, nil
 }
 
-// checkConfigStore checks if the configuration store is accessible
+// checkConfigStore checks if the configuration store is accessible.
 func (h *Handler) checkConfigStore(ctx context.Context) HealthCheck {
 	if h.config == nil {
 		return HealthCheck{
@@ -107,7 +107,7 @@ func (h *Handler) checkCredentialStore() HealthCheck {
 	return HealthCheck{Status: "healthy"}
 }
 
-// checkAuthService checks if the auth service is accessible
+// checkAuthService checks if the auth service is accessible.
 func (h *Handler) checkAuthService(ctx context.Context) HealthCheck {
 	if h.auth == nil {
 		return HealthCheck{

@@ -337,7 +337,7 @@ func TestCreateCancelledResults(t *testing.T) {
 		assert.False(t, result.Success)
 		assert.Equal(t, recs[i], result.Recommendation)
 		assert.NotNil(t, result.Error)
-		assert.Contains(t, result.Error.Error(), "cancelled")
+		assert.Contains(t, result.Error.Error(), "canceled")
 		assert.Contains(t, result.CommitmentID, "us-west-2")
 	}
 }
@@ -731,7 +731,7 @@ func TestPopulateAccountNames(t *testing.T) {
 }
 
 // TestPopulateAccountNamesLogic tests the logic of populateAccountNames
-// by verifying it populates the AccountName field correctly
+// by verifying it populates the AccountName field correctly.
 func TestPopulateAccountNamesLogic(t *testing.T) {
 	ctx := context.Background()
 

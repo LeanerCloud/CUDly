@@ -11,7 +11,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 )
 
-// mockTaskLocker implements TaskLocker for testing
+// mockTaskLocker implements TaskLocker for testing.
 type mockTaskLocker struct {
 	acquired    bool
 	err         error

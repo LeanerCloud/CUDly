@@ -362,7 +362,7 @@ func TestResolveBastionProvider_BastionDisabled(t *testing.T) {
 
 // TestResolveBastionProvider_LegacyFallback verifies the back-compat path:
 // when AccountLookup/STSClientFactory are nil, the resolver falls through to
-// the old behaviour of trusting the caller-supplied STS client.
+// the old behavior of trusting the caller-supplied STS client.
 func TestResolveBastionProvider_LegacyFallback(t *testing.T) {
 	target := &config.CloudAccount{
 		ID:           "target-acct",

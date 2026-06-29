@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockAnalyticsStore implements AnalyticsStore for testing
+// mockAnalyticsStore implements AnalyticsStore for testing.
 type mockAnalyticsStore struct {
 	saveSnapshotFunc             func(ctx context.Context, snapshot *SavingsSnapshot) error
 	bulkInsertSnapshotsFunc      func(ctx context.Context, snapshots []SavingsSnapshot) error
@@ -117,7 +117,7 @@ func (m *mockAnalyticsStore) Close() error {
 	return nil
 }
 
-// mockConfigStore implements config.StoreInterface for testing
+// mockConfigStore implements config.StoreInterface for testing.
 type mockConfigStore struct {
 	getPurchaseHistoryFunc             func(ctx context.Context, accountID string, limit int) ([]config.PurchaseHistoryRecord, error)
 	getAllPurchaseHistoryFunc          func(ctx context.Context, limit int) ([]config.PurchaseHistoryRecord, error)
@@ -446,7 +446,7 @@ func newTestCollector(t *testing.T, store *mockAnalyticsStore, cfgStore *mockCon
 	return collector
 }
 
-// TestNewCollector tests the NewCollector function
+// TestNewCollector tests the NewCollector function.
 func TestNewCollector(t *testing.T) {
 	t.Run("returns error when analytics store is nil", func(t *testing.T) {
 		collector, err := NewCollector(CollectorConfig{AnalyticsStore: nil}, &mockConfigStore{})
@@ -469,7 +469,7 @@ func TestNewCollector(t *testing.T) {
 	})
 }
 
-// TestCollectorCollect tests the Collect method
+// TestCollectorCollect tests the Collect method.
 func TestCollectorCollect(t *testing.T) {
 	t.Run("returns error when GetAllPurchaseHistory fails", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
@@ -698,11 +698,11 @@ func TestCollectorCollect(t *testing.T) {
 		err := newTestCollector(t, store, cfgStore).Collect(ctx)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
-		assert.Empty(t, store.savedSnapshots, "no snapshots written on a cancelled run")
+		assert.Empty(t, store.savedSnapshots, "no snapshots written on a canceled run")
 	})
 }
 
-// TestConstants tests the exported constants
+// TestConstants tests the exported constants.
 func TestConstants(t *testing.T) {
 	t.Run("HoursPerYear is correct", func(t *testing.T) {
 		assert.Equal(t, 365*24, HoursPerYear)
@@ -714,7 +714,7 @@ func TestConstants(t *testing.T) {
 	})
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStore) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }
