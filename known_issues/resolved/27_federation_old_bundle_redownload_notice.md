@@ -1,6 +1,7 @@
 # Known Issues: Federation IaC — Old bundles need re-download for zero-touch registration
 
 > **Audit status (2026-04-22):** `1 needs triage · 0 resolved (new file)`
+> **GitHub Issue:** #43
 
 Surfaced during the zero-touch federation bundle work
 (`fix(iac): drop email gate from Terraform registration.tf across all bundles`,
