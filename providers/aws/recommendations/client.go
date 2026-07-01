@@ -22,6 +22,16 @@ import (
 // payer org we have seen. Exceeding the cap returns a diagnostic error (issue #692).
 const maxRecommendationPages = 20
 
+// DefaultRecLookbackPeriod is the LookbackPeriod string forwarded to
+// GetReservationPurchaseRecommendation when --rec-lookback-period is not
+// specified. Kept in the recommendations package so the cmd flag default,
+// the cmd-side fallback, and the client-side fallback all refer to a single
+// source of truth (avoids the magic-value duplication called out by
+// feedback_no_hardcoded_magic_values.md). Valid CE values are 7d/30d/60d
+// (see convertLookbackPeriodE); 7d matches the prior hardcoded behaviour
+// from before --rec-lookback-period existed.
+const DefaultRecLookbackPeriod = "7d"
+
 // CostExplorerAPI defines the interface for Cost Explorer operations
 type CostExplorerAPI interface {
 	GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error)
@@ -49,6 +59,10 @@ type Client struct {
 	// lazily once per Client lifetime via sync.Once (one DescribeInstanceTypes
 	// fan-out per scheduler tick).
 	skuCatalog skuCatalog
+
+	// recLookbackPeriod is forwarded to GetReservationPurchaseRecommendation
+	// as LookbackPeriodInDays. Defaults to "7d" when empty.
+	recLookbackPeriod string
 }
 
 // NewClient creates a new recommendations client
@@ -94,13 +108,20 @@ func (c *Client) SetInstanceTypePagerFactory(f func() InstanceTypePager) {
 // instanceTypeLookup returns the cached SKU entry for instanceType.
 // On the first call the catalogue is built by calling the pager factory.
 // ok=false when no factory is configured, the catalogue fetch failed, or
-// the instance type was not in the catalogue — the caller falls back to
+// the instance type was not in the catalogue -- the caller falls back to
 // VCPU=0/MemoryGB=0 (graceful-degradation contract from Azure PR #810).
 func (c *Client) instanceTypeLookup(ctx context.Context, instanceType string) (instanceTypeSKUEntry, bool) {
 	if c.instanceTypePagerFactory == nil {
 		return instanceTypeSKUEntry{}, false
 	}
 	return c.skuCatalog.lookup(ctx, instanceType, c.instanceTypePagerFactory)
+}
+
+// SetRecLookbackPeriod configures the LookbackPeriodInDays used by
+// GetRecommendationsForService. Valid values: "7d", "30d", "60d".
+// An empty or unrecognised value falls back to "7d" at call time.
+func (c *Client) SetRecLookbackPeriod(period string) {
+	c.recLookbackPeriod = period
 }
 
 // GetRecommendations fetches Reserved Instance recommendations for any service
@@ -225,9 +246,47 @@ var defaultDiscoveryTerms = []string{"1yr", "3yr"}
 // rows and render as distinct UI rows for free.
 var defaultDiscoveryPaymentOptions = []string{"all-upfront", "partial-upfront", "no-upfront"}
 
+// fetchSingleComboRecs fetches recommendations for one (term, payment) pair.
+// If the context is already done before the call, it returns (nil, ctx.Err()).
+// If GetRecommendations returns an error after ctx cancellation, it also
+// returns (nil, ctx.Err()) so the caller exits the sweep immediately. Per-combo
+// errors (throttle, 5xx) return (nil, err) with ctx.Err() == nil, signalling
+// skip-and-continue tolerance in the outer loop.
+func (c *Client) fetchSingleComboRecs(ctx context.Context, service common.ServiceType, term string, payment string) ([]common.Recommendation, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	lookback := c.recLookbackPeriod
+	if lookback == "" {
+		lookback = DefaultRecLookbackPeriod
+	}
+	params := common.RecommendationParams{
+		Service:        service,
+		PaymentOption:  payment,
+		Term:           term,
+		LookbackPeriod: lookback,
+		Region:         "",
+	}
+	recs, err := c.GetRecommendations(ctx, params)
+	if err != nil {
+		// A canceled / deadline-exceeded ctx is NOT a per-combo
+		// failure to be tolerated -- every subsequent combo
+		// would just hit the same dead context and waste time
+		// while we accumulate "failures" that hide the real
+		// reason. Short-circuit so the caller sees the ctx
+		// error verbatim. Per-combo errors (throttle, 5xx)
+		// keep the existing skip-and-continue tolerance.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	return recs, nil
+}
+
 // GetRecommendationsForService fetches recommendations for a specific
-// service across the full Cartesian product of defaultDiscoveryTerms ×
-// defaultDiscoveryPaymentOptions (currently 2 × 3 = 6 Cost Explorer
+// service across the full Cartesian product of defaultDiscoveryTerms x
+// defaultDiscoveryPaymentOptions (currently 2 x 3 = 6 Cost Explorer
 // calls per service). Each call returns the recs for that single
 // (term, payment) cell and the parser tags them with params.Term /
 // params.PaymentOption so the resulting slice contains every combo
@@ -244,26 +303,9 @@ func (c *Client) GetRecommendationsForService(ctx context.Context, service commo
 	attempts := 0
 	for _, term := range defaultDiscoveryTerms {
 		for _, payment := range defaultDiscoveryPaymentOptions {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
 			attempts++
-			params := common.RecommendationParams{
-				Service:        service,
-				PaymentOption:  payment,
-				Term:           term,
-				LookbackPeriod: "7d",
-				Region:         "",
-			}
-			recs, err := c.GetRecommendations(ctx, params)
+			recs, err := c.fetchSingleComboRecs(ctx, service, term, payment)
 			if err != nil {
-				// A canceled / deadline-exceeded ctx is NOT a per-combo
-				// failure to be tolerated — every subsequent combo
-				// would just hit the same dead context and waste time
-				// while we accumulate "failures" that hide the real
-				// reason. Short-circuit so the caller sees the ctx
-				// error verbatim. Per-combo errors (throttle, 5xx)
-				// keep the existing skip-and-continue tolerance.
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
