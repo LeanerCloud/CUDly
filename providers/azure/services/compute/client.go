@@ -169,6 +169,8 @@ type AzureRetailPriceItem struct {
 	Type            string  `json:"type"`
 }
 
+// AzureRetailPrice is the paginated response envelope returned by the Azure
+// Retail Prices API; NextPageLink is non-empty when additional pages exist.
 type AzureRetailPrice struct {
 	Items        []AzureRetailPriceItem `json:"Items"`
 	NextPageLink string                 `json:"NextPageLink"`

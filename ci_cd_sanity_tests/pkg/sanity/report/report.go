@@ -1,3 +1,4 @@
+// Package report defines the structured output types for CI/CD sanity-test runs.
 package report
 
 import (
@@ -6,6 +7,7 @@ import (
 	"time"
 )
 
+// Status is the outcome of a single sanity check.
 type Status string
 
 const (
@@ -14,6 +16,8 @@ const (
 	StatusSkip Status = "SKIP"
 )
 
+// CheckResult records the outcome of one named sanity check, including timing
+// and optional key/value details for post-hoc debugging.
 type CheckResult struct {
 	Name      string            `json:"name"`
 	Status    Status            `json:"status"`
@@ -23,6 +27,8 @@ type CheckResult struct {
 	EndedAt   time.Time         `json:"ended_at"`
 }
 
+// Report aggregates the results of a full sanity-test run against a single cloud
+// provider and is serialised to JSON for upload to the CI artefact store.
 type Report struct {
 	RunID     string        `json:"run_id"`
 	Cloud     string        `json:"cloud"`
@@ -32,10 +38,14 @@ type Report struct {
 	Results   []CheckResult `json:"results"`
 }
 
+// Add appends a single check result to the report. Not safe for concurrent
+// use; callers running checks in goroutines must serialise Add calls.
 func (r *Report) Add(res CheckResult) {
 	r.Results = append(r.Results, res)
 }
 
+// HasFailures reports whether any recorded check ended in StatusFail. Skips
+// and passes do not count as failures.
 func (r *Report) HasFailures() bool {
 	for _, rr := range r.Results {
 		if rr.Status == StatusFail {
@@ -45,6 +55,8 @@ func (r *Report) HasFailures() bool {
 	return false
 }
 
+// WriteJSON serialises the report to path with indented JSON and 0600
+// permissions so it can be uploaded as a CI artefact.
 func (r *Report) WriteJSON(path string) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
