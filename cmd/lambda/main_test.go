@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/server"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 
 // createTestApp creates a minimal Application for testing with no DB dependency
 func createTestApp() *server.Application {
-	apiHandler := api.NewHandler(api.HandlerConfig{})
+	apiHandler := api.NewHandler(&api.HandlerConfig{})
 	return &server.Application{
 		API:       apiHandler,
 		Scheduler: &testutil.MockScheduler{},

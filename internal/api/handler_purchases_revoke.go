@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // handler_purchases_revoke.go implements POST /api/purchases/{purchaseId}/revoke
 // which lets a session-authenticated user revoke a completed purchase while it

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -65,7 +65,7 @@ type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]recomme
 // revalidate semantics on non-Lambda runtimes. Lambda containers can't
 // safely run background goroutines (they freeze between invocations)
 // so on Lambda the cache falls back to synchronous fetch-on-stale —
-// today's behaviour. Non-Lambda runtimes get SWR: stale rows are
+// today's behavior. Non-Lambda runtimes get SWR: stale rows are
 // served immediately while a detached goroutine refreshes the row for
 // the next reader.
 //
@@ -74,8 +74,8 @@ type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]recomme
 // refresh, avoiding a thundering-herd CE fan-out.
 type riUtilizationCache struct {
 	store    riUtilizationCacheStore
-	isLambda bool
 	sf       singleflight.Group
+	isLambda bool
 }
 
 func newRIUtilizationCache(store riUtilizationCacheStore, isLambda bool) *riUtilizationCache {
@@ -145,7 +145,7 @@ func (c *riUtilizationCache) getOrFetch(
 // kickBackgroundRefresh runs a single-flighted refetch in a detached
 // goroutine. sf.Do with the same key collapses concurrent calls to
 // one in-flight refresh. The refresh uses a fresh context (not the
-// caller's) because the caller's ctx may be cancelled when the HTTP
+// caller's) because the caller's ctx may be canceled when the HTTP
 // response completes, which would abort the refresh prematurely.
 func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackDays int, fetch riUtilizationFetcher) {
 	go func() {
@@ -155,18 +155,24 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 			}
 		}()
 
-		_, _, _ = c.sf.Do(key, func() (any, error) {
+		// The callback logs and swallows its own errors (returning nil), so
+		// the singleflight result carries no actionable error. Capture the
+		// outer error anyway and log defensively rather than blank-discarding
+		// it, so a future callback change that returns an error is not lost.
+		if _, err, _ := c.sf.Do(key, func() (any, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
 			data, err := fetch(ctx, lookbackDays)
 			if err != nil {
 				logging.Warnf("ri_utilization_cache: background refresh failed (key=%s): %v", key, err)
-				return nil, err
+				return nil, nil
 			}
 			c.storePayload(ctx, region, lookbackDays, data)
 			return nil, nil
-		})
+		}); err != nil {
+			logging.Warnf("ri_utilization_cache: background refresh singleflight error (key=%s): %v", key, err)
+		}
 	}()
 }
 

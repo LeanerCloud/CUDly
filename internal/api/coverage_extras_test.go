@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // coverage_extras_test.go — additional micro-tests for the remaining ~0.6% gap.
 
@@ -218,7 +218,7 @@ func TestApplyOverrideSlices(t *testing.T) {
 		ExcludeTypes:   []string{"db.r5.large"},
 	}
 
-	applyOverrideSlices(override, req)
+	applyOverrideSlices(override, &req)
 
 	assert.Equal(t, []string{"mysql"}, override.IncludeEngines)
 	assert.Equal(t, []string{"postgres"}, override.ExcludeEngines)
@@ -233,7 +233,7 @@ func TestApplyOverrideSlices_NilFields(t *testing.T) {
 		IncludeEngines: []string{"existing"},
 	}
 	// Nil fields should not overwrite existing values
-	applyOverrideSlices(override, AccountServiceOverrideRequest{})
+	applyOverrideSlices(override, &AccountServiceOverrideRequest{})
 	assert.Equal(t, []string{"existing"}, override.IncludeEngines)
 }
 

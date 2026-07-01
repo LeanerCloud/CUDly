@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -201,7 +201,10 @@ func (h *Handler) getPendingRegistration(ctx context.Context, id string) (*confi
 func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) {
 	reviewedAt := time.Now()
 	reg.ReviewedAt = &reviewedAt
-	session, _ := h.requireAdmin(ctx, httpReq)
+	session, err := h.requireAdmin(ctx, httpReq)
+	if err != nil {
+		logging.Warnf("setReviewMetadata: failed to get admin session for reviewer attribution: %v", err)
+	}
 	if session != nil {
 		reg.ReviewedBy = &session.UserID
 	}
@@ -234,11 +237,17 @@ func (h *Handler) encryptRegistrationCredential(payload string) (string, error) 
 
 // notifyRegistrant sends an email about an approval or rejection.
 // Errors are logged but not propagated (matching sendPurchaseApprovalEmail pattern).
-func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data email.RegistrationDecisionData) {
+func (h *Handler) notifyRegistrant(reg *config.AccountRegistration, data *email.RegistrationDecisionData) {
 	if h.emailNotifier == nil || reg.ContactEmail == "" {
 		return
 	}
-	if err := h.emailNotifier.SendRegistrationDecisionNotification(context.Background(), reg.ContactEmail, data); err != nil {
+	// Best-effort, fire-after-commit notification: the registration state has
+	// already changed, so bound the synchronous send with its own timeout
+	// (not the request ctx, which may already be done) so a stalled notifier
+	// can never hold the approval/rejection path open indefinitely.
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := h.emailNotifier.SendRegistrationDecisionNotification(notifyCtx, reg.ContactEmail, *data); err != nil {
 		logging.Warnf("failed to send registration decision notification: %v", err)
 	}
 }
@@ -256,7 +265,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
 		return nil, NewClientError(400, "invalid account request body")
 	}
-	if err := validateCloudAccountRequest(acctReq); err != nil {
+	if err := validateCloudAccountRequest(&acctReq); err != nil {
 		return nil, err
 	}
 
@@ -273,7 +282,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 
 	// Create the cloud account (only one request reaches here).
 	now := time.Now()
-	account := cloudAccountFromRequest(acctReq)
+	account := cloudAccountFromRequest(&acctReq)
 	account.ID = uuid.New().String()
 	// Auto-enable when the operator either embedded a credential in
 	// the registration (legacy key-based flow) OR when the account
@@ -300,7 +309,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "approved",
 	})
@@ -361,7 +370,7 @@ func (h *Handler) rejectRegistration(ctx context.Context, httpReq *events.Lambda
 		return nil, fmt.Errorf("registrations: transition: %w", err)
 	}
 
-	h.notifyRegistrant(reg, email.RegistrationDecisionData{
+	h.notifyRegistrant(reg, &email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
 		ExternalID: reg.ExternalID, Decision: "rejected",
 		RejectionReason: body.Reason,
@@ -455,7 +464,7 @@ func generateReferenceToken() (string, error) {
 // for a new-registration notification email.
 //
 // Rules:
-//   - Every member of the Administrators group is an authorised reviewer.
+//   - Every member of the Administrators group is an authorized reviewer.
 //   - The first admin email is the To; remaining admins + the global
 //     Settings → General notification email go on Cc.
 //   - When no admin users are configured, falls through to the legacy
@@ -464,7 +473,7 @@ func generateReferenceToken() (string, error) {
 //
 // The account's own ContactEmail is NOT included in the approver set
 // because the submitter can't review their own registration.
-func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc []string, approvers []string) {
+func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string, cc, approvers []string) {
 	adminEmails := h.gatherAdminEmails(ctx)
 	globalNotify := h.globalNotificationEmail(ctx)
 
@@ -494,7 +503,7 @@ func (h *Handler) resolveRegistrationRecipients(ctx context.Context) (to string,
 }
 
 // gatherAdminEmails returns the deduped, insertion-ordered list of emails
-// for every authorised reviewer, i.e. every member of the Administrators group
+// for every authorized reviewer, i.e. every member of the Administrators group
 // (the group-membership replacement for the former role == "admin" check;
 // issue #907). Transport errors are logged and result in an empty return so
 // registration notifications don't block on auth-store hiccups.

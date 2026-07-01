@@ -271,7 +271,8 @@ func TestResolveGCPTokenSource_InvalidJSON(t *testing.T) {
 	}
 	_, err := ResolveGCPTokenSource(context.Background(), account, store)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "parse gcp credentials")
+	// Invalid JSON is now rejected at the credential-type detection step.
+	assert.Contains(t, err.Error(), "detect gcp credential type")
 }
 
 // ---------------------------------------------------------------------------
@@ -385,8 +386,9 @@ func TestResolveAzureTokenCredential_ManagedIdentity(t *testing.T) {
 
 func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 	// Exercises the WIF branch where CredTypeGCPWIFConfig is used as the key.
-	// The JSON is intentionally invalid so google.CredentialsFromJSON fails,
-	// but we cover the credType selection branch.
+	// The JSON is intentionally invalid so the loader rejects it at the
+	// credential-type detection step, but we still cover the credType
+	// selection branch.
 	store := newMockStore()
 	store.data["acct1/gcp_workload_identity_config"] = []byte("not valid json")
 
@@ -396,7 +398,7 @@ func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 	}
 	_, err := ResolveGCPTokenSource(context.Background(), account, store)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "parse gcp credentials")
+	assert.Contains(t, err.Error(), "detect gcp credential type")
 }
 
 func TestResolveGCPTokenSource_ServiceAccountKey_ValidJSON(t *testing.T) {

@@ -13,14 +13,14 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// PostgresContainer wraps a testcontainers PostgreSQL instance
+// PostgresContainer wraps a testcontainers PostgreSQL instance.
 type PostgresContainer struct {
 	Container testcontainers.Container
 	Config    *database.Config
 	DB        *database.Connection
 }
 
-// SetupPostgresContainer creates and starts a PostgreSQL test container
+// SetupPostgresContainer creates and starts a PostgreSQL test container.
 func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContainer, error) {
 	t.Helper()
 
@@ -72,7 +72,9 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	// Create database connection
 	db, err := database.NewConnection(ctx, config, nil)
 	if err != nil {
-		postgresContainer.Terminate(ctx)
+		if termErr := postgresContainer.Terminate(ctx); termErr != nil {
+			t.Logf("failed to terminate postgres container after connection error: %v", termErr)
+		}
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
@@ -83,7 +85,7 @@ func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContain
 	}, nil
 }
 
-// Cleanup terminates the test container and closes database connection
+// Cleanup terminates the test container and closes database connection.
 func (c *PostgresContainer) Cleanup(ctx context.Context) error {
 	if c.DB != nil {
 		c.DB.Close()
@@ -94,7 +96,7 @@ func (c *PostgresContainer) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-// TruncateTables removes all data from tables (useful between tests)
+// TruncateTables removes all data from tables (useful between tests).
 func (c *PostgresContainer) TruncateTables(ctx context.Context, tables ...string) error {
 	for _, table := range tables {
 		// Use pgx.Identifier to safely quote table names and prevent SQL injection
@@ -107,7 +109,7 @@ func (c *PostgresContainer) TruncateTables(ctx context.Context, tables ...string
 	return nil
 }
 
-// ResetDatabase drops and recreates all tables (useful for clean state)
+// ResetDatabase drops and recreates all tables (useful for clean state).
 func (c *PostgresContainer) ResetDatabase(ctx context.Context) error {
 	// Drop all tables
 	query := `

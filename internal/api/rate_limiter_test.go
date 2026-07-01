@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // Legacy RateLimiter/newRateLimiter/rateLimitEntry were removed (02-N1).
 // Tests for getDefaultRateLimits and assertRateLimitKeysKnown live in

@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"encoding/base64"
@@ -15,15 +15,15 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 )
 
-// Security constants
+// Security constants.
 const (
-	// MaxRequestBodySize is the maximum allowed request body size (1MB)
+	// MaxRequestBodySize is the maximum allowed request body size (1MB).
 	MaxRequestBodySize = 1 * 1024 * 1024
 )
 
 // Input validation helpers
 
-// uuidRegex validates UUID format (used for path parameters)
+// uuidRegex validates UUID format (used for path parameters).
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // gcpClientEmailRegex matches a GCP service-account email.
@@ -51,7 +51,7 @@ var awsWebIdentityTokenFilePrefixes = []string{
 	"/var/run/secrets/kubernetes.io/serviceaccount/",
 }
 
-// validProviders are the allowed provider values
+// validProviders are the allowed provider values.
 var validProviders = map[string]bool{
 	"":      true, // empty is allowed (means all)
 	"all":   true,
@@ -64,7 +64,7 @@ var validProviders = map[string]bool{
 // Uppercase is rejected to prevent stored-XSS via mixed-case surprises and to keep names consistent.
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// regionNameRegex validates AWS/Azure/GCP region names - requires at least one character
+// regionNameRegex validates AWS/Azure/GCP region names - requires at least one character.
 var regionNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // validateGCPClientEmail returns a 400 error when gcp_client_email is non-empty
@@ -118,7 +118,7 @@ func validateAWSWebIdentityTokenFile(path string) error {
 		"/var/run/secrets/kubernetes.io/serviceaccount/)")
 }
 
-// validateProvider checks if a provider value is valid
+// validateProvider checks if a provider value is valid.
 func validateProvider(provider string) error {
 	if !validProviders[provider] {
 		return NewClientError(400, "invalid provider: must be aws, azure, gcp, or all")
@@ -204,7 +204,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateFlatPayload(credentialType, payload, gcpServiceAccountRequired, gcpServiceAccountOptional); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "service_account" {
+		if !payloadTypeMatches(payload, "service_account") {
 			return NewClientError(400, "gcp_service_account payload must have type=\"service_account\"")
 		}
 		return nil
@@ -212,7 +212,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateGCPWIFPayload(payload); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "external_account" {
+		if !payloadTypeMatches(payload, "external_account") {
 			return NewClientError(400, "gcp_workload_identity_config payload must have type=\"external_account\"")
 		}
 		return nil
@@ -220,6 +220,13 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 	// validCredentialTypes is the gate; if a new type slips past it without a
 	// schema entry here, that is a programming error worth surfacing.
 	return NewClientError(400, fmt.Sprintf("no payload schema defined for credential_type %q", credentialType))
+}
+
+// payloadTypeMatches returns true when payload["type"] is a non-empty string equal to want.
+// A missing or non-string "type" field returns false.
+func payloadTypeMatches(payload map[string]interface{}, want string) bool {
+	t, ok := payload["type"].(string)
+	return ok && t == want
 }
 
 // validateFlatPayload checks that every required key is present as a non-empty
@@ -304,18 +311,18 @@ func rejectUnknownKeys(credentialType string, payload map[string]interface{}, al
 // payloadDepth returns the maximum nesting depth of m, counting the top-level
 // map as depth 1. A nested map adds 1; non-map values do not.
 func payloadDepth(m map[string]interface{}, current int) int {
-	max := current
+	maxDepth := current
 	for _, v := range m {
 		if nested, ok := v.(map[string]interface{}); ok {
-			if d := payloadDepth(nested, current+1); d > max {
-				max = d
+			if d := payloadDepth(nested, current+1); d > maxDepth {
+				maxDepth = d
 			}
 		}
 	}
-	return max
+	return maxDepth
 }
 
-// validateServiceName checks if a service name is valid
+// validateServiceName checks if a service name is valid.
 func validateServiceName(service string) error {
 	// Empty is allowed for queries (means all services)
 	if service == "" {
@@ -334,7 +341,7 @@ func validateServiceName(service string) error {
 	return nil
 }
 
-// validateRegion checks if a region name is valid
+// validateRegion checks if a region name is valid.
 func validateRegion(region string) error {
 	// Empty is allowed for queries (means all regions)
 	if region == "" {
@@ -353,7 +360,7 @@ func validateRegion(region string) error {
 	return nil
 }
 
-// validateServicePath checks for path traversal attacks in service paths
+// validateServicePath checks for path traversal attacks in service paths.
 func validateServicePath(service string) error {
 	// Reject path traversal attempts
 	if strings.Contains(service, "..") {
@@ -379,7 +386,7 @@ func validateServicePath(service string) error {
 	return nil
 }
 
-// validateUUID checks if a string is a valid UUID
+// validateUUID checks if a string is a valid UUID.
 func validateUUID(id string) error {
 	if !uuidRegex.MatchString(id) {
 		return NewClientError(400, "invalid ID format: must be a valid UUID")
@@ -398,7 +405,7 @@ func validUUIDPtrOrNil(p *string) *string {
 	return p
 }
 
-// validateContentType checks if the Content-Type header is acceptable for the request
+// validateContentType checks if the Content-Type header is acceptable for the request.
 func validateContentType(req *events.LambdaFunctionURLRequest) error {
 	method := req.RequestContext.HTTP.Method
 	// Only POST/PUT/PATCH with bodies need content-type validation
@@ -432,7 +439,7 @@ func validateContentType(req *events.LambdaFunctionURLRequest) error {
 	return NewClientError(400, "unsupported Content-Type: must be application/json")
 }
 
-// validateRequestBodySize checks if the request body is within allowed limits
+// validateRequestBodySize checks if the request body is within allowed limits.
 func validateRequestBodySize(body string) error {
 	if len(body) > MaxRequestBodySize {
 		return NewClientError(400, fmt.Sprintf("request body too large: maximum size is %d bytes", MaxRequestBodySize))
@@ -608,7 +615,7 @@ func decodeBase64Password(encoded string) (string, error) {
 //
 // paramName is included in the error message so callers can distinguish
 // min_savings_usd vs min_savings_pct errors in client logs.
-func parseMinSavingsParam(raw string, paramName string) (float64, error) {
+func parseMinSavingsParam(raw, paramName string) (float64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
 		return 0, nil

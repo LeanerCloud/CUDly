@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for analytics endpoints.
-package api
+// Package apihttp provides the HTTP API handlers for analytics endpoints.
+package apihttp
 
 import (
 	"context"

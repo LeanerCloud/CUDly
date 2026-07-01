@@ -176,7 +176,7 @@ func TestSchedulerConfig(t *testing.T) {
 	mockPurchase := new(MockPurchaseManager)
 	mockEmail := new(MockEmailSender)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:     mockStore,
 		PurchaseManager: nil, // We'd use mockPurchase but types don't match in test
 		EmailSender:     nil, // We'd use mockEmail but types don't match in test
@@ -194,15 +194,24 @@ func TestSchedulerConfig(t *testing.T) {
 func TestNewScheduler(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://dashboard.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	assert.NotNil(t, scheduler)
 	assert.Equal(t, "https://dashboard.example.com", scheduler.dashboardURL)
+}
+
+func TestNewScheduler_NilConfigPanics(t *testing.T) {
+	// A nil config is a programming error: building a Scheduler with every
+	// dependency unset would only surface as a confusing nil deref later, so
+	// NewScheduler fails loud at construction.
+	assert.PanicsWithValue(t,
+		"scheduler: NewScheduler requires a non-nil *Config",
+		func() { NewScheduler(nil) })
 }
 
 func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
@@ -565,12 +574,12 @@ func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 func TestScheduler_Interface(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
-	cfg := SchedulerConfig{
+	cfg := Config{
 		ConfigStore:  mockStore,
 		DashboardURL: "https://test.example.com",
 	}
 
-	scheduler := NewScheduler(cfg)
+	scheduler := NewScheduler(&cfg)
 
 	// Verify scheduler has required fields
 	assert.NotNil(t, scheduler.config)
@@ -747,7 +756,7 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 }
@@ -776,7 +785,7 @@ func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 
@@ -800,7 +809,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
-	expected := config.RecommendationFilter{
+	expected := &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -815,7 +824,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider:   "aws",
 		Service:    "ec2",
 		Region:     "us-east-1",
@@ -833,7 +842,7 @@ func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
 	scheduler := &Scheduler{config: mockStore}
-	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -857,7 +866,7 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		cacheTTL: time.Nanosecond,
 	}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Give any (wrongly-spawned) goroutine time to hit the store; none
@@ -914,7 +923,7 @@ func TestScheduler_ListRecommendations_ColdStartSync(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
+	_, err := scheduler.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 
 	// Assert the cold-start path ran: GetGlobalConfig is only called by
@@ -948,7 +957,7 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
 		// Small sleep so concurrent workers genuinely overlap.
@@ -976,7 +985,7 @@ func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
 		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
 		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return nil, fmt.Errorf("cred error for %s", acct.ID)
 	}
 
@@ -1000,7 +1009,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
 		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	fn := func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		if acct.ID == "acct-bad" {
 			return nil, fmt.Errorf("transient")
 		}
@@ -1020,7 +1029,7 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 // correctly skips the all-failed error path.
 func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
-		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+		func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 			t.Fatalf("fn must not be called for zero-accounts input")
 			return nil, nil
 		})
@@ -1276,8 +1285,8 @@ func TestScheduler_ConvertRecommendations_IDUniqueness(t *testing.T) {
 	// "only Details.Engine differs" property holds at every level
 	// (Service / ResourceType already match across the pair).
 	cases := []struct {
-		name string
 		recs func() (common.Recommendation, common.Recommendation)
+		name string
 	}{
 		{
 			name: "term: 1yr vs 3yr (issue #188 — AWS 1yr recs were vanishing)",
@@ -1447,8 +1456,15 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
-// Test successful Azure recommendations
-func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
+// TestScheduler_CollectAzureRecommendations_AllAccountsFail pins the
+// fail-loud contract introduced by the recent provider changes: when every
+// enabled Azure account fails (here: DefaultAzureCredential is unavailable
+// in the test environment), collectAzureRecommendations must surface an
+// "all accounts failed" error rather than silently returning a partial /
+// empty result that would be merged into the aggregate as success.
+// The test validates the per-account loop runs without crashing AND that
+// the aggregate error contract holds.
+func TestScheduler_CollectAzureRecommendations_AllAccountsFail(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
@@ -1469,17 +1485,17 @@ func TestScheduler_CollectAzureRecommendations_Success(t *testing.T) {
 	}
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return(azureAccounts, nil)
 
-	// The managed_identity path will try DefaultAzureCredential which will
-	// fail in tests, so we expect an error log but no crash.
+	// The managed_identity path will try DefaultAzureCredential which fails
+	// in tests; with 1 enabled account, FailedCount == len(accounts) so the
+	// fan-out must return errAllAccountsFailed (no silent partial success).
 	scheduler := &Scheduler{
 		config: mockStore,
 	}
 
 	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
-	require.NoError(t, err)
-	// In test environment without Azure credentials, 0 recommendations is expected
-	// (the error is logged and skipped). The test validates the per-account loop runs.
-	_ = recs
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all 1 accounts failed")
+	assert.Nil(t, recs)
 }
 
 // Test GCP recommendations with no accounts — should skip gracefully
@@ -1606,8 +1622,8 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 // fields are set by each test case to drive the GetCallerIdentity response
 // shape (success with an account ID, or an error).
 type fakeSTSClient struct {
-	accountID string
 	err       error
+	accountID string
 }
 
 func (f *fakeSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerIdentityInput, _ ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {

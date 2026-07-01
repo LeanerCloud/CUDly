@@ -12,12 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockSNSClient is a mock implementation of SNS client
-type MockSNSClient struct {
+// SNSClient is a mock implementation of SNS client.
+type SNSClient struct {
 	mock.Mock
 }
 
-func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, opts ...func(*sns.Options)) (*sns.PublishOutput, error) {
+func (m *SNSClient) Publish(ctx context.Context, input *sns.PublishInput, opts ...func(*sns.Options)) (*sns.PublishOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -25,12 +25,12 @@ func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, op
 	return args.Get(0).(*sns.PublishOutput), args.Error(1)
 }
 
-// MockSESClient is a mock implementation of SES client
-type MockSESClient struct {
+// SESClient is a mock implementation of SES client.
+type SESClient struct {
 	mock.Mock
 }
 
-func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
+func (m *SESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, opts ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -38,7 +38,7 @@ func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInp
 	return args.Get(0).(*sesv2.SendEmailOutput), args.Error(1)
 }
 
-func (m *MockSESClient) GetAccount(ctx context.Context, input *sesv2.GetAccountInput, opts ...func(*sesv2.Options)) (*sesv2.GetAccountOutput, error) {
+func (m *SESClient) GetAccount(ctx context.Context, input *sesv2.GetAccountInput, opts ...func(*sesv2.Options)) (*sesv2.GetAccountOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -46,7 +46,7 @@ func (m *MockSESClient) GetAccount(ctx context.Context, input *sesv2.GetAccountI
 	return args.Get(0).(*sesv2.GetAccountOutput), args.Error(1)
 }
 
-func (m *MockSESClient) GetEmailIdentity(ctx context.Context, input *sesv2.GetEmailIdentityInput, opts ...func(*sesv2.Options)) (*sesv2.GetEmailIdentityOutput, error) {
+func (m *SESClient) GetEmailIdentity(ctx context.Context, input *sesv2.GetEmailIdentityInput, opts ...func(*sesv2.Options)) (*sesv2.GetEmailIdentityOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -54,7 +54,7 @@ func (m *MockSESClient) GetEmailIdentity(ctx context.Context, input *sesv2.GetEm
 	return args.Get(0).(*sesv2.GetEmailIdentityOutput), args.Error(1)
 }
 
-func (m *MockSESClient) CreateEmailIdentity(ctx context.Context, input *sesv2.CreateEmailIdentityInput, opts ...func(*sesv2.Options)) (*sesv2.CreateEmailIdentityOutput, error) {
+func (m *SESClient) CreateEmailIdentity(ctx context.Context, input *sesv2.CreateEmailIdentityInput, opts ...func(*sesv2.Options)) (*sesv2.CreateEmailIdentityOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -65,13 +65,13 @@ func (m *MockSESClient) CreateEmailIdentity(ctx context.Context, input *sesv2.Cr
 // testSender creates a sender with mock clients for testing
 type testSender struct {
 	*Sender
-	mockSNS *MockSNSClient
-	mockSES *MockSESClient
+	mockSNS *SNSClient
+	mockSES *SESClient
 }
 
 func newTestSender(topicARN, fromEmail string) *testSender {
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
+	mockSNS := new(SNSClient)
+	mockSES := new(SESClient)
 
 	return &testSender{
 		Sender: &Sender{
@@ -208,7 +208,7 @@ func TestTemplates_NewRecommendations(t *testing.T) {
 	}
 
 	// Create sender with mock that expects the call
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil).Once()
 
@@ -369,7 +369,7 @@ func TestTemplateContents(t *testing.T) {
 }
 
 func TestSender_SendNotification_Success(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil)
 
@@ -398,7 +398,7 @@ func TestSender_SendNotification_NilClient(t *testing.T) {
 }
 
 func TestSender_SendNotification_Error(t *testing.T) {
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(nil, assert.AnError)
 
@@ -414,7 +414,7 @@ func TestSender_SendNotification_Error(t *testing.T) {
 }
 
 func TestSender_SendToEmail_Success(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount is called to check sandbox mode - return production mode (not sandbox)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
@@ -446,7 +446,7 @@ func TestSender_SendToEmail_NilClient(t *testing.T) {
 }
 
 func TestSender_SendToEmail_Error(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount is called first - return production mode (not sandbox)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
@@ -465,8 +465,8 @@ func TestSender_SendToEmail_Error(t *testing.T) {
 }
 
 func TestNewSenderWithClients(t *testing.T) {
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
+	mockSNS := new(SNSClient)
+	mockSES := new(SESClient)
 
 	cfg := SenderConfig{
 		TopicARN:     "arn:aws:sns:us-east-1:123456789012:topic",
@@ -503,7 +503,7 @@ func TestNewSender_Success(t *testing.T) {
 
 // Test SendToEmail sandbox mode flows
 func TestSender_SendToEmail_SandboxModeVerified(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount returns sandbox mode (ProductionAccessEnabled = false)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
@@ -525,7 +525,7 @@ func TestSender_SendToEmail_SandboxModeVerified(t *testing.T) {
 }
 
 func TestSender_SendToEmail_SandboxModeNotVerified(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount returns sandbox mode
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
@@ -550,7 +550,7 @@ func TestSender_SendToEmail_SandboxModeNotVerified(t *testing.T) {
 }
 
 func TestSender_SendToEmail_SandboxCheckError(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount fails
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(nil, assert.AnError)
@@ -571,7 +571,7 @@ func TestSender_SendToEmail_SandboxCheckError(t *testing.T) {
 }
 
 func TestSender_SendToEmail_EmailIdentityNotFound(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount returns sandbox mode
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
@@ -597,7 +597,7 @@ func TestSender_SendToEmail_EmailIdentityNotFound(t *testing.T) {
 }
 
 func TestSender_SendToEmail_CreateVerificationError(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	// GetAccount returns sandbox mode
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
@@ -635,7 +635,7 @@ func TestSender_isInSandbox_NilClient(t *testing.T) {
 }
 
 func TestSender_isInSandbox_ProductionMode(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 
@@ -652,7 +652,7 @@ func TestSender_isInSandbox_ProductionMode(t *testing.T) {
 }
 
 func TestSender_isInSandbox_SandboxMode(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
 
@@ -682,7 +682,7 @@ func TestSender_isEmailVerified_NilClient(t *testing.T) {
 }
 
 func TestSender_isEmailVerified_Verified(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.GetEmailIdentityInput")).
 		Return(&sesv2.GetEmailIdentityOutput{VerifiedForSendingStatus: true}, nil)
 
@@ -699,7 +699,7 @@ func TestSender_isEmailVerified_Verified(t *testing.T) {
 }
 
 func TestSender_isEmailVerified_NotVerified(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.GetEmailIdentityInput")).
 		Return(&sesv2.GetEmailIdentityOutput{VerifiedForSendingStatus: false}, nil)
 
@@ -716,7 +716,7 @@ func TestSender_isEmailVerified_NotVerified(t *testing.T) {
 }
 
 func TestSender_isEmailVerified_NotFound(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.GetEmailIdentityInput")).
 		Return(nil, assert.AnError)
 
@@ -747,7 +747,7 @@ func TestSender_createVerificationRequest_NilClient(t *testing.T) {
 }
 
 func TestSender_createVerificationRequest_Success(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("CreateEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.CreateEmailIdentityInput")).
 		Return(&sesv2.CreateEmailIdentityOutput{}, nil)
 
@@ -763,7 +763,7 @@ func TestSender_createVerificationRequest_Success(t *testing.T) {
 }
 
 func TestSender_createVerificationRequest_Error(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("CreateEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.CreateEmailIdentityInput")).
 		Return(nil, assert.AnError)
 
@@ -803,7 +803,7 @@ func TestNewSenderWithContext_Success(t *testing.T) {
 // are populated with the expected substrings, and the From address is
 // the configured FROM_EMAIL (not a hardcoded literal).
 func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 
@@ -860,7 +860,7 @@ func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
 // to single-part text — the existing code path stays valid for callers
 // that haven't been upgraded.
 func TestSender_SendToEmailWithCCMultipart_FallsBackWhenHTMLEmpty_Issue287(t *testing.T) {
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	var captured *sesv2.SendEmailInput
@@ -889,7 +889,7 @@ func TestSender_SendToEmailWithCCMultipart_FallsBackWhenHTMLEmpty_Issue287(t *te
 // broadcast topic, regardless of how it got there.
 func TestSendNotification_RejectsTokenBearingBody(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	// No Publish calls expected — the guard fires before the client is touched.
 	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 
@@ -919,7 +919,7 @@ func TestSendNotification_RejectsTokenBearingBody(t *testing.T) {
 // broadcast body that contains no token reaches SNS normally.
 func TestSendNotification_AllowsTokenFreeBody(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(&sns.PublishOutput{MessageId: aws.String("msg-ok")}, nil).Once()
 	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
@@ -942,11 +942,11 @@ func TestSendNotification_AllowsTokenFreeBody(t *testing.T) {
 // SNS subscriber.
 func TestSendScheduledPurchaseNotification_UsesSESNotSNS(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	// SNS Publish must NOT be called.
 	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil).Once()
 	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
@@ -976,8 +976,8 @@ func TestSendScheduledPurchaseNotification_UsesSESNotSNS(t *testing.T) {
 // omitting RecipientEmail returns ErrNoRecipient, not a silent broadcast.
 func TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
+	mockSNS := new(SNSClient)
+	mockSES := new(SESClient)
 	// Neither SNS Publish nor SES SendEmail should be called.
 	t.Cleanup(func() {
 		mockSNS.AssertExpectations(t)
@@ -1009,11 +1009,11 @@ func TestSendScheduledPurchaseNotification_ErrNoRecipientWhenEmpty(t *testing.T)
 // every SNS subscriber, allowing unauthorised spend approval.
 func TestSendRIExchangePendingApproval_UsesSESNotSNS(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
+	mockSNS := new(SNSClient)
 	// SNS Publish must NOT be called.
 	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 
-	mockSES := new(MockSESClient)
+	mockSES := new(SESClient)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil).Once()
 	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
@@ -1053,8 +1053,8 @@ func TestSendRIExchangePendingApproval_UsesSESNotSNS(t *testing.T) {
 // omitting RecipientEmail returns ErrNoRecipient, not a silent broadcast.
 func TestSendRIExchangePendingApproval_ErrNoRecipientWhenEmpty(t *testing.T) {
 	t.Parallel()
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
+	mockSNS := new(SNSClient)
+	mockSES := new(SESClient)
 	// Neither SNS Publish nor SES SendEmail should be called.
 	t.Cleanup(func() {
 		mockSNS.AssertExpectations(t)
@@ -1088,7 +1088,7 @@ func TestSendNotification_SubjectSanitizedAndTruncated(t *testing.T) {
 
 	t.Run("newline_stripped", func(t *testing.T) {
 		var captured *sns.PublishInput
-		mockSNS := new(MockSNSClient)
+		mockSNS := new(SNSClient)
 		mockSNS.On("Publish", mock.Anything, mock.MatchedBy(func(in *sns.PublishInput) bool {
 			captured = in
 			return true
@@ -1109,7 +1109,7 @@ func TestSendNotification_SubjectSanitizedAndTruncated(t *testing.T) {
 	t.Run("long_subject_truncated", func(t *testing.T) {
 		const longSubject = "AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA AAAAAAAAAA"
 		var captured *sns.PublishInput
-		mockSNS := new(MockSNSClient)
+		mockSNS := new(SNSClient)
 		mockSNS.On("Publish", mock.Anything, mock.MatchedBy(func(in *sns.PublishInput) bool {
 			captured = in
 			return true

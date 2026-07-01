@@ -21,7 +21,7 @@ type mockSuppressionStore struct {
 	sups []config.PurchaseSuppression
 }
 
-func (m *mockSuppressionStore) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *mockSuppressionStore) ListStoredRecommendations(_ context.Context, _ *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return m.recs, nil
 }
 func (m *mockSuppressionStore) ListActiveSuppressions(_ context.Context) ([]config.PurchaseSuppression, error) {
@@ -78,7 +78,7 @@ func TestApplySuppressions_SubtractsCount(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, 2, recs[0].Count, "5 - 3 = 2")
@@ -106,7 +106,7 @@ func TestApplySuppressions_DropsFullyCoveredRecs(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, recs, "rec fully covered by suppression should be dropped")
 }
@@ -132,7 +132,7 @@ func TestApplySuppressions_CumulativeAcrossExecutions(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, 3, recs[0].Count, "10 - 3 - 4 = 3")
@@ -165,7 +165,7 @@ func TestApplySuppressions_EngineDifferentiates(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, 5, recs[0].Count, "engine mismatch → no subtraction")
@@ -191,7 +191,7 @@ func TestApplySuppressions_NilAccountIDNormalised(t *testing.T) {
 	}
 	s := &Scheduler{config: store}
 
-	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	recs, err := s.ListRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Equal(t, 3, recs[0].Count, "5 - 2 = 3 (nil account matched to empty-string suppression)")

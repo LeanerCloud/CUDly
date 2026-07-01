@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
@@ -144,7 +144,7 @@ func TestLambdaResponseToHTTP_InvalidBase64(t *testing.T) {
 
 func TestHandleHTTPRequest(t *testing.T) {
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	req := httptest.NewRequest("GET", "/api/health", nil)
@@ -158,7 +158,7 @@ func TestHandleHTTPRequest(t *testing.T) {
 
 func TestHandleHTTPRequest_WithBody(t *testing.T) {
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	body := bytes.NewReader([]byte(`{"test":"data"}`))
@@ -619,7 +619,7 @@ func TestInitConfigStore(t *testing.T) {
 
 func TestHandleHTTPRequest_EnsureDBError(t *testing.T) {
 	app := &Application{
-		API:      api.NewHandler(api.HandlerConfig{}),
+		API:      api.NewHandler(&api.HandlerConfig{}),
 		dbConfig: &database.Config{Host: "unreachable"},
 		dbErr:    fmt.Errorf("connection failed"),
 	}
@@ -634,7 +634,7 @@ func TestHandleHTTPRequest_EnsureDBError(t *testing.T) {
 
 func TestHandleLambdaEvent_EnsureDBError(t *testing.T) {
 	app := &Application{
-		API:      api.NewHandler(api.HandlerConfig{}),
+		API:      api.NewHandler(&api.HandlerConfig{}),
 		dbConfig: &database.Config{Host: "unreachable"},
 		dbErr:    fmt.Errorf("connection failed"),
 	}

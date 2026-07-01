@@ -48,7 +48,7 @@ func (c *AWSCredentials) String() string { return "[REDACTED AWS CREDENTIALS]" }
 
 // AzureCredentials holds resolved Azure service principal credentials.
 type AzureCredentials struct {
-	ClientSecret string
+	ClientSecret string //nolint:gosec // G117: field must carry the resolved Azure client secret to build the token credential; String() redacts it (never logged)
 }
 
 // String returns a redacted representation.
@@ -74,7 +74,7 @@ type STSClientFactory func(provider aws.CredentialsProvider) STSClient
 // AWSResolveOptions holds optional dependencies for the AWS credential
 // resolver. The bastion path needs both AccountLookup and STSClientFactory to
 // self-resolve correctly; without them, bastion mode falls back to the
-// pre-self-loading behaviour (trusts the caller-supplied STS client) for
+// pre-self-loading behavior (trusts the caller-supplied STS client) for
 // backward compatibility.
 //
 // AmbientProvider, when set, is returned for role_arn accounts whose
@@ -206,7 +206,7 @@ func resolveRoleARNProvider(
 // at depth 1 to prevent loops.
 //
 // Legacy path: when either option is nil, the resolver falls back to the old
-// behaviour and trusts that the caller-supplied stsClient already carries
+// behavior and trusts that the caller-supplied stsClient already carries
 // bastion credentials. This preserves backward compatibility with callers that
 // have not yet been updated to wire the lookup/factory.
 func resolveBastionProvider(
@@ -238,7 +238,7 @@ func resolveBastionProvider(
 	}
 	// Recursively resolve the bastion's own credentials. Pass empty opts to
 	// guarantee the recursive call cannot trigger bastion mode (already
-	// guarded above by the AWSAuthMode check, but defence in depth).
+	// guarded above by the AWSAuthMode check, but defense in depth).
 	bastionCreds, err := ResolveAWSCredentialProviderWithOpts(ctx, bastion, store, stsClient, AWSResolveOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve bastion %s creds: %w", bastion.ID, err)
@@ -289,7 +289,7 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: no client secret stored for account %s", account.ID)
 	}
 	var payload struct {
-		ClientSecret string `json:"client_secret"`
+		ClientSecret string `json:"client_secret"` //nolint:gosec // G117: local unmarshal target for the stored Azure client secret; transient, not logged
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("credentials: parse azure secret for account %s: %w", account.ID, err)
@@ -405,10 +405,18 @@ func resolveGCPWIFCredential(
 	opts GCPResolveOptions,
 ) (oauth2.TokenSource, error) {
 	// Peek at the stored WIF JSON first — absent means this is a
-	// federated (secret-free) account.
+	// federated (secret-free) account. LoadRaw already maps not-found to
+	// (nil, nil), so any non-nil error here is a real store failure (DB
+	// connectivity, decrypt) that must be surfaced rather than silently
+	// collapsed to "no credential": otherwise a transient failure would
+	// silently fall back to the federated path and mask the outage.
 	var raw []byte
 	if store != nil {
-		raw, _ = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		var loadErr error
+		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		if loadErr != nil {
+			return nil, fmt.Errorf("credentials: load GCP WIF config for account %s: %w", account.ID, loadErr)
+		}
 	}
 
 	issuer := opts.IssuerURL
@@ -443,9 +451,44 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope)
+	// Detect the credential type from the JSON's "type" discriminator and load
+	// it with the type-pinned google loader. Both a service-account key
+	// ("service_account") and a workload-identity-federation config
+	// ("external_account") are accepted, since loadStoredGCPTokenSource serves
+	// both the gcp_service_account and legacy WIF credential paths.
+	credKind, err := detectGCPCredentialsType(raw)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: detect gcp credential type for account %s: %w", account.ID, err)
+	}
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(ctx, raw, credKind, google.CredentialsParams{
+		Scopes: []string{gcpCloudPlatformScope},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}
 	return creds.TokenSource, nil
+}
+
+// detectGCPCredentialsType reads the "type" discriminator from a GCP credential
+// JSON blob and maps it to the google.CredentialsType the type-pinned loader
+// expects. Only the two kinds CUDly stores are accepted: a service-account key
+// ("service_account") and a workload-identity-federation config
+// ("external_account"). Any other type is rejected so an unexpected credential
+// shape can never be loaded unintentionally.
+func detectGCPCredentialsType(raw []byte) (google.CredentialsType, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return "", fmt.Errorf("parse credential type field: %w", err)
+	}
+	switch header.Type {
+	case string(google.ServiceAccount):
+		return google.ServiceAccount, nil
+	case string(google.ExternalAccount):
+		return google.ExternalAccount, nil
+	default:
+		return "", fmt.Errorf("unsupported gcp credential type %q (want %q or %q)",
+			header.Type, google.ServiceAccount, google.ExternalAccount)
+	}
 }

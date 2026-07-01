@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -1821,8 +1821,12 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	}
 	before := summarizePurchaseHistory(baseline)
 
-	// After: same rows plus one cancelled execution (the pending that got cancelled).
-	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
+	// After: same rows plus one canceled execution (the pending that got
+	// canceled). Build on a fresh slice so the append never aliases baseline's
+	// backing array (which the before-snapshot above still reflects).
+	withCancelled := make([]config.PurchaseHistoryRecord, 0, len(baseline)+1)
+	withCancelled = append(withCancelled, baseline...)
+	withCancelled = append(withCancelled, config.PurchaseHistoryRecord{
 		Status:           "cancelled",
 		UpfrontCost:      999.0,
 		EstimatedSavings: 99.0,

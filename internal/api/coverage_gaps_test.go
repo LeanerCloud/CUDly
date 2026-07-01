@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // coverage_gaps_test.go — additional tests to push internal/api coverage above 80%.
 // Targets: parseAccountIDs, redactEmail, mergeServiceConfig, checkRateLimit,

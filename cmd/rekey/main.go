@@ -18,8 +18,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
@@ -40,9 +38,9 @@ func main() {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-
-	if err := run(ctx); err != nil {
+	err := run(ctx)
+	cancel()
+	if err != nil {
 		log.Fatalf("rekey: %v", err)
 	}
 }
@@ -175,13 +173,15 @@ func rekeyOne(ctx context.Context, db *database.Connection, id, blob string, zer
 		log.Printf("rekey: encrypt id=%s: %v", id, err)
 		return outcomeErrored
 	}
-	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		log.Printf("rekey: begin tx id=%s: %v", id, err)
 		return outcomeErrored
 	}
 	if _, err := tx.Exec(ctx, `UPDATE account_credentials SET encrypted_blob = $1 WHERE id = $2`, newBlob, id); err != nil {
-		_ = tx.Rollback(ctx)
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			log.Printf("rekey: rollback id=%s: %v", id, rbErr)
+		}
 		log.Printf("rekey: update id=%s: %v", id, err)
 		return outcomeErrored
 	}

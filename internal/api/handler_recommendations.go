@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -37,16 +37,16 @@ import (
 // min_savings_pct: effective savings percentage floor (0-100 scale).
 // Both are optional; absent or "0" means no floor. Fractions are rejected (a
 // user typing "30%" expects a percentage, not $30.5).
-func parseRecommendationFilter(params map[string]string) (config.RecommendationFilter, error) {
+func parseRecommendationFilter(params map[string]string) (*config.RecommendationFilter, error) {
 	// Validate input parameters to prevent injection attacks.
 	if err := validateProvider(params["provider"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if err := validateServiceName(params["service"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if err := validateRegion(params["region"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 
 	// parseAccountIDs splits, trims, and UUID-validates the comma-separated
@@ -55,22 +55,22 @@ func parseRecommendationFilter(params map[string]string) (config.RecommendationF
 	// MaxAccountIDsPerRequest (200). See validation.go::parseAccountIDs.
 	accountIDs, err := parseAccountIDs(params["account_ids"])
 	if err != nil {
-		return config.RecommendationFilter{}, NewClientError(400, err.Error())
+		return nil, NewClientError(400, err.Error())
 	}
 
 	minSavingsUSD, err := parseMinSavingsParam(params["min_savings_usd"], "min_savings_usd")
 	if err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	minSavingsPct, err := parseMinSavingsParam(params["min_savings_pct"], "min_savings_pct")
 	if err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if minSavingsPct < 0 || minSavingsPct > 100 {
-		return config.RecommendationFilter{}, NewClientError(400, "min_savings_pct must be between 0 and 100")
+		return nil, NewClientError(400, "min_savings_pct must be between 0 and 100")
 	}
 
-	return config.RecommendationFilter{
+	return &config.RecommendationFilter{
 		Provider:      params["provider"],
 		Service:       params["service"],
 		Region:        params["region"],

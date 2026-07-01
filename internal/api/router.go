@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -724,7 +724,7 @@ func (r *Router) healthCheckHandler(ctx context.Context, req *events.LambdaFunct
 }
 
 func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getPublicInfo(ctx, req)
+	return r.h.getPublicInfo(ctx, req), nil
 }
 
 func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
@@ -732,7 +732,7 @@ func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFuncti
 }
 
 func (r *Router) getDeploymentInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getDeploymentInfo(ctx, req)
+	return r.h.getDeploymentInfo(ctx, req), nil
 }
 
 func (r *Router) docsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

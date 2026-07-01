@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/CUDly/internal/api"
+	api "github.com/LeanerCloud/CUDly/internal/api"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/server/scheduledauth"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
@@ -334,7 +334,7 @@ func TestHandleScheduledHTTP(t *testing.T) {
 
 func TestCreateHTTPServer(t *testing.T) {
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	t.Run("server addr and timeouts", func(t *testing.T) {
@@ -350,7 +350,7 @@ func TestCreateHTTPServer(t *testing.T) {
 	t.Run("routes respond", func(t *testing.T) {
 		// Give app enough state for health check to pass
 		healthyApp := &Application{
-			API:     api.NewHandler(api.HandlerConfig{}),
+			API:     api.NewHandler(&api.HandlerConfig{}),
 			Config:  &mockConfigStoreForHealth{},
 			Auth:    createHealthyAuthService(),
 			Version: "test",
@@ -390,7 +390,7 @@ func TestHTTPTransportServesOIDCEndpoints(t *testing.T) {
 	// A nil signer means HandleOIDC returns a 404 JSON body rather than the
 	// real discovery document -- but critically it is *JSON* and the path is
 	// *handled* rather than falling through to the SPA/404 fallback.
-	apiHandler := api.NewHandler(api.HandlerConfig{})
+	apiHandler := api.NewHandler(&api.HandlerConfig{})
 	app := &Application{
 		API: apiHandler,
 	}
@@ -426,7 +426,7 @@ func TestHTTPTransportServesOIDCEndpoints(t *testing.T) {
 // api.Handler.HandleOIDC and returns JSON (not HTML).
 func TestHandleOIDCHTTP(t *testing.T) {
 	app := &Application{
-		API: api.NewHandler(api.HandlerConfig{}),
+		API: api.NewHandler(&api.HandlerConfig{}),
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/oidc/.well-known/openid-configuration", nil)

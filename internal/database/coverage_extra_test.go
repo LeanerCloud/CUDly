@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -395,7 +394,7 @@ func TestConnectionBeginTx_Fails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := conn.BeginTx(ctx, pgx.TxOptions{})
+	_, err := conn.BeginTx(ctx, nil)
 	assert.Error(t, err)
 }
 

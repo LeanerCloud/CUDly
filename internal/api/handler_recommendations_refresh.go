@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -58,12 +59,6 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, err
 	}
 
-	// Read current freshness so we can include last_collected_at in the 202 body.
-	freshness, err := h.config.GetRecommendationsFreshness(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read freshness: %w", err)
-	}
-
 	// Atomically mark collection as started. Returns false (409) if another
 	// collection is already in flight (started_at set within the last 5 minutes).
 	ok, err := h.config.MarkCollectionStarted(ctx)
@@ -74,7 +69,9 @@ func (h *Handler) postRefreshRecommendations(ctx context.Context, req *events.La
 		return nil, NewClientError(409, "recommendation collection already in progress; try again in a few minutes")
 	}
 
-	freshness, err = h.runMarkedCollection(ctx)
+	// runMarkedCollection re-reads freshness after the trigger, so the value
+	// used for the 202 body reflects the started_at this caller just recorded.
+	freshness, err := h.runMarkedCollection(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +104,9 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
 	if schedulerARN != "" {
 		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
-			_ = h.config.ClearCollectionStarted(ctx)
+			if clearErr := h.config.ClearCollectionStarted(ctx); clearErr != nil {
+				logging.Warnf("runMarkedCollection: failed to clear collection started marker: %v", clearErr)
+			}
 			return nil, fmt.Errorf("failed to trigger async collection: %w", invokeErr)
 		}
 		freshness, err := h.config.GetRecommendationsFreshness(ctx)
@@ -130,7 +129,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 
 // asyncInvokeSelf fires an InvocationType=Event invoke of the given Lambda
 // function ARN with the EventBridge-style payload that handleLambdaScheduledEvent
-// recognises as a "collect recommendations" job. The call returns immediately;
+// recognizes as a "collect recommendations" job. The call returns immediately;
 // the Lambda runtime delivers the event to the next available container
 // (which may be this same container's next invocation).
 func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error {
@@ -156,10 +155,14 @@ func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error
 	// internal/server/lambda.go (which checks Source == "aws.events" ||
 	// Action != "") classifies this consistently with EventBridge cron
 	// deliveries that already exercise this code path.
-	payload, _ := json.Marshal(map[string]string{
+	payload, marshalErr := json.Marshal(map[string]string{
 		"source": "aws.events",
 		"action": "collect_recommendations",
 	})
+	if marshalErr != nil {
+		// This is a programming error: a const map[string]string cannot fail to marshal.
+		return fmt.Errorf("asyncInvokeSelf: marshal payload: %w", marshalErr)
+	}
 
 	_, err = invoker.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   aws.String(functionARN),
@@ -186,45 +189,4 @@ func (h *Handler) getLambdaInvoker(ctx context.Context) (LambdaInvokerInterface,
 		return nil, fmt.Errorf("load AWS config: %w", h.awsCfgErr)
 	}
 	return lambda.NewFromConfig(h.awsCfg), nil
-}
-
-// triggerColdStartCollect is the GET /api/recommendations cold-start path.
-// It is called from ListRecommendations when last_collected_at is nil AND
-// last_collection_started_at is nil (no collection running). It fires an
-// async self-invoke (Lambda mode) or a synchronous collect (HTTP mode) and
-// returns the freshness state after the trigger so the caller can return an
-// empty list to the user with the correct "collecting" indicator.
-//
-// The returned freshness may have LastCollectionStartedAt set (async) or
-// LastCollectedAt set (sync). Callers should treat a non-nil
-// LastCollectionStartedAt as "collection in progress".
-func (h *Handler) triggerColdStartCollect(ctx context.Context) (*config.RecommendationsFreshness, error) {
-	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
-	if schedulerARN != "" {
-		// Atomic mark. ok=false means another caller already marked it — we
-		// MUST NOT trigger a second async invoke or call ClearCollectionStarted
-		// (that would wipe the other caller's in-flight marker). Returning the
-		// current freshness lets the caller see the in-flight collection and
-		// poll for completion.
-		ok, err := h.config.MarkCollectionStarted(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to mark cold-start collection: %w", err)
-		}
-		if !ok {
-			return h.config.GetRecommendationsFreshness(ctx)
-		}
-		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
-			// Roll back ONLY because we own the marker (ok==true above).
-			_ = h.config.ClearCollectionStarted(ctx)
-			return nil, fmt.Errorf("failed to trigger cold-start collect: %w", invokeErr)
-		}
-		// Re-read freshness to return the started_at value.
-		return h.config.GetRecommendationsFreshness(ctx)
-	}
-
-	// HTTP / non-Lambda mode: synchronous collect.
-	if _, err := h.scheduler.CollectRecommendations(ctx); err != nil {
-		return nil, fmt.Errorf("cold-start collect failed: %w", err)
-	}
-	return h.config.GetRecommendationsFreshness(ctx)
 }

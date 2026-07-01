@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: HMAC-SHA1 is the RFC 6238 TOTP default algorithm, not used for a collision-sensitive purpose
 	"crypto/subtle"
 	"encoding/base32"
 	"fmt"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -85,7 +86,7 @@ func verifyTOTP(secret, code string) bool {
 	return valid == 1
 }
 
-// generateTOTP generates a TOTP code for the given counter
+// generateTOTP generates a TOTP code for the given counter.
 func generateTOTP(secret string, counter int64) string {
 	// Decode base32 secret
 	secretBytes, err := base32Decode(secret)
@@ -265,12 +266,12 @@ func (s *Service) consumeRecoveryCode(user *User, entered string) bool {
 // secret, so a stateless client-side carrier (signed token) is not
 // needed.
 type MFASetupResult struct {
-	Secret          string
+	Secret          string //nolint:gosec // G117: field carries the freshly-generated TOTP secret returned to the enrolling user; transient, not persisted in plaintext or logged
 	ProvisioningURI string
 }
 
 // MFASetup begins an MFA enrollment for a user. The caller must
-// re-verify the user's password (defence-in-depth against a session
+// re-verify the user's password (defense-in-depth against a session
 // token being lifted from another tab). Returns the freshly-generated
 // secret + provisioning URI; persists the secret in the user's
 // pending fields with a short expiry. Does NOT flip MFAEnabled —
@@ -346,7 +347,9 @@ func (s *Service) validatePendingMFAEnrollment(ctx context.Context, user *User, 
 	if time.Now().After(*user.MFAPendingSecretExpiresAt) {
 		user.MFAPendingSecret = ""
 		user.MFAPendingSecretExpiresAt = nil
-		_ = s.store.UpdateUser(ctx, user)
+		if updateErr := s.store.UpdateUser(ctx, user); updateErr != nil {
+			logging.Warnf("service_mfa: failed to clear expired MFA enrollment for user: %v", updateErr)
+		}
 		return fmt.Errorf("%w", ErrMFAEnrollmentExpired)
 	}
 	if !verifyTOTP(user.MFAPendingSecret, code) {
@@ -377,8 +380,8 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	if err != nil || user == nil {
 		return nil, fmt.Errorf("%w", ErrMFAAuthFailed)
 	}
-	if err := s.validatePendingMFAEnrollment(ctx, user, code); err != nil {
-		return nil, err
+	if errX := s.validatePendingMFAEnrollment(ctx, user, code); errX != nil {
+		return nil, errX
 	}
 
 	plaintext, hashes, err := s.generateAndHashRecoveryCodes()
@@ -422,7 +425,7 @@ func (s *Service) disableMFAAlreadyOff(ctx context.Context, user *User) error {
 
 // MFADisable turns off MFA for a user. Requires both the current
 // password AND a fresh proof-of-possession (either a TOTP code or
-// an unused recovery code). Defence-in-depth: a stolen session
+// an unused recovery code). Defense-in-depth: a stolen session
 // alone shouldn't disable MFA, and a stolen authenticator alone
 // shouldn't either.
 //

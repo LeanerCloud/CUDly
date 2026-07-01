@@ -10,12 +10,12 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// CleanupEvent represents the input to the cleanup function
+// CleanupEvent represents the input to the cleanup function.
 type CleanupEvent struct {
 	DryRun bool `json:"dryRun,omitempty"`
 }
 
-// CleanupResult represents the cleanup operation results
+// CleanupResult represents the cleanup operation results.
 type CleanupResult struct {
 	SessionsDeleted   int64 `json:"sessionsDeleted"`
 	ExecutionsDeleted int64 `json:"executionsDeleted"`
@@ -75,7 +75,9 @@ func deleteExpired(ctx context.Context, db *database.Connection, now time.Time, 
 	}
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback(ctx)
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				log.Printf("cleanup-lambda: rollback failed: %v", rbErr)
+			}
 		}
 	}()
 

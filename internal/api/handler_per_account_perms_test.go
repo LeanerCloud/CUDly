@@ -1,4 +1,4 @@
-package api
+package apihttp
 
 // TestPerAccountPerms is the comprehensive regression suite for per-account
 // permission scoping across every endpoint that returns or accepts
@@ -838,7 +838,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", ctx, &config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -909,7 +909,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", ctx, &config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)

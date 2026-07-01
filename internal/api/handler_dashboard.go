@@ -1,5 +1,5 @@
-// Package api provides the HTTP API handlers for the CUDly dashboard.
-package api
+// Package apihttp provides the HTTP API handlers for the CUDly dashboard.
+package apihttp
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	// without this the commitment KPIs (ActiveCommitments / CommittedMonthly /
 	// CurrentCoverage / YTDSavings) would leak other accounts' data to a scoped
 	// user. Unrestricted / admin sessions resolve to an empty scope and keep the
-	// all-accounts behaviour.
+	// all-accounts behavior.
 	if len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
 		accountUUIDs, accountExternalIDsByProvider, err = h.resolveAllowedAccountScope(ctx, session)
 		if err != nil {
@@ -42,7 +42,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		}
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(ctx, &config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[s
 // explicit filter).
 //
 // Returns (nil, nil, nil) for unrestricted / admin sessions so the caller keeps
-// the all-accounts behaviour. A restricted session that matches no account
+// the all-accounts behavior. A restricted session that matches no account
 // resolves to a non-nil-but-empty UUID set (a sentinel that selects no rows),
 // so a scoped user with zero accessible accounts sees zeroed KPIs rather than
 // everyone's data.
@@ -150,7 +150,8 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 	// Non-nil empty slice: a sentinel meaning "scoped to zero accounts" so the
 	// dual-column predicate matches no rows (never falls back to all-accounts).
 	allowedUUIDs := []string{}
-	for _, a := range accounts {
+	for i := range accounts {
+		a := &accounts[i]
 		if auth.MatchesAccount(allowed, a.ID, a.Name) {
 			allowedUUIDs = append(allowedUUIDs, a.ID)
 		}
@@ -173,13 +174,14 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 
 	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := recs[:0]
-	for _, rec := range recs {
+	for i := range recs {
+		rec := &recs[i]
 		if rec.CloudAccountID == nil {
 			continue
 		}
 		id := *rec.CloudAccountID
 		if auth.MatchesAccount(allowed, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, *rec)
 		}
 	}
 	return filtered, nil
@@ -196,7 +198,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 // payment) fan-out does not over-report savings; details in the function body.
 //
 // Recs without a CloudAccountID and recs whose triple has no entry in the
-// map all count at full weight — this matches the pre-#196 behaviour for
+// map all count at full weight — this matches the pre-#196 behavior for
 // un-configured accounts. Zero-coverage configs are excluded from the map
 // by resolveCoverageByAccountKey (issue #201) so they also fall through to
 // full weight rather than silently zeroing the headline.
@@ -221,7 +223,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 func summarizeRecommendationsWithCoverage(
 	recs []config.RecommendationRecord,
 	coverageByKey map[string]float64,
-) (float64, map[string]ServiceSavings) {
+) (totalSavings float64, byService map[string]ServiceSavings) {
 	// Dedupe to one representative variant per physical-resource cell BEFORE
 	// summing. After PR #195's per-(term, payment) fan-out, a single physical
 	// resource produces up to 6 rec rows (2 terms x 3 payments). Those rows are
@@ -234,11 +236,11 @@ func summarizeRecommendationsWithCoverage(
 	// variant"); this reducer is the backend equivalent.
 	representatives := bestVariantPerCell(recs, coverageByKey)
 
-	var total float64
-	byService := make(map[string]ServiceSavings)
-	for _, rep := range representatives {
+	byService = make(map[string]ServiceSavings)
+	for i := range representatives {
+		rep := &representatives[i]
 		scaled := rep.scaled
-		total += scaled
+		totalSavings += scaled
 		svc := byService[rep.rec.Service]
 		svc.PotentialSavings += scaled
 		// CurrentSavings is the committed/realized monthly savings for the
@@ -254,7 +256,7 @@ func summarizeRecommendationsWithCoverage(
 		svc.CurrentSavings += scaled
 		byService[rep.rec.Service] = svc
 	}
-	return total, byService
+	return totalSavings, byService
 }
 
 // cellRepresentative is the chosen variant for one physical-resource cell plus
@@ -277,7 +279,7 @@ type cellRepresentative struct {
 // variants so the backend by_service rollup and the frontend per-cell grouping
 // agree. A nil CloudAccountID maps to the empty segment, matching the
 // frontend's nullish-coalescing of cloud_account_id to an empty string.
-func recCellKey(rec config.RecommendationRecord) string {
+func recCellKey(rec *config.RecommendationRecord) string {
 	account := ""
 	if rec.CloudAccountID != nil {
 		account = *rec.CloudAccountID
@@ -303,17 +305,18 @@ func bestVariantPerCell(
 ) []cellRepresentative {
 	indexByCell := make(map[string]int, len(recs))
 	reps := make([]cellRepresentative, 0, len(recs))
-	for _, rec := range recs {
+	for i := range recs {
+		rec := &recs[i]
 		scaled := scaledSavings(rec, coverageByKey)
 		key := recCellKey(rec)
 		if idx, ok := indexByCell[key]; ok {
 			if scaled > reps[idx].scaled {
-				reps[idx] = cellRepresentative{rec: rec, scaled: scaled}
+				reps[idx] = cellRepresentative{rec: *rec, scaled: scaled}
 			}
 			continue
 		}
 		indexByCell[key] = len(reps)
-		reps = append(reps, cellRepresentative{rec: rec, scaled: scaled})
+		reps = append(reps, cellRepresentative{rec: *rec, scaled: scaled})
 	}
 	return reps
 }
@@ -321,7 +324,7 @@ func bestVariantPerCell(
 // scaledSavings returns rec.Savings * min(max(coverage, 0), 100) / 100 when
 // a coverage entry exists for the rec's (account, provider, service) triple.
 // Otherwise returns rec.Savings unchanged.
-func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]float64) float64 {
+func scaledSavings(rec *config.RecommendationRecord, coverageByKey map[string]float64) float64 {
 	if rec.CloudAccountID == nil || coverageByKey == nil {
 		return rec.Savings
 	}
@@ -341,14 +344,14 @@ func scaledSavings(rec config.RecommendationRecord, coverageByKey map[string]flo
 // resolveCoverageByAccountKey returns a map of AccountConfigKey -> resolved
 // coverage% for every (account, provider, service) triple represented in
 // recs. Lookup errors degrade gracefully to a nil map (no scaling applied
-// → un-overridden behaviour).
+// → un-overridden behavior).
 //
 // Entries with a resolved coverage of zero are omitted from the map.
 // ServiceConfig.Coverage is a float64 whose zero-value means "not configured",
 // so including a zero entry would silently scale that account's savings to $0
 // even though the operator never set an explicit coverage cap (issue #201).
 // When an entry is absent, scaledSavings falls through to full savings,
-// matching the pre-#196 behaviour for un-configured accounts.
+// matching the pre-#196 behavior for un-configured accounts.
 func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config.RecommendationRecord) map[string]float64 {
 	if len(recs) == 0 {
 		return nil
@@ -380,7 +383,10 @@ func (h *Handler) resolveCoverageByAccountKey(ctx context.Context, recs []config
 // resolveTargetCoverage returns the configured default coverage or 80% when
 // no global config is set or the configured value is zero.
 func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
-	globalCfg, _ := h.config.GetGlobalConfig(ctx)
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		logging.Warnf("resolveTargetCoverage: failed to get global config, using default 80%%: %v", err)
+	}
 	if globalCfg != nil && globalCfg.DefaultCoverage > 0 {
 		return globalCfg.DefaultCoverage
 	}
@@ -392,7 +398,7 @@ func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
 // getPlannedPurchases (handler_purchases.go) so the dashboard widget and
 // the Plans page walk the same canonical "what's about to happen" set.
 //
-// The widget previously enumerated plans and synthesised one row per plan
+// The widget previously enumerated plans and synthesized one row per plan
 // from plan.NextExecutionDate. That was wrong because action endpoints
 // (DELETE /api/purchases/planned/{id}, pause, resume, run) all target
 // purchase_executions.execution_id, not purchase_plans.id; the Cancel
@@ -456,9 +462,9 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 // scheduler at instance-create time).
 func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecution) UpcomingPurchase {
 	var provider, service string
-	for _, svcCfg := range plan.Services {
-		provider = svcCfg.Provider
-		service = svcCfg.Service
+	for i := range plan.Services {
+		provider = plan.Services[i].Provider
+		service = plan.Services[i].Service
 		break
 	}
 	return UpcomingPurchase{
@@ -475,28 +481,11 @@ func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecu
 	}
 }
 
-// planIntersectsAllowed returns true when any of the plan's associated cloud
-// accounts is in the allowed list (matched by ID or display name). Returns
-// false when the plan has no account rows — scoped users don't get to see
-// unattributed plans.
-func (h *Handler) planIntersectsAllowed(ctx context.Context, planID string, allowed []string) (bool, error) {
-	accounts, err := h.config.GetPlanAccounts(ctx, planID)
-	if err != nil {
-		return false, fmt.Errorf("failed to get plan accounts: %w", err)
-	}
-	for _, acct := range accounts {
-		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // getPublicInfo returns public information about the CUDly instance (no auth required).
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
 // Sensitive identifiers (API key secret URL, deployment AWS account ID) are intentionally
 // absent here; they live on the authenticated GET /api/info/deployment endpoint (#633).
-func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionURLRequest) (*PublicInfoResponse, error) {
+func (h *Handler) getPublicInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) *PublicInfoResponse {
 	// Check if admin exists
 	adminExists := false
 	if h.auth != nil {
@@ -509,14 +498,14 @@ func (h *Handler) getPublicInfo(ctx context.Context, req *events.LambdaFunctionU
 	return &PublicInfoResponse{
 		Version:     "1.0.0",
 		AdminExists: adminExists,
-	}, nil
+	}
 }
 
 // getDeploymentInfo returns sensitive deployment identifiers for authenticated callers.
 // Requires at least AuthUser (enforced by the router). The two fields it returns
 // expose the AWS account ID and the Secrets Manager ARN path — neither should be
 // reachable without a valid session (#633).
-func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) (*DeploymentInfoResponse, error) {
+func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctionURLRequest) *DeploymentInfoResponse {
 	// Build the AWS Console deep-link to the Secrets Manager secret.
 	var apiKeySecretURL string
 	if h.secretsARN != "" {
@@ -535,13 +524,17 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 	// orphan execution whose account was deleted (issue #608). The call
 	// is best-effort: non-AWS deployments and STS transient failures
 	// return "" and the frontend falls back to the "Account deleted"
-	// warning label, which is safe.
-	deploymentAWSAccountID, _ := h.resolveAWSAccountID(ctx)
+	// warning label, which is safe. We log the error for traceability and
+	// keep the empty-string-safe downstream behavior.
+	deploymentAWSAccountID, err := h.resolveAWSAccountID(ctx)
+	if err != nil {
+		logging.Warnf("deploymentInfo: AWS account ID lookup failed; returning empty DeploymentAWSAccountID (frontend handles it safely): %v", err)
+	}
 
 	return &DeploymentInfoResponse{
 		APIKeySecretURL:        apiKeySecretURL,
 		DeploymentAWSAccountID: deploymentAWSAccountID,
-	}, nil
+	}
 }
 
 // commitmentExpiry returns the moment a purchase's commitment term ends.
@@ -552,7 +545,7 @@ func (h *Handler) getDeploymentInfo(ctx context.Context, _ *events.LambdaFunctio
 // place). One year is approximated as 365 days — matches the original
 // dashboard arithmetic verbatim; leap-year precision isn't material for
 // a multi-year RI/SP/CUD term.
-func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
+func commitmentExpiry(p *config.PurchaseHistoryRecord) time.Time {
 	termDuration := time.Duration(p.Term) * 365 * 24 * time.Hour
 	return p.Timestamp.Add(termDuration)
 }
@@ -560,16 +553,18 @@ func commitmentExpiry(p config.PurchaseHistoryRecord) time.Time {
 // isActiveCommitment reports whether the purchase is active: its term has not
 // yet expired as of `now` AND its status is one of the successful terminal
 // states ("" for DB-backed rows where the column is unpersisted, or
-// "completed"). Rows synthesised from failed/cancelled/expired executions
+// "completed"). Rows synthesized from failed/cancelled/expired executions
 // carry a non-empty status other than "completed" and are excluded so they
 // do not inflate the committed_monthly KPI. The boundary is strict (After):
 // a commitment is active right up to the instant its term ends.
 //
 // Same predicate shared by the dashboard aggregate and the per-commitment
 // inventory endpoint. Status values: see PurchaseHistoryRecord.Status doc.
-func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
+//
+//nolint:misspell // documents DB status literals incl. 'cancelled' (status CHECK constraint); rename tracked in PR #1277
+func isActiveCommitment(p *config.PurchaseHistoryRecord, now time.Time) bool {
 	// Status is unpersisted (dynamodbav:"-"); DB rows always read back as "".
-	// Synthesised rows set it to "failed", "expired", "cancelled", "pending",
+	// Synthesized rows set it to "failed", "expired", "cancelled", "pending",
 	// "notified", "approved", "running", or "paused". Only "" and "completed"
 	// represent a commitment that is actually live on the provider.
 	if p.Status != "" && p.Status != "completed" {
@@ -585,7 +580,8 @@ func isActiveCommitment(p config.PurchaseHistoryRecord, now time.Time) bool {
 // same "active" definition.
 func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryRecord, now time.Time) map[string]float64 {
 	byService := make(map[string]float64)
-	for _, p := range purchases {
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, now) {
 			continue
 		}
@@ -669,7 +665,8 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 		committedMonthly += v
 	}
 
-	for _, p := range purchases {
+	for i := range purchases {
+		p := &purchases[i]
 		if !isActiveCommitment(p, currentTime) {
 			continue
 		}
@@ -694,7 +691,7 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs [
 	return activeCommitments, committedMonthly, ytdSavings, savingsByService
 }
 
-// calculateCurrentCoverage calculates the current coverage percentage
+// calculateCurrentCoverage calculates the current coverage percentage.
 func (h *Handler) calculateCurrentCoverage(potentialSavings, committedMonthly float64) float64 {
 	if potentialSavings == 0 {
 		return 100.0 // No recommendations means 100% coverage
