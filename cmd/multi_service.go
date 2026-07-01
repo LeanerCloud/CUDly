@@ -76,7 +76,9 @@ var shutdownRequested atomic.Bool
 // (2) score, display, confirm, and purchase.
 func runToolMultiService(ctx context.Context, cfg Config) {
 	if cfg.CSVInput != "" {
-		runToolFromCSV(ctx, cfg)
+		if err := runToolFromCSV(ctx, cfg); err != nil {
+			log.Fatalf("%v", err)
+		}
 		return
 	}
 
@@ -256,8 +258,10 @@ func buildServiceStats(recs []common.Recommendation, results []common.PurchaseRe
 	return stats
 }
 
-// runToolFromCSV processes recommendations from a CSV input file
-func runToolFromCSV(ctx context.Context, cfg Config) {
+// runToolFromCSV processes recommendations from a CSV input file.
+// It returns an error instead of exiting so the orchestration glue is
+// unit-testable; the caller (runToolMultiService) turns errors fatal.
+func runToolFromCSV(ctx context.Context, cfg Config) error {
 	// Determine if this is a dry run
 	isDryRun := !cfg.ActualPurchase
 	printRunMode(isDryRun)
@@ -269,7 +273,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 	// Read recommendations from CSV
 	recommendations, err := loadRecommendationsFromCSV(cfg.CSVInput)
 	if err != nil {
-		log.Fatalf("Failed to read CSV file: %v", err)
+		return fmt.Errorf("failed to read CSV file: %w", err)
 	}
 
 	AppLogger.Printf("✅ Loaded %d recommendations from CSV\n", len(recommendations))
@@ -279,7 +283,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 
 	if len(recommendations) == 0 {
 		AppLogger.Println("⚠️  No recommendations to process after filtering")
-		return
+		return nil
 	}
 
 	// Load AWS configuration
@@ -290,7 +294,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, configOptions...)
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		return fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
 	// Create account alias cache for lookup
@@ -366,6 +370,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 
 	// Print final summary
 	printMultiServiceSummary(recommendations, allResults, serviceStats, isDryRun)
+	return nil
 }
 
 // filterAndAdjustRecommendations applies filters, coverage, count override, and instance limits to recommendations
