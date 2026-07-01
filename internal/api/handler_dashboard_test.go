@@ -263,9 +263,10 @@ func TestSummarizeRecommendationsWithCoverage(t *testing.T) {
 			total, byService := summarizeRecommendationsWithCoverage(tc.recs, tc.coverage)
 			assert.InDelta(t, tc.wantTotal, total, 0.0001)
 			assert.InDelta(t, tc.wantTotal, byService["rds"].PotentialSavings, 0.0001)
-			// Issue #908: CurrentSavings (committed/realized) is sourced from
-			// the same coverage-scaled amount, so it tracks the scaled total.
-			assert.InDelta(t, tc.wantTotal, byService["rds"].CurrentSavings, 0.0001)
+			// CurrentSavings is populated by getDashboardSummary from purchase
+			// history, not here — it must remain 0 from this function (issue #1031).
+			assert.Equal(t, 0.0, byService["rds"].CurrentSavings,
+				"summarize must not set CurrentSavings")
 		})
 	}
 }
@@ -320,15 +321,14 @@ func TestSummarizeRecommendationsWithCoverage_100PctContract(t *testing.T) {
 		"nil coverage map must return un-scaled savings (issue #201 contract)")
 }
 
-// TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings is the
-// issue #908 regression: by_service[svc].current_savings must be populated
-// (and keyed/scaled identically to potential) so the Home chart's
-// current-savings underlay renders instead of being a flat $0 series.
-//
-// Before the fix, summarizeRecommendationsWithCoverage set only
-// PotentialSavings, leaving CurrentSavings at its float64 zero value for
-// every service regardless of configured coverage.
-func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing.T) {
+// TestSummarizeRecommendationsWithCoverage_DoesNotSetCurrentSavings asserts
+// that summarizeRecommendationsWithCoverage only populates PotentialSavings.
+// CurrentSavings represents committed/realized savings from active purchase
+// history and is populated separately in getDashboardSummary via
+// aggregateActiveCommitmentsPerService. Mixing the two here would cause a
+// service with recommendations but no purchases to falsely report non-zero
+// CurrentSavings (issue #1031).
+func TestSummarizeRecommendationsWithCoverage_DoesNotSetCurrentSavings(t *testing.T) {
 	acctA := "acct-A"
 	keyEC2 := config.AccountConfigKey(acctA, "aws", "ec2")
 	keyRDS := config.AccountConfigKey(acctA, "aws", "rds")
@@ -343,21 +343,18 @@ func TestSummarizeRecommendationsWithCoverage_PopulatesCurrentSavings(t *testing
 
 	_, byService := summarizeRecommendationsWithCoverage(recs, coverage)
 
-	// current_savings is non-zero where coverage exists and is scaled the
-	// same way potential is (rec.Savings * coverage/100), keyed per service.
-	assert.InDelta(t, 600.0, byService["ec2"].CurrentSavings, 0.001,
-		"ec2 current_savings = 1000 * 60/100")
-	assert.InDelta(t, 100.0, byService["rds"].CurrentSavings, 0.001,
-		"rds current_savings = 400 * 25/100")
+	// PotentialSavings is scaled correctly by coverage.
+	assert.InDelta(t, 600.0, byService["ec2"].PotentialSavings, 0.001,
+		"ec2 potential_savings = 1000 * 60/100")
+	assert.InDelta(t, 100.0, byService["rds"].PotentialSavings, 0.001,
+		"rds potential_savings = 400 * 25/100")
 
-	// And it matches PotentialSavings (both flow from the same scaled amount).
-	assert.InDelta(t, byService["ec2"].PotentialSavings, byService["ec2"].CurrentSavings, 0.001)
-	assert.InDelta(t, byService["rds"].PotentialSavings, byService["rds"].CurrentSavings, 0.001)
-
-	// Sanity: every populated service has a strictly positive current_savings
-	// when coverage is configured (the bug produced 0 here).
-	require.Positive(t, byService["ec2"].CurrentSavings)
-	require.Positive(t, byService["rds"].CurrentSavings)
+	// CurrentSavings is NOT set here — it remains the float64 zero value.
+	// getDashboardSummary populates it from purchase history (issue #1031).
+	assert.Equal(t, 0.0, byService["ec2"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
+	assert.Equal(t, 0.0, byService["rds"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
 }
 
 // TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell is the
@@ -406,8 +403,10 @@ func TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell(t *testing.
 	// sum of all variants (100+200+300+50 = 650).
 	assert.InDelta(t, 350.0, byService["ec2"].PotentialSavings, 0.0001,
 		"by_service potential must sum per-cell MAX (300+50), not all variants")
-	assert.InDelta(t, 350.0, byService["ec2"].CurrentSavings, 0.0001,
-		"by_service current must dedupe identically to potential")
+	// CurrentSavings is NOT set by this reducer; getDashboardSummary populates
+	// it from active purchase history (issue #1031). It must stay 0 here.
+	assert.Equal(t, 0.0, byService["ec2"].CurrentSavings,
+		"summarize must not set CurrentSavings; that is getDashboardSummary's responsibility")
 	// The headline total dedupes the same way.
 	assert.InDelta(t, 350.0, total, 0.0001,
 		"total must sum per-cell MAX (300+50), not all variants")
@@ -1202,6 +1201,54 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 		"current_savings field must carry the active purchase's EstimatedSavings")
 }
 
+// TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments is the
+// issue #1031 regression: a service with recommendations but no active purchase
+// history must ship current_savings: 0, not current_savings: potential_savings.
+//
+// The bug was that summarizeRecommendationsWithCoverage set CurrentSavings to
+// the same scaled value as PotentialSavings. getDashboardSummary only overwrites
+// CurrentSavings for services that appear in the purchase-history result, so
+// services with no purchases retained the wrong non-zero value.
+func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *testing.T) {
+	ctx := context.Background()
+
+	// No purchases at all — represents a new account that has recommendations
+	// but has not yet acted on them.
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
+		[]config.RecommendationRecord{
+			{Service: "EC2", Savings: 500.0},
+			{Service: "RDS", Savings: 300.0},
+		}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return(
+		[]config.PurchaseHistoryRecord{}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{
+		auth:      mockAuth,
+		scheduler: mockScheduler,
+		config:    mockStore,
+	}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+	require.NoError(t, err)
+
+	// PotentialSavings must be populated from recommendations.
+	assert.InDelta(t, 500.0, result.ByService["EC2"].PotentialSavings, 0.001)
+	assert.InDelta(t, 300.0, result.ByService["RDS"].PotentialSavings, 0.001)
+
+	// CurrentSavings must be 0 — no active commitments exist yet.
+	// Before the fix, this incorrectly equalled PotentialSavings because
+	// summarizeRecommendationsWithCoverage also wrote CurrentSavings (issue #1031).
+	assert.Equal(t, 0.0, result.ByService["EC2"].CurrentSavings,
+		"no active commitments: current_savings must be 0, not equal to potential_savings")
+	assert.Equal(t, 0.0, result.ByService["RDS"].CurrentSavings,
+		"no active commitments: current_savings must be 0, not equal to potential_savings")
+}
+
 func TestHandler_calculateCurrentCoverage(t *testing.T) {
 	handler := &Handler{}
 
@@ -1325,5 +1372,150 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 		result, err := handler.getUpcomingPurchases(ctx, req)
 		require.NoError(t, err)
 		assert.Len(t, result.Purchases, 0)
+	})
+}
+
+// TestElapsedWholeMonths verifies that elapsedWholeMonths counts calendar months
+// correctly using AddDate-stepping rather than a 30-day divisor.
+// Regression for 01-M2: with integer-truncated 30-day arithmetic a 28-day
+// gap in February would score 0 months, and a year-start-to-now gap spanning
+// months of varying length could be off by 1.
+func TestElapsedWholeMonths(t *testing.T) {
+	t.Run("same instant returns 0", func(t *testing.T) {
+		now := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, 0, elapsedWholeMonths(now, now))
+	})
+
+	t.Run("to before from returns 0", func(t *testing.T) {
+		from := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 0, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("exactly 1 month returns 1", func(t *testing.T) {
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 1, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("28-day February gap counts as 1 month, not 0", func(t *testing.T) {
+		// 30-day-divisor arithmetic: int(28*24 / (24*30)) = 0. AddDate-stepping: 1.
+		from := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) // Feb has 28 days in 2026
+		assert.Equal(t, 1, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("partial month not yet complete returns floor", func(t *testing.T) {
+		from := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 2, 14, 0, 0, 0, 0, time.UTC) // 30 days but < 1 full calendar month
+		assert.Equal(t, 0, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("6 complete months returns 6", func(t *testing.T) {
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 6, elapsedWholeMonths(from, to))
+	})
+
+	t.Run("cross-year gap counts correctly", func(t *testing.T) {
+		from := time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, 5, elapsedWholeMonths(from, to))
+	})
+}
+
+// TestFilterDashboardRecommendations_FreshSlice verifies that filtering writes
+// into a fresh backing array and does not corrupt the caller's input slice.
+// Regression for 01-L2: the previous recs[:0] form reused the input's backing
+// array, so any element written during filtering overwrote the original.
+func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
+	ctx := context.Background()
+
+	// Seed: two accounts A (allowed) and B (blocked). After filtering, only
+	// A's rec survives. With recs[:0] the filtering loop wrote A's rec into
+	// position [0] of the shared backing array, which also holds the original
+	// input[0]; but if B's rec came first (input[0]=B, input[1]=A), the write
+	// would corrupt input[0]. We reproduce this arrangement explicitly.
+	accountAID := "aaaa-1111"
+	accountBID := "bbbb-2222"
+	// B comes first in the input so that recs[:0] corruption is detectable.
+	input := []config.RecommendationRecord{
+		{CloudAccountID: &accountBID, Service: "rds", Savings: 200.0},
+		{CloudAccountID: &accountAID, Service: "ec2", Savings: 100.0},
+	}
+	// Keep a snapshot of input[0] before filtering.
+	originalFirst := input[0]
+
+	mockStore := new(MockConfigStore)
+	// resolveAccountNamesByID calls ListCloudAccounts via the Fn override path.
+	listCalled := false
+	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		listCalled = true
+		return []config.CloudAccount{
+			{ID: accountAID, Name: "Account A"},
+			{ID: accountBID, Name: "Account B"},
+		}, nil
+	}
+
+	mockAuth := new(MockAuthService)
+	// Session restricted to account A only.
+	session := &Session{UserID: "user-1"}
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-1").Return([]string{accountAID}, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	handler := &Handler{auth: mockAuth, config: mockStore}
+	_ = listCalled // asserted implicitly: if not called the name map is empty and MatchesAccount uses only ID
+
+	filtered, err := handler.filterDashboardRecommendations(ctx, session, input)
+	require.NoError(t, err)
+
+	// Only account A's rec must pass through.
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "ec2", filtered[0].Service)
+
+	// input[0] must be unchanged — recs[:0] would have overwritten it with
+	// the first accepted element (ec2) since filter appends in order.
+	assert.Equal(t, originalFirst, input[0],
+		"recs[:0] reuse corrupts the backing array; fresh slice must not mutate input")
+}
+
+// TestFirstServiceConfig verifies that firstServiceConfig returns the service
+// from the lexicographically first key, giving a deterministic result regardless
+// of map iteration order.
+// Regression for 01-N1: both upcomingFromExecution and buildPlannedPurchase
+// used an unordered map range + break, which could return a different service on
+// each call when the plan has more than one entry.
+func TestFirstServiceConfig(t *testing.T) {
+	t.Run("empty services returns zero value", func(t *testing.T) {
+		plan := &config.PurchasePlan{Services: map[string]config.ServiceConfig{}}
+		got := firstServiceConfig(plan)
+		assert.Equal(t, config.ServiceConfig{}, got)
+	})
+
+	t.Run("single service returned", func(t *testing.T) {
+		plan := &config.PurchasePlan{
+			Services: map[string]config.ServiceConfig{
+				"ec2": {Provider: "aws", Service: "ec2", Term: 1, Payment: "no_upfront"},
+			},
+		}
+		got := firstServiceConfig(plan)
+		assert.Equal(t, "aws", got.Provider)
+		assert.Equal(t, "ec2", got.Service)
+	})
+
+	t.Run("multiple services returns lexicographically first key deterministically", func(t *testing.T) {
+		plan := &config.PurchasePlan{
+			Services: map[string]config.ServiceConfig{
+				"rds": {Provider: "aws", Service: "rds", Term: 3},
+				"ec2": {Provider: "aws", Service: "ec2", Term: 1},
+				"elasticache": {Provider: "aws", Service: "elasticache", Term: 1},
+			},
+		}
+		// "ec2" < "elasticache" < "rds" lexicographically.
+		for i := 0; i < 20; i++ {
+			got := firstServiceConfig(plan)
+			assert.Equal(t, "ec2", got.Service,
+				"must always return ec2 (lexicographically first key), iteration %d", i)
+		}
 	})
 }
