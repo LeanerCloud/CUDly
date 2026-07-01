@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	"github.com/LeanerCloud/CUDly/pkg/concurrency"
 )
 
 // coverageServiceFilters lists the Cost Explorer service-dimension values
@@ -319,14 +320,20 @@ func serviceRegionFilter(service, region string) *types.Expression {
 
 // fetchCoveragePage calls the Cost Explorer API with rate-limit retry.
 // Mirrors fetchUtilizationPage so the two paths fail and back off the
-// same way.
+// same way. The shared concurrency semaphore (CUDLY_MAX_PARALLELISM) is
+// held only across the outbound SDK call, matching fetchRIPageWithRetry,
+// so the coverage-enrichment fan-out stays inside the global IO cap.
 func (c *Client) fetchCoveragePage(ctx context.Context, input *costexplorer.GetReservationCoverageInput) (*costexplorer.GetReservationCoverageOutput, error) {
 	c.rateLimiter.Reset()
 	for {
 		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
+		if acqErr := concurrency.Acquire(ctx); acqErr != nil {
+			return nil, fmt.Errorf("concurrency acquire failed: %w", acqErr)
+		}
 		result, err := c.costExplorerClient.GetReservationCoverage(ctx, input)
+		concurrency.Release(ctx)
 		if !c.rateLimiter.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation coverage: %w", err)
