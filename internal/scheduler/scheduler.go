@@ -898,7 +898,14 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 			PaymentOption:  globalCfg.DefaultPayment,
 			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
-		recs, _ = recClient.GetRecommendations(ctx, params)
+		recs, err = recClient.GetRecommendations(ctx, params)
+		if err != nil {
+			// Fail loud: a misconfigured DefaultPayment/DefaultTerm or a CE
+			// failure on this fallback must surface to the operator instead
+			// of silently presenting as "zero recommendations".
+			return nil, fmt.Errorf("failed to get %s recommendations with default term/payment fallback (term=%s, payment=%s, lookback=%s): %w",
+				providerName, params.Term, params.PaymentOption, params.LookbackPeriod, err)
+		}
 	}
 	result := s.convertRecommendations(recs, providerName)
 	if accountID != nil {

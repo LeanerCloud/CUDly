@@ -1601,6 +1601,48 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 	assert.Len(t, recs, 1)
 }
 
+// Regression test for COR-05 (#1168): when the primary sweep returns zero
+// recommendations and the default term/payment fallback GetRecommendations
+// call fails, the error must be propagated instead of being silently
+// swallowed (`recs, _ =`) and presenting as "zero recommendations".
+func TestScheduler_CollectAWSRecommendations_FallbackError(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockFactory := new(MockProviderFactory)
+	mockProvider := new(MockProvider)
+	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() {
+		mockFactory.AssertExpectations(t)
+		mockProvider.AssertExpectations(t)
+		mockRecClient.AssertExpectations(t)
+	})
+
+	globalCfg := &config.GlobalConfig{
+		DefaultTerm:    3,
+		DefaultPayment: "all-upfront",
+	}
+
+	fallbackErr := errors.New("ValidationException: invalid PaymentOption")
+
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
+	mockProvider.On("GetRecommendationsClient", ctx).Return(mockRecClient, nil)
+	mockRecClient.On("GetAllRecommendations", ctx).Return([]common.Recommendation{}, nil) // Empty -> triggers fallback
+	mockRecClient.On("GetRecommendations", ctx, mock.AnythingOfType("common.RecommendationParams")).Return(nil, fallbackErr)
+
+	scheduler := &Scheduler{
+		config:          mockStore,
+		providerFactory: mockFactory,
+	}
+
+	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	require.Error(t, err, "fallback GetRecommendations failure must propagate, not be swallowed")
+	require.ErrorIs(t, err, fallbackErr)
+	assert.Contains(t, err.Error(), "default term/payment fallback", "error must identify the fallback path")
+	assert.Contains(t, err.Error(), "term=3yr")
+	assert.Contains(t, err.Error(), "payment=all-upfront")
+	assert.Nil(t, recs, "no recommendations must be returned when the fallback fails")
+}
+
 // fakeSTSClient is a minimal in-test STSClient implementation used by the
 // ambient host-account tagging tests (issue #604). The fakeAccountID + err
 // fields are set by each test case to drive the GetCallerIdentity response
