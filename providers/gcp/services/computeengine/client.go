@@ -43,7 +43,7 @@ const maxMachineTypeItems = 20
 //   - 1-year: "1yr", "1", "12mo"
 //   - 3-year: "3yr", "3", "36mo"
 //
-// An empty or unrecognised term returns an error rather than silently defaulting
+// An empty or unrecognized term returns an error rather than silently defaulting
 // to 12 months; a silent mis-default can purchase the wrong term and waste money.
 func termPlan(term string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(term)) {
@@ -52,7 +52,7 @@ func termPlan(term string) (string, error) {
 	case "1yr", "1", "12mo":
 		return computepb.Commitment_TWELVE_MONTH.String(), nil
 	default:
-		return "", fmt.Errorf("termPlan: unrecognised commitment term %q (accepted: 1yr/1/12mo or 3yr/3/36mo)", term)
+		return "", fmt.Errorf("termPlan: unrecognized commitment term %q (accepted: 1yr/1/12mo or 3yr/3/36mo)", term)
 	}
 }
 
@@ -390,7 +390,7 @@ type CommitmentRequest struct {
 // single commitments.insert call.
 // Each recommendation's Count is treated as vCPU count; the memory Amount is
 // read from ComputeDetails.MemoryGB (populated by extractMemoryMBFromRecommendation).
-// Recommendations with an unrecognised term or missing memory are skipped with a
+// Recommendations with an unrecognized term or missing memory are skipped with a
 // log warning so a bad rec never contaminates an otherwise valid group.
 func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 	type key struct{ account, region, term string }
@@ -407,7 +407,7 @@ func GroupCommitments(recs []common.Recommendation) []CommitmentRequest {
 		}
 		plan, err := termPlan(rec.Term)
 		if err != nil {
-			log.Printf("GroupCommitments: skipping recommendation with unrecognised term %q: %v", rec.Term, err)
+			log.Printf("GroupCommitments: skipping recommendation with unrecognized term %q: %v", rec.Term, err)
 			continue
 		}
 		recMemMB, err := memoryMBFromDetails(rec)
@@ -903,7 +903,7 @@ func skuMatchesMachineType(sku *cloudbilling.Sku, machineType, region string) bo
 // BreakEvenMonths so the scorer can filter and rank GCP recommendations correctly
 // (issue #1022 C2). Pricing failures are logged but do not discard the recommendation:
 // EstimatedSavings from the Recommender payload is the authoritative savings signal.
-// Returns nil when the params.Term is unrecognised so the caller skips an
+// Returns nil when the params.Term is unrecognized so the caller skips an
 // unroutable recommendation rather than queuing a purchase with an invalid plan.
 func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpRec *recommenderpb.Recommendation, params common.RecommendationParams) *common.Recommendation {
 	// GCP CUDs are billed monthly with no upfront option; force "monthly"
@@ -917,13 +917,13 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 	paymentOption := "monthly"
 
 	// H-3: propagate params.Term (default "1yr") and validate it so an
-	// unrecognised term fails loud here rather than reaching buildInsertRequest.
+	// unrecognized term fails loud here rather than reaching buildInsertRequest.
 	term := params.Term
 	if term == "" {
 		term = "1yr"
 	}
 	if _, err := termPlan(term); err != nil {
-		log.Printf("computeengine: skipping recommendation with unrecognised term %q: %v", term, err)
+		log.Printf("computeengine: skipping recommendation with unrecognized term %q: %v", term, err)
 		return nil
 	}
 

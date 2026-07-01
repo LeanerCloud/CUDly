@@ -19,15 +19,14 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/scorer"
 )
 
-// MockCommitmentsService mocks the CommitmentsService interface
+// MockCommitmentsService mocks the CommitmentsService interface.
 type MockCommitmentsService struct {
-	commitments   []*computepb.Commitment
-	operation     *MockOperation
 	listErr       error
 	insertErr     error
-	index         int
-	lastInsertReq *computepb.InsertRegionCommitmentRequest   // captured for assertions
+	lastInsertReq *computepb.InsertRegionCommitmentRequest // captured for assertions
+	operation     *MockOperation
 	insertReqs    []*computepb.InsertRegionCommitmentRequest // every Insert call (re-drive assertions)
+	commitments   []*computepb.Commitment
 }
 
 func (m *MockCommitmentsService) List(ctx context.Context, req *computepb.ListRegionCommitmentsRequest) CommitmentsIterator {
@@ -47,11 +46,11 @@ func (m *MockCommitmentsService) Close() error {
 	return nil
 }
 
-// MockCommitmentsIterator mocks the CommitmentsIterator interface
+// MockCommitmentsIterator mocks the CommitmentsIterator interface.
 type MockCommitmentsIterator struct {
+	err         error
 	commitments []*computepb.Commitment
 	index       int
-	err         error
 }
 
 func (m *MockCommitmentsIterator) Next() (*computepb.Commitment, error) {
@@ -66,7 +65,7 @@ func (m *MockCommitmentsIterator) Next() (*computepb.Commitment, error) {
 	return c, nil
 }
 
-// MockOperation mocks the CommitmentsOperation interface
+// MockOperation mocks the CommitmentsOperation interface.
 type MockOperation struct {
 	err error
 }
@@ -75,10 +74,10 @@ func (m *MockOperation) Wait(ctx context.Context, opts ...gax.CallOption) error 
 	return m.err
 }
 
-// MockMachineTypesService mocks the MachineTypesService interface
+// MockMachineTypesService mocks the MachineTypesService interface.
 type MockMachineTypesService struct {
-	machineTypes []*computepb.MachineType
 	err          error
+	machineTypes []*computepb.MachineType
 }
 
 func (m *MockMachineTypesService) List(ctx context.Context, req *computepb.ListMachineTypesRequest) MachineTypesIterator {
@@ -89,11 +88,11 @@ func (m *MockMachineTypesService) Close() error {
 	return nil
 }
 
-// MockMachineTypesIterator mocks the MachineTypesIterator interface
+// MockMachineTypesIterator mocks the MachineTypesIterator interface.
 type MockMachineTypesIterator struct {
+	err          error
 	machineTypes []*computepb.MachineType
 	index        int
-	err          error
 }
 
 func (m *MockMachineTypesIterator) Next() (*computepb.MachineType, error) {
@@ -108,7 +107,7 @@ func (m *MockMachineTypesIterator) Next() (*computepb.MachineType, error) {
 	return mt, nil
 }
 
-// MockBillingService mocks the BillingService interface
+// MockBillingService mocks the BillingService interface.
 type MockBillingService struct {
 	skus *cloudbilling.ListSkusResponse
 	err  error
@@ -121,11 +120,11 @@ func (m *MockBillingService) ListSKUs(serviceID string) (*cloudbilling.ListSkusR
 	return m.skus, nil
 }
 
-// MockRecommenderIterator mocks the RecommenderIterator interface
+// MockRecommenderIterator mocks the RecommenderIterator interface.
 type MockRecommenderIterator struct {
+	err             error
 	recommendations []*recommenderpb.Recommendation
 	index           int
-	err             error
 }
 
 func (m *MockRecommenderIterator) Next() (*recommenderpb.Recommendation, error) {
@@ -140,7 +139,7 @@ func (m *MockRecommenderIterator) Next() (*recommenderpb.Recommendation, error) 
 	return rec, nil
 }
 
-// MockRecommenderClient mocks the RecommenderClient interface
+// MockRecommenderClient mocks the RecommenderClient interface.
 type MockRecommenderClient struct {
 	iterator RecommenderIterator
 	closed   bool
@@ -577,7 +576,7 @@ func TestComputeEngineClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) 
 
 // TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID confirms the
 // CLI path (no owning execution, empty token) keeps its prior non-idempotent
-// behaviour: no RequestId is set and the name is the timestamp-based fallback.
+// behavior: no RequestId is set and the name is the timestamp-based fallback.
 func TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID(t *testing.T) {
 	ctx := context.Background()
 	client, _ := NewClient(ctx, "test-project", "us-central1")
@@ -900,6 +899,8 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 	assert.Equal(t, "us-central1", rec.Region)
 	assert.Equal(t, "n1-standard-4", rec.ResourceType)
 	assert.Equal(t, 50.5, rec.EstimatedSavings)
+	assert.Equal(t, "monthly", rec.PaymentOption,
+		"GCP CUDs are billed monthly; PaymentOption must match ValidPaymentOptionsByProvider[\"gcp\"]")
 }
 
 // infiniteRecommenderIterator never signals iterator.Done, used to exercise
@@ -919,7 +920,7 @@ func (c *infiniteRecommenderClient) ListRecommendations(_ context.Context, _ *re
 func (c *infiniteRecommenderClient) Close() error { return nil }
 
 // TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError asserts
-// that a cancelled context is treated as a terminal stop and returns an error
+// that a canceled context is treated as a terminal stop and returns an error
 // rather than silently producing a partial result set
 // (feedback_ctx_cancel_terminal).
 func TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError(t *testing.T) {
@@ -931,7 +932,7 @@ func TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError(t *testing
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
 	_, err = client.GetRecommendations(ctx, common.RecommendationParams{})
-	require.Error(t, err, "cancelled context must surface an error, not a partial result set")
+	require.Error(t, err, "canceled context must surface an error, not a partial result set")
 }
 
 // TestComputeEngineClient_GetRecommendations_PageCapFires asserts that the
@@ -1425,16 +1426,16 @@ func TestTermPlan_UsesSdkEnumConstants(t *testing.T) {
 
 // TestTermPlan_RejectsUnknownTerm is the regression test for the "fail loud" policy:
 // termPlan must return an error rather than silently defaulting to 12 months when
-// given an unrecognised or empty term. A silent mis-default can purchase the wrong
+// given an unrecognized or empty term. A silent mis-default can purchase the wrong
 // duration and waste money.
 //
 // This test fails on pre-fix code that silently returned TWELVE_MONTH for any
-// unrecognised input.
+// unrecognized input.
 func TestTermPlan_RejectsUnknownTerm(t *testing.T) {
 	for _, badTerm := range []string{"", "2yr", "invalid", "24mo", "forever"} {
 		_, err := termPlan(badTerm)
-		require.Error(t, err, "termPlan must reject unrecognised term %q (no silent 12-month default)", badTerm)
-		assert.Contains(t, err.Error(), "unrecognised commitment term",
+		require.Error(t, err, "termPlan must reject unrecognized term %q (no silent 12-month default)", badTerm)
+		assert.Contains(t, err.Error(), "unrecognized commitment term",
 			"error for term %q must identify the bad input", badTerm)
 	}
 }
@@ -1487,7 +1488,7 @@ func TestConvertGCPRecommendation_PropagatesParamsTerm(t *testing.T) {
 }
 
 // TestConvertGCPRecommendation_RejectsUnknownTerm asserts that convertGCPRecommendation
-// returns nil when given an unrecognised params.Term (e.g. "5yr"). An unroutable
+// returns nil when given an unrecognized params.Term (e.g. "5yr"). An unroutable
 // recommendation must be dropped before it can reach buildInsertRequest and attempt
 // to insert a commitment with an invalid plan.
 //
@@ -1500,7 +1501,7 @@ func TestConvertGCPRecommendation_RejectsUnknownTerm(t *testing.T) {
 
 	rec := client.convertGCPRecommendation(ctx, gcpRec, common.RecommendationParams{Term: "5yr"})
 	assert.Nil(t, rec,
-		"convertGCPRecommendation must return nil for unrecognised term (not silently default to 12 months)")
+		"convertGCPRecommendation must return nil for unrecognized term (not silently default to 12 months)")
 }
 
 // TestGetRecommendations_FiltersNonActiveStates is a regression test for H-1
