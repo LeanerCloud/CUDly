@@ -288,7 +288,10 @@ func (c *Client) findOfferingID(ctx context.Context, rec common.Recommendation, 
 		return "", err
 	}
 
-	duration := c.getDurationStringForAPI(rec.Term)
+	duration, err := c.getDurationStringForAPI(rec.Term)
+	if err != nil {
+		return "", err
+	}
 	tag := execID
 	if tag == "" {
 		tag = "no-exec"
@@ -380,11 +383,19 @@ func isLastMemoryDBPage(nextToken *string) bool {
 // getDurationStringForAPI converts the term string to a duration value accepted
 // by DescribeReservedNodesOfferings (seconds as a string or "1yr"/"3yr").
 // The MemoryDB API accepts both numeric-seconds strings and year strings.
-func (c *Client) getDurationStringForAPI(term string) string {
-	if term == "3yr" || term == "3" || term == "36" {
-		return "3yr"
+// Returns an error on any unrecognized or empty input so callers fail loud
+// rather than silently buying a 1-year reservation when another commitment
+// length was intended. The month-count forms ("12", "36") were accepted by the
+// previous implementation and are kept for compatibility.
+func (c *Client) getDurationStringForAPI(term string) (string, error) {
+	switch term {
+	case "3yr", "3", "36":
+		return "3yr", nil
+	case "1yr", "1", "12":
+		return "1yr", nil
+	default:
+		return "", fmt.Errorf("unsupported MemoryDB reservation term %q: must be one of 1yr, 1, 12, 3yr, 3, 36", term)
 	}
-	return "1yr"
 }
 
 // ValidateOffering checks if an offering exists without purchasing

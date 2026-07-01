@@ -374,7 +374,10 @@ func (c *Client) paginateRDSOfferings(ctx context.Context, rec common.Recommenda
 	if err != nil {
 		return "", fmt.Errorf("cannot look up RDS offering: %w", err)
 	}
-	duration := c.getDurationString(rec.Term)
+	duration, err := c.getDurationString(rec.Term)
+	if err != nil {
+		return "", err
+	}
 
 	tag := execID
 	if tag == "" {
@@ -528,12 +531,19 @@ const (
 	ThreeYearSeconds = 94608000 // 3 * 365 days in seconds
 )
 
-// getDurationString converts term string to duration string for RDS API
-func (c *Client) getDurationString(term string) string {
-	if term == "3yr" || term == "3" {
-		return fmt.Sprintf("%d", ThreeYearSeconds)
+// getDurationString converts a term string to the duration string the RDS
+// API expects. Returns an error on any unrecognized or empty input so callers
+// fail loud rather than silently buying a 1-year reservation when another
+// commitment length was intended.
+func (c *Client) getDurationString(term string) (string, error) {
+	switch term {
+	case "3yr", "3":
+		return fmt.Sprintf("%d", ThreeYearSeconds), nil
+	case "1yr", "1":
+		return fmt.Sprintf("%d", OneYearSeconds), nil
+	default:
+		return "", fmt.Errorf("unsupported RDS reservation term %q: must be one of 1yr, 1, 3yr, 3", term)
 	}
-	return fmt.Sprintf("%d", OneYearSeconds)
 }
 
 // convertPaymentOption converts payment option to AWS string
