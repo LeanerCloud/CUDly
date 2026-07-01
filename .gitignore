@@ -135,8 +135,10 @@ security-audit-swarm/
 # ~/.claude/CLAUDE.md §2a (Tool Selection) for the full rationale.
 .claude/
 
-# Generated docs (security runbooks etc.)
-docs/
+# Generated docs (security runbooks etc.). Only the generated output
+# directory is ignored; hand-written documentation under docs/ is
+# tracked normally (e.g. docs/DEPLOYMENT.md, docs/DEVELOPMENT.md).
+docs/generated/
 
 # Graphify knowledge graph output — regenerated locally, not committed
 graphify-out/
