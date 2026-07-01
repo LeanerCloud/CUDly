@@ -910,7 +910,7 @@ func (m *mockExchangeClient) Execute(ctx context.Context, req exchange.ExchangeE
 	return "", nil, errors.New("Execute not mocked")
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchange) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

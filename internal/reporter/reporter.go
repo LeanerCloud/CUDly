@@ -16,7 +16,7 @@ const (
 )
 
 // RenderTable returns a formatted table of recommendations that passed the scorer.
-// Columns: Cloud, Account, Region, Service, Type, Term, Count, Est. Cost, Est. Savings, Savings%, Break-even, Commitment
+// Columns: Cloud, Account, Region, Service, Type, Term, Count, Est. Cost, Est. Savings, Savings%, Break-even, Commitment.
 func RenderTable(result scorer.ScoredResult) string {
 	if len(result.Passed) == 0 {
 		return "No recommendations passed the filters.\n"
@@ -52,7 +52,7 @@ func RenderTable(result scorer.ScoredResult) string {
 }
 
 // RenderExcluded returns a formatted table of recommendations that were filtered out.
-// Columns: Cloud, Account, Region, Service, Type, Term, Savings%, FilterReason
+// Columns: Cloud, Account, Region, Service, Type, Term, Savings%, FilterReason.
 func RenderExcluded(result scorer.ScoredResult) string {
 	if len(result.Filtered) == 0 {
 		return ""

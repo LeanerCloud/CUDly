@@ -781,11 +781,11 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	assert.Equal(t, "gap-1", row.PurchaseID)
 	assert.Equal(t, "completed", row.Status)
 	assert.Contains(t, row.StatusDescription, "history record could not be saved", "the audit gap must be surfaced to the user")
-	assert.True(t, row.IsAuditGap, "synthesised audit-gap row must carry the explicit IsAuditGap marker")
+	assert.True(t, row.IsAuditGap, "synthesized audit-gap row must carry the explicit IsAuditGap marker")
 	assert.Equal(t, 1, resp.Summary.TotalCompleted, "money was committed, so it counts as completed")
-	// Double-count guard: the synthesised audit-gap row is an audit flag, not a
+	// Double-count guard: the synthesized audit-gap row is an audit flag, not a
 	// money source. A partially-saved multi-rec execution can have BOTH some
-	// purchase_history rows AND this synthesised row, so its execution-level
+	// purchase_history rows AND this synthesized row, so its execution-level
 	// dollars must NOT be added to the committed totals (those come from the
 	// purchase_history rows that actually saved).
 	assert.Equal(t, 0.0, resp.Summary.TotalUpfront, "audit-gap row must not contribute execution-level dollars (double-count risk)")
@@ -881,9 +881,9 @@ func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.
 }
 
 // TestHandler_getHistory_FilterParams is the issue #701 primary regression
-// guard. /api/history must honour the provider / account_ids / start / end
+// guard. /api/history must honor the provider / account_ids / start / end
 // query params the frontend sends — both on the SQL path (purchase_history
-// rows in fetchPurchaseHistory) and on the in-memory path (synthesised
+// rows in fetchPurchaseHistory) and on the in-memory path (synthesized
 // execution rows in fetchExecutionsAsHistory). The filters were previously
 // dropped silently; visible filter affordances were no-ops.
 //
@@ -1651,7 +1651,7 @@ func TestMatchesExecution_ExternalIDOnlyPending(t *testing.T) {
 // TestHandler_getHistory_CompletedExecutionNotDuplicated guards the dedup path.
 // The store loads "completed" executions now (so audit-gap rows can surface),
 // but a NORMAL completed execution (Error=="") is already represented by its
-// purchase_history rows and must NOT be synthesised a second time. The History
+// purchase_history rows and must NOT be synthesized a second time. The History
 // list must contain exactly one row for that purchase.
 func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 	ctx := context.Background()
@@ -1664,7 +1664,7 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 	// execution (exec-clean-1) and the purchase_history row (ri-commitment-1)
 	// are separate records with different IDs; the test does not assert they
 	// match. It asserts that ALL clean completed executions are skipped (not
-	// synthesised) because they are assumed already represented by their
+	// synthesized) because they are assumed already represented by their
 	// purchase_history rows, so the surviving row is the purchase_history one.
 	cleanCompletedExec := []config.PurchaseExecution{
 		{
@@ -1694,12 +1694,12 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 }
 
 // TestSummarizePurchaseHistory_CancelledExcludedFromKPIs is the regression
-// test for issue #736. Cancelling a pending purchase must not add its upfront
+// test for issue #736. Canceling a pending purchase must not add its upfront
 // cost or savings to the KPI totals. Specifically:
 //   - TotalUpfront, TotalMonthlySavings, TotalAnnualSavings must reflect only
 //     the approved/completed rows.
-//   - TotalCompleted must not include cancelled rows.
-//   - A pre-existing cancelled row in the dataset must also be excluded.
+//   - TotalCompleted must not include canceled rows.
+//   - A pre-existing canceled row in the dataset must also be excluded.
 func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 	purchases := []config.PurchaseHistoryRecord{
 		// Three completed rows that should contribute to the KPI totals.
@@ -1708,29 +1708,29 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 		{Status: "", UpfrontCost: 50.0, EstimatedSavings: 5.0}, // legacy row, no status
 		// One pending row that should be counted as pending, not completed.
 		{Status: "pending", UpfrontCost: 999.0, EstimatedSavings: 99.0},
-		// Two cancelled rows — the regression case from issue #736.
+		// Two canceled rows — the regression case from issue #736.
 		// Neither must appear in the dollar KPIs or TotalCompleted.
-		{Status: "cancelled", UpfrontCost: 500.0, EstimatedSavings: 50.0},
-		{Status: "cancelled", UpfrontCost: 750.0, EstimatedSavings: 75.0},
+		{Status: "canceled", UpfrontCost: 500.0, EstimatedSavings: 50.0},
+		{Status: "canceled", UpfrontCost: 750.0, EstimatedSavings: 75.0},
 	}
 
 	summary := summarizePurchaseHistory(purchases)
 
 	assert.Equal(t, 6, summary.TotalPurchases, "all rows count toward TotalPurchases")
-	assert.Equal(t, 3, summary.TotalCompleted, "cancelled rows must not inflate TotalCompleted")
+	assert.Equal(t, 3, summary.TotalCompleted, "canceled rows must not inflate TotalCompleted")
 	assert.Equal(t, 1, summary.TotalPending)
 
 	assert.InDelta(t, 350.0, summary.TotalUpfront, 0.001,
-		"cancelled upfront cost must not be included in TotalUpfront (issue #736)")
+		"canceled upfront cost must not be included in TotalUpfront (issue #736)")
 	assert.InDelta(t, 35.0, summary.TotalMonthlySavings, 0.001,
-		"cancelled savings must not be included in TotalMonthlySavings (issue #736)")
+		"canceled savings must not be included in TotalMonthlySavings (issue #736)")
 	assert.InDelta(t, 420.0, summary.TotalAnnualSavings, 0.001,
-		"TotalAnnualSavings = TotalMonthlySavings * 12 and must exclude cancelled (issue #736)")
+		"TotalAnnualSavings = TotalMonthlySavings * 12 and must exclude canceled (issue #736)")
 }
 
 // TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs mirrors the
 // QA reproduction scenario from issue #736: start with N approved purchases,
-// observe KPI totals, then add a cancelled execution and assert the totals
+// observe KPI totals, then add a canceled execution and assert the totals
 // are unchanged.
 // TestHandler_getHistory_LimitParsing is the 01-M1 regression guard.
 // Prior to the fix, parseHistoryFilters used fmt.Sscanf to parse the limit
@@ -1821,20 +1821,20 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 	}
 	before := summarizePurchaseHistory(baseline)
 
-	// After: same rows plus one cancelled execution (the pending that got cancelled).
+	// After: same rows plus one canceled execution (the pending that got canceled).
 	withCancelled := append(baseline, config.PurchaseHistoryRecord{ //nolint:gocritic
-		Status:           "cancelled",
+		Status:           "canceled",
 		UpfrontCost:      999.0,
 		EstimatedSavings: 99.0,
 	})
 	after := summarizePurchaseHistory(withCancelled)
 
 	assert.Equal(t, before.TotalUpfront, after.TotalUpfront,
-		"cancelling a pending purchase must not change TotalUpfront (issue #736)")
+		"canceling a pending purchase must not change TotalUpfront (issue #736)")
 	assert.Equal(t, before.TotalMonthlySavings, after.TotalMonthlySavings,
-		"cancelling a pending purchase must not change TotalMonthlySavings (issue #736)")
+		"canceling a pending purchase must not change TotalMonthlySavings (issue #736)")
 	assert.Equal(t, before.TotalAnnualSavings, after.TotalAnnualSavings,
-		"cancelling a pending purchase must not change TotalAnnualSavings (issue #736)")
+		"canceling a pending purchase must not change TotalAnnualSavings (issue #736)")
 	assert.Equal(t, before.TotalCompleted, after.TotalCompleted,
-		"cancelling a pending purchase must not change TotalCompleted (issue #736)")
+		"canceling a pending purchase must not change TotalCompleted (issue #736)")
 }

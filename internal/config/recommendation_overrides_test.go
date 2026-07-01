@@ -128,7 +128,7 @@ func TestResolveAccountConfigsForRecs_OverrideWithoutGlobal_OverrideApplied(t *t
 
 	resolved := got[AccountConfigKey("acct-A", "aws", "rds")]
 	assert.NotNil(t, resolved, "override-without-global entry must be in the map")
-	assert.False(t, resolved.Enabled, "override Enabled=false applied against synthesised baseline")
+	assert.False(t, resolved.Enabled, "override Enabled=false applied against synthesized baseline")
 	assert.Equal(t, 70.0, resolved.Coverage, "override Coverage=70 applied")
 	assert.Equal(t, "aws", resolved.Provider, "Provider set from rec")
 	assert.Equal(t, "rds", resolved.Service, "Service set from rec")

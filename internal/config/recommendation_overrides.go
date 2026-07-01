@@ -71,8 +71,8 @@ func (c *globalConfigCache) lookup(ctx context.Context, store AccountConfigReade
 //     the triple as "no filter applies".
 //
 // When a per-account override exists but no global ServiceConfig does, the
-// override is applied against a synthesised default baseline (Enabled: true)
-// so the operator's intent is honoured even when a global row has not been
+// override is applied against a synthesized default baseline (Enabled: true)
+// so the operator's intent is honored even when a global row has not been
 // created yet.
 //
 // Errors from either lookup are returned alongside the partial map so the
@@ -127,7 +127,7 @@ func ResolveAccountConfigsForRecs(
 		}
 
 		// override may be nil — ResolveServiceConfig returns global unchanged.
-		// global may be nil — ResolveServiceConfig synthesises a default baseline.
+		// global may be nil — ResolveServiceConfig synthesizes a default baseline.
 		resolved[key] = ResolveServiceConfig(rec.Provider, rec.Service, global, override)
 	}
 

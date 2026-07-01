@@ -509,7 +509,7 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 	})
 }
 
-// Test UpdateUserProfile
+// Test UpdateUserProfile.
 func TestService_ErrorPaths(t *testing.T) {
 	ctx := context.Background()
 

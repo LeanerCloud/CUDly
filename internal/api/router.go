@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// RouteHandler is a function that handles a matched route
+// RouteHandler is a function that handles a matched route.
 type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error)
 
 // AuthLevel controls how Router.Route() enforces authentication.
@@ -17,7 +17,7 @@ type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest
 // if any registered route leaves it at the zero value. See the const
 // block below for the AuthAdmin / AuthUser / AuthPublic options.
 //
-// Router.Route enforces these levels itself as a defence-in-depth check,
+// Router.Route enforces these levels itself as a defense-in-depth check,
 // in addition to the validateSecurity → authenticate middleware that runs
 // earlier in the request pipeline. If middleware ordering ever changes or
 // a new route bypasses validateSecurity, the router-level enforcement
@@ -48,7 +48,7 @@ const (
 	AuthPublic
 )
 
-// Route defines a routing rule
+// Route defines a routing rule.
 type Route struct {
 	// Pattern matching fields
 	ExactPath  string // Exact path match (e.g., "/api/health")
@@ -66,7 +66,7 @@ type Route struct {
 	Auth AuthLevel
 }
 
-// Router manages request routing
+// Router manages request routing.
 type Router struct {
 	routes []Route
 	h      *Handler
@@ -101,7 +101,7 @@ func validateRoutes(routes []Route) {
 	}
 }
 
-// registerRoutes sets up all application routes
+// registerRoutes sets up all application routes.
 func (r *Router) registerRoutes() {
 	r.routes = []Route{
 		// Dashboard endpoints — read-only views available to any signed-in
@@ -356,7 +356,7 @@ func (r *Router) registerRoutes() {
 
 // Route finds and executes the matching route handler.
 //
-// Authentication enforcement is defence-in-depth: validateSecurity →
+// Authentication enforcement is defense-in-depth: validateSecurity →
 // authenticate already runs in the middleware pipeline before dispatch,
 // but Router.Route also enforces the per-route Auth level so routes stay
 // protected even if middleware ordering changes or a new code path
@@ -380,7 +380,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 				// no auth check; relied upon by middleware via isPublicEndpoint
 			default:
 				// authUnset / unknown level — NewRouter should have already
-				// panicked at startup. Defence in depth: refuse to dispatch.
+				// panicked at startup. Defense in depth: refuse to dispatch.
 				return nil, NewClientError(500, "internal routing error")
 			}
 			params := r.extractParams(route, path)
@@ -390,7 +390,7 @@ func (r *Router) Route(ctx context.Context, method, path string, req *events.Lam
 	return nil, errNotFound
 }
 
-// matches checks if a route matches the given method and path
+// matches checks if a route matches the given method and path.
 func (r *Router) matches(route Route, method, path string) bool {
 	// Check method (if specified)
 	if route.Method != "" && route.Method != method {
@@ -414,7 +414,7 @@ func (r *Router) matches(route Route, method, path string) bool {
 	return route.PathPrefix != "" || route.PathSuffix != ""
 }
 
-// extractParams extracts path parameters from the route
+// extractParams extracts path parameters from the route.
 func (r *Router) extractParams(route Route, path string) map[string]string {
 	params := make(map[string]string)
 
@@ -801,7 +801,7 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 
-// formatNotFoundError creates a detailed not found error message
+// formatNotFoundError creates a detailed not found error message.
 func formatNotFoundError(method, path string) error {
 	return fmt.Errorf("%w: %s %s", errNotFound, method, path)
 }

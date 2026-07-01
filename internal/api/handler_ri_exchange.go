@@ -50,7 +50,7 @@ type reshapeRecsClient interface {
 	GetRIUtilization(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
 }
 
-// buildReshapeEC2Client honours the injected factory when set, falling
+// buildReshapeEC2Client honors the injected factory when set, falling
 // back to the direct AWS SDK constructor otherwise. Tests inject a
 // stub via Handler.reshapeEC2Factory; prod leaves the field nil.
 func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
@@ -77,7 +77,7 @@ type targetOfferingsEC2Client interface {
 	ListTargetOfferings(ctx context.Context, params ec2svc.ListTargetOfferingsParams) ([]ec2svc.TargetOffering, error)
 }
 
-// buildTargetOfferingsEC2Client honours the injected factory when set,
+// buildTargetOfferingsEC2Client honors the injected factory when set,
 // falling back to the direct AWS SDK constructor otherwise.
 func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsEC2Client {
 	if h.targetOfferingsEC2Factory != nil {
@@ -110,7 +110,7 @@ var offeringIDPattern = regexp.MustCompile(
 // the query so AWS returns all valid target instance types -- the full
 // menu of what the user can exchange into.
 //
-// GET /api/ri-exchange/target-offerings?source_ri_id=<uuid>&region=<region>
+// GET /api/ri-exchange/target-offerings?source_ri_id=<uuid>&region=<region>.
 func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	if _, err := h.requirePermission(ctx, req, "view", "purchases"); err != nil {
 		return nil, err
@@ -332,7 +332,7 @@ func (h *Handler) checkListRIsAccountIDParam(ctx context.Context, params map[str
 // the running AWS account.
 //
 // The optional ?account_id= query parameter narrows the listing to a single
-// AWS account so the page honours the Main Header global account filter
+// AWS account so the page honors the Main Header global account filter
 // (issue #871). Convertible RIs are read from the deployment's ambient AWS
 // credentials, which resolve to exactly one account number; when the chip
 // selects a different account, none of these RIs belong to it, so we return
@@ -1012,7 +1012,7 @@ func (h *Handler) approveRIExchange(ctx context.Context, req *events.LambdaFunct
 			}
 			// Record-level RBAC denied (e.g. approve-own user is not the creator).
 			// If a token is present, preserve legacy token flow; otherwise surface the error.
-			if !(token != "" && isPermissionDenied(sessErr)) {
+			if token == "" || !isPermissionDenied(sessErr) {
 				return nil, sessErr
 			}
 		case isPermissionDenied(err):
@@ -1044,7 +1044,7 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token strin
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	return h.executeApprovedExchange(ctx, id, record)
@@ -1077,7 +1077,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -1094,7 +1094,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 }
 
 // fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
-// that it is in "pending" state, and then verifies that session is authorised to
+// that it is in "pending" state, and then verifies that session is authorized to
 // approve it. Extracted from approveRIExchangeViaSession to keep that function
 // under the cyclomatic-complexity limit.
 func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
@@ -1329,15 +1329,15 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "canceled", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.

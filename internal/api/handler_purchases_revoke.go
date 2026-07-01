@@ -130,7 +130,7 @@ var revokeMarkRetryBackoffs = []time.Duration{
 //
 // Gmail-style pre-fire delay (issue #291 wave-2): when the ID resolves to a
 // purchase_execution in status="scheduled" (cloud SDK not yet called), the
-// execution is cancelled at zero cost and control returns immediately — no
+// execution is canceled at zero cost and control returns immediately — no
 // provider SDK call is made. This path handles AWS, GCP, and Azure uniformly
 // since nothing has been committed to any cloud yet.
 func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
@@ -225,7 +225,7 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 //
 // The method enforces revoke-any/revoke-own RBAC (same permissions as the
 // completed-purchase revoke path), then atomically transitions the execution
-// to "cancelled" and removes its purchase_suppressions.
+// to "canceled" and removes its purchase_suppressions.
 //
 // Returns 410 Gone only when the CAS observes the row already transitioned out
 // of "scheduled" (the scheduler fired the SDK call between our SELECT and the
@@ -239,19 +239,19 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 	// (scheduler lag / backpressure). Returning 410 purely on a past timestamp
 	// would break free-cancel during lag even though the CAS below can still
 	// cancel it before any cloud call. Let CancelScheduledExecutionAtomic be the
-	// sole arbiter: it returns cancelled=false (-> 410) only when the row has
+	// sole arbiter: it returns canceled=false (-> 410) only when the row has
 	// actually moved out of "scheduled".
 	if err := h.authorizeSessionRevokeExecution(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
-	// Atomically transition from scheduled -> cancelled and remove suppressions.
+	// Atomically transition from scheduled -> canceled and remove suppressions.
 	var cancelledBy *string
 	if session.Email != "" {
 		e := session.Email
 		cancelledBy = &e
 	}
-	var cancelled bool
+	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
@@ -261,18 +261,18 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 		// a scheduled row, miscoded as "race lost" -> a misleading 410 even
 		// during the happy path. Issue #290 wave-2: keep the two CAS contracts
 		// distinct so 410 unambiguously means "scheduler already fired".
-		cancelled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelScheduledExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
 		if err != nil {
 			return err
 		}
-		if !cancelled {
+		if !canceled {
 			return nil
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
 		return nil, fmt.Errorf("cancel scheduled execution %s: %w", execution.ExecutionID, err)
 	}
-	if !cancelled {
+	if !canceled {
 		// A concurrent scheduler tick transitioned the row away from "scheduled"
 		// between our SELECT and the CAS UPDATE — the window closed. Return 410
 		// so the client knows to switch to the completed-purchase revoke path.
@@ -281,11 +281,11 @@ func (h *Handler) revokeScheduledExecution(ctx context.Context, session *Session
 		))
 	}
 
-	logging.Infof("revokeScheduledExecution: execution_id=%s cancelled before SDK call (free cancel)", execution.ExecutionID)
+	logging.Infof("revokeScheduledExecution: execution_id=%s canceled before SDK call (free cancel)", execution.ExecutionID)
 
 	return map[string]string{
-		"status":  "cancelled",
-		"message": "Purchase cancelled. No cloud API call was made; no cost incurred.",
+		"status":  "canceled",
+		"message": "Purchase canceled. No cloud API call was made; no cost incurred.",
 	}, nil
 }
 

@@ -153,7 +153,7 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 
 // isPlanAllowedCached resolves and memoises whether the session may see the given plan.
 // NotFound errors are treated as "not allowed" (not an error) so missing plans don't
-// surface as 500s, mirroring the previous inline behaviour.
+// surface as 500s, mirroring the previous inline behavior.
 func (h *Handler) isPlanAllowedCached(ctx context.Context, session *Session, planID string, cache map[string]bool) (bool, error) {
 	if ok, cached := cache[planID]; cached {
 		return ok, nil
@@ -168,7 +168,7 @@ func (h *Handler) isPlanAllowedCached(ctx context.Context, session *Session, pla
 }
 
 // buildPlannedPurchase converts a (plan, execution) pair into the API-facing PlannedPurchase.
-// Provider/service/term/payment are taken from the first service entry, matching prior behaviour.
+// Provider/service/term/payment are taken from the first service entry, matching prior behavior.
 func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecution) PlannedPurchase {
 	var provider, service, payment string
 	var term int
@@ -220,7 +220,7 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 //     feedback_fail_closed_middleware.md.
 //
 // Only fetches the execution on the creator-match path: admin and update-any
-// callers are authorised without a store round-trip (and admin sessions have
+// callers are authorized without a store round-trip (and admin sessions have
 // unrestricted access, so requireExecutionAccess skipped the fetch too).
 func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Session, executionID string) error {
 	if session.UserID == apiKeyAdminUserID {
@@ -348,37 +348,37 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
+	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
 	}
 
 	// Set the parent plan's enabled flag to false so the Plans page toggle
 	// reflects the disable action immediately. Issue #774: previously the
-	// execution was cancelled but plan.enabled was left true, causing
+	// execution was canceled but plan.enabled was left true, causing
 	// inconsistent state between the Scheduled Purchases and Plans views.
-	if cancelled.PlanID != "" {
-		if err := h.disablePlan(ctx, cancelled.PlanID); err != nil {
+	if canceled.PlanID != "" {
+		if err := h.disablePlan(ctx, canceled.PlanID); err != nil {
 			return nil, err
 		}
 	}
 
-	return &StatusResponse{Status: "cancelled"}, nil
+	return &StatusResponse{Status: "canceled"}, nil
 }
 
-// cancelOrRecoverExecution transitions the execution to "cancelled" if it is
-// still in {pending, paused}. If a prior attempt already cancelled it
+// cancelOrRecoverExecution transitions the execution to "canceled" if it is
+// still in {pending, paused}. If a prior attempt already canceled it
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
 // can still drive the plan-disable side-effect, keeping the operation
 // idempotent across retries.
 // actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
-	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled", actor)
+	canceled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "canceled", actor)
 	if err == nil {
-		return cancelled, nil
+		return canceled, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: %v", executionID, err))
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
 	if getErr != nil {
@@ -387,9 +387,9 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if existing == nil {
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
-	if existing.Status != "cancelled" {
+	if existing.Status != "canceled" {
 		return nil, NewClientError(409, fmt.Sprintf(
-			"execution %s cannot be cancelled (status=%s)",
+			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))
 	}
 	return existing, nil
@@ -447,7 +447,7 @@ func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*con
 	return execution, nil
 }
 
-// Purchase action handlers
+// Purchase action handlers.
 func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, execID, token string) (any, error) {
 	if err := validateUUID(execID); err != nil {
 		return nil, err
@@ -634,7 +634,7 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 // The scheduler picks up rows with status=scheduled and
 // scheduled_execution_at <= NOW() and fires the actual SDK call.
 // Revoking a status=scheduled execution (via the revoke handler or the
-// History "Revoke" button) transitions it to "cancelled" at zero cloud cost.
+// History "Revoke" button) transitions it to "canceled" at zero cloud cost.
 func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (any, error) {
 	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy)
 	if err != nil {
@@ -671,9 +671,9 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 //
 // The atomic CAS (TransitionExecutionStatus WHERE status IN (pending,notified))
 // prevents a silent revoke loss: if a concurrent Cancel flipped the row to
-// "cancelled" between the caller's SELECT and this write, TransitionExecutionStatus
+// "canceled" between the caller's SELECT and this write, TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
-// blindly overwriting the cancelled state.
+// blindly overwriting the canceled state.
 func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (*config.PurchaseExecution, error) {
 	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled", transitionedBy)
 	if err != nil {
@@ -891,7 +891,7 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
 			return nil, err
 		}
-		return map[string]string{"status": "cancelled"}, nil
+		return map[string]string{"status": "canceled"}, nil
 	}
 
 	return h.cancelPurchaseViaSession(ctx, req, execution)
@@ -900,17 +900,17 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 // cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
 // Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
 // is in a cancellable state (pending|notified), atomically flips the row
-// to "cancelled" AND drops its purchase_suppressions in the same
+// to "canceled" AND drops its purchase_suppressions in the same
 // transaction, and stamps session.Email onto CancelledBy. The History
 // UI's annotateCancelled() helper renders CancelledBy as
-// "cancelled by <email>" at read time — see handler_history.go.
+// "canceled by <email>" at read time — see handler_history.go.
 //
 // The atomic suppression cleanup mirrors purchase.Manager.CancelExecution
 // on the email-token path: an executePurchase upfront writes
 // purchase_suppressions to hide the just-bought capacity from the
 // recommendations list during the grace window, and cancel must drop
 // those rows in the same commit so a crash between the two writes can't
-// leave the rec list hiding capacity the user already cancelled.
+// leave the rec list hiding capacity the user already canceled.
 func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
 	// These endpoints are AuthPublic so the outer middleware skips CSRF.
 	// Enforce it here for the session-authed sub-path: the session bearer
@@ -925,14 +925,14 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 	}
 
 	if !execution.IsCancelable() {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled (status=%s)", execution.ExecutionID, execution.Status))
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
 	}
 
 	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
-	// Atomically flip status from pending/notified to cancelled + clear
+	// Atomically flip status from pending/notified to canceled + clear
 	// suppressions in one tx. CancelExecutionAtomic issues a conditional
 	// UPDATE WHERE status IN ('pending','notified'), so a concurrent approve
 	// that has already transitioned the row to 'approved' causes zero rows
@@ -943,26 +943,26 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		e := session.Email
 		cancelledBy = &e
 	}
-	var cancelled bool
+	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		cancelled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
 		if err != nil {
 			return err
 		}
-		if !cancelled {
+		if !canceled {
 			return nil
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
 		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, err)
 	}
-	if !cancelled {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
+	if !canceled {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
@@ -1393,7 +1393,8 @@ func (h *Handler) tryResolveActorEmail(ctx context.Context, req *events.LambdaFu
 // failures into the contact_email gate — exactly the misclassification
 // the propagate-vs-fall-through split is meant to prevent.
 func isPermissionDenied(err error) bool {
-	ce, ok := err.(*clientError)
+	ce := &clientError{}
+	ok := errors.As(err, &ce)
 	return ok && ce.code == 403
 }
 
@@ -1401,7 +1402,7 @@ func isPermissionDenied(err error) bool {
 // the request carries no Bearer token, the auth service isn't configured,
 // or session validation fails. Mirrors tryResolveActorEmail's silent
 // best-effort semantics so AuthPublic callers can opt into session-aware
-// behaviour without forcing a 401 on tokenless flows.
+// behavior without forcing a 401 on tokenless flows.
 func (h *Handler) tryGetSession(ctx context.Context, req *events.LambdaFunctionURLRequest) *Session {
 	if req == nil || h.auth == nil {
 		return nil
@@ -1443,7 +1444,7 @@ func buildPurchaseDetailsResponse(execution *config.PurchaseExecution, planName 
 	return response
 }
 
-// getPurchaseDetails returns details about a specific purchase execution
+// getPurchaseDetails returns details about a specific purchase execution.
 func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (any, error) {
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
@@ -1482,7 +1483,7 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 	return buildPurchaseDetailsResponse(execution, planName), nil
 }
 
-// ExecutePurchaseRequest represents the request to execute purchases
+// ExecutePurchaseRequest represents the request to execute purchases.
 type ExecutePurchaseRequest struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	// CapacityPercent is what fraction (1..100) of the originally-
@@ -1495,7 +1496,7 @@ type ExecutePurchaseRequest struct {
 	// email and executes the purchase immediately. The only accepted
 	// non-empty value is "direct"; any other value is treated as the
 	// default approval-required flow. The handler re-checks the
-	// execute-any/execute-own RBAC gate before honouring "direct",
+	// execute-any/execute-own RBAC gate before honoring "direct",
 	// even if the session already passed the execute:purchases gate in
 	// validateExecutePurchaseRequest, so a client that sets this field
 	// without the privilege receives a 403 rather than silent fallback.
@@ -2159,7 +2160,7 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 	return ""
 }
 
-// resolveApprovalRecipients computes the To / Cc / authorised-approver sets
+// resolveApprovalRecipients computes the To / Cc / authorized-approver sets
 // for a purchase approval email based on the recommendations' account
 // contact emails and the global Settings → General notification email.
 //
@@ -2167,17 +2168,17 @@ func (h *Handler) resolveDashboardURL(req *events.LambdaFunctionURLRequest) stri
 // purchase in that account; the global notification inbox is informed for
 // visibility. So we direct the email at the contact email(s) as To, list
 // any *other* contact emails plus the global notification email as Cc,
-// and the approve/cancel token is only honoured for session holders whose
-// email matches one of the authorised approvers (case-insensitive).
+// and the approve/cancel token is only honored for session holders whose
+// email matches one of the authorized approvers (case-insensitive).
 //
-// **Authorisation policy** (post-security-hardening): the authorised-
+// **Authorisation policy** (post-security-hardening): the authorized-
 // approver set is ALWAYS the per-account contact_email list, never the
 // global notification email. The global notify mailbox is informed of the
 // purchase via Cc but cannot itself approve. If no recommendation has a
 // per-account contact_email, the approver set is empty and the caller
 // must reject the approval with a clear error directing the operator to
 // set a contact email on the account. This closes the loophole where a
-// catch-all inbox could authorise spend on accounts it doesn't own.
+// catch-all inbox could authorize spend on accounts it doesn't own.
 //
 // Returns ("", nil, nil, nil) when neither contact_email nor globalNotify
 // is configured — the caller surfaces a user-facing error.
@@ -2226,7 +2227,7 @@ func (h *Handler) resolveApprovalRecipients(ctx context.Context, recs []config.R
 // insertion-ordered list of contact emails for the unique accounts
 // referenced by recs. Accounts without a CloudAccountID or without a
 // contact_email are silently skipped — they're not an error, just not a
-// contribution to the authorised-approver set. A real DB error from
+// contribution to the authorized-approver set. A real DB error from
 // lookupContactEmail is propagated so the caller surfaces it as a
 // retriable failure instead of silently degrading to a globalNotify
 // fallback (which would be wrong: a transient DB blip should not change
@@ -2287,7 +2288,7 @@ func uniqueAccountIDsFromRecs(recs []config.RecommendationRecord) []string {
 //
 //   - real DB error → return ("", err). The caller propagates as a
 //     retriable failure rather than silently treating the actor as
-//     unauthorised or falling through to globalNotify; a transient
+//     unauthorized or falling through to globalNotify; a transient
 //     blip should not change who is allowed to approve.
 //   - account-not-found (GetCloudAccount returns nil, nil per pgx
 //     ErrNoRows handling in the postgres store) → return ("", nil).
@@ -2320,9 +2321,9 @@ func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, er
 
 // authorizeApprovalAction returns the actor email to record on an
 // approve/cancel action, after enforcing that the session-authenticated
-// user's email is on the authorised-approver list for the given execution.
+// user's email is on the authorized-approver list for the given execution.
 // Returns a 403 ClientError when the session is missing or the email
-// doesn't match. The returned actor is stored as approved_by/cancelled_by
+// doesn't match. The returned actor is stored as approved_by/canceled_by
 // on the execution.
 //
 // Rationale: the approve/cancel API routes are AuthPublic (token-only) for
@@ -2360,5 +2361,5 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 			return actor, nil
 		}
 	}
-	return "", NewClientError(403, "your session email is not the authorised approver for this purchase")
+	return "", NewClientError(403, "your session email is not the authorized approver for this purchase")
 }

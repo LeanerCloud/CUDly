@@ -84,7 +84,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	if len(successfulCollects) > 0 {
 		providers, accountKeys, err := successfulCollectArrays(successfulCollects)
 		if err != nil {
-			return fmt.Errorf("failed to materialise successful-collect arrays: %w", err)
+			return fmt.Errorf("failed to materialize successful-collect arrays: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM recommendations
@@ -443,7 +443,7 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 //
 // Returns true when this caller won the race (rowsAffected == 1) and should
 // proceed with the async invoke. Returns false when another collection is
-// already in flight (rowsAffected == 0), signalling the handler to return
+// already in flight (rowsAffected == 0), signaling the handler to return
 // 409 Conflict.
 func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (bool, error) {
 	tag, err := s.db.Exec(ctx, `

@@ -15,7 +15,7 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// MockSecretIterator implements the iterator interface for testing
+// MockSecretIterator implements the iterator interface for testing.
 type MockSecretIterator struct {
 	secrets []*secretmanagerpb.Secret
 	index   int
@@ -34,7 +34,7 @@ func (m *MockSecretIterator) Next() (*secretmanagerpb.Secret, error) {
 	return secret, nil
 }
 
-// MockGCPSecretManagerClient is a mock implementation of the GCP Secret Manager client
+// MockGCPSecretManagerClient is a mock implementation of the GCP Secret Manager client.
 type MockGCPSecretManagerClient struct {
 	mock.Mock
 }
@@ -57,7 +57,7 @@ func (m *MockGCPSecretManagerClient) Close() error {
 	return args.Error(0)
 }
 
-// testableGCPResolver wraps GCPResolver to allow injecting a mock client
+// testableGCPResolver wraps GCPResolver to allow injecting a mock client.
 type testableGCPResolver struct {
 	mockClient *MockGCPSecretManagerClient
 	projectID  string
@@ -104,7 +104,7 @@ func (r *testableGCPResolver) ListSecrets(ctx context.Context, filter string) ([
 
 	for {
 		secret, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

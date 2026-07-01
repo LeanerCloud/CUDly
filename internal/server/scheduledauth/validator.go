@@ -54,7 +54,7 @@ type Config struct {
 	Issuer    string   // OIDC issuer; defaults to GoogleIssuer in oidc mode
 	JWKSURL   string   // OIDC JWKS endpoint; defaults to GoogleJWKSURL in oidc mode
 	Audiences []string // accepted aud claims (must be non-empty in oidc mode)
-	Subjects  []string // accepted sub claims (REQUIRED non-empty in oidc mode — defence in depth)
+	Subjects  []string // accepted sub claims (REQUIRED non-empty in oidc mode — defense in depth)
 	Skew      time.Duration
 	Bearer    string // shared secret for bearer mode (must be non-empty)
 }
@@ -148,7 +148,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	// claim for Cloud Scheduler-signed ID tokens. That is what
 	// SCHEDULED_TASK_OIDC_SUBJECTS must contain.
 	if len(cfg.Subjects) == 0 {
-		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_SUBJECTS (defence in depth)", ErrConfigInvalid)
+		return nil, fmt.Errorf("%w: oidc mode requires SCHEDULED_TASK_OIDC_SUBJECTS (defense in depth)", ErrConfigInvalid)
 	}
 
 	auds, err := cleanSet(cfg.Audiences, "SCHEDULED_TASK_OIDC_AUDIENCE")
@@ -202,7 +202,7 @@ func cleanSet(in []string, label string) (map[string]struct{}, error) {
 func validateAbsoluteURL(raw, label string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: %s must be an absolute URL: %v", ErrConfigInvalid, label, err)
+		return fmt.Errorf("%w: %s must be an absolute URL: %w", ErrConfigInvalid, label, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("%w: %s must be an absolute URL", ErrConfigInvalid, label)
@@ -245,7 +245,7 @@ func (v *Validator) Warmup(ctx context.Context) {
 		ctx, cancel = context.WithTimeout(ctx, warmupTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, http.NoBody)
 	if err != nil {
 		log.Printf("scheduledauth: WARN — JWKS warmup request build failed: %v", err)
 		return
@@ -339,7 +339,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// and skew-tolerant expiry checks below.
 	idToken, err := v.verifier.Verify(ctx, rawToken)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %w", ErrUnauthorized, err)
 	}
 
 	// Re-parse the payload to access iat / nbf — IDToken exposes Expiry
@@ -347,7 +347,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 	// nbf is not exposed as a typed field.
 	var c claims
 	if err := idToken.Claims(&c); err != nil {
-		return fmt.Errorf("%w: malformed claims: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: malformed claims: %w", ErrUnauthorized, err)
 	}
 
 	if err := v.checkTimestamps(c); err != nil {
@@ -361,7 +361,7 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 		return fmt.Errorf("%w: audience %v not in allowlist", ErrUnauthorized, idToken.Audience)
 	}
 
-	// Subject pinning: required defence-in-depth — any GCP SA in the
+	// Subject pinning: required defense-in-depth — any GCP SA in the
 	// org could mint a token with our `aud` value, but only the
 	// scheduler SA has our `sub`.
 	if _, ok := v.subjects[idToken.Subject]; !ok {

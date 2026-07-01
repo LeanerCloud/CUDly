@@ -293,14 +293,14 @@ func TestNewResolver_MultipleEnvResolvers(t *testing.T) {
 	assert.Equal(t, "value", val2)
 }
 
-// TestNewResolver_ContextCancellation tests behavior with cancelled context
+// TestNewResolver_ContextCancellation tests behavior with canceled context
 func TestNewResolver_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
 	config := &Config{Provider: "env"}
 
-	// EnvResolver should still work with cancelled context
+	// EnvResolver should still work with canceled context
 	// since it doesn't actually use the context for initialization
 	resolver, err := NewResolver(ctx, config)
 	require.NoError(t, err)

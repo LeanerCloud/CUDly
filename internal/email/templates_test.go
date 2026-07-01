@@ -158,7 +158,7 @@ func TestSender_SendWelcomeEmail_Success(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-// Test template success paths with no recommendations (edge case)
+// Test template success paths with no recommendations (edge case).
 func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
@@ -181,7 +181,7 @@ func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testi
 	mockSNS.AssertExpectations(t)
 }
 
-// Test when topic/from email are empty (early return paths)
+// Test when topic/from email are empty (early return paths).
 func TestSender_SendNewRecommendationsNotification_NoTopic(t *testing.T) {
 	sender := &Sender{
 		topicARN: "",
@@ -269,7 +269,7 @@ func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test error cases for template functions
+// Test error cases for template functions.
 func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	sender := &Sender{
@@ -389,7 +389,7 @@ func TestSender_SendWelcomeEmail_SESError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Test multiple recommendations in templates
+// Test multiple recommendations in templates.
 func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).

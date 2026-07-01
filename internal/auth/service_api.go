@@ -40,14 +40,14 @@ type APIGroup struct {
 	UpdatedAt       string          `json:"updated_at,omitempty"`
 }
 
-// APIPermission is the permission type for API responses
+// APIPermission is the permission type for API responses.
 type APIPermission struct {
 	Action      string                   `json:"action"`
 	Resource    string                   `json:"resource"`
 	Constraints *APIPermissionConstraint `json:"constraints,omitempty"`
 }
 
-// APIPermissionConstraint is the permission constraint type for API responses
+// APIPermissionConstraint is the permission constraint type for API responses.
 type APIPermissionConstraint struct {
 	Accounts  []string `json:"accounts,omitempty"`
 	Providers []string `json:"providers,omitempty"`
@@ -91,7 +91,7 @@ type APIUpdateUserRequest struct {
 	Groups []string `json:"groups,omitempty"`
 }
 
-// APICreateGroupRequest is the request type for creating groups via API
+// APICreateGroupRequest is the request type for creating groups via API.
 type APICreateGroupRequest struct {
 	Name            string          `json:"name"`
 	Description     string          `json:"description,omitempty"`
@@ -198,7 +198,7 @@ func apiPermissionToPermission(ap APIPermission) Permission {
 // API adapter methods - these implement the AuthServiceInterface from handler.go
 // They use any to avoid import cycles with the api package
 
-// CreateUserAPI creates a new user via the API
+// CreateUserAPI creates a new user via the API.
 func (s *Service) CreateUserAPI(ctx context.Context, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APICreateUserRequest)
 	if !ok {
@@ -246,7 +246,7 @@ func (s *Service) UpdateUserAPI(ctx context.Context, actorUserID, userID string,
 	return userToAPIUser(user), nil
 }
 
-// ListUsersAPI returns all users via the API
+// ListUsersAPI returns all users via the API.
 func (s *Service) ListUsersAPI(ctx context.Context) (any, error) {
 	users, err := s.ListUsers(ctx)
 	if err != nil {
@@ -259,7 +259,7 @@ func (s *Service) ListUsersAPI(ctx context.Context) (any, error) {
 	return result, nil
 }
 
-// ChangePasswordAPI changes a user's password via the API
+// ChangePasswordAPI changes a user's password via the API.
 func (s *Service) ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error {
 	req := ChangePasswordRequest{
 		CurrentPassword: currentPassword,
@@ -268,7 +268,7 @@ func (s *Service) ChangePasswordAPI(ctx context.Context, userID, currentPassword
 	return s.ChangePassword(ctx, userID, req)
 }
 
-// CreateGroupAPI creates a new group via the API
+// CreateGroupAPI creates a new group via the API.
 func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APICreateGroupRequest)
 	if !ok {
@@ -291,7 +291,7 @@ func (s *Service) CreateGroupAPI(ctx context.Context, reqInterface any) (any, er
 	return groupToAPIGroup(group), nil
 }
 
-// UpdateGroupAPI updates a group via the API
+// UpdateGroupAPI updates a group via the API.
 func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterface any) (any, error) {
 	req, ok := reqInterface.(APIUpdateGroupRequest)
 	if !ok {
@@ -329,7 +329,7 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, groupID string, reqInterfa
 	return groupToAPIGroup(group), nil
 }
 
-// GetGroupAPI returns a group by ID via the API
+// GetGroupAPI returns a group by ID via the API.
 func (s *Service) GetGroupAPI(ctx context.Context, groupID string) (any, error) {
 	group, err := s.GetGroup(ctx, groupID)
 	if err != nil {
@@ -341,7 +341,7 @@ func (s *Service) GetGroupAPI(ctx context.Context, groupID string) (any, error) 
 	return groupToAPIGroup(group), nil
 }
 
-// ListGroupsAPI returns all groups via the API
+// ListGroupsAPI returns all groups via the API.
 func (s *Service) ListGroupsAPI(ctx context.Context) (any, error) {
 	groups, err := s.ListGroups(ctx)
 	if err != nil {
@@ -354,7 +354,7 @@ func (s *Service) ListGroupsAPI(ctx context.Context) (any, error) {
 	return result, nil
 }
 
-// HasPermissionAPI checks if a user has a specific permission via the API
+// HasPermissionAPI checks if a user has a specific permission via the API.
 func (s *Service) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	return s.HasPermission(ctx, userID, action, resource, nil)
 }

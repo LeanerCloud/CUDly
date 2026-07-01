@@ -120,7 +120,7 @@ func TestBuildAndUpload_SuccessWithFrontendDirEnv(t *testing.T) {
 	assert.Contains(t, uploaded, "index.html")
 }
 
-// TestFindFrontendDir_EnvVar_NotFound tests the env var path when package.json is absent
+// TestFindFrontendDir_EnvVar_NotFound tests the env var path when package.json is absent.
 func TestFindFrontendDir_EnvVar_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Point env var to dir without package.json
@@ -134,7 +134,7 @@ func TestFindFrontendDir_EnvVar_NotFound(t *testing.T) {
 	_ = err
 }
 
-// TestFindFrontendDir_EnvVar_Found tests the env var path when package.json exists
+// TestFindFrontendDir_EnvVar_Found tests the env var path when package.json exists.
 func TestFindFrontendDir_EnvVar_Found(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(`{}`), 0644))
@@ -146,7 +146,7 @@ func TestFindFrontendDir_EnvVar_Found(t *testing.T) {
 	assert.NotEmpty(t, dir)
 }
 
-// TestGetConfigPath_HomeDirError tests GetConfigPath when HOME is unset
+// TestGetConfigPath_HomeDirError tests GetConfigPath when HOME is unset.
 func TestGetConfigPath_HomeError(t *testing.T) {
 	original := os.Getenv("HOME")
 	os.Unsetenv("HOME")
@@ -157,7 +157,7 @@ func TestGetConfigPath_HomeError(t *testing.T) {
 	os.Setenv("HOME", original)
 }
 
-// TestGetConfigDir_HomeError tests GetConfigDir when HOME is unset
+// TestGetConfigDir_HomeError tests GetConfigDir when HOME is unset.
 func TestGetConfigDir_HomeError(t *testing.T) {
 	original := os.Getenv("HOME")
 	os.Unsetenv("HOME")
@@ -166,7 +166,7 @@ func TestGetConfigDir_HomeError(t *testing.T) {
 	os.Setenv("HOME", original)
 }
 
-// TestLoadConfig_ParseError tests LoadConfig when the config file contains invalid YAML
+// TestLoadConfig_ParseError tests LoadConfig when the config file contains invalid YAML.
 func TestLoadConfig_ParseError(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -182,7 +182,7 @@ func TestLoadConfig_ParseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to parse config file")
 }
 
-// TestEmptyBucket_DeleteWithErrors covers the per-object error handling branch
+// TestEmptyBucket_DeleteWithErrors covers the per-object error handling branch.
 func TestFrontendService_EmptyBucket_DeleteWithErrors(t *testing.T) {
 	errKey := "locked-file.html"
 	errMsg := "access denied"

@@ -15,15 +15,15 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 )
 
-// Security constants
+// Security constants.
 const (
-	// MaxRequestBodySize is the maximum allowed request body size (1MB)
+	// MaxRequestBodySize is the maximum allowed request body size (1MB).
 	MaxRequestBodySize = 1 * 1024 * 1024
 )
 
 // Input validation helpers
 
-// uuidRegex validates UUID format (used for path parameters)
+// uuidRegex validates UUID format (used for path parameters).
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // gcpClientEmailRegex matches a GCP service-account email.
@@ -51,7 +51,7 @@ var awsWebIdentityTokenFilePrefixes = []string{
 	"/var/run/secrets/kubernetes.io/serviceaccount/",
 }
 
-// validProviders are the allowed provider values
+// validProviders are the allowed provider values.
 var validProviders = map[string]bool{
 	"":      true, // empty is allowed (means all)
 	"all":   true,
@@ -64,7 +64,7 @@ var validProviders = map[string]bool{
 // Uppercase is rejected to prevent stored-XSS via mixed-case surprises and to keep names consistent.
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// regionNameRegex validates AWS/Azure/GCP region names - requires at least one character
+// regionNameRegex validates AWS/Azure/GCP region names - requires at least one character.
 var regionNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // validateGCPClientEmail returns a 400 error when gcp_client_email is non-empty
@@ -118,7 +118,7 @@ func validateAWSWebIdentityTokenFile(path string) error {
 		"/var/run/secrets/kubernetes.io/serviceaccount/)")
 }
 
-// validateProvider checks if a provider value is valid
+// validateProvider checks if a provider value is valid.
 func validateProvider(provider string) error {
 	if !validProviders[provider] {
 		return NewClientError(400, "invalid provider: must be aws, azure, gcp, or all")
@@ -315,7 +315,7 @@ func payloadDepth(m map[string]interface{}, current int) int {
 	return max
 }
 
-// validateServiceName checks if a service name is valid
+// validateServiceName checks if a service name is valid.
 func validateServiceName(service string) error {
 	// Empty is allowed for queries (means all services)
 	if service == "" {
@@ -334,7 +334,7 @@ func validateServiceName(service string) error {
 	return nil
 }
 
-// validateRegion checks if a region name is valid
+// validateRegion checks if a region name is valid.
 func validateRegion(region string) error {
 	// Empty is allowed for queries (means all regions)
 	if region == "" {
@@ -353,7 +353,7 @@ func validateRegion(region string) error {
 	return nil
 }
 
-// validateServicePath checks for path traversal attacks in service paths
+// validateServicePath checks for path traversal attacks in service paths.
 func validateServicePath(service string) error {
 	// Reject path traversal attempts
 	if strings.Contains(service, "..") {
@@ -379,7 +379,7 @@ func validateServicePath(service string) error {
 	return nil
 }
 
-// validateUUID checks if a string is a valid UUID
+// validateUUID checks if a string is a valid UUID.
 func validateUUID(id string) error {
 	if !uuidRegex.MatchString(id) {
 		return NewClientError(400, "invalid ID format: must be a valid UUID")
@@ -398,7 +398,7 @@ func validUUIDPtrOrNil(p *string) *string {
 	return p
 }
 
-// validateContentType checks if the Content-Type header is acceptable for the request
+// validateContentType checks if the Content-Type header is acceptable for the request.
 func validateContentType(req *events.LambdaFunctionURLRequest) error {
 	method := req.RequestContext.HTTP.Method
 	// Only POST/PUT/PATCH with bodies need content-type validation
@@ -432,7 +432,7 @@ func validateContentType(req *events.LambdaFunctionURLRequest) error {
 	return NewClientError(400, "unsupported Content-Type: must be application/json")
 }
 
-// validateRequestBodySize checks if the request body is within allowed limits
+// validateRequestBodySize checks if the request body is within allowed limits.
 func validateRequestBodySize(body string) error {
 	if len(body) > MaxRequestBodySize {
 		return NewClientError(400, fmt.Sprintf("request body too large: maximum size is %d bytes", MaxRequestBodySize))

@@ -17,12 +17,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// STSClient interface for AWS STS operations
+// STSClient interface for AWS STS operations.
 type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// ManagerConfig holds configuration for the purchase manager
+// ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
 	ConfigStore            config.StoreInterface
 	EmailSender            email.SenderInterface
@@ -48,7 +48,7 @@ type ManagerConfig struct {
 	OIDCIssuerURL string
 }
 
-// Manager handles purchase workflow
+// Manager handles purchase workflow.
 type Manager struct {
 	config          config.StoreInterface
 	email           email.SenderInterface
@@ -64,7 +64,7 @@ type Manager struct {
 	oidcIssuerURL   string
 }
 
-// PurchaseDefaults holds default purchase settings
+// PurchaseDefaults holds default purchase settings.
 type PurchaseDefaults struct {
 	Term         int
 	Payment      string
@@ -72,7 +72,7 @@ type PurchaseDefaults struct {
 	RampSchedule string
 }
 
-// ProcessResult holds the result of processing scheduled purchases
+// ProcessResult holds the result of processing scheduled purchases.
 type ProcessResult struct {
 	Processed int `json:"processed"`
 	Executed  int `json:"executed"`
@@ -102,12 +102,12 @@ type ProcessResult struct {
 // single env-configurable threshold.
 const staleApprovedThreshold = 15 * time.Minute
 
-// NotificationResult holds the result of sending notifications
+// NotificationResult holds the result of sending notifications.
 type NotificationResult struct {
 	Notified int `json:"notified"`
 }
 
-// NewManager creates a new purchase manager
+// NewManager creates a new purchase manager.
 func NewManager(cfg ManagerConfig) *Manager {
 	factory := cfg.ProviderFactory
 	if factory == nil {
@@ -242,7 +242,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		// original execErr as the innermost %w so errors.As/errors.Is can still
 		// reach it from callers (e.g. claimAndRedrive checking ErrAuditLoss).
 		if execErr != nil {
-			execErr = fmt.Errorf("%w: terminal save failed (%v); original execution error: %w",
+			execErr = fmt.Errorf("%w: terminal save failed (%w); original execution error: %w",
 				config.ErrAuditLoss, err, execErr)
 		} else {
 			execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
@@ -298,7 +298,7 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 func recIsSafeToRedrive(rec config.RecommendationRecord) bool {
 	switch rec.Provider {
 	case "", "aws":
-		// Empty provider is legacy AWS. All AWS services honour IdempotencyToken.
+		// Empty provider is legacy AWS. All AWS services honor IdempotencyToken.
 		return true
 	case "azure":
 		// Azure savings-plans uses a timestamp-based alias name and has no
@@ -450,7 +450,7 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 // without a stable ExecutionID (legacy rows) also fall through because
 // idempotencyLineageKey(exec) falls back to "" for them and
 // DeriveIdempotencyToken("", i) would produce the same token set for every
-// such row. These fall through to the original behaviour: the row is atomically
+// such row. These fall through to the original behavior: the row is atomically
 // transitioned to "failed" so it surfaces in History and can be Retry-ed by
 // an operator after confirming the cloud-side state.
 //
@@ -468,7 +468,7 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	for i := range stranded {
 		exec := &stranded[i]
 
-		// Idempotent re-drive path (issue #639): all recs honour
+		// Idempotent re-drive path (issue #639): all recs honor
 		// opts.IdempotencyToken via DeriveIdempotencyToken(idempotencyLineageKey(exec), i),
 		// so a second in-place call on the same row is a safe no-op on the
 		// provider side. The ExecutionID must be non-empty so the lineage key
@@ -498,7 +498,7 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	return recovered, nil
 }
 
-// ProcessScheduledPurchases checks for and executes scheduled purchases
+// ProcessScheduledPurchases checks for and executes scheduled purchases.
 func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult, error) {
 	logging.Info("Processing scheduled purchases...")
 
@@ -535,7 +535,7 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 		// pre-purchase states proceed. The query already filters to
 		// pending/notified, but a row another worker transitioned in the gap
 		// between SELECT and here (approved/running/failed/...) must be skipped.
-		// The atomic claim below is the real guard; this is defence-in-depth.
+		// The atomic claim below is the real guard; this is defense-in-depth.
 		if exec.Status != "pending" && exec.Status != "notified" {
 			continue
 		}

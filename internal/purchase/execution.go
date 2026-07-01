@@ -35,7 +35,7 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	// Direct-execute purchases (Opportunities "Purchase" button) arrive
 	// with no associated plan. PlanID is empty and the Postgres UUID
 	// column rejects "" with SQLSTATE 22P02, so skip the plan/accounts
-	// fetch entirely and synthesise a placeholder plan whose Name is the
+	// fetch entirely and synthesize a placeholder plan whose Name is the
 	// only field downstream history/notification code reads. By
 	// definition direct-execute purchases target a single account, so
 	// fall straight through to the legacy single-account path.
@@ -138,13 +138,13 @@ func anyRecPurchased(recs []config.RecommendationRecord) bool {
 
 // multiAccountPartialError is the sentinel returned by executeMultiAccount when
 // at least one account committed a real purchase while one or more others
-// failed (issue #1014). It is the multi-account analogue of partialPurchaseError:
+// failed (issue #1014). It is the multi-account analog of partialPurchaseError:
 // the executor entry points must NOT treat this as a flat failure — the
 // per-account rows already own their authoritative status (partially_completed /
 // completed / failed) and real commitments exist, so an SQS/cron caller must ACK
 // the message (not redeliver) to avoid re-running the fan-out and double-buying
 // the accounts that already succeeded (which #1012's stable key would otherwise
-// dedupe, but the contract should not depend on that second line of defence).
+// dedupe, but the contract should not depend on that second line of defense).
 type multiAccountPartialError struct {
 	committed int
 	errors    []string
@@ -296,7 +296,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 // The second return value is the resolved target account's ExternalID — the
 // provider-appropriate account identifier (AWS account number, Azure
 // subscription, GCP project) that the caller stamps onto purchase_history
-// (#646). It is "" when no target account could be identified, signalling the
+// (#646). It is "" when no target account could be identified, signaling the
 // caller to fall back to the ambient AWS STS identity.
 //
 // The account is taken from exec.CloudAccountID when set (plan-with-single-
@@ -464,7 +464,7 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 
 // getMaxAccountParallelism is a thin alias over the shared
 // execution.ConcurrencyFromEnv so the purchase manager and the scheduler
-// both honour the same CUDLY_MAX_ACCOUNT_PARALLELISM override.
+// both honor the same CUDLY_MAX_ACCOUNT_PARALLELISM override.
 func getMaxAccountParallelism() int {
 	return execution.ConcurrencyFromEnv()
 }
@@ -571,7 +571,7 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 		}
 		v := r.Value
 		i := v.index
-		// Defence-in-depth: even with the closure's bounds check, never
+		// Defense-in-depth: even with the closure's bounds check, never
 		// index past exec.Recommendations here (a future refactor that
 		// mutates the slice between fan-out and aggregation would corrupt
 		// this otherwise).
@@ -608,7 +608,7 @@ func (m *Manager) aggregatePurchaseOutcomes(ctx context.Context, exec *config.Pu
 // recordHistoryAuditGap stamps exec.Error with a note that a successful
 // purchase's history record could not be saved (issue #621). The execution
 // keeps a successful status; the marker is what makes the row visible in the
-// History view (which synthesises completed executions that carry an Error).
+// History view (which synthesizes completed executions that carry an Error).
 // Appends rather than overwrites so multiple failed history writes within one
 // execution are all recorded.
 // historyAuditGapPrefix is the structured prefix stamped on exec.Error by
@@ -639,7 +639,7 @@ func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, 
 // token and the provider dedupes the purchase. It falls back to ExecutionID
 // only for legacy rows persisted before migration 000066 (IdempotencyKey == "");
 // for a single un-retried execution that fallback is identical to the pre-fix
-// behaviour, and such legacy rows never gain a retry successor that could
+// behavior, and such legacy rows never gain a retry successor that could
 // diverge (the retry handler seeds the successor's key from the predecessor's
 // ExecutionID in that case, preserving the match).
 func idempotencyLineageKey(exec *config.PurchaseExecution) string {
@@ -665,7 +665,7 @@ func appendErrNote(existing, note string) string {
 }
 
 // normalizePurchaseSource canonicalizes exec.Source for downstream tag
-// stamping. Defence-in-depth: NormalizeSource rejects anything outside
+// stamping. Defense-in-depth: NormalizeSource rejects anything outside
 // the allowed whitelist; an unexpected value (DB tampering, future
 // code path) is dropped to "" rather than fed onto a cloud commitment
 // where it would be expensive to retract.
@@ -674,7 +674,7 @@ func appendErrNote(existing, note string) string {
 // failing the rec over a tag-only field would abort a successful cloud
 // purchase, which is a worse outcome than a missing tag. Input
 // validation at the API write boundary (exec.Source on save) is the
-// correct gate; this fallback is last-resort defence-in-depth.
+// correct gate; this fallback is last-resort defense-in-depth.
 func (m *Manager) normalizePurchaseSource(exec *config.PurchaseExecution) string {
 	source := exec.Source
 	if source == "" {
@@ -803,7 +803,7 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 }
 
 // logRecCtxErr emits a diagnostic log line when a per-recommendation context has
-// been cancelled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
+// been canceled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
 // budget fired) from Canceled (a parent context stopped the execution) so that
 // CloudWatch filters can tell the two apart without parsing error strings.
 // It is a no-op when recCtxErr is nil.
@@ -949,7 +949,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 // mapServiceType maps a service string to common.ServiceType. Both the
 // canonical hyphenated slugs (compute, relational-db, cache, search,
 // data-warehouse) and the legacy AWS-only slugs (ec2, rds, elasticache,
-// opensearch, redshift, memorydb) are recognised; everything else passes
+// opensearch, redshift, memorydb) are recognized; everything else passes
 // through verbatim. Savings Plans slugs are normalised by mapSavingsPlansSlug.
 func (m *Manager) mapServiceType(service string) common.ServiceType {
 	if svc, ok := mapSavingsPlansSlug(service); ok {

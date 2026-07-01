@@ -249,7 +249,7 @@ func TestSMTPSender_SendPurchaseFailedNotification_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test that SMTPSender implements SenderInterface
+// Test that SMTPSender implements SenderInterface.
 func TestSMTPSender_ImplementsInterface(t *testing.T) {
 	var sender SenderInterface = &SMTPSender{}
 	assert.NotNil(t, sender)

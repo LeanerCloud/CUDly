@@ -25,7 +25,7 @@ type DBRateLimiter struct {
 	cleanupInterval time.Duration
 }
 
-// Verify that DBRateLimiter implements RateLimiterInterface
+// Verify that DBRateLimiter implements RateLimiterInterface.
 var _ RateLimiterInterface = (*DBRateLimiter)(nil)
 
 // dbRateLimiterScheduledCleanupInterval is the period between scheduled
@@ -50,7 +50,7 @@ func NewDBRateLimiter(pool *pgxpool.Pool) *DBRateLimiter {
 //
 // This ensures that perpetually-denied keys (whose count never resets to 1)
 // are also evicted, preventing unbounded row growth on the rate_limits table
-// under sustained abuse (02-M2). The goroutine stops when ctx is cancelled.
+// under sustained abuse (02-M2). The goroutine stops when ctx is canceled.
 //
 // Call this once at server startup after creating the DBRateLimiter. The
 // goroutine is lightweight (one blocked timer channel) and safe to call from
@@ -70,7 +70,7 @@ func (rl *DBRateLimiter) StartCleanupWorker(ctx context.Context) {
 	}()
 }
 
-// SetLimit allows customizing rate limits for specific endpoints
+// SetLimit allows customizing rate limits for specific endpoints.
 func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 	rl.limitsMu.Lock()
 	defer rl.limitsMu.Unlock()
@@ -91,7 +91,7 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // production — see commit 9fa4170a1's sibling note in
 // known_issues/05_config_store_postgres.md).
 //
-// Behaviour: each call increments `count` (or resets to 1 if the
+// Behavior: each call increments `count` (or resets to 1 if the
 // window has expired). The returned `count` is then compared to
 // `config.MaxAttempts` to decide allow/deny. `count` may temporarily
 // drift past MaxAttempts under sustained over-limit traffic — the
@@ -144,7 +144,7 @@ func (rl *DBRateLimiter) Allow(ctx context.Context, key string, endpoint string)
 }
 
 // maybeCleanup triggers cleanup if enough time has passed since the last cleanup
-// This prevents spawning too many goroutines when under high load
+// This prevents spawning too many goroutines when under high load.
 func (rl *DBRateLimiter) maybeCleanup() {
 	// Quick check without lock - if cleanup is already running, skip
 	if rl.cleanupRunning.Load() {
@@ -174,7 +174,7 @@ func (rl *DBRateLimiter) maybeCleanup() {
 }
 
 // cleanup removes expired rate limit entries from the database
-// This is called asynchronously and errors are logged but not returned
+// This is called asynchronously and errors are logged but not returned.
 func (rl *DBRateLimiter) cleanup() {
 	if rl.pool == nil {
 		return
@@ -197,19 +197,19 @@ func (rl *DBRateLimiter) cleanup() {
 	}
 }
 
-// AllowWithIP is a convenience method that formats the key as an IP-based key
+// AllowWithIP is a convenience method that formats the key as an IP-based key.
 func (rl *DBRateLimiter) AllowWithIP(ctx context.Context, ip string, endpoint string) (bool, error) {
 	key := fmt.Sprintf("IP#%s", ip)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithEmail is a convenience method that formats the key as an email-based key
+// AllowWithEmail is a convenience method that formats the key as an email-based key.
 func (rl *DBRateLimiter) AllowWithEmail(ctx context.Context, email string, endpoint string) (bool, error) {
 	key := fmt.Sprintf("EMAIL#%s", email)
 	return rl.Allow(ctx, key, endpoint)
 }
 
-// AllowWithUser is a convenience method that formats the key as a user-based key
+// AllowWithUser is a convenience method that formats the key as a user-based key.
 func (rl *DBRateLimiter) AllowWithUser(ctx context.Context, userID string, endpoint string) (bool, error) {
 	key := fmt.Sprintf("USER#%s", userID)
 	return rl.Allow(ctx, key, endpoint)

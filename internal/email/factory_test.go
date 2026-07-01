@@ -298,7 +298,7 @@ func TestNewSenderFromEnvironment_EmailEnabled(t *testing.T) {
 	})
 }
 
-// Test NewSenderWithConfig
+// Test NewSenderWithConfig.
 func TestNewSenderWithConfig_AWS(t *testing.T) {
 	cfg := FactoryConfig{
 		Provider:     ProviderAWS,

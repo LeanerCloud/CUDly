@@ -12,7 +12,7 @@ import (
 // TestValidateAWSExternalID covers the issue #128 backend validation
 // invariants for the AWS sts:ExternalId field on the role_arn auth mode.
 // The frontend always populates this field (issue #18 / PR #36) but the
-// backend is the source of truth — defence-in-depth requires that empty
+// backend is the source of truth — defense-in-depth requires that empty
 // / out-of-range / disallowed-charset values are rejected with 400s on
 // both create and update.
 func TestValidateAWSExternalID(t *testing.T) {
@@ -246,7 +246,7 @@ func TestCreateAccount_AWSExternalID_BastionNoRoleArnExempt(t *testing.T) {
 // TestParseArnPartition covers the helper that extracts the partition
 // segment from an STS GetCallerIdentity ARN (issue #130c). The result
 // is interpolated into the IAM trust-policy snippet, so any failure to
-// recognise a known partition must fall back to "" (which the frontend
+// recognize a known partition must fall back to "" (which the frontend
 // then defaults to "aws").
 func TestParseArnPartition(t *testing.T) {
 	cases := []struct {

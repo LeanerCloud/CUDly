@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ValidProviders lists all supported cloud providers
+// ValidProviders lists all supported cloud providers.
 var ValidProviders = []string{"aws", "azure", "gcp"}
 
 // ValidPaymentOptions lists the AWS-canonical payment options. Kept for
@@ -162,13 +162,13 @@ func crossProviderPaymentAlias(provider, raw string) (string, bool) {
 	return "", false
 }
 
-// ValidRampScheduleTypes lists all supported ramp schedule types
+// ValidRampScheduleTypes lists all supported ramp schedule types.
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
 
-// ValidCollectionSchedules lists all valid collection schedule values
+// ValidCollectionSchedules lists all valid collection schedule values.
 var ValidCollectionSchedules = []string{"", "hourly", "daily", "weekly"}
 
-// Validate validates the GlobalConfig
+// Validate validates the GlobalConfig.
 func (c *GlobalConfig) Validate() error {
 	if err := c.validateProviders(); err != nil {
 		return err
@@ -268,7 +268,7 @@ func (c *GlobalConfig) validateGracePeriodDays() error {
 	return nil
 }
 
-// validateProviders checks that all enabled providers are valid
+// validateProviders checks that all enabled providers are valid.
 func (c *GlobalConfig) validateProviders() error {
 	for _, p := range c.EnabledProviders {
 		if !isValidProvider(p) {
@@ -278,7 +278,7 @@ func (c *GlobalConfig) validateProviders() error {
 	return nil
 }
 
-// validateNotificationEmail validates the notification email format if provided
+// validateNotificationEmail validates the notification email format if provided.
 func (c *GlobalConfig) validateNotificationEmail() error {
 	if c.NotificationEmail != nil && *c.NotificationEmail != "" {
 		if _, err := mail.ParseAddress(*c.NotificationEmail); err != nil {
@@ -288,7 +288,7 @@ func (c *GlobalConfig) validateNotificationEmail() error {
 	return nil
 }
 
-// validateTerm validates that the term is 1 or 3 years (or 0 for not set - service-level only)
+// validateTerm validates that the term is 1 or 3 years (or 0 for not set - service-level only).
 func validateTerm(term int) error {
 	if term != 0 && term != 1 && term != 3 {
 		return fmt.Errorf("default term must be 1 or 3 years, got: %d", term)
@@ -296,7 +296,7 @@ func validateTerm(term int) error {
 	return nil
 }
 
-// validateGlobalTerm validates that the term is 1 or 3 years (0 is not allowed for global config)
+// validateGlobalTerm validates that the term is 1 or 3 years (0 is not allowed for global config).
 func validateGlobalTerm(term int) error {
 	if term != 1 && term != 3 {
 		return fmt.Errorf("default term must be 1 or 3 years, got: %d", term)
@@ -314,7 +314,7 @@ func validatePaymentOption(payment string) error {
 	return nil
 }
 
-// validateCoverage validates that coverage is within acceptable range
+// validateCoverage validates that coverage is within acceptable range.
 func validateCoverage(coverage float64) error {
 	if coverage < MinCoverage || coverage > MaxCoverage {
 		return fmt.Errorf("default coverage must be between %d and %d, got: %.2f", MinCoverage, MaxCoverage, coverage)
@@ -322,7 +322,7 @@ func validateCoverage(coverage float64) error {
 	return nil
 }
 
-// Validate validates the ServiceConfig
+// Validate validates the ServiceConfig.
 func (c *ServiceConfig) Validate() error {
 	if err := c.validateProvider(); err != nil {
 		return err
@@ -403,7 +403,7 @@ func (c *ServiceConfig) validateConfigCoverage() error {
 	return nil
 }
 
-// Validate validates the PurchasePlan
+// Validate validates the PurchasePlan.
 func (p *PurchasePlan) Validate() error {
 	// Name is required
 	if p.Name == "" {
@@ -436,7 +436,7 @@ func (p *PurchasePlan) Validate() error {
 	return nil
 }
 
-// Validate validates the RampSchedule
+// Validate validates the RampSchedule.
 func (r *RampSchedule) Validate() error {
 	if r.Type != "" && !isValidRampScheduleType(r.Type) {
 		return fmt.Errorf("invalid ramp schedule type: %s (valid: %s)", r.Type, strings.Join(ValidRampScheduleTypes, ", "))
@@ -526,7 +526,7 @@ func ValidatePaymentOptionEnv(val string) error {
 		return nil
 	}
 	if !isValidPaymentOption(val) {
-		return fmt.Errorf("value %q is not a recognised payment option (valid: %s)", val, strings.Join(validPaymentOptionsUnion, ", "))
+		return fmt.Errorf("value %q is not a recognized payment option (valid: %s)", val, strings.Join(validPaymentOptionsUnion, ", "))
 	}
 	return nil
 }
@@ -542,7 +542,7 @@ func ValidateRampScheduleEnv(val string) error {
 		return nil
 	}
 	if !isValidRampScheduleType(val) {
-		return fmt.Errorf("value %q is not a recognised ramp schedule type (valid: %s)", val, strings.Join(ValidRampScheduleTypes, ", "))
+		return fmt.Errorf("value %q is not a recognized ramp schedule type (valid: %s)", val, strings.Join(ValidRampScheduleTypes, ", "))
 	}
 	return nil
 }

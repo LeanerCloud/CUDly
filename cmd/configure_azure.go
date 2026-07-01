@@ -19,10 +19,10 @@ import (
 	"golang.org/x/term"
 )
 
-// azureUUIDRegex validates Azure UUIDs (subscription IDs, tenant IDs, client IDs)
+// azureUUIDRegex validates Azure UUIDs (subscription IDs, tenant IDs, client IDs).
 var azureUUIDRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// validateAzureUUID validates an Azure UUID to prevent command injection
+// validateAzureUUID validates an Azure UUID to prevent command injection.
 func validateAzureUUID(uuid, fieldName string) error {
 	if !azureUUIDRegex.MatchString(uuid) {
 		return fmt.Errorf("invalid %s format: must be a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)", fieldName)
@@ -30,7 +30,7 @@ func validateAzureUUID(uuid, fieldName string) error {
 	return nil
 }
 
-// AzureCredentials holds the Azure Service Principal credentials
+// AzureCredentials holds the Azure Service Principal credentials.
 type AzureCredentials struct {
 	TenantID       string `json:"tenant_id"`
 	ClientID       string `json:"client_id"`
@@ -38,7 +38,7 @@ type AzureCredentials struct {
 	SubscriptionID string `json:"subscription_id"`
 }
 
-// AzureConfigOptions holds configuration for the Azure config command
+// AzureConfigOptions holds configuration for the Azure config command.
 type AzureConfigOptions struct {
 	StackName      string
 	Profile        string
@@ -97,7 +97,7 @@ func validateAzureCredentialFields(creds AzureCredentials) error {
 	return validateAzureUUID(creds.SubscriptionID, "Subscription ID")
 }
 
-// storeAzureCredentials stores Azure credentials in the secrets store
+// storeAzureCredentials stores Azure credentials in the secrets store.
 func storeAzureCredentials(ctx context.Context, store SecretsStore, stackName string, creds AzureCredentials) error {
 	if err := validateAzureCredentialFields(creds); err != nil {
 		return err
@@ -173,7 +173,7 @@ func runConfigureAzure(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// loadAWSConfigForAzure loads AWS configuration with optional profile
+// loadAWSConfigForAzure loads AWS configuration with optional profile.
 func loadAWSConfigForAzure(ctx context.Context) (aws.Config, error) {
 	var opts []func(*awsconfig.LoadOptions) error
 	if azureOpts.Profile != "" {
@@ -188,7 +188,7 @@ func loadAWSConfigForAzure(ctx context.Context) (aws.Config, error) {
 	return cfg, nil
 }
 
-// collectAzureCredentials collects Azure credentials interactively or from flags
+// collectAzureCredentials collects Azure credentials interactively or from flags.
 func collectAzureCredentials(reader *bufio.Reader) (AzureCredentials, error) {
 	creds := AzureCredentials{
 		TenantID:       azureOpts.TenantID,
@@ -212,7 +212,7 @@ func collectAzureCredentials(reader *bufio.Reader) (AzureCredentials, error) {
 	return creds, nil
 }
 
-// promptForAzureCredentialFields prompts for missing credential fields
+// promptForAzureCredentialFields prompts for missing credential fields.
 func promptForAzureCredentialFields(reader *bufio.Reader, creds *AzureCredentials) error {
 	if creds.TenantID == "" {
 		fmt.Print("Azure Tenant ID: ")
@@ -254,7 +254,7 @@ func promptForAzureCredentialFields(reader *bufio.Reader, creds *AzureCredential
 	return nil
 }
 
-// runAzureSetupCommands runs the Azure CLI commands interactively
+// runAzureSetupCommands runs the Azure CLI commands interactively.
 func runAzureSetupCommands(reader *bufio.Reader) error {
 	fmt.Println("Step 1: Azure Login")
 	fmt.Println("-------------------")
@@ -360,7 +360,7 @@ func promptAndRunExplicitCommand(reader *bufio.Reader, name, displayCmd string, 
 	}
 }
 
-// executeExplicitCommand runs a command with explicit program and arguments
+// executeExplicitCommand runs a command with explicit program and arguments.
 func executeExplicitCommand(displayCmd string, program string, args ...string) error {
 	fmt.Println()
 	fmt.Printf("Executing: %s\n", displayCmd)

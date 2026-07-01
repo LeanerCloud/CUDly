@@ -189,16 +189,16 @@ func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor stri
 // status IN ('pending','notified') so a concurrent approve that wins
 // the race causes zero rows to be affected and the caller receives a
 // clean error with the current status rather than silently overwriting
-// the approved row. This is the token/email-link cancel analogue of
+// the approved row. This is the token/email-link cancel analog of
 // the atomic guard TransitionExecutionStatus provides for ApproveAndExecute.
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
-	logging.Infof("Cancelling execution: %s", executionID)
+	logging.Infof("Canceling execution: %s", executionID)
 
 	if _, err := m.loadCancelableExecution(ctx, executionID, token); err != nil {
 		return err
 	}
 
-	// Build the nullable cancelled_by pointer — see ApproveExecution for
+	// Build the nullable canceled_by pointer — see ApproveExecution for
 	// the nil-vs-empty-string rationale.
 	var cancelledBy *string
 	if actor != "" {
@@ -210,15 +210,15 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 	// CancelExecutionAtomic flips status only when status IN
 	// ('pending','notified') so a concurrent approve that has already
 	// transitioned the row causes zero rows affected and we surface a 409.
-	var cancelled bool
+	var canceled bool
 	var currentStatus string
 	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		cancelled, currentStatus, err = m.config.CancelExecutionAtomic(ctx, tx, executionID, cancelledBy)
+		canceled, currentStatus, err = m.config.CancelExecutionAtomic(ctx, tx, executionID, cancelledBy)
 		if err != nil {
 			return err
 		}
-		if !cancelled {
+		if !canceled {
 			// Row already transitioned (concurrent approve/cancel won the
 			// race). Return early without touching suppressions — the other
 			// operation owns the execution state now.
@@ -229,11 +229,11 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 		return fmt.Errorf("failed to cancel execution: %w", err)
 	}
 
-	if !cancelled {
-		return fmt.Errorf("execution %s cannot be cancelled: concurrent operation already transitioned it to %q", executionID, currentStatus)
+	if !canceled {
+		return fmt.Errorf("execution %s cannot be canceled: concurrent operation already transitioned it to %q", executionID, currentStatus)
 	}
 
-	logging.Infof("Execution %s cancelled", executionID)
+	logging.Infof("Execution %s canceled", executionID)
 	return nil
 }
 
@@ -265,14 +265,14 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 	// PurchaseExecution.IsCancelable predicate with the session path in
 	// cancelPurchaseViaSession so the policy can never drift between the two
 	// flows (issue #645). The previous predicate rejected only
-	// completed/cancelled, which let an email-link holder cancel an
+	// completed/canceled, which let an email-link holder cancel an
 	// approved/running/paused/failed/expired execution that the dashboard
 	// user cannot. Restricting to the pre-purchase states is also the
 	// in-flight guard: approved/running rows are mid-execution (the AWS
-	// commitment is being or has been created), so cancelling them would
+	// commitment is being or has been created), so canceling them would
 	// leave the DB and the cloud out of sync.
 	if !execution.IsCancelable() {
-		return nil, fmt.Errorf("execution cannot be cancelled, current status: %s", execution.Status)
+		return nil, fmt.Errorf("execution cannot be canceled, current status: %s", execution.Status)
 	}
 	return execution, nil
 }

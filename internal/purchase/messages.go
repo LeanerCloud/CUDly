@@ -11,17 +11,17 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// MessageType defines the types of async messages that can be processed
+// MessageType defines the types of async messages that can be processed.
 type MessageType string
 
 const (
-	// MessageTypeExecutePurchase triggers execution of a scheduled purchase
+	// MessageTypeExecutePurchase triggers execution of a scheduled purchase.
 	MessageTypeExecutePurchase MessageType = "execute_purchase"
-	// MessageTypeApprove approves a pending execution
+	// MessageTypeApprove approves a pending execution.
 	MessageTypeApprove MessageType = "approve"
-	// MessageTypeCancel cancels a pending execution
+	// MessageTypeCancel cancels a pending execution.
 	MessageTypeCancel MessageType = "cancel"
-	// MessageTypeSendNotification sends a notification for upcoming purchase
+	// MessageTypeSendNotification sends a notification for upcoming purchase.
 	MessageTypeSendNotification MessageType = "send_notification"
 )
 
@@ -77,7 +77,7 @@ func (m *Manager) ProcessMessage(ctx context.Context, body string) error {
 	}
 }
 
-// handleExecutePurchase processes an execute_purchase message
+// handleExecutePurchase processes an execute_purchase message.
 func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) error {
 	if msg.ExecutionID == "" {
 		return fmt.Errorf("execution_id required for execute_purchase message")
@@ -232,7 +232,7 @@ func (m *Manager) matchActorAgainstApprovers(ctx context.Context, actor string, 
 			return nil
 		}
 	}
-	return fmt.Errorf("actor email is not an authorised approver for this purchase")
+	return fmt.Errorf("actor email is not an authorized approver for this purchase")
 }
 
 // gatherApproverContactEmails mirrors the algorithm in

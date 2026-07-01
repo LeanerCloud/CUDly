@@ -163,7 +163,7 @@ func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T)
 	assert.Equal(t, full.ExternalID, got[0].ExternalID)
 	assert.Equal(t, full.Provider, got[0].Provider)
 
-	// Defence-in-depth: the JSON-serialized summary must not leak any sensitive
+	// Defense-in-depth: the JSON-serialized summary must not leak any sensitive
 	// field, even by accident (e.g. a future struct-embedding refactor).
 	blob, marshalErr := json.Marshal(got)
 	require.NoError(t, marshalErr)
@@ -1198,7 +1198,7 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	store := setupAdminMock(ctx)
 	// Plan with an empty services map — derived provider set is empty;
 	// the validation block skips and the assignment passes through.
-	// Pins the defensive behaviour so a future change is conscious.
+	// Pins the defensive behavior so a future change is conscious.
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID209, Name: "no-services"}, nil
 	}
@@ -1895,7 +1895,7 @@ func TestUpdateAccount_DuplicateKey_Returns409(t *testing.T) {
 	assert.Contains(t, ce.Error(), "already exists")
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreAccounts) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

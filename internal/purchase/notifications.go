@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// SendUpcomingPurchaseNotifications sends notifications for upcoming automated purchases
+// SendUpcomingPurchaseNotifications sends notifications for upcoming automated purchases.
 func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*NotificationResult, error) {
 	logging.Info("Checking for upcoming purchases to notify...")
 
@@ -35,7 +35,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 	}, nil
 }
 
-// shouldNotifyPlan checks if a plan should trigger a notification
+// shouldNotifyPlan checks if a plan should trigger a notification.
 func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool {
 	if !plan.Enabled || !plan.AutoPurchase {
 		return false
@@ -61,7 +61,7 @@ func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool {
 	return true
 }
 
-// sendPlanNotification sends a notification for a plan and returns true if successful
+// sendPlanNotification sends a notification for a plan and returns true if successful.
 func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.PurchasePlan) bool {
 	daysUntil := int(time.Until(*plan.NextExecutionDate).Hours() / config.HoursPerDay)
 	logging.Infof("Sending notification for plan %s (purchase in %d days)", plan.Name, daysUntil)
@@ -105,7 +105,7 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 	return true
 }
 
-// getOrCreateExecution gets existing execution or creates new one
+// getOrCreateExecution gets existing execution or creates new one.
 func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.PurchasePlan) (*config.PurchaseExecution, error) {
 	// Check for existing execution for this date to prevent duplicates
 	existing, err := m.config.GetExecutionByPlanAndDate(ctx, plan.ID, *plan.NextExecutionDate)

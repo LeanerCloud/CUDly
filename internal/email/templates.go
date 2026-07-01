@@ -88,7 +88,7 @@ When it makes sense:
   - You want the deepest discount tier (3-year) but aren't sure the
     workload will still fit in 18 months, or you want to be covered in
     case your usage drops.
-  - You're moving to a new service or region and historical utilisation
+  - You're moving to a new service or region and historical utilization
     data is thin.
 
 How it works (7-day enrollment window from each purchase):
@@ -100,7 +100,7 @@ How it works (7-day enrollment window from each purchase):
      insurance policy activates and covers any overcommitment from that
      point forward.
   3. Purchase commitments normally through CUDly: Archera tracks
-     utilisation independently and pays out on shortfalls per your
+     utilization independently and pays out on shortfalls per your
      policy.
 
 Archera charges an insurance premium for the coverage you select, a
@@ -157,7 +157,7 @@ This is an automated message from CUDly.
 
 // passwordResetHTMLTemplate renders the same content as the plain-text
 // password reset template with a styled CTA button and CUDly branding.
-// Modelled on purchaseApprovalRequestHTMLTemplate (line 367) — inline styles
+// Modeled on purchaseApprovalRequestHTMLTemplate (line 367) — inline styles
 // because most email clients (Outlook, mobile Gmail) ignore class-based CSS.
 // Issue #355.
 const passwordResetHTMLTemplate = `<!DOCTYPE html>
@@ -339,7 +339,7 @@ View exchange history:
 This is an automated message from CUDly.
 `
 
-// SendNewRecommendationsNotification sends an email about new recommendations
+// SendNewRecommendationsNotification sends an email about new recommendations.
 func (s *Sender) SendNewRecommendationsNotification(ctx context.Context, data NotificationData) error {
 	body, err := RenderNewRecommendationsEmail(data)
 	if err != nil {
@@ -370,7 +370,7 @@ func (s *Sender) SendScheduledPurchaseNotification(ctx context.Context, data Not
 	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
-// SendPurchaseConfirmation sends a confirmation after successful purchases
+// SendPurchaseConfirmation sends a confirmation after successful purchases.
 func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data NotificationData) error {
 	body, err := RenderPurchaseConfirmationEmail(data)
 	if err != nil {
@@ -381,7 +381,7 @@ func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data Notification
 	return s.SendNotification(ctx, subject, body)
 }
 
-// SendPurchaseFailedNotification sends a notification when purchases fail
+// SendPurchaseFailedNotification sends a notification when purchases fail.
 func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
 	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
@@ -392,7 +392,7 @@ func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data Notifi
 	return s.SendNotification(ctx, subject, body)
 }
 
-// PasswordResetData holds data for password reset emails
+// PasswordResetData holds data for password reset emails.
 type PasswordResetData struct {
 	Email    string
 	ResetURL string
@@ -408,7 +408,7 @@ func (s *Sender) SendPasswordResetEmail(ctx context.Context, email, resetURL str
 	)
 }
 
-// WelcomeUserData holds data for welcome emails
+// WelcomeUserData holds data for welcome emails.
 type WelcomeUserData struct {
 	Email        string
 	DashboardURL string
@@ -447,7 +447,7 @@ func (s *Sender) SendUserInviteEmail(ctx context.Context, email, setupURL string
 // SendRIExchangePendingApproval sends an email with RI exchange approval links.
 // The rendered body contains per-exchange approve/reject links that carry live
 // tokens; any subscriber of the SNS topic who receives this body can
-// approve spend they were never authorised for. This method therefore routes
+// approve spend they were never authorized for. This method therefore routes
 // through targeted SES (SendToEmailWithCC), mirroring the hardened path used
 // by SendPurchaseApprovalRequest.
 //
@@ -467,7 +467,7 @@ func (s *Sender) SendRIExchangePendingApproval(ctx context.Context, data RIExcha
 	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
-// SendRIExchangeCompleted sends a notification about completed RI exchanges
+// SendRIExchangeCompleted sends a notification about completed RI exchanges.
 func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
 	body, err := RenderRIExchangeCompletedEmail(data)
 	if err != nil {
@@ -483,7 +483,7 @@ const purchaseApprovalRequestTemplate = `CUDly - Purchase Approval Required
 
 A direct purchase of {{len .Recommendations}} commitment(s) has been submitted and requires approval.
 {{if .AuthorizedApprovers}}
-Authorised approver(s):
+Authorized approver(s):
 {{range .AuthorizedApprovers}}  - {{.}}
 {{end}}
 Only the inbox(es) listed above can approve or cancel this purchase.
@@ -529,7 +529,7 @@ When it makes sense:
   - The buyer wants the deepest discount tier (3-year) but isn't sure
     the workload will still fit in 18 months, or wants to be covered in
     case usage drops.
-  - They're moving to a new service or region and historical utilisation
+  - They're moving to a new service or region and historical utilization
     data is thin.
 
 How it works (within the 7-day enrollment window from each purchase):
@@ -541,7 +541,7 @@ How it works (within the 7-day enrollment window from each purchase):
      insurance policy activates and covers any overcommitment from that
      point forward.
   3. Continue purchasing commitments normally through CUDly: Archera
-     tracks utilisation independently and pays out on shortfalls per
+     tracks utilization independently and pays out on shortfalls per
      the policy.
 
 Archera charges an insurance premium for the coverage selected, a
@@ -562,7 +562,7 @@ This is an automated message from CUDly. Do not share these links.
 
 // purchaseApprovalRequestHTMLTemplate renders the same approval request
 // as the plain-text template above with inline-styled CTAs and a richer
-// summary table. CSS classes are NOT honoured by most email clients
+// summary table. CSS classes are NOT honored by most email clients
 // (Outlook, mobile Gmail) — every visual rule lives in inline `style=""`
 // attributes on the elements themselves. Issue #287.
 const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
@@ -579,7 +579,7 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 {{if .AuthorizedApprovers}}
 <tr><td style="padding:0 32px 16px 32px;">
 <div style="background:#fef9c3;border-left:4px solid #facc15;padding:12px 16px;font-size:13px;color:#713f12;border-radius:4px;">
-<strong>Authorised approver(s):</strong>
+<strong>Authorized approver(s):</strong>
 <ul style="margin:6px 0 0 18px;padding:0;">
 {{range .AuthorizedApprovers}}<li>{{.}}</li>
 {{end}}</ul>
@@ -641,14 +641,14 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 <h3 style="margin:14px 0 6px 0;font-size:12px;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">When it makes sense</h3>
 <ul style="margin:6px 0 10px 0;padding-left:22px;color:#475569;">
 <li style="margin-bottom:4px;">The buyer wants the deepest discount tier (3-year) but isn't sure the workload will still fit in 18 months, or wants to be covered in case usage drops.</li>
-<li style="margin-bottom:4px;">They're moving to a new service or region and historical utilisation data is thin.</li>
+<li style="margin-bottom:4px;">They're moving to a new service or region and historical utilization data is thin.</li>
 </ul>
 
 <h3 style="margin:10px 0 6px 0;font-size:12px;color:#334155;text-transform:uppercase;letter-spacing:0.04em;">How it works <span style="font-weight:400;color:#64748b;text-transform:none;letter-spacing:0;">(7-day enrollment window from each purchase)</span></h3>
 <ol style="margin:6px 0 10px 0;padding-left:22px;color:#475569;">
 <li style="margin-bottom:4px;"><strong>Sign up at Archera:</strong> create an account using the link below. The CUDly signup link tells Archera the buyer came from us; CUDly is compensated for the referral, and the link unlocks a dedicated onboarding path.</li>
 <li style="margin-bottom:4px;"><strong>Archera starts ingesting cost data:</strong> once access is granted, the insurance policy activates and covers any overcommitment from that point forward.</li>
-<li style="margin-bottom:4px;"><strong>Continue purchasing commitments normally through CUDly:</strong> Archera tracks utilisation independently and pays out on shortfalls per the policy.</li>
+<li style="margin-bottom:4px;"><strong>Continue purchasing commitments normally through CUDly:</strong> Archera tracks utilization independently and pays out on shortfalls per the policy.</li>
 </ol>
 <p style="margin:6px 0;">Archera charges an insurance premium for the coverage selected, a separate fee paid to Archera. The cloud commitment purchased through CUDly is unaffected: same price, same billing.</p>
 
@@ -729,7 +729,7 @@ func (s *Sender) SendPurchaseApprovalRequest(ctx context.Context, data Notificat
 	}
 	// Both empty and malformed FROM_EMAIL (e.g. "noreply@" when the
 	// subdomain_zone_name tfvar is unset) map to ErrNoFromEmail so the
-	// handler can report "FROM_EMAIL not configured" — the prior behaviour
+	// handler can report "FROM_EMAIL not configured" — the prior behavior
 	// handed the bad string to SES and surfaced a BadRequestException stack
 	// trace ("Missing domain") to the user.
 	if !isValidFromEmail(s.fromEmail) {
@@ -840,7 +840,7 @@ const registrationReceivedTemplate = `CUDly - New Account Registration
 
 A new target account has requested to join your CUDly deployment.
 {{if .AdminApprovers}}
-Authorised reviewer(s):
+Authorized reviewer(s):
 {{range .AdminApprovers}}  - {{.}}
 {{end}}
 Only CUDly administrators listed above can approve or reject this

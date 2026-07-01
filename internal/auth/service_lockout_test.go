@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLogin_AccountLockout_BeforePasswordCheck verifies lockout check happens before password verification
+// TestLogin_AccountLockout_BeforePasswordCheck verifies lockout check happens before password verification.
 func TestLogin_AccountLockout_BeforePasswordCheck(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -43,7 +43,7 @@ func TestLogin_AccountLockout_BeforePasswordCheck(t *testing.T) {
 	mockStore.AssertNotCalled(t, "UpdateUser", ctx, mock.Anything)
 }
 
-// TestLogin_AccountLockout_FailedAttempts verifies lockout occurs after max failed attempts
+// TestLogin_AccountLockout_FailedAttempts verifies lockout occurs after max failed attempts.
 func TestLogin_AccountLockout_FailedAttempts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -80,7 +80,7 @@ func TestLogin_AccountLockout_FailedAttempts(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestLogin_AccountLockout_Duration verifies lockout duration is correct
+// TestLogin_AccountLockout_Duration verifies lockout duration is correct.
 func TestLogin_AccountLockout_Duration(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -117,7 +117,7 @@ func TestLogin_AccountLockout_Duration(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestLogin_AccountLockout_ExpiredLock verifies expired lockouts allow login
+// TestLogin_AccountLockout_ExpiredLock verifies expired lockouts allow login.
 func TestLogin_AccountLockout_ExpiredLock(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -147,7 +147,7 @@ func TestLogin_AccountLockout_ExpiredLock(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestLogin_AccountLockout_ResetOnSuccess verifies successful login resets failed attempts
+// TestLogin_AccountLockout_ResetOnSuccess verifies successful login resets failed attempts.
 func TestLogin_AccountLockout_ResetOnSuccess(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -183,7 +183,7 @@ func TestLogin_AccountLockout_ResetOnSuccess(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestLogin_AccountLockout_IncrementalFailures verifies each failure increments counter
+// TestLogin_AccountLockout_IncrementalFailures verifies each failure increments counter.
 func TestLogin_AccountLockout_IncrementalFailures(t *testing.T) {
 	ctx := context.Background()
 
@@ -228,7 +228,7 @@ func TestLogin_AccountLockout_IncrementalFailures(t *testing.T) {
 	}
 }
 
-// TestLogin_AccountLockout_MFAFailure verifies MFA failures count toward lockout
+// TestLogin_AccountLockout_MFAFailure verifies MFA failures count toward lockout.
 func TestLogin_AccountLockout_MFAFailure(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -274,7 +274,7 @@ func TestLogin_AccountLockout_MFAFailure(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestLogin_AccountLockout_GenericErrorMessage verifies no information leakage
+// TestLogin_AccountLockout_GenericErrorMessage verifies no information leakage.
 func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -302,7 +302,7 @@ func TestLogin_AccountLockout_GenericErrorMessage(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-// TestRecordFailedLogin verifies recordFailedLogin function behavior
+// TestRecordFailedLogin verifies recordFailedLogin function behavior.
 func TestRecordFailedLogin(t *testing.T) {
 	ctx := context.Background()
 
@@ -370,7 +370,7 @@ func TestRecordFailedLogin(t *testing.T) {
 // Issue #416 added the "store error" scenario: the real Postgres store returns
 // (nil, pgx.ErrNoRows) for a missing row, not (nil, nil). Both the error path and
 // the nil-user path now collapse to the same message "Check your email address and password and try again"
-// and the Login function runs a dummy bcrypt compare to equalise response timing.
+// and the Login function runs a dummy bcrypt compare to equalize response timing.
 func TestLogin_OWASPEnumerationInvariant(t *testing.T) {
 	const wantMsg = "Check your email address and password and try again"
 	ctx := context.Background()

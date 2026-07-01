@@ -15,7 +15,7 @@ import (
 // GCP 403 / PermissionDenied must downgrade to WARN so a single
 // misconfigured account doesn't drown out other log signals; non-GCP
 // providers and non-permission errors must keep the existing ERROR
-// behaviour until analogous predicates are added.
+// behavior until analogous predicates are added.
 func TestIsAccountPermissionError(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -35,14 +35,14 @@ var (
 	ErrTokenInBroadcast = errors.New("email: message body contains an approval token; use targeted SES send, not SNS broadcast")
 )
 
-// SenderConfig holds configuration for the email sender
+// SenderConfig holds configuration for the email sender.
 type SenderConfig struct {
 	TopicARN     string
 	FromEmail    string
 	EmailAddress string // Legacy: for SNS notifications
 }
 
-// Sender handles sending email notifications
+// Sender handles sending email notifications.
 type Sender struct {
 	snsClient    SNSPublisher
 	sesClient    SESEmailSender
@@ -51,7 +51,7 @@ type Sender struct {
 	emailAddress string
 }
 
-// NewSender creates a new email sender with default context
+// NewSender creates a new email sender with default context.
 func NewSender(cfg SenderConfig) (*Sender, error) {
 	return NewSenderWithContext(context.Background(), cfg)
 }
@@ -79,7 +79,7 @@ func isValidFromEmail(addr string) bool {
 	return true
 }
 
-// NewSenderWithContext creates a new email sender with the provided context
+// NewSenderWithContext creates a new email sender with the provided context.
 func NewSenderWithContext(ctx context.Context, cfg SenderConfig) (*Sender, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -95,7 +95,7 @@ func NewSenderWithContext(ctx context.Context, cfg SenderConfig) (*Sender, error
 	}, nil
 }
 
-// NewSenderWithClients creates a new email sender with custom clients (for testing)
+// NewSenderWithClients creates a new email sender with custom clients (for testing).
 func NewSenderWithClients(snsClient SNSPublisher, sesClient SESEmailSender, cfg SenderConfig) *Sender {
 	return &Sender{
 		snsClient:    snsClient,
@@ -154,7 +154,7 @@ func (s *Sender) SendNotification(ctx context.Context, subject, message string) 
 	return nil
 }
 
-// isInSandbox checks if SES is in sandbox mode
+// isInSandbox checks if SES is in sandbox mode.
 func (s *Sender) isInSandbox(ctx context.Context) (bool, error) {
 	if s.sesClient == nil {
 		return false, fmt.Errorf("SES client not initialized")
@@ -169,7 +169,7 @@ func (s *Sender) isInSandbox(ctx context.Context) (bool, error) {
 	return !output.ProductionAccessEnabled, nil
 }
 
-// isEmailVerified checks if an email identity is verified in SES
+// isEmailVerified checks if an email identity is verified in SES.
 func (s *Sender) isEmailVerified(ctx context.Context, email string) (bool, error) {
 	if s.sesClient == nil {
 		return false, fmt.Errorf("SES client not initialized")
@@ -186,7 +186,7 @@ func (s *Sender) isEmailVerified(ctx context.Context, email string) (bool, error
 	return output.VerifiedForSendingStatus, nil
 }
 
-// createVerificationRequest initiates email verification for an email address
+// createVerificationRequest initiates email verification for an email address.
 func (s *Sender) createVerificationRequest(ctx context.Context, email string) error {
 	if s.sesClient == nil {
 		return fmt.Errorf("SES client not initialized")
@@ -204,7 +204,7 @@ func (s *Sender) createVerificationRequest(ctx context.Context, email string) er
 }
 
 // SendToEmail sends an email directly to a specific email address via SES
-// If SES is in sandbox mode, it will automatically verify the recipient email if needed
+// If SES is in sandbox mode, it will automatically verify the recipient email if needed.
 func (s *Sender) SendToEmail(ctx context.Context, toEmail, subject, body string) error {
 	return s.SendToEmailWithCC(ctx, toEmail, nil, subject, body)
 }
@@ -249,7 +249,7 @@ func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string,
 }
 
 // SendToEmailWithCC sends an email with a primary To recipient plus optional
-// Cc recipients. The To recipient is treated as the authorised actor for the
+// Cc recipients. The To recipient is treated as the authorized actor for the
 // message (verified in sandbox mode) and Cc recipients are informed of the
 // action without carrying the "you must do something" burden. Duplicate
 // entries across To/Cc are stripped so a single inbox is never addressed
@@ -396,7 +396,7 @@ func buildSESSendEmailInput(fromEmail, toEmail string, cc []string, subject, bod
 
 // dedupeCCAgainstTo returns cc with the to-address removed (case-insensitive)
 // and duplicate entries collapsed, preserving input order. Empty strings are
-// dropped so a caller can freely pass optional slots without sanitising.
+// dropped so a caller can freely pass optional slots without sanitizing.
 func dedupeCCAgainstTo(to string, cc []string) []string {
 	if len(cc) == 0 {
 		return nil
@@ -414,7 +414,7 @@ func dedupeCCAgainstTo(to string, cc []string) []string {
 	return out
 }
 
-// NotificationData holds data for rendering email templates
+// NotificationData holds data for rendering email templates.
 type NotificationData struct {
 	DashboardURL  string
 	ApprovalToken string
@@ -439,7 +439,7 @@ type NotificationData struct {
 	RecipientEmail string
 	// CCEmails carries additional recipients (e.g. the global notification
 	// email) for flows where more than one inbox needs visibility into the
-	// action but only one party is authorised to approve. Empty for single-
+	// action but only one party is authorized to approve. Empty for single-
 	// recipient flows. Purchase approvals use this to keep the global
 	// notification email informed while directing the approver role at the
 	// account's contact email.
@@ -448,7 +448,7 @@ type NotificationData struct {
 	// allowed to click the approve/cancel links. The template prints these
 	// verbatim in the message body so recipients on CC know the action
 	// isn't theirs to take. When empty the template omits the authorisation
-	// block (legacy broadcast behaviour).
+	// block (legacy broadcast behavior).
 	AuthorizedApprovers []string
 	// RequestedByName is the human-readable display name (or email-local) of
 	// the user who submitted the purchase. Rendered in the approval-email
@@ -486,7 +486,7 @@ type NotificationData struct {
 	RevokeURL string
 }
 
-// RecommendationSummary is a simplified recommendation for email display
+// RecommendationSummary is a simplified recommendation for email display.
 type RecommendationSummary struct {
 	Service        string
 	ResourceType   string
@@ -508,7 +508,7 @@ type RecommendationSummary struct {
 	AccountLabel string
 }
 
-// RIExchangeNotificationData holds data for RI exchange email templates
+// RIExchangeNotificationData holds data for RI exchange email templates.
 type RIExchangeNotificationData struct {
 	DashboardURL string
 	Mode         string
@@ -522,11 +522,11 @@ type RIExchangeNotificationData struct {
 	// SES (not the SNS broadcast topic). Mirrors NotificationData.RecipientEmail.
 	RecipientEmail string
 	// CCEmails carries additional recipients informed of the pending exchanges
-	// but not the authorised approvers. Deduplicated against RecipientEmail.
+	// but not the authorized approvers. Deduplicated against RecipientEmail.
 	CCEmails []string
 }
 
-// RIExchangeItem represents a single exchange in an email notification
+// RIExchangeItem represents a single exchange in an email notification.
 type RIExchangeItem struct {
 	RecordID           string
 	ApprovalToken      string
@@ -540,7 +540,7 @@ type RIExchangeItem struct {
 	Error              string
 }
 
-// SkippedExchange represents an exchange that was skipped
+// SkippedExchange represents an exchange that was skipped.
 type SkippedExchange struct {
 	SourceRIID         string
 	SourceInstanceType string
@@ -548,7 +548,7 @@ type SkippedExchange struct {
 }
 
 // redactEmail returns a redacted version of an email address for safe logging.
-// e.g. "user@example.com" -> "us***@example.com"
+// e.g. "user@example.com" -> "us***@example.com".
 func redactEmail(email string) string {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {
