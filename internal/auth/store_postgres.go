@@ -20,6 +20,7 @@ type DBConnection interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
 	Ping(ctx context.Context) error
 }
 
@@ -353,6 +354,14 @@ func (s *PostgresStore) CountGroupMembers(ctx context.Context, groupID string) (
 	return count, nil
 }
 
+// adminInvariantAdvisoryLockKey is the transaction-scoped advisory lock key
+// serializing writes that affect the "at least/at most the right number of
+// admins" invariants. It MUST stay equal to the key used by
+// check_min_one_admin() in migration 000065 so bootstrap inserts and
+// admin-demoting commits serialize against each other as well as among
+// themselves.
+const adminInvariantAdvisoryLockKey = 8059058058580001
+
 // CreateAdminIfNone atomically inserts user as the first admin in the
 // system. Returns (true, nil) when the insert succeeded; (false, nil)
 // when an admin already existed (TOCTOU race — both callers passed
@@ -361,10 +370,18 @@ func (s *PostgresStore) CountGroupMembers(ctx context.Context, groupID string) (
 // for any other failure.
 //
 // The conditional INSERT closes the bootstrap race without the
-// users_one_admin partial unique index (dropped in migration 000050).
-// Postgres guarantees atomicity of the SELECT … WHERE NOT EXISTS …
-// INSERT in a single statement — no advisory lock or transaction is
-// needed.
+// users_one_admin partial unique index (dropped in migration 000050),
+// but a single INSERT … WHERE NOT EXISTS statement is NOT race-free on
+// its own: under READ COMMITTED each statement's snapshot is taken at
+// statement start, so two concurrent calls can both see "no admin" and
+// both insert (reproduced by
+// TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce). To close
+// that window the insert runs in a transaction that first takes the
+// transaction-scoped advisory lock shared with the min-one-admin
+// trigger (migration 000065): the second caller blocks until the first
+// commits, and its INSERT statement then takes a fresh snapshot that
+// sees the committed admin, so the NOT EXISTS guard suppresses the
+// duplicate. The lock auto-releases at COMMIT or ROLLBACK.
 func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool, error) {
 	if user.ID == "" {
 		user.ID = uuid.New().String()
@@ -411,7 +428,22 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 		groupIDs = append(append([]string(nil), groupIDs...), DefaultAdminGroupID)
 	}
 
-	tag, err := s.db.Exec(ctx, query,
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to begin admin bootstrap transaction: %w", err)
+	}
+	// Rollback is a no-op after a successful Commit; on any earlier return
+	// it also releases the advisory lock. Matches the project convention
+	// (e.g. internal/config/store_postgres.go) for deferred rollback.
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Serialize against concurrent bootstrap calls and against the
+	// min-one-admin deferred trigger (see adminInvariantAdvisoryLockKey).
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminInvariantAdvisoryLockKey); err != nil {
+		return false, fmt.Errorf("failed to acquire admin bootstrap lock: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, query,
 		user.ID, user.Email, user.PasswordHash, user.Salt,
 		groupIDs, user.Active, user.MFAEnabled, user.MFASecret,
 		user.MFAPendingSecret, user.MFAPendingSecretExpiresAt, recoveryCodes,
@@ -429,6 +461,10 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 			return false, ErrEmailInUse
 		}
 		return false, fmt.Errorf("failed to create admin: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("failed to commit admin bootstrap transaction: %w", err)
 	}
 
 	return tag.RowsAffected() > 0, nil
