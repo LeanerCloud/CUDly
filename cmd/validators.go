@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// validateFlags performs validation on command line flags before execution
+// validateFlags performs validation on command line flags before execution.
 func validateFlags(cmd *cobra.Command, args []string) error {
 	if err := validateNumericRanges(cmd); err != nil {
 		return err
@@ -69,6 +69,22 @@ func validateNumericRanges(cmd *cobra.Command) error {
 		return fmt.Errorf("override-count (%d) exceeds reasonable limit of %d", toolCfg.OverrideCount, MaxReasonableInstances)
 	}
 
+	if err := validateMinPoolSize(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateMinPoolSize checks that --min-pool-size is a non-negative whole number.
+// Instance counts are integers, so a fractional threshold is nonsensical.
+func validateMinPoolSize() error {
+	if toolCfg.MinPoolSize < 0 {
+		return fmt.Errorf("min-pool-size must be 0 (disabled) or a positive whole number, got: %.2f", toolCfg.MinPoolSize)
+	}
+	if toolCfg.MinPoolSize > 0 && toolCfg.MinPoolSize != float64(int64(toolCfg.MinPoolSize)) {
+		return fmt.Errorf("min-pool-size must be a whole number (instance counts are integers), got: %.2f", toolCfg.MinPoolSize)
+	}
 	return nil
 }
 
@@ -92,7 +108,7 @@ func validateTargetCoverage(cmd *cobra.Command) error {
 	return nil
 }
 
-// validatePaymentAndTerm validates payment options and term configuration
+// validatePaymentAndTerm validates payment options and term configuration.
 func validatePaymentAndTerm() error {
 	// Validate payment option
 	validPaymentOptions := map[string]bool{
@@ -113,7 +129,7 @@ func validatePaymentAndTerm() error {
 	return warnRDS3YearNoUpfront()
 }
 
-// warnRDS3YearNoUpfront warns if RDS service is selected with 3-year no-upfront
+// warnRDS3YearNoUpfront warns if RDS service is selected with 3-year no-upfront.
 func warnRDS3YearNoUpfront() error {
 	// In CSV-input mode the payment option comes from each row, not the
 	// --payment flag (which keeps its no-upfront default), so this flag-based
@@ -138,7 +154,7 @@ func warnRDS3YearNoUpfront() error {
 	return nil
 }
 
-// containsService checks if a service exists in the slice
+// containsService checks if a service exists in the slice.
 func containsService(services []common.ServiceType, service common.ServiceType) bool {
 	for _, svc := range services {
 		if svc == service {
@@ -148,7 +164,7 @@ func containsService(services []common.ServiceType, service common.ServiceType) 
 	return false
 }
 
-// validateFilePaths validates CSV input/output paths
+// validateFilePaths validates CSV input/output paths.
 func validateFilePaths() error {
 	// Validate CSV output path if provided
 	if toolCfg.CSVOutput != "" {
@@ -173,7 +189,7 @@ func validateFilePaths() error {
 	return nil
 }
 
-// validateFilterFlags validates filter configuration flags
+// validateFilterFlags validates filter configuration flags.
 func validateFilterFlags() error {
 	// Check for region conflicts
 	if err := validateNoConflicts(toolCfg.IncludeRegions, toolCfg.ExcludeRegions, "region"); err != nil {
@@ -201,7 +217,7 @@ func validateFilterFlags() error {
 	return nil
 }
 
-// validateNoConflicts checks that include and exclude lists don't overlap
+// validateNoConflicts checks that include and exclude lists don't overlap.
 func validateNoConflicts(include, exclude []string, itemType string) error {
 	if len(include) == 0 || len(exclude) == 0 {
 		return nil
@@ -218,7 +234,7 @@ func validateNoConflicts(include, exclude []string, itemType string) error {
 	return nil
 }
 
-// validateInstanceTypes performs basic validation on instance type names
+// validateInstanceTypes performs basic validation on instance type names.
 func validateInstanceTypes(instanceTypes []string) error {
 	if len(instanceTypes) == 0 {
 		return nil
