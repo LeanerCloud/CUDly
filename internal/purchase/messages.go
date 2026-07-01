@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -208,7 +209,9 @@ func (m *Manager) loadAsyncExecutionForApproval(ctx context.Context, msg *AsyncM
 	if execution.ApprovalToken == "" || msg.Token == "" {
 		return nil, fmt.Errorf("invalid approval token")
 	}
-	if subtle.ConstantTimeCompare([]byte(execution.ApprovalToken), []byte(msg.Token)) != 1 {
+	storedHash := sha256.Sum256([]byte(execution.ApprovalToken))
+	userHash := sha256.Sum256([]byte(msg.Token))
+	if subtle.ConstantTimeCompare(storedHash[:], userHash[:]) != 1 {
 		return nil, fmt.Errorf("invalid approval token")
 	}
 	return execution, nil

@@ -178,6 +178,12 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return args.Get(0).(*config.PurchaseExecution), args.Error(1)
 }
 
+// SetCancelledBy mocks the SetCancelledBy targeted-update operation.
+func (m *MockConfigStore) SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error {
+	args := m.Called(ctx, executionID, cancelledBy)
+	return args.Error(0)
+}
+
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
 // Defaults to (true, "cancelled", nil) when no expectation is registered
 // so tests that only need the happy path don't require explicit mock setup.

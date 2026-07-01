@@ -462,6 +462,21 @@ func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data
 	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
 }
 
+// SendPurchaseExecutedNotification sends the post-execution notification email
+// via SMTP. Mirrors SendPurchaseApprovalRequest: prefers data.RecipientEmail
+// over the static s.notifyEmail. Issue #291.
+func (s *SMTPSender) SendPurchaseExecutedNotification(ctx context.Context, data NotificationData) error {
+	recipient := data.RecipientEmail
+	if recipient == "" {
+		recipient = s.notifyEmail
+	}
+	if recipient == "" {
+		return ErrNoRecipient
+	}
+	subject := buildExecutedNotificationSubject(data)
+	return sendPurchaseExecutedNotificationVia(ctx, s, recipient, subject, data)
+}
+
 // SendRegistrationReceivedNotification sends an email to CUDly administrators
 // for a new registration via SMTP. Prefers the caller-resolved
 // data.RecipientEmail + CCEmails (admin emails + global notify) so the To /

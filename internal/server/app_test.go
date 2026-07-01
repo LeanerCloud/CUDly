@@ -313,6 +313,9 @@ func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data 
 func (n *noopEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
 	return nil
 }
+func (n *noopEmailSender) SendPurchaseExecutedNotification(_ context.Context, _ email.NotificationData) error {
+	return nil
+}
 func (n *noopEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
 	return nil
 }
