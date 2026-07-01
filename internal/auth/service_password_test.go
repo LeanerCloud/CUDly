@@ -309,7 +309,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		testUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			PasswordResetToken:  "hashed-token", // Now stores the hash
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
@@ -360,7 +360,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		expiredUser := &User{
 			ID:                  "user-456",
 			Email:               "expired@example.com",
-			PasswordResetToken:  "hashed-expired-token",
+			PasswordResetToken:  hashSessionToken("expired-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
@@ -389,7 +389,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		testUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			PasswordResetToken:  "hashed-token",
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
@@ -422,7 +422,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		testUser := &User{
 			ID:                  "user-123",
 			Email:               "test@example.com",
-			PasswordResetToken:  "hashed-token",
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			PasswordHistory:     []string{hash},
 			Active:              true,
@@ -462,7 +462,7 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 			ID:                  "user-123",
 			Email:               "test@example.com",
 			PasswordHash:        currentHash,
-			PasswordResetToken:  "hashed-token",
+			PasswordResetToken:  hashSessionToken("valid-reset-token"),
 			PasswordResetExpiry: &expiry,
 			Active:              true,
 		}
@@ -483,6 +483,37 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("constant-time mismatch rejects token even when DB row exists", func(t *testing.T) {
+		// The DB returned a user but the stored reset-token hash does not match
+		// the hash we derived from the supplied token string. The constant-time
+		// guard must reject the request to avoid timing-based disclosure.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		expiry := time.Now().Add(time.Hour)
+		mismatchUser := &User{
+			ID:                  "user-999",
+			Email:               "mismatch@example.com",
+			PasswordResetToken:  "completely-different-hash",
+			PasswordResetExpiry: &expiry,
+			Active:              true,
+		}
+
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(mismatchUser, nil).Once()
+
+		req := PasswordResetConfirm{
+			Token:       "some-token",
+			NewPassword: "SecureT3st@789",
+		}
+
+		err := service.ConfirmPasswordReset(ctx, req)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid or expired reset token")
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 // TestService_ResetTokenStatus covers the read-only token-status probe
@@ -498,7 +529,7 @@ func TestService_ResetTokenStatus(t *testing.T) {
 
 		expiry := time.Now().Add(time.Hour)
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
-			Return(&User{ID: "u1", Active: true, PasswordResetExpiry: &expiry}, nil).Once()
+			Return(&User{ID: "u1", Active: true, PasswordResetToken: hashSessionToken("valid-token"), PasswordResetExpiry: &expiry}, nil).Once()
 
 		state, flow, err := service.ResetTokenStatus(ctx, "valid-token")
 		require.NoError(t, err)
@@ -515,7 +546,7 @@ func TestService_ResetTokenStatus(t *testing.T) {
 
 		expiry := time.Now().Add(time.Hour)
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
-			Return(&User{ID: "u2", Active: false, PasswordResetExpiry: &expiry}, nil).Once()
+			Return(&User{ID: "u2", Active: false, PasswordResetToken: hashSessionToken("valid-invite-token"), PasswordResetExpiry: &expiry}, nil).Once()
 
 		state, flow, err := service.ResetTokenStatus(ctx, "valid-invite-token")
 		require.NoError(t, err)
@@ -532,7 +563,7 @@ func TestService_ResetTokenStatus(t *testing.T) {
 
 		expiry := time.Now().Add(-time.Hour)
 		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
-			Return(&User{ID: "u3", Active: true, PasswordResetExpiry: &expiry}, nil).Once()
+			Return(&User{ID: "u3", Active: true, PasswordResetToken: hashSessionToken("expired-token"), PasswordResetExpiry: &expiry}, nil).Once()
 
 		state, flow, err := service.ResetTokenStatus(ctx, "expired-token")
 		require.NoError(t, err)
@@ -583,6 +614,32 @@ func TestService_ResetTokenStatus(t *testing.T) {
 		// No store call expected; the empty-token branch returns
 		// before consulting the store.
 		state, flow, err := service.ResetTokenStatus(ctx, "")
+		require.NoError(t, err)
+		assert.Equal(t, ResetTokenStateUsed, state)
+		assert.Equal(t, ResetTokenFlowReset, flow)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("constant-time mismatch returns used even if DB row exists", func(t *testing.T) {
+		// The DB returned a row but the stored token hash does not match the
+		// hash derived from the supplied token. The constant-time check must
+		// treat this as a missing/consumed token rather than branching on
+		// expiry state, to avoid leaking information through timing.
+		mockStore := new(MockStore)
+		mockEmail := new(MockEmailSender)
+		service := createTestService(mockStore, mockEmail)
+
+		expiry := time.Now().Add(time.Hour)
+		mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).
+			Return(&User{
+				ID:                  "u9",
+				Active:              true,
+				PasswordResetToken:  "different-hash-entirely",
+				PasswordResetExpiry: &expiry,
+			}, nil).Once()
+
+		state, flow, err := service.ResetTokenStatus(ctx, "some-token")
 		require.NoError(t, err)
 		assert.Equal(t, ResetTokenStateUsed, state)
 		assert.Equal(t, ResetTokenFlowReset, flow)

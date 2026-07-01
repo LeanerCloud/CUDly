@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"strings"
@@ -416,6 +417,11 @@ func (s *Service) ResetTokenStatus(ctx context.Context, token string) (ResetToke
 		return ResetTokenStateUsed, ResetTokenFlowReset, nil
 	}
 
+	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
+		return ResetTokenStateUsed, ResetTokenFlowReset, nil
+	}
+
 	if user.PasswordResetExpiry == nil || time.Now().After(*user.PasswordResetExpiry) {
 		flow := ResetTokenFlowReset
 		if !user.Active {
@@ -442,6 +448,11 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 		return nil, err
 	}
 	if user == nil {
+		return nil, fmt.Errorf("invalid or expired reset token")
+	}
+
+	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
 		return nil, fmt.Errorf("invalid or expired reset token")
 	}
 

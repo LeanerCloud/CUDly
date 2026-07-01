@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -262,6 +263,13 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("failed to validate API key: %w", err)
 	}
 	if key == nil {
+		return nil, nil, fmt.Errorf("invalid API key")
+	}
+
+	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// The DB lookup already found the row by hash; this redundant check ensures the
+	// hot path does not leak timing information through early return differences.
+	if subtle.ConstantTimeCompare([]byte(key.KeyHash), []byte(keyHash)) != 1 {
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
