@@ -41,7 +41,7 @@ type ServiceClient interface {
 	GetRegion() string
 
 	// Recommendations
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Commitments (RI/SP/CUD/etc)
 	GetExistingCommitments(ctx context.Context) ([]common.Commitment, error)
@@ -56,7 +56,7 @@ type ServiceClient interface {
 // RecommendationsClient provides centralized recommendations across all services
 type RecommendationsClient interface {
 	// Get recommendations with filtering
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Get recommendations for a specific service
 	GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)

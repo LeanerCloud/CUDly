@@ -127,7 +127,7 @@ type redisPriceItem struct {
 }
 
 // GetRecommendations gets Redis Cache reservation recommendations from the Azure Consumption API.
-func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	var pager RecommendationsPager

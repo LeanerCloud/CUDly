@@ -114,7 +114,7 @@ type SynapseRetailPriceItem struct {
 
 // GetRecommendations retrieves Synapse reservation recommendations from the
 // Azure Consumption API.
-func (c *SynapseClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *SynapseClient) GetRecommendations(ctx context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	recs := make([]common.Recommendation, 0)
 
 	var pager RecommendationsPager

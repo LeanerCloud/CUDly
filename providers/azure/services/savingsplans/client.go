@@ -126,7 +126,7 @@ func (c *Client) GetRegion() string {
 // recommendations (the Benefits Recommendations API is still in preview).
 // This mirrors the AWS Savings Plans client which also returns empty here and
 // delegates to Cost Explorer centrally.
-func (c *Client) GetRecommendations(_ context.Context, _ common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(_ context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 

@@ -617,7 +617,7 @@ func TestCloudSQLClient_GetRecommendations_WithMock(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -635,7 +635,7 @@ func TestCloudSQLClient_GetRecommendations_IteratorError(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cloudsql: iterate recommendations")
 	assert.Nil(t, recs, "partial data must not leak on iterator failure")
@@ -655,7 +655,7 @@ func TestCloudSQLClient_GetRecommendations_Empty(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }

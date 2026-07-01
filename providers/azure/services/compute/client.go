@@ -175,7 +175,7 @@ type AzureRetailPrice struct {
 }
 
 // GetRecommendations gets VM RI recommendations from Azure Consumption API
-func (c *ComputeClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *ComputeClient) GetRecommendations(ctx context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected pager if available (for testing)

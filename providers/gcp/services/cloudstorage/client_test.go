@@ -376,7 +376,7 @@ func TestCloudStorageClient_GetRecommendations_WithMock(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -394,7 +394,7 @@ func TestCloudStorageClient_GetRecommendations_Empty(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }
@@ -411,7 +411,7 @@ func TestCloudStorageClient_GetRecommendations_IteratorError(t *testing.T) {
 	// Iterator errors now propagate (issue #1022 H2 fix) -- they must not be
 	// silently swallowed, as that would mask auth/quota failures and cause callers
 	// to act on a partial (empty) recommendation list.
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cloudstorage: iterate recommendations")
 	assert.Nil(t, recommendations)

@@ -434,7 +434,7 @@ func TestDatabaseClient_GetRecommendations_WithMockPager(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -461,7 +461,7 @@ func TestDatabaseClient_GetRecommendations_MultiplePages(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }

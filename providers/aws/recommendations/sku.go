@@ -32,17 +32,17 @@ type instanceTypeSKUEntry struct {
 	memoryGB float64
 }
 
-// skuCatalog holds a lazily-built per-Client instance-type catalogue.
-// The catalogue is fetched ONCE per client lifetime via sync.Once
+// skuCatalog holds a lazily-built per-Client instance-type catalog.
+// The catalog is fetched ONCE per client lifetime via sync.Once
 // so a single recommendations refresh issues at most one
 // DescribeInstanceTypes fan-out regardless of how many EC2 recs are returned.
 type skuCatalog struct {
+	m    map[string]instanceTypeSKUEntry
 	once sync.Once
-	m    map[string]instanceTypeSKUEntry // nil means fetch failed
 }
 
-// lookup returns the catalogue entry for instanceType, building the
-// catalogue on the first call. ok=false on cache miss or fetch failure;
+// lookup returns the catalog entry for instanceType, building the
+// catalog on the first call. ok=false on cache miss or fetch failure;
 // the caller falls back to VCPU=0 / MemoryGB=0 and does NOT fail the
 // conversion (graceful-degradation contract from Azure PR #810).
 func (s *skuCatalog) lookup(ctx context.Context, instanceType string, newPager func() InstanceTypePager) (instanceTypeSKUEntry, bool) {
@@ -65,17 +65,17 @@ func (s *skuCatalog) lookup(ctx context.Context, instanceType string, newPager f
 // WARN so operators can detect it.
 //
 // Any page-fetch error also returns nil (partial results are discarded so
-// callers never see a half-populated catalogue).
+// callers never see a half-populated catalog).
 func fetchInstanceTypeCatalogue(ctx context.Context, pager InstanceTypePager) map[string]instanceTypeSKUEntry {
 	out := make(map[string]instanceTypeSKUEntry)
 	for pager.HasMorePages() {
 		if err := ctx.Err(); err != nil {
-			logging.Warnf("aws ec2: instance type catalogue fetch interrupted: %v — Details.VCPU/MemoryGB left at 0", err)
+			logging.Warnf("aws ec2: instance type catalog fetch interrupted: %v -- Details.VCPU/MemoryGB left at 0", err)
 			return nil
 		}
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			logging.Warnf("aws ec2: instance type catalogue page fetch failed: %v — Details.VCPU/MemoryGB left at 0", err)
+			logging.Warnf("aws ec2: instance type catalog page fetch failed: %v -- Details.VCPU/MemoryGB left at 0", err)
 			return nil
 		}
 		populateInstanceTypeSKUMap(out, page.InstanceTypes)
@@ -86,7 +86,8 @@ func fetchInstanceTypeCatalogue(ctx context.Context, pager InstanceTypePager) ma
 // populateInstanceTypeSKUMap writes one instanceTypeSKUEntry per item in
 // instanceTypes into out. First-write-wins on duplicate names.
 func populateInstanceTypeSKUMap(out map[string]instanceTypeSKUEntry, instanceTypes []ec2types.InstanceTypeInfo) {
-	for _, info := range instanceTypes {
+	for i := range instanceTypes {
+		info := &instanceTypes[i]
 		name := string(info.InstanceType)
 		if name == "" {
 			continue
@@ -101,7 +102,7 @@ func populateInstanceTypeSKUMap(out map[string]instanceTypeSKUEntry, instanceTyp
 // extractInstanceTypeSKUEntry reads the vCPU count and memory size from
 // InstanceTypeInfo. Returns (0, 0) when either field is absent or nil;
 // callers treat 0 as "unknown".
-func extractInstanceTypeSKUEntry(info ec2types.InstanceTypeInfo) instanceTypeSKUEntry {
+func extractInstanceTypeSKUEntry(info *ec2types.InstanceTypeInfo) instanceTypeSKUEntry {
 	var vCPUs int
 	var memoryGB float64
 

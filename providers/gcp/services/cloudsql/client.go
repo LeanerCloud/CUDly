@@ -138,20 +138,30 @@ func (c *CloudSQLClient) GetRegion() string {
 	return c.region
 }
 
+// resolveRecommenderClient returns the injected client (for testing) or creates
+// a new one from the stored options.
+func (c *CloudSQLClient) resolveRecommenderClient(ctx context.Context) (RecommenderClient, error) {
+	if c.recommenderClient != nil {
+		return c.recommenderClient, nil
+	}
+	client, err := recommender.NewClient(ctx, c.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create recommender client: %w", err)
+	}
+	return &realRecommenderClient{client: client}, nil
+}
+
 // GetRecommendations gets Cloud SQL recommendations from GCP Recommender API
-func (c *CloudSQLClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *CloudSQLClient) GetRecommendations(ctx context.Context, p *common.RecommendationParams) ([]common.Recommendation, error) {
+	if p == nil {
+		return nil, fmt.Errorf("params cannot be nil")
+	}
+	params := *p
 	recommendations := make([]common.Recommendation, 0)
 
-	// Use injected client if available (for testing)
-	var recClient RecommenderClient
-	if c.recommenderClient != nil {
-		recClient = c.recommenderClient
-	} else {
-		client, err := recommender.NewClient(ctx, c.clientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create recommender client: %w", err)
-		}
-		recClient = &realRecommenderClient{client: client}
+	recClient, err := c.resolveRecommenderClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer recClient.Close()
 

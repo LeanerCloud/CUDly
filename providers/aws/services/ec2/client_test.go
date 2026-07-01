@@ -103,7 +103,7 @@ func TestClient_GetRegion(t *testing.T) {
 func TestClient_GetRecommendations(t *testing.T) {
 	t.Parallel()
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }

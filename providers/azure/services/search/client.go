@@ -130,7 +130,7 @@ type AzureRetailPrice struct {
 }
 
 // GetRecommendations gets Azure Search reservation recommendations from Azure Consumption API
-func (c *SearchClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *SearchClient) GetRecommendations(ctx context.Context, _ *common.RecommendationParams) ([]common.Recommendation, error) {
 	recommendations := make([]common.Recommendation, 0)
 
 	// Use injected pager if available (for testing)

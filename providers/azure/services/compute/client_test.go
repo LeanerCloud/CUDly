@@ -214,7 +214,7 @@ func TestComputeClient_GetRecommendations_WithMock(t *testing.T) {
 		Region:  "eastus",
 	}
 
-	recommendations, err := client.GetRecommendations(ctx, params)
+	recommendations, err := client.GetRecommendations(ctx, &params)
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }
@@ -242,7 +242,7 @@ func TestComputeClient_GetRecommendations_EmitsBothPaymentVariants(t *testing.T)
 	}
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, recs, 2, "one API rec must expand to two payment-variant entries")
 
