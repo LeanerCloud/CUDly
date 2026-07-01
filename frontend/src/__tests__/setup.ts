@@ -4,6 +4,7 @@
 import '@testing-library/jest-dom';
 import { TextEncoder, TextDecoder } from 'util';
 import { webcrypto } from 'crypto';
+import structuredClonePolyfill from '@ungap/structured-clone';
 
 // Polyfill TextEncoder/TextDecoder for Node.js environment
 global.TextEncoder = TextEncoder;
@@ -61,8 +62,24 @@ Object.defineProperty(global, 'Chart', {
 // the Node.js global structuredClone to the window scope). The utils.ts
 // deepClone function delegates to structuredClone; without this the suite
 // throws "ReferenceError: structuredClone is not defined" (finding 11-N1).
+//
+// Prefer the environment-provided native implementation when present; only
+// polyfill when absent. The polyfill is @ungap/structured-clone, a faithful
+// implementation of the HTML structured clone algorithm (preserves
+// undefined-valued properties, Date, Map, Set, RegExp, cycles; throws
+// TypeError on functions), unlike the previous JSON round-trip which
+// validated weaker semantics than production browsers (TEST-07). When the
+// host Node has a native structuredClone, @ungap delegates to it; otherwise
+// it uses its own serialize/deserialize. In jsdom-on-jest, Date/Map/Set
+// primordials are shared with Node so `instanceof` keeps working on cloned
+// values regardless of which path runs.
 if (typeof globalThis.structuredClone === 'undefined') {
-  globalThis.structuredClone = <T>(val: T): T => JSON.parse(JSON.stringify(val)) as T;
+  globalThis.structuredClone = (<T>(value: T, options?: StructuredSerializeOptions): T => {
+    if (options?.transfer?.length) {
+      throw new Error('structuredClone polyfill does not support the transfer option');
+    }
+    return structuredClonePolyfill(value);
+  }) as typeof structuredClone;
 }
 
 // Mock alert and confirm

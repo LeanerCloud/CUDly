@@ -501,10 +501,9 @@ describe('providerBadgeHtml', () => {
 
 // ---------------------------------------------------------------------------
 // Regression tests for finding 11-N1: deepClone defaults to structuredClone.
-// Note: the jsdom test environment polyfills structuredClone with a JSON
-// round-trip (see setup.ts) because jsdom does not expose Node's built-in
-// structuredClone. As a result, undefined preservation can only be asserted
-// when the native structuredClone is available (not in jsdom).
+// The jsdom test environment polyfills structuredClone via
+// `@ungap/structured-clone` (see setup.ts), which implements the real HTML
+// structured clone algorithm, so full browser semantics are asserted here.
 // ---------------------------------------------------------------------------
 describe('deepClone (11-N1: structuredClone default)', () => {
   test('deep copy: mutation of clone does not affect source', () => {
@@ -525,6 +524,57 @@ describe('deepClone (11-N1: structuredClone default)', () => {
     expect(deepClone(null)).toBe(null);
     expect(deepClone(42)).toBe(42);
     expect(deepClone('hello')).toBe('hello');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for TEST-07: the test-environment structuredClone must
+// implement real structured clone semantics, not a JSON round-trip. Each test
+// below fails against the previous JSON.parse(JSON.stringify(...)) polyfill
+// and passes against the browser/Node algorithm.
+// ---------------------------------------------------------------------------
+describe('deepClone (TEST-07: real structured clone semantics)', () => {
+  test('preserves undefined-valued properties (JSON round-trip drops them)', () => {
+    const obj: { a: number; b: number | undefined } = { a: 1, b: undefined };
+    const clone = deepClone(obj);
+    expect('b' in clone).toBe(true);
+    expect(clone.b).toBeUndefined();
+  });
+
+  test('preserves Date instances (JSON round-trip stringifies them)', () => {
+    const obj = { ts: new Date('2026-01-02T03:04:05.678Z') };
+    const clone = deepClone(obj);
+    expect(clone.ts).toBeInstanceOf(Date);
+    expect(clone.ts.getTime()).toBe(obj.ts.getTime());
+    expect(clone.ts).not.toBe(obj.ts);
+  });
+
+  test('preserves Map and Set (JSON round-trip degrades them to {})', () => {
+    const obj = { m: new Map([['k', 1]]), s: new Set([1, 2]) };
+    const clone = deepClone(obj);
+    expect(clone.m).toBeInstanceOf(Map);
+    expect(clone.m.get('k')).toBe(1);
+    expect(clone.m).not.toBe(obj.m);
+    expect(clone.s).toBeInstanceOf(Set);
+    expect(clone.s.has(2)).toBe(true);
+    expect(clone.s).not.toBe(obj.s);
+  });
+
+  test('handles cyclic references (JSON round-trip throws)', () => {
+    interface Cyclic {
+      name: string;
+      self?: Cyclic;
+    }
+    const obj: Cyclic = { name: 'loop' };
+    obj.self = obj;
+    const clone = deepClone(obj);
+    expect(clone).not.toBe(obj);
+    expect(clone.self).toBe(clone);
+  });
+
+  test('throws on functions like the browser implementation', () => {
+    // JSON round-trip silently drops functions; structured clone must throw.
+    expect(() => deepClone({ fn: (): number => 1 })).toThrow();
   });
 });
 
