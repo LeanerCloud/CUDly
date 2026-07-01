@@ -5170,6 +5170,38 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       const variantRows = document.querySelectorAll('.rec-variant-row');
       expect(variantRows.length).toBe(2);
     });
+
+    // QA 4.13: expand/collapse state must be reset when the data source
+    // reloads due to a provider/account Global filter change. Before the fix,
+    // stale expandedCells keys from the prior provider desynchronised the
+    // Expand-All button label and left newly-shown groups collapsed.
+    test('QA 4.13: expand state clears on loadRecommendations (provider filter change)', async () => {
+      const recs = multiVariantRecs();
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+
+      // 1. Load and expand all groups.
+      await loadRecommendations();
+      const expandAllBtn = document.querySelector<HTMLButtonElement>('.expand-all-toggle');
+      expect(expandAllBtn).not.toBeNull();
+      expandAllBtn!.click();
+
+      // Confirm we are now in "Collapse all" state.
+      expect(expandAllBtn!.textContent).toMatch(/Collapse all/);
+
+      // 2. Simulate a provider filter change by calling loadRecommendations()
+      //    again (this is exactly what the subscribeProvider callback invokes).
+      await loadRecommendations();
+
+      // 3. Expand state must have been cleared: button label reverts to
+      //    "Expand all" and no variant rows are visible (groups are collapsed).
+      const expandAllBtn2 = document.querySelector<HTMLButtonElement>('.expand-all-toggle');
+      expect(expandAllBtn2).not.toBeNull();
+      expect(expandAllBtn2!.textContent).toMatch(/Expand all/);
+
+      const variantRows = document.querySelectorAll('.rec-variant-row');
+      expect(variantRows.length).toBe(0);
+    });
   });
 });
 
@@ -6477,6 +6509,70 @@ describe('Issue #494: deterministic group sort on multi-variant cells', () => {
       // Must not be the empty / single-element trivial case.
       expect(first.length).toBe(3);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // QA 4.13 - Monthly Cost: zero-cost (all-upfront) variants must not prevent
+  // sort-direction toggle from reordering rows.
+  //
+  // Before the fix, cells with at least one all-upfront variant (monthly_cost=0)
+  // all scored 0 via Math.min(...finite), tying every such cell so the direction
+  // multiplier had nothing to act on and subsequent sort clicks were no-ops.
+  // The fix uses the minimum NON-ZERO recurring cost, falling back to 0 only
+  // when all finite values are 0 (pure all-upfront cell).
+  // -------------------------------------------------------------------------
+  test('Monthly Cost: mixed cell (all-upfront + no-upfront) sorts by non-zero recurring cost, not 0', async () => {
+    // cellLow: all-upfront (monthly=0) + no-upfront (monthly=20) -> score = 20
+    const cellLow = multiVariantCell({
+      resourceType: 'low-mixed', payment1y: 'all-upfront', payment3y: 'no-upfront',
+      upfront1y: 500, upfront3y: 0, monthly1y: 0, monthly3y: 20,
+    });
+    // cellHigh: all-upfront (monthly=0) + no-upfront (monthly=80) -> score = 80
+    const cellHigh = multiVariantCell({
+      resourceType: 'high-mixed', payment1y: 'all-upfront', payment3y: 'no-upfront',
+      upfront1y: 500, upfront3y: 0, monthly1y: 0, monthly3y: 80,
+    });
+    const recs = [...cellHigh, ...cellLow]; // wrong insertion order
+
+    // Ascending: cellLow (score=20) must precede cellHigh (score=80).
+    setupTestFixture(recs, { column: 'monthly_cost', direction: 'asc' });
+    await loadRecommendations();
+    const ascOrder = renderedCellOrder();
+    expect(indexOrFail(ascOrder, 'low-mixed'))
+      .toBeLessThan(indexOrFail(ascOrder, 'high-mixed'));
+
+    // Descending: cellHigh (score=80) must now precede cellLow (score=20).
+    // This is the toggle that was broken before the fix -- both cells scored 0
+    // so direction-flip was a no-op.
+    setupTestFixture(recs, { column: 'monthly_cost', direction: 'desc' });
+    await loadRecommendations();
+    const descOrder = renderedCellOrder();
+    expect(indexOrFail(descOrder, 'high-mixed'))
+      .toBeLessThan(indexOrFail(descOrder, 'low-mixed'));
+
+    // The two directions must produce OPPOSITE orderings (the toggle is live).
+    expect(ascOrder).not.toEqual(descOrder);
+  });
+
+  test('Monthly Cost: pure all-upfront cell scores 0 (not POSITIVE_INFINITY) and sorts before all-null cells', async () => {
+    // cellPureAllUpfront: both variants have monthly_cost=0 (all-upfront) -> score=0
+    const cellPureAllUpfront = multiVariantCell({
+      resourceType: 'pure-upfront', payment1y: 'all-upfront', payment3y: 'all-upfront',
+      upfront1y: 600, upfront3y: 1800, monthly1y: 0, monthly3y: 0,
+    });
+    // cellAllNull: both variants have monthly_cost=null -> score=POSITIVE_INFINITY
+    const cellAllNull = multiVariantCell({
+      resourceType: 'pure-null', payment1y: 'all-upfront', payment3y: 'all-upfront',
+      upfront1y: 1000, upfront3y: 3000, monthly1y: null, monthly3y: null,
+    });
+    const recs = [...cellAllNull, ...cellPureAllUpfront];
+
+    // Ascending: pure-upfront (score=0) must come before all-null (score=+Inf).
+    setupTestFixture(recs, { column: 'monthly_cost', direction: 'asc' });
+    await loadRecommendations();
+    const order = renderedCellOrder();
+    expect(indexOrFail(order, 'pure-upfront'))
+      .toBeLessThan(indexOrFail(order, 'pure-null'));
   });
 });
 
