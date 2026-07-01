@@ -75,7 +75,7 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 // concurrent revoke, or (false, false) on a real error.
 func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution) (fired, raceLost bool) {
 	// CAS: scheduled -> approved. If this fails with ErrExecutionNotInExpectedStatus
-	// the revoke handler already transitioned the row to "cancelled" — that is
+	// the revoke handler already transitioned the row to "canceled" -- that is
 	// not an error, just a CAS race loss.
 	// Scheduler-initiated fire: no human session UUID, so transitioned_by = NULL.
 	updated, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"scheduled"}, "approved", nil)

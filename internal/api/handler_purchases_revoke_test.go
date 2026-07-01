@@ -581,14 +581,14 @@ func TestRevokePurchase_ScheduledExecution_AdminFreeCancel(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	// CancelExecutionAtomic and DeleteSuppressionsByExecutionTx use mock defaults
-	// (WithTx calls fn(nil), CancelExecutionAtomic returns true/"cancelled"/nil).
+	// (WithTx calls fn(nil), CancelScheduledExecutionAtomic returns true/"canceled"/nil).
 
 	h := &Handler{config: mockStore, auth: mockAuth}
 	result, err := h.revokePurchase(ctx, sessionReq("tok"), execID)
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -621,7 +621,7 @@ func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *test
 	}
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-		Return(true, "cancelled", nil).Once()
+		Return(true, "canceled", nil).Once()
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -629,7 +629,7 @@ func TestRevokePurchase_ScheduledExecution_PastTimestampStillCancellable(t *test
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -692,7 +692,7 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 	exec := scheduledExecution(execID, "")
 	mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-		Return(true, "cancelled", nil).Once()
+		Return(true, "canceled", nil).Once()
 	// Suppression cleanup must run inside the same tx as the CAS.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
@@ -704,7 +704,7 @@ func TestRevokePurchase_ScheduledExecution_BugReg_HappyPathCAS(t *testing.T) {
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 	assert.Contains(t, m["message"], "No cloud API call")
 }
 
@@ -736,7 +736,7 @@ func TestRevokePurchase_ScheduledExecution_RevokeOwnCreator(t *testing.T) {
 	require.NoError(t, err)
 	m, ok := result.(map[string]string)
 	require.True(t, ok)
-	assert.Equal(t, "cancelled", m["status"])
+	assert.Equal(t, "canceled", m["status"])
 }
 
 // TestRevokePurchase_ScheduledExecution_RevokeOwnWrongCreator verifies that
@@ -1376,7 +1376,7 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		exec := scheduledExecution(execID, "")
 		mockStore.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 		mockStore.On("CancelScheduledExecutionAtomic", ctx, mock.Anything, execID, mock.Anything).
-			Return(true, "cancelled", nil).Once()
+			Return(true, "canceled", nil).Once()
 		mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, execID).Return(nil).Once()
 
 		h := &Handler{config: mockStore, auth: mockAuth}
@@ -1384,10 +1384,10 @@ func TestRevokePurchase_ConcurrentScheduledRevoke_OneWinsOneGets410(t *testing.T
 		require.NoError(t, err)
 		m, ok := result.(map[string]string)
 		require.True(t, ok)
-		assert.Equal(t, "cancelled", m["status"])
+		assert.Equal(t, "canceled", m["status"])
 	})
 
-	// --- Second caller: CAS returns !cancelled (scheduler or first caller won) ---
+	// --- Second caller: CAS returns !canceled (scheduler or first caller won) ---
 	t.Run("second caller gets 410", func(t *testing.T) {
 		t.Parallel()
 		mockStore := new(MockConfigStore)

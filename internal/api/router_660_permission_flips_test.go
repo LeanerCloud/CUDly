@@ -292,8 +292,8 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).
-			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil)
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "canceled", mock.Anything).
+			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "canceled"}, nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)

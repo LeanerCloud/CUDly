@@ -114,7 +114,12 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 // wave-2) appear in the History view with a Revoke button before the cloud SDK
 // call fires. Without this entry the row is invisible to the History UI, making
 // the Revoke button unreachable (issue #290, second-wave CR Finding E).
-var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", "cancelled"}
+// Both the US-spelling status (config.StatusCanceled) and the legacy British
+// spelling (config.LegacyStatusCanceled) are listed: during the expand-contract
+// rename (migration 000078) old code may still write the legacy value before
+// the rolling deploy completes. The contract migration (#1278) normalizes the
+// data once the deploy is verified stable; drop the legacy entry here then.
+var historyExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused", "completed", "partially_completed", "failed", "expired", config.StatusCanceled, config.LegacyStatusCanceled}
 
 // approvalExpiryWindow is how long a pending approval stays actionable
 // before the History view flips it to "expired". Aligns with the
@@ -345,7 +350,10 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 		row.StatusDescription = exec.Error
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
-	case "cancelled":
+	case config.StatusCanceled, config.LegacyStatusCanceled:
+		// The legacy British spelling is still matched during the
+		// expand-contract rename (migration 000078) until the contract
+		// migration (#1278) normalizes and drops it.
 		annotateCancelled(row, exec, approver)
 	default:
 		// In-flight (approved/running/scheduled/paused) and audit-gap
@@ -410,24 +418,24 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 	}
 }
 
-// annotateCancelled resolves who cancelled the execution:
-//  1. exec.CancelledBy — populated by the session-authed deep-link flow;
+// annotateCancelled resolves who canceled the execution:
+//  1. exec.CanceledBy -- populated by the session-authed deep-link flow;
 //     exact session-authed click attribution.
-//  2. approver — the notification inbox that received the cancel token;
+//  2. approver -- the notification inbox that received the cancel token;
 //     authoritative accountable party but not necessarily the clicker.
 //     Used on legacy token-only paths (async workers, old email clicks).
 func annotateCancelled(row *config.PurchaseHistoryRecord, exec config.PurchaseExecution, approver string) {
-	if exec.CancelledBy != nil && *exec.CancelledBy != "" {
-		row.Approver = *exec.CancelledBy
-		row.StatusDescription = "cancelled by " + *exec.CancelledBy
+	if exec.CanceledBy != nil && *exec.CanceledBy != "" {
+		row.Approver = *exec.CanceledBy
+		row.StatusDescription = "canceled by " + *exec.CanceledBy
 		return
 	}
 	if approver != "" {
 		row.Approver = approver
-		row.StatusDescription = "cancelled by " + approver + " (via approval link)"
+		row.StatusDescription = "canceled by " + approver + " (via approval link)"
 		return
 	}
-	row.StatusDescription = "cancelled via approval link"
+	row.StatusDescription = "canceled via approval link"
 }
 
 // annotateApproved resolves who approved the execution using the same
@@ -1022,10 +1030,14 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		case "expired":
 			summary.TotalExpired++
 			continue
-		case "cancelled":
-			// A cancelled purchase represents zero committed spend and zero
+		case config.StatusCanceled, config.LegacyStatusCanceled:
+			// A canceled purchase represents zero committed spend and zero
 			// realized savings (issue #736). Exclude from all dollar KPIs and
-			// from TotalCompleted — the money was never committed.
+			// from TotalCompleted -- the money was never committed. The legacy
+			// British spelling is matched alongside the US one during the
+			// expand-contract rename (migration 000078) so legacy rows can't
+			// inflate KPIs mid-deploy; the contract migration (#1278) drops it
+			// once the deploy is stable.
 			continue
 		}
 		summary.TotalCompleted++

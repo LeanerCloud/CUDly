@@ -139,7 +139,7 @@ func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 			seen[s] = true
 		}
 		return seen["approved"] && seen["running"] &&
-			!seen["completed"] && !seen["failed"] && !seen["cancelled"] && !seen["pending"] && !seen["notified"]
+			!seen["completed"] && !seen["failed"] && !seen["canceled"] && !seen["pending"] && !seen["notified"]
 	}), reapAfter).
 		Return([]config.PurchaseExecution{}, nil)
 

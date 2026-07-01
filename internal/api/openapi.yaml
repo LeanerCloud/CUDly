@@ -2441,7 +2441,12 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, notified, approved, cancelled, completed, failed, running, paused]
+          # Migration 000078 (expand-contract rename, cancelled -> canceled):
+          # both spellings are valid during the rolling deploy window. New code
+          # writes "canceled" (US); rows written by old code retain "cancelled"
+          # until the CONTRACT migration (#1278) normalizes them, at which
+          # point the legacy entry can be removed from this enum.
+          enum: [pending, notified, approved, canceled, cancelled, completed, failed, running, paused]
         step_number:
           type: integer
         scheduled_date:

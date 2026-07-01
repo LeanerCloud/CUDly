@@ -348,37 +348,42 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
-	cancelled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
+	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
 	}
 
 	// Set the parent plan's enabled flag to false so the Plans page toggle
 	// reflects the disable action immediately. Issue #774: previously the
-	// execution was cancelled but plan.enabled was left true, causing
+	// execution was canceled but plan.enabled was left true, causing
 	// inconsistent state between the Scheduled Purchases and Plans views.
-	if cancelled.PlanID != "" {
-		if err := h.disablePlan(ctx, cancelled.PlanID); err != nil {
+	if canceled.PlanID != "" {
+		if err := h.disablePlan(ctx, canceled.PlanID); err != nil {
 			return nil, err
 		}
 	}
 
-	return &StatusResponse{Status: "cancelled"}, nil
+	return &StatusResponse{Status: "canceled"}, nil
 }
 
-// cancelOrRecoverExecution transitions the execution to "cancelled" if it is
-// still in {pending, paused}. If a prior attempt already cancelled it
+// cancelOrRecoverExecution transitions the execution to "canceled" if it is
+// still in {pending, paused}. If a prior attempt already canceled it
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
 // can still drive the plan-disable side-effect, keeping the operation
 // idempotent across retries.
 // actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
-	cancelled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "cancelled", actor)
+	result, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "canceled", actor)
 	if err == nil {
-		return cancelled, nil
+		return result, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
+		// Not a CAS conflict: a real server-side failure (DB error, transient
+		// fault). Surface it as a plain wrapped error so the router logs the
+		// raw detail and returns a generic 500 -- a 409 here would misclassify
+		// a retriable backend failure as the caller's fault and leak backend
+		// text (feedback_http_status_classification; same class as PR #1276).
+		return nil, fmt.Errorf("cancel execution %s: %w", executionID, err)
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
 	if getErr != nil {
@@ -387,10 +392,26 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if existing == nil {
 		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
-	if existing.Status != "cancelled" {
+	// Accept both spellings: during the expand-contract rename (migration
+	// 000078) a concurrent legacy cancel may have written the legacy value
+	// before the rolling deploy completes. The contract migration (#1278)
+	// normalizes the data, after which LegacyStatusCanceled can be removed.
+	if existing.Status != config.StatusCanceled && existing.Status != config.LegacyStatusCanceled {
 		return nil, NewClientError(409, fmt.Sprintf(
-			"execution %s cannot be cancelled (status=%s)",
+			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))
+	}
+	// Normalize the response Status so the idempotent recovery path returns the
+	// canonical US spelling even when the DB row still carries the legacy value.
+	// Without this, a caller that received an in-flight 200 from this branch
+	// would see status="cancelled" while a caller that hit the happy-path
+	// transition above would see status="canceled" for the same execution_id
+	// during the rolling deploy. The legacy value is preserved in storage --
+	// only the in-memory copy returned to the handler is normalized -- so the
+	// contract migration's authoritative status backfill still observes every
+	// legacy row.
+	if existing.Status == config.LegacyStatusCanceled {
+		existing.Status = config.StatusCanceled
 	}
 	return existing, nil
 }
@@ -634,7 +655,7 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 // The scheduler picks up rows with status=scheduled and
 // scheduled_execution_at <= NOW() and fires the actual SDK call.
 // Revoking a status=scheduled execution (via the revoke handler or the
-// History "Revoke" button) transitions it to "cancelled" at zero cloud cost.
+// History "Revoke" button) transitions it to "canceled" at zero cloud cost.
 func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (any, error) {
 	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy)
 	if err != nil {
@@ -671,9 +692,9 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 //
 // The atomic CAS (TransitionExecutionStatus WHERE status IN (pending,notified))
 // prevents a silent revoke loss: if a concurrent Cancel flipped the row to
-// "cancelled" between the caller's SELECT and this write, TransitionExecutionStatus
+// "canceled" between the caller's SELECT and this write, TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
-// blindly overwriting the cancelled state.
+// blindly overwriting the canceled state.
 func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (*config.PurchaseExecution, error) {
 	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled", transitionedBy)
 	if err != nil {
@@ -891,26 +912,44 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
 			return nil, err
 		}
-		return map[string]string{"status": "cancelled"}, nil
+		return map[string]string{"status": "canceled"}, nil
 	}
 
 	return h.cancelPurchaseViaSession(ctx, req, execution)
 }
 
+// guardImmediatelyCancelable returns a 409 ClientError unless the execution is
+// in a state the plain cancel CAS (CancelExecutionAtomic, pending/notified)
+// handles, and nil when it is cancelable. A "scheduled" row is cancelable but
+// only via the /revoke flow (CancelScheduledExecutionAtomic); routing it
+// through the cancel path would pass IsCancelable, fail the pending/notified-only
+// CAS, and surface a misleading "concurrent operation" 409 -- so it gets a
+// clear message directing it to the revoke endpoint instead (issue #290).
+// Shared by the session and email-token cancel gates so the policy can't drift.
+func guardImmediatelyCancelable(execution *config.PurchaseExecution) error {
+	if execution.Status == "scheduled" {
+		return NewClientError(409, fmt.Sprintf("execution %s is scheduled; use the revoke endpoint to cancel it before it fires", execution.ExecutionID))
+	}
+	if !execution.IsImmediatelyCancelable() {
+		return NewClientError(409, fmt.Sprintf("execution %s cannot be canceled (status=%s)", execution.ExecutionID, execution.Status))
+	}
+	return nil
+}
+
 // cancelPurchaseViaSession is the session-authed branch of cancelPurchase.
 // Enforces the cancel-any/cancel-own RBAC matrix, validates the execution
-// is in a cancellable state (pending|notified), atomically flips the row
-// to "cancelled" AND drops its purchase_suppressions in the same
-// transaction, and stamps session.Email onto CancelledBy. The History
-// UI's annotateCancelled() helper renders CancelledBy as
-// "cancelled by <email>" at read time — see handler_history.go.
+// is in a cancelable state (pending|notified), atomically flips the row
+// to "canceled" AND drops its purchase_suppressions in the same
+// transaction, and stamps session.Email onto CanceledBy. The History
+// UI's annotateCancelled() helper renders CanceledBy as
+// "canceled by <email>" at read time -- see handler_history.go.
 //
 // The atomic suppression cleanup mirrors purchase.Manager.CancelExecution
 // on the email-token path: an executePurchase upfront writes
 // purchase_suppressions to hide the just-bought capacity from the
 // recommendations list during the grace window, and cancel must drop
 // those rows in the same commit so a crash between the two writes can't
-// leave the rec list hiding capacity the user already cancelled.
+// leave the rec list hiding capacity the user already canceled.
 func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution) (any, error) {
 	// These endpoints are AuthPublic so the outer middleware skips CSRF.
 	// Enforce it here for the session-authed sub-path: the session bearer
@@ -924,45 +963,45 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		return nil, err
 	}
 
-	if !execution.IsCancelable() {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled (status=%s)", execution.ExecutionID, execution.Status))
-	}
-
 	if err := h.authorizeSessionCancel(ctx, session, execution); err != nil {
 		return nil, err
 	}
 
-	// Atomically flip status from pending/notified to cancelled + clear
+	if err := guardImmediatelyCancelable(execution); err != nil {
+		return nil, err
+	}
+
+	// Atomically flip status from pending/notified to canceled + clear
 	// suppressions in one tx. CancelExecutionAtomic issues a conditional
 	// UPDATE WHERE status IN ('pending','notified'), so a concurrent approve
 	// that has already transitioned the row to 'approved' causes zero rows
 	// to be affected and we return a 409 with the current status rather
 	// than silently overwriting an approved purchase.
-	var cancelledBy *string
+	var canceledBy *string
 	if session.Email != "" {
 		e := session.Email
-		cancelledBy = &e
+		canceledBy = &e
 	}
-	var cancelled bool
+	var canceled bool
 	var currentStatus string
 	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		cancelled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, cancelledBy)
+		canceled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, canceledBy)
 		if err != nil {
 			return err
 		}
-		if !cancelled {
+		if !canceled {
 			return nil
 		}
 		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
 	}); err != nil {
 		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, err)
 	}
-	if !cancelled {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
+	if !canceled {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
@@ -2322,7 +2361,7 @@ func (h *Handler) lookupContactEmail(ctx context.Context, id string) (string, er
 // approve/cancel action, after enforcing that the session-authenticated
 // user's email is on the authorised-approver list for the given execution.
 // Returns a 403 ClientError when the session is missing or the email
-// doesn't match. The returned actor is stored as approved_by/cancelled_by
+// doesn't match. The returned actor is stored as approved_by/canceled_by
 // on the execution.
 //
 // Rationale: the approve/cancel API routes are AuthPublic (token-only) for

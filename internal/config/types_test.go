@@ -280,7 +280,7 @@ func TestPurchasePlan_Defaults(t *testing.T) {
 }
 
 func TestPurchaseExecution_Statuses(t *testing.T) {
-	validStatuses := []string{"pending", "notified", "approved", "cancelled", "completed", "failed"}
+	validStatuses := []string{"pending", "notified", "approved", "canceled", "completed", "failed"}
 
 	for _, status := range validStatuses {
 		exec := PurchaseExecution{Status: status}
@@ -400,4 +400,39 @@ func TestGlobalConfig_GracePeriodFor(t *testing.T) {
 		// Missing key still defaults.
 		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("gcp"))
 	})
+}
+
+// TestPurchaseExecution_CancelablePredicates locks the distinction between the
+// two cancelability predicates (CodeRabbit finding #6, PR #1277):
+//   - IsCancelable is the broad policy predicate: pending/notified/scheduled.
+//   - IsImmediatelyCancelable is the narrow CAS predicate the /cancel paths
+//     gate on: pending/notified only. "scheduled" is cancelable but only via
+//     the Gmail-style revoke flow (CancelScheduledExecutionAtomic), so it must
+//     NOT be immediately cancelable -- otherwise it misroutes into the
+//     pending/notified-only CAS and surfaces a misleading "concurrent
+//     operation" error.
+func TestPurchaseExecution_CancelablePredicates(t *testing.T) {
+	cases := []struct {
+		status                string
+		cancelable            bool
+		immediatelyCancelable bool
+	}{
+		{"pending", true, true},
+		{"notified", true, true},
+		{"scheduled", true, false},
+		{"approved", false, false},
+		{"running", false, false},
+		{"paused", false, false},
+		{"completed", false, false},
+		{"canceled", false, false},
+		{"failed", false, false},
+		{"expired", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			e := &PurchaseExecution{Status: tc.status}
+			assert.Equal(t, tc.cancelable, e.IsCancelable(), "IsCancelable(%q)", tc.status)
+			assert.Equal(t, tc.immediatelyCancelable, e.IsImmediatelyCancelable(), "IsImmediatelyCancelable(%q)", tc.status)
+		})
+	}
 }

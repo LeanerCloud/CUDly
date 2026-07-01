@@ -1044,7 +1044,7 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, id, token strin
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	return h.executeApprovedExchange(ctx, id, record)
@@ -1077,7 +1077,7 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled by a newer analysis run")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -1329,15 +1329,15 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
-	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "cancelled", nil)
+	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "canceled", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was cancelled")
+		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
 	}
 
-	return map[string]string{"status": "cancelled"}, nil
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.
