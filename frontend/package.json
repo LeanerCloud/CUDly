@@ -9,6 +9,8 @@
     "watch": "webpack --mode development --watch",
     "test": "jest --coverage",
     "test:watch": "jest --watch",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium",
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
@@ -17,6 +19,7 @@
     "@babel/core": "^7.23.0",
     "@babel/preset-env": "^7.23.0",
     "@babel/preset-typescript": "^7.23.0",
+    "@playwright/test": "^1.60.0",
     "@testing-library/dom": "^9.3.0",
     "@testing-library/jest-dom": "^6.1.0",
     "@types/chart.js": "^2.9.41",
@@ -34,6 +37,7 @@
     "jest-environment-jsdom": "^29.7.0",
     "jsdom": "^22.1.0",
     "mini-css-extract-plugin": "^2.7.0",
+    "serve": "^14.2.6",
     "style-loader": "^3.3.0",
     "ts-jest": "^29.1.0",
     "ts-loader": "^9.5.0",
@@ -58,7 +62,8 @@
     "testPathIgnorePatterns": [
       "/node_modules/",
       "/src/__tests__/setup.ts",
-      "/src/__tests__/mocks/"
+      "/src/__tests__/mocks/",
+      "/tests-e2e/"
     ],
     "moduleNameMapper": {
       "\\.(css|less|scss|sass)$": "<rootDir>/src/__tests__/mocks/styleMock.ts"
@@ -66,7 +71,8 @@
     "collectCoverageFrom": [
       "src/**/*.ts",
       "!src/__tests__/**",
-      "!src/**/*.d.ts"
+      "!src/**/*.d.ts",
+      "!tests-e2e/**"
     ],
     "coverageDirectory": "coverage",
     "coverageThreshold": {
