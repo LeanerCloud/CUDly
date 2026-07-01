@@ -60,6 +60,12 @@ jest.mock('../state', () => ({
   getAmortizeUpfront: jest.fn().mockReturnValue(false),
   setAmortizeUpfront: jest.fn(),
   subscribeAmortizeUpfront: jest.fn().mockReturnValue(() => {}),
+  getPurchaseHistoryColumnFilters: jest.fn().mockReturnValue({}),
+  setPurchaseHistoryColumnFilter: jest.fn(),
+  clearAllPurchaseHistoryColumnFilters: jest.fn(),
+  getApprovalQueueColumnFilters: jest.fn().mockReturnValue({}),
+  setApprovalQueueColumnFilter: jest.fn(),
+  clearAllApprovalQueueColumnFilters: jest.fn(),
 }));
 
 // Mock permissions so we can inject arbitrary permission sets, including
