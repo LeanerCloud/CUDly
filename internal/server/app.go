@@ -1169,3 +1169,7 @@ func (a *authServiceAdapter) RevokeAPIKeyAPI(ctx context.Context, userID, keyID 
 func (a *authServiceAdapter) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (any, any, error) {
 	return a.service.ValidateUserAPIKeyAPI(ctx, apiKey)
 }
+
+func (a *authServiceAdapter) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action, resource string) (string, bool, error) {
+	return a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
+}
