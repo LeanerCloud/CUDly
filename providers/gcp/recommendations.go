@@ -59,6 +59,13 @@ type regionResult struct {
 	sql     []common.Recommendation
 	cache   []common.Recommendation
 	storage []common.Recommendation
+	// attempted counts the service calls launched for this region (after the
+	// params service filter), failed counts how many of those errored, and
+	// lastErr keeps one representative error. mergeRegionResults aggregates
+	// these across regions for the all-attempted-failed guard (COR-03).
+	attempted int
+	failed    int
+	lastErr   error
 }
 
 // RecommendationsClientAdapter aggregates GCP CUD and commitment recommendations across all services
@@ -152,15 +159,42 @@ func (r *RecommendationsClientAdapter) GetRecommendations(ctx context.Context, p
 	}
 	sort.Strings(sortedRegions)
 
-	allRecommendations := make([]common.Recommendation, 0)
+	return mergeRegionResults(sortedRegions, results)
+}
+
+// mergeRegionResults appends compute, sql, cache, storage per region in the
+// (sorted) order given so output is deterministic, and ports the AWS 08-H4
+// all-failed guard from providers/aws/recommendations/client.go: when every
+// attempted (region, service) call errored (e.g. an expired credential, a
+// project-wide throttle, or an RBAC gap), it returns a wrapped error instead
+// of an empty-but-nil-error result. Returning (recs, nil) on a total failure
+// makes a broken run indistinguishable from "no savings available": the
+// scheduler would count the account as succeeded, evict its previously
+// collected rows, and clear last_collection_error (COR-03). Partial failure
+// is tolerated: if at least one call succeeded, the successful results are
+// returned with a nil error (failures were already logged at WARN in
+// collectRegion).
+func mergeRegionResults(sortedRegions []string, results map[string]regionResult) ([]common.Recommendation, error) {
+	attempted := 0
+	failed := 0
+	var lastErr error
+	merged := make([]common.Recommendation, 0)
 	for _, region := range sortedRegions {
 		res := results[region]
-		allRecommendations = append(allRecommendations, res.compute...)
-		allRecommendations = append(allRecommendations, res.sql...)
-		allRecommendations = append(allRecommendations, res.cache...)
-		allRecommendations = append(allRecommendations, res.storage...)
+		attempted += res.attempted
+		failed += res.failed
+		if res.lastErr != nil {
+			lastErr = res.lastErr
+		}
+		merged = append(merged, res.compute...)
+		merged = append(merged, res.sql...)
+		merged = append(merged, res.cache...)
+		merged = append(merged, res.storage...)
 	}
-	return allRecommendations, nil
+	if failed > 0 && failed == attempted {
+		return nil, fmt.Errorf("all %d GCP recommendation service calls failed across %d regions: %w", failed, len(sortedRegions), lastErr)
+	}
+	return merged, nil
 }
 
 // collectComputeRecs fetches Compute Engine CUD recommendations for one region.
@@ -220,9 +254,13 @@ func (r *RecommendationsClientAdapter) collectStorageRecs(ctx context.Context, p
 // collectRegion fetches recommendations for all four GCP services
 // (Compute Engine, Cloud SQL, Memorystore, Cloud Storage) for a single region
 // concurrently. Per-service errors are logged at WARN with the region+service
-// tag and never propagate -- the previous silent-skip-on-err shape is preserved
-// (so a misconfigured project doesn't error out the whole recommendations
-// refresh) but errors are now observable in logs. The per-service fetch logic
+// tag and do not fail the region on their own -- the previous
+// silent-skip-on-err shape is preserved for partial failures (so a
+// misconfigured project doesn't error out the whole recommendations refresh).
+// Each region does report its attempted/failed call counts and a
+// representative error in the returned regionResult so mergeRegionResults can
+// fail loud when EVERY attempted call across all regions errored (COR-03).
+// The per-service fetch logic
 // (semaphore, client construction, GetRecommendations call) is delegated to
 // dedicated helpers (collectComputeRecs, collectSQLRecs, collectCacheRecs,
 // collectStorageRecs) to keep this function's cyclomatic complexity under the
@@ -239,25 +277,30 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	attempted := 0
 	if shouldIncludeService(params, common.ServiceCompute) {
+		attempted++
 		g.Go(func() error {
 			computeRecs, computeErr = r.collectComputeRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceRelationalDB) {
+		attempted++
 		g.Go(func() error {
 			sqlRecs, sqlErr = r.collectSQLRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceCache) {
+		attempted++
 		g.Go(func() error {
 			cacheRecs, cacheErr = r.collectCacheRecs(gctx, params, region)
 			return nil
 		})
 	}
 	if shouldIncludeService(params, common.ServiceStorage) {
+		attempted++
 		g.Go(func() error {
 			storageRecs, storageErr = r.collectStorageRecs(gctx, params, region)
 			return nil
@@ -265,20 +308,33 @@ func (r *RecommendationsClientAdapter) collectRegion(ctx context.Context, params
 	}
 	_ = g.Wait()
 
+	failed := 0
+	var lastErr error
 	if computeErr != nil {
 		logging.Warnf("GCP %s compute recommendations: %v", region, computeErr)
+		failed++
+		lastErr = computeErr
 	}
 	if sqlErr != nil {
 		logging.Warnf("GCP %s cloudsql recommendations: %v", region, sqlErr)
+		failed++
+		lastErr = sqlErr
 	}
 	if cacheErr != nil {
 		logging.Warnf("GCP %s memorystore recommendations: %v", region, cacheErr)
+		failed++
+		lastErr = cacheErr
 	}
 	if storageErr != nil {
 		logging.Warnf("GCP %s cloudstorage recommendations: %v", region, storageErr)
+		failed++
+		lastErr = storageErr
 	}
 
-	return regionResult{compute: computeRecs, sql: sqlRecs, cache: cacheRecs, storage: storageRecs}
+	return regionResult{
+		compute: computeRecs, sql: sqlRecs, cache: cacheRecs, storage: storageRecs,
+		attempted: attempted, failed: failed, lastErr: lastErr,
+	}
 }
 
 // GetRecommendationsForService retrieves GCP commitment recommendations for a specific service
