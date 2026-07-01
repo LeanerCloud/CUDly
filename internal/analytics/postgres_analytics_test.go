@@ -580,7 +580,7 @@ func TestQueryByProvider(t *testing.T) {
 			AddRow("aws", "rds", 2500.0, f64ptr(85.0)).
 			AddRow("aws", "elasticache", 1200.0, f64ptr(75.0))
 
-		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT provider, service, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY provider, service, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
@@ -603,7 +603,7 @@ func TestQueryByProvider(t *testing.T) {
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
-		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT provider, service, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY provider, service, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnError(errors.New("database error"))
 
@@ -632,7 +632,7 @@ func TestQueryByService(t *testing.T) {
 			AddRow("rds", "us-east-1", 1800.0, f64ptr(90.0)).
 			AddRow("rds", "us-west-2", 700.0, f64ptr(75.0))
 
-		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT service, region, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY service, region, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
@@ -655,7 +655,7 @@ func TestQueryByService(t *testing.T) {
 		now := time.Now().UTC()
 		startDate := now.Add(-30 * 24 * time.Hour)
 
-		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT service, region, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY service, region, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnError(errors.New("database error"))
 
@@ -1141,7 +1141,7 @@ func TestQueryByProviderRowScanError(t *testing.T) {
 			"provider", // Missing other columns
 		}).AddRow("aws").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT provider, service, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY provider, service, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
@@ -1167,7 +1167,7 @@ func TestQueryByServiceRowScanError(t *testing.T) {
 			"service", // Missing other columns
 		}).AddRow("rds").RowError(0, errors.New("scan error"))
 
-		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT service, region, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY service, region, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
@@ -1258,7 +1258,7 @@ func TestQueryByProviderRowsErr(t *testing.T) {
 			"provider", "service", "total_savings", "avg_coverage",
 		}).AddRow("aws", "rds", 2500.0, f64ptr(85.0))
 
-		mock.ExpectQuery(`SELECT provider, service, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT provider, service, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY provider, service, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}).
 			WillReturnRows(rows)
 
@@ -1285,7 +1285,7 @@ func TestQueryByServiceRowsErr(t *testing.T) {
 			"service", "region", "total_savings", "avg_coverage",
 		}).AddRow("rds", "us-east-1", 1800.0, f64ptr(90.0))
 
-		mock.ExpectQuery(`SELECT service, region, AVG\(total_savings\) as total_savings`).
+		mock.ExpectQuery(`(?s)SELECT service, region, AVG\(ts_savings\) as total_savings.*SUM\(total_savings\) as ts_savings.*GROUP BY service, region, timestamp`).
 			WithArgs(startDate, now, []string{"account-123"}, "aws").
 			WillReturnRows(rows)
 
