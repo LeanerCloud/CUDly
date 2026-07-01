@@ -12,7 +12,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,17 +46,20 @@ func azureTestHandler(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// newTestAzureResolver creates an AzureResolver backed by a mock HTTP server.
+// newTestAzureResolver creates an AzureResolver backed by a mock HTTPS server.
+// TLS is required because the GA Key Vault challenge policy only attaches
+// credentials over TLS-protected connections; server.Client() supplies a
+// transport that trusts the test server's certificate.
 // The handler must NOT reference the server variable (it is created inside this function).
 func newTestAzureResolver(t *testing.T, handler http.HandlerFunc) (*AzureResolver, *httptest.Server) {
 	t.Helper()
 
-	server := httptest.NewServer(azureTestHandler(handler))
+	server := httptest.NewTLSServer(azureTestHandler(handler))
 
 	cred := &fakeTokenCredential{}
 	client, err := azsecrets.NewClient(server.URL, cred, &azsecrets.ClientOptions{
 		ClientOptions: policy.ClientOptions{
-			InsecureAllowCredentialWithHTTP: true,
+			Transport: server.Client(),
 			Retry: policy.RetryOptions{
 				MaxRetries: 0,
 			},
@@ -284,4 +287,21 @@ func TestAzureResolverReal_Close(t *testing.T) {
 	// Close is idempotent
 	err = resolver.Close()
 	assert.NoError(t, err)
+}
+
+// TestAzureResolver_IMDSBlocked verifies that the IMDS-blocking transport
+// installed by NewAzureResolver prevents outbound connections to the Azure/AWS
+// link-local metadata endpoint (169.254.169.254). Without this guard an
+// attacker-controlled redirect could leak managed-identity credentials.
+func TestAzureResolver_IMDSBlocked(t *testing.T) {
+	client := imdsBlockingTransport()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://169.254.169.254/metadata/instance", nil)
+	require.NoError(t, err)
+
+	_, err = client.Do(req)
+	require.Error(t, err, "expected IMDS connection to be blocked")
+	assert.Contains(t, err.Error(), "blocked",
+		"error message should indicate the connection was blocked")
 }

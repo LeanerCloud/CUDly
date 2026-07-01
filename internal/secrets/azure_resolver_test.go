@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -32,7 +32,7 @@ func (m MockSecretID) Version() string {
 
 // MockAzureSecretsPager simulates the Azure secrets pager
 type MockAzureSecretsPager struct {
-	pages       [][]*azsecrets.SecretItem
+	pages       [][]*azsecrets.SecretProperties
 	currentPage int
 	err         error
 }
@@ -45,18 +45,18 @@ func (m *MockAzureSecretsPager) More() bool {
 	return m.currentPage < len(m.pages)
 }
 
-func (m *MockAzureSecretsPager) NextPage(ctx context.Context) (azsecrets.ListSecretsResponse, error) {
+func (m *MockAzureSecretsPager) NextPage(ctx context.Context) (azsecrets.ListSecretPropertiesResponse, error) {
 	if m.err != nil {
-		return azsecrets.ListSecretsResponse{}, m.err
+		return azsecrets.ListSecretPropertiesResponse{}, m.err
 	}
 	if m.currentPage >= len(m.pages) {
-		return azsecrets.ListSecretsResponse{}, errors.New("no more pages")
+		return azsecrets.ListSecretPropertiesResponse{}, errors.New("no more pages")
 	}
 	page := m.pages[m.currentPage]
 	m.currentPage++
 
-	return azsecrets.ListSecretsResponse{
-		SecretListResult: azsecrets.SecretListResult{
+	return azsecrets.ListSecretPropertiesResponse{
+		SecretPropertiesListResult: azsecrets.SecretPropertiesListResult{
 			Value: page,
 		},
 	}, nil
@@ -72,7 +72,7 @@ func (m *MockAzureSecretsClient) GetSecret(ctx context.Context, name string, ver
 	return args.Get(0).(azsecrets.GetSecretResponse), args.Error(1)
 }
 
-func (m *MockAzureSecretsClient) NewListSecretsPager(options *azsecrets.ListSecretsOptions) *MockAzureSecretsPager {
+func (m *MockAzureSecretsClient) NewListSecretPropertiesPager(options *azsecrets.ListSecretPropertiesOptions) *MockAzureSecretsPager {
 	args := m.Called(options)
 	return args.Get(0).(*MockAzureSecretsPager)
 }
@@ -113,7 +113,7 @@ func (r *testableAzureResolver) GetSecretJSON(ctx context.Context, secretID stri
 func (r *testableAzureResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
 	secrets := make([]string, 0)
 
-	pager := r.mockClient.NewListSecretsPager(nil)
+	pager := r.mockClient.NewListSecretPropertiesPager(nil)
 
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -154,7 +154,7 @@ func TestAzureResolver_GetSecret_Success(t *testing.T) {
 	secretValue := "my-azure-secret-value"
 	mockClient.On("GetSecret", ctx, "test-secret", "", (*azsecrets.GetSecretOptions)(nil)).Return(
 		azsecrets.GetSecretResponse{
-			SecretBundle: azsecrets.SecretBundle{
+			Secret: azsecrets.Secret{
 				Value: &secretValue,
 			},
 		}, nil,
@@ -191,7 +191,7 @@ func TestAzureResolver_GetSecret_NilValue(t *testing.T) {
 
 	mockClient.On("GetSecret", ctx, "nil-secret", "", (*azsecrets.GetSecretOptions)(nil)).Return(
 		azsecrets.GetSecretResponse{
-			SecretBundle: azsecrets.SecretBundle{
+			Secret: azsecrets.Secret{
 				Value: nil,
 			},
 		}, nil,
@@ -213,7 +213,7 @@ func TestAzureResolver_GetSecretJSON_Success(t *testing.T) {
 	jsonSecret := `{"username":"azure-user","password":"azure-password","timeout":30}`
 	mockClient.On("GetSecret", ctx, "json-secret", "", (*azsecrets.GetSecretOptions)(nil)).Return(
 		azsecrets.GetSecretResponse{
-			SecretBundle: azsecrets.SecretBundle{
+			Secret: azsecrets.Secret{
 				Value: &jsonSecret,
 			},
 		}, nil,
@@ -237,7 +237,7 @@ func TestAzureResolver_GetSecretJSON_InvalidJSON(t *testing.T) {
 	invalidJSON := "not-valid-json"
 	mockClient.On("GetSecret", ctx, "invalid-json", "", (*azsecrets.GetSecretOptions)(nil)).Return(
 		azsecrets.GetSecretResponse{
-			SecretBundle: azsecrets.SecretBundle{
+			Secret: azsecrets.Secret{
 				Value: &invalidJSON,
 			},
 		}, nil,
@@ -277,7 +277,7 @@ func TestAzureResolver_ListSecrets_Success(t *testing.T) {
 	id3 := azsecrets.ID(MockSecretID("https://myvault.vault.azure.net/secrets/secret-3"))
 
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{
+		pages: [][]*azsecrets.SecretProperties{
 			{
 				{ID: &id1},
 				{ID: &id2},
@@ -288,7 +288,7 @@ func TestAzureResolver_ListSecrets_Success(t *testing.T) {
 		},
 	}
 
-	mockClient.On("NewListSecretsPager", (*azsecrets.ListSecretsOptions)(nil)).Return(pager)
+	mockClient.On("NewListSecretPropertiesPager", (*azsecrets.ListSecretPropertiesOptions)(nil)).Return(pager)
 
 	result, err := resolver.ListSecrets(ctx, "")
 
@@ -310,7 +310,7 @@ func TestAzureResolver_ListSecrets_WithFilter(t *testing.T) {
 	id3 := azsecrets.ID(MockSecretID("https://myvault.vault.azure.net/secrets/prod-api-key"))
 
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{
+		pages: [][]*azsecrets.SecretProperties{
 			{
 				{ID: &id1},
 				{ID: &id2},
@@ -319,7 +319,7 @@ func TestAzureResolver_ListSecrets_WithFilter(t *testing.T) {
 		},
 	}
 
-	mockClient.On("NewListSecretsPager", (*azsecrets.ListSecretsOptions)(nil)).Return(pager)
+	mockClient.On("NewListSecretPropertiesPager", (*azsecrets.ListSecretPropertiesOptions)(nil)).Return(pager)
 
 	result, err := resolver.ListSecrets(ctx, "prod")
 
@@ -340,7 +340,7 @@ func TestAzureResolver_ListSecrets_Error(t *testing.T) {
 		err: errors.New("permission denied"),
 	}
 
-	mockClient.On("NewListSecretsPager", (*azsecrets.ListSecretsOptions)(nil)).Return(pager)
+	mockClient.On("NewListSecretPropertiesPager", (*azsecrets.ListSecretPropertiesOptions)(nil)).Return(pager)
 
 	result, err := resolver.ListSecrets(ctx, "")
 
@@ -356,10 +356,10 @@ func TestAzureResolver_ListSecrets_Empty(t *testing.T) {
 	resolver := &testableAzureResolver{mockClient: mockClient, vaultURL: "https://myvault.vault.azure.net/"}
 
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{},
+		pages: [][]*azsecrets.SecretProperties{},
 	}
 
-	mockClient.On("NewListSecretsPager", (*azsecrets.ListSecretsOptions)(nil)).Return(pager)
+	mockClient.On("NewListSecretPropertiesPager", (*azsecrets.ListSecretPropertiesOptions)(nil)).Return(pager)
 
 	result, err := resolver.ListSecrets(ctx, "")
 
@@ -376,7 +376,7 @@ func TestAzureResolver_ListSecrets_NilID(t *testing.T) {
 	id1 := azsecrets.ID(MockSecretID("https://myvault.vault.azure.net/secrets/valid-secret"))
 
 	pager := &MockAzureSecretsPager{
-		pages: [][]*azsecrets.SecretItem{
+		pages: [][]*azsecrets.SecretProperties{
 			{
 				{ID: &id1},
 				{ID: nil}, // nil ID should be skipped
@@ -384,7 +384,7 @@ func TestAzureResolver_ListSecrets_NilID(t *testing.T) {
 		},
 	}
 
-	mockClient.On("NewListSecretsPager", (*azsecrets.ListSecretsOptions)(nil)).Return(pager)
+	mockClient.On("NewListSecretPropertiesPager", (*azsecrets.ListSecretPropertiesOptions)(nil)).Return(pager)
 
 	result, err := resolver.ListSecrets(ctx, "")
 
