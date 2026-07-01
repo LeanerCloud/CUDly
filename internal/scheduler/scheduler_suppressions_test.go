@@ -58,6 +58,12 @@ func (m *mockSuppressionStore) GetGlobalConfig(_ context.Context) (*config.Globa
 		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
 	}, nil
 }
+func (m *mockSuppressionStore) UpsertNotificationMute(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (m *mockSuppressionStore) IsNotificationMuted(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
 
 func strPtr(s string) *string { return &s }
 

@@ -1078,6 +1078,25 @@ func (m *MockConfigStore) StampRIExchangeApprovedBy(ctx context.Context, id stri
 	return args.Error(0)
 }
 
+// UpsertNotificationMute mocks the UpsertNotificationMute operation.
+// Defaults to nil when no expectation is registered.
+func (m *MockConfigStore) UpsertNotificationMute(ctx context.Context, recipientEmail, scope, unmuteToken string) error {
+	if !isExpected(&m.Mock, "UpsertNotificationMute") {
+		return nil
+	}
+	return m.Called(ctx, recipientEmail, scope, unmuteToken).Error(0)
+}
+
+// IsNotificationMuted mocks the IsNotificationMuted operation.
+// Defaults to (false, nil) when no expectation is registered.
+func (m *MockConfigStore) IsNotificationMuted(ctx context.Context, recipientEmail, scope string) (bool, error) {
+	if !isExpected(&m.Mock, "IsNotificationMuted") {
+		return false, nil
+	}
+	args := m.Called(ctx, recipientEmail, scope)
+	return args.Bool(0), args.Error(1)
+}
+
 // isExpected reports whether mock has any .On() expectation for method.
 func isExpected(mock *mock.Mock, method string) bool {
 	for _, call := range mock.ExpectedCalls {

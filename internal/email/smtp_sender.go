@@ -11,6 +11,7 @@ import (
 	"net/smtp"
 	"strings"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
@@ -43,6 +44,30 @@ type SMTPSender struct {
 	notifyEmail   string
 	useTLS        bool
 	allowInsecure bool
+	// muteChecker consults the muted_recipients table before each send.
+	// Nil disables mute checking (e.g. when no DB is wired in tests).
+	muteChecker MuteChecker
+	// unsubscribeBaseURL is the dashboard base URL used to construct the
+	// List-Unsubscribe header value. Empty disables the header.
+	unsubscribeBaseURL string
+}
+
+// WithMuteChecker returns a shallow copy of s with the given MuteChecker wired
+// in, mirroring (*Sender).WithMuteChecker so the SMTP transport applies the same
+// per-recipient mute suppression as SES.
+func (s *SMTPSender) WithMuteChecker(mc MuteChecker) *SMTPSender {
+	c := *s
+	c.muteChecker = mc
+	return &c
+}
+
+// WithUnsubscribeBaseURL returns a shallow copy of s with the given base URL
+// set, mirroring (*Sender).WithUnsubscribeBaseURL. When non-empty the SMTP
+// approval send emits RFC 8058 List-Unsubscribe headers.
+func (s *SMTPSender) WithUnsubscribeBaseURL(u string) *SMTPSender {
+	c := *s
+	c.unsubscribeBaseURL = u
+	return &c
 }
 
 // NewSMTPSender creates a new SMTP email sender
@@ -210,6 +235,34 @@ func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subj
 	}
 	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n\r\n", subject, boundary)
 
+	return []byte(headers + buildMultipartBody(boundary, textBody, htmlBody))
+}
+
+// buildSMTPMessageMultipartWithHeaders is buildSMTPMessageMultipart with extra
+// pre-sanitized header lines (e.g. List-Unsubscribe) inserted before the
+// header-terminating blank line. extraHeaders must already be CRLF-terminated.
+// A per-message random boundary is generated via mimeRandBoundary to avoid
+// the body-collision risk of a fixed literal (07-N2).
+func (s *SMTPSender) buildSMTPMessageMultipartWithHeaders(toEmail string, cc []string, subject, textBody, htmlBody, extraHeaders string) []byte {
+	boundary := mimeRandBoundary()
+	from := s.fromEmail
+	if s.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
+	}
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\n", from, toEmail)
+	if len(cc) > 0 {
+		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
+	}
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n", subject, boundary)
+	headers += extraHeaders
+	headers += "\r\n"
+
+	return []byte(headers + buildMultipartBody(boundary, textBody, htmlBody))
+}
+
+// buildMultipartBody assembles the multipart/alternative body (text + HTML
+// parts) for the given boundary. Shared by the plain and header-aware builders.
+func buildMultipartBody(boundary, textBody, htmlBody string) string {
 	var body strings.Builder
 	body.WriteString("--")
 	body.WriteString(boundary)
@@ -223,7 +276,25 @@ func (s *SMTPSender) buildSMTPMessageMultipart(toEmail string, cc []string, subj
 	body.WriteString(boundary)
 	body.WriteString("--\r\n")
 
-	return []byte(headers + body.String())
+	return body.String()
+}
+
+// buildSMTPMessageWithHeaders is buildSMTPMessage with extra pre-sanitized
+// header lines (e.g. List-Unsubscribe) inserted before the header-terminating
+// blank line. extraHeaders must already be CRLF-terminated.
+func (s *SMTPSender) buildSMTPMessageWithHeaders(toEmail string, cc []string, subject, body, extraHeaders string) []byte {
+	from := s.fromEmail
+	if s.fromName != "" {
+		from = fmt.Sprintf("%s <%s>", sanitizeHeader(s.fromName), s.fromEmail)
+	}
+	headers := fmt.Sprintf("From: %s\r\nTo: %s\r\n", from, toEmail)
+	if len(cc) > 0 {
+		headers += fmt.Sprintf("Cc: %s\r\n", strings.Join(cc, ", "))
+	}
+	headers += fmt.Sprintf("Subject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n", subject)
+	headers += extraHeaders
+	headers += "\r\n"
+	return []byte(headers + body + "\r\n")
 }
 
 // buildSMTPMessage assembles the RFC-5322 message bytes (headers + blank
@@ -432,6 +503,11 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 // Prefers data.RecipientEmail (the submitter's notification email from app
 // settings) over the static SMTP-configured s.notifyEmail so the approval token
 // lands in the right inbox per submitter.
+//
+// Mute check + List-Unsubscribe mirror the SES (*Sender) path: if the recipient
+// has opted out of purchase_approvals the email is silently skipped, muted CC
+// addresses are dropped, and an RFC 8058 List-Unsubscribe header pair is added
+// when an unsubscribe base URL is configured.
 func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
 	recipient := data.RecipientEmail
 	if recipient == "" {
@@ -440,8 +516,94 @@ func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data Notif
 	if recipient == "" {
 		return ErrNoRecipient
 	}
+
+	scope := string(common.ScopePurchaseApprovals)
+
+	// Per-recipient mute check: skip silently if the approver has opted out.
+	if isRecipientMuted(ctx, s.muteChecker, recipient, scope) {
+		logging.Infof("email/smtp: purchase approval skipped for muted recipient (scope=%s)", scope)
+		return nil
+	}
+
+	// Filter CC list against mutes so no muted address receives a copy.
+	filteredCC := filterMutedRecipients(ctx, s.muteChecker, data.CCEmails, scope)
+
+	// Build RFC 8058 List-Unsubscribe headers scoped to the primary recipient.
+	// The token in the header is bound to recipient only, but the SMTP envelope
+	// delivers a single shared message to recipient + all CC addresses. Emitting
+	// the header when CC recipients exist would let any of them one-click-mute
+	// the primary recipient (an authorization-boundary violation), so suppress
+	// the header entirely whenever there is a CC list.
+	var unsubHdr, postHdr string
+	if len(filteredCC) == 0 {
+		unsubHdr, postHdr = unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, recipient, scope)
+	}
+
 	subject := fmt.Sprintf("CUDly - Purchase Approval Required (%d commitment(s))", len(data.Recommendations))
-	return sendPurchaseApprovalRequestVia(ctx, s, recipient, subject, data)
+
+	textBody, err := RenderPurchaseApprovalRequestEmail(data)
+	if err != nil {
+		return fmt.Errorf("failed to render purchase approval request email (text): %w", err)
+	}
+	htmlBody, htmlErr := RenderPurchaseApprovalRequestEmailHTML(data)
+	if htmlErr != nil {
+		logging.Warnf("email: HTML approval-request render failed, falling back to text-only: %v", htmlErr)
+		htmlBody = ""
+	}
+	return s.sendMultipartWithUnsubscribe(ctx, recipient, filteredCC, subject, textBody, htmlBody, unsubHdr, postHdr)
+}
+
+// sendMultipartWithUnsubscribe sends a multipart/alternative (text + HTML)
+// message via SMTP, optionally injecting the RFC 8058 List-Unsubscribe /
+// List-Unsubscribe-Post headers. htmlBody == "" degrades to a single-part text
+// send. unsubHdr == "" omits the unsubscribe headers entirely.
+func (s *SMTPSender) sendMultipartWithUnsubscribe(ctx context.Context, toEmail string, ccEmails []string, subject, textBody, htmlBody, unsubHdr, postHdr string) error {
+	if unsubHdr == "" {
+		// No List-Unsubscribe headers required: reuse the existing send path.
+		return s.SendToEmailWithCCMultipart(ctx, toEmail, ccEmails, subject, textBody, htmlBody)
+	}
+	if s.fromEmail == "" {
+		logging.Debug("No from email configured, skipping email")
+		return nil
+	}
+
+	toEmail = sanitizeHeader(toEmail)
+	subject = sanitizeHeader(subject)
+	sanitizedCC := sanitizeCCList(toEmail, ccEmails)
+
+	extra := buildListUnsubscribeHeaderLines(unsubHdr, postHdr)
+	var msg []byte
+	if htmlBody == "" {
+		msg = s.buildSMTPMessageWithHeaders(toEmail, sanitizedCC, subject, textBody, extra)
+	} else {
+		msg = s.buildSMTPMessageMultipartWithHeaders(toEmail, sanitizedCC, subject, textBody, htmlBody, extra)
+	}
+	rcpts := append([]string{toEmail}, sanitizedCC...)
+
+	if err := s.dispatchSMTP(rcpts, msg); err != nil {
+		return err
+	}
+
+	if len(sanitizedCC) > 0 {
+		logging.Debugf("Sent approval email via SMTP to %s (cc %d): %s", redactEmail(toEmail), len(sanitizedCC), subject)
+	} else {
+		logging.Debugf("Sent approval email via SMTP to %s: %s", redactEmail(toEmail), subject)
+	}
+	return nil
+}
+
+// buildListUnsubscribeHeaderLines returns the RFC 8058 List-Unsubscribe header
+// lines (each terminated with CRLF), already sanitized against header
+// injection. Returns "" when headerValue is empty.
+func buildListUnsubscribeHeaderLines(headerValue, postValue string) string {
+	if headerValue == "" {
+		return ""
+	}
+	lines := fmt.Sprintf("List-Unsubscribe: %s\r\n", sanitizeHeader(headerValue))
+	if postValue != "" {
+		lines += fmt.Sprintf("List-Unsubscribe-Post: %s\r\n", sanitizeHeader(postValue))
+	}
+	return lines
 }
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -49,6 +50,12 @@ type Sender struct {
 	topicARN     string
 	fromEmail    string
 	emailAddress string
+	// muteChecker consults the muted_recipients table before each send.
+	// Nil disables mute checking (e.g. when no DB is wired in tests).
+	muteChecker MuteChecker
+	// unsubscribeBaseURL is the dashboard base URL used to construct the
+	// List-Unsubscribe header value. Empty disables the header.
+	unsubscribeBaseURL string
 }
 
 // NewSender creates a new email sender with default context
@@ -104,6 +111,65 @@ func NewSenderWithClients(snsClient SNSPublisher, sesClient SESEmailSender, cfg 
 		fromEmail:    cfg.FromEmail,
 		emailAddress: cfg.EmailAddress,
 	}
+}
+
+// WithMuteChecker returns a shallow copy of s with the given MuteChecker wired
+// in. Callers that have a DB-backed store use this to enable per-recipient mute
+// suppression on outbound SES sends.
+func (s *Sender) WithMuteChecker(mc MuteChecker) *Sender {
+	c := *s
+	c.muteChecker = mc
+	return &c
+}
+
+// WithUnsubscribeBaseURL returns a shallow copy of s with the given base URL
+// set. When non-empty the sender appends List-Unsubscribe / List-Unsubscribe-Post
+// headers (RFC 8058) to outbound SES messages for applicable scopes.
+func (s *Sender) WithUnsubscribeBaseURL(u string) *Sender {
+	c := *s
+	c.unsubscribeBaseURL = u
+	return &c
+}
+
+// muteKey resolves the NOTIFICATION_MUTE_SECRET HMAC key via the shared
+// fail-closed policy (common.ResolveMuteSecret). In production a missing secret
+// yields a nil key (and an error), so the send path emits no List-Unsubscribe
+// header rather than a forgeable one; non-production falls back to the dev key.
+func muteKey() []byte {
+	key, err := common.ResolveMuteSecret()
+	if err != nil {
+		logging.Warnf("email: %v; List-Unsubscribe header suppressed", err)
+		return nil
+	}
+	return key
+}
+
+// buildUnsubscribeURL constructs the one-click unsubscribe URL for the given
+// (email, scope) pair. Returns ("", "") when unsubscribeBaseURL is empty.
+func (s *Sender) buildUnsubscribeURL(email, scope string) (unsubURL, mailtoURL string) {
+	return unsubscribeURLFor(s.unsubscribeBaseURL, email, scope), ""
+}
+
+// listUnsubscribeHeaders returns the List-Unsubscribe and List-Unsubscribe-Post
+// header values for the given (email, scope) pair (RFC 8058).
+// Returns ("", "") when no base URL is configured.
+func (s *Sender) listUnsubscribeHeaders(email, scope string) (headerValue, postValue string) {
+	return unsubscribeHeaderValuesFor(s.unsubscribeBaseURL, email, scope)
+}
+
+// isMuted returns true when the given address is muted for this scope. When the
+// mute checker is nil or returns an error the address is treated as not muted so
+// a transient DB outage doesn't silently block approval emails.
+func (s *Sender) isMuted(ctx context.Context, email, scope string) bool {
+	return isRecipientMuted(ctx, s.muteChecker, email, scope)
+}
+
+// filterMutedAddresses returns a copy of addrs with any muted (for scope)
+// entries removed. The original slice is not modified. Errors from the mute
+// store are treated as "not muted" (fail-open) so a DB hiccup does not
+// silently suppress approval emails.
+func (s *Sender) filterMutedAddresses(ctx context.Context, addrs []string, scope string) []string {
+	return filterMutedRecipients(ctx, s.muteChecker, addrs, scope)
 }
 
 // snsMaxSubjectLen is the maximum byte length SNS accepts for a Subject.
@@ -233,7 +299,7 @@ func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string,
 
 	cc := dedupeCCAgainstTo(toEmail, ccEmails)
 
-	input := buildSESSendEmailInputMultipart(s.fromEmail, toEmail, cc, subject, textBody, htmlBody)
+	input := buildSESSendEmailInputMultipart(s.fromEmail, toEmail, cc, subject, textBody, htmlBody, nil)
 
 	_, err := s.sesClient.SendEmail(ctx, input)
 	if err != nil {
@@ -268,7 +334,7 @@ func (s *Sender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEmails
 
 	cc := dedupeCCAgainstTo(toEmail, ccEmails)
 
-	input := buildSESSendEmailInput(s.fromEmail, toEmail, cc, subject, body)
+	input := buildSESSendEmailInput(s.fromEmail, toEmail, cc, subject, body, nil)
 
 	_, err := s.sesClient.SendEmail(ctx, input)
 	if err != nil {
@@ -326,72 +392,166 @@ func (s *Sender) ensureSandboxRecipientVerified(ctx context.Context, toEmail str
 // buildSESSendEmailInputMultipart constructs a sesv2.SendEmailInput with
 // both a plain-text and an HTML alternative body. SES handles the
 // multipart/alternative MIME assembly server-side when both Text and Html
-// fields are populated on types.Body.
+// fields are populated on types.Body. extraHeaders are appended as-is; use
+// addListUnsubscribeHeaders to build the RFC 8058 pair.
 //
 // Header injection note (07-M1): SES v2 SendEmail accepts structured fields
 // (Subject.Data, Body.Text.Data, Body.Html.Data) and builds the MIME envelope
 // server-side. CR/LF injection via Subject.Data is not possible through the
 // structured API. Any future raw-MIME path MUST sanitize the subject with
 // sanitizeHeader before composing the header string, matching the SMTP path.
-func buildSESSendEmailInputMultipart(fromEmail, toEmail string, cc []string, subject, textBody, htmlBody string) *sesv2.SendEmailInput {
+func buildSESSendEmailInputMultipart(fromEmail, toEmail string, cc []string, subject, textBody, htmlBody string, extraHeaders []types.MessageHeader) *sesv2.SendEmailInput {
 	destination := &types.Destination{
 		ToAddresses: []string{toEmail},
 	}
 	if len(cc) > 0 {
 		destination.CcAddresses = cc
 	}
-	return &sesv2.SendEmailInput{
-		Destination: destination,
-		Content: &types.EmailContent{
-			Simple: &types.Message{
-				Subject: &types.Content{
-					Charset: aws.String("UTF-8"),
-					Data:    aws.String(subject),
-				},
-				Body: &types.Body{
-					Text: &types.Content{
-						Charset: aws.String("UTF-8"),
-						Data:    aws.String(textBody),
-					},
-					Html: &types.Content{
-						Charset: aws.String("UTF-8"),
-						Data:    aws.String(htmlBody),
-					},
-				},
+	msg := &types.Message{
+		Subject: &types.Content{
+			Charset: aws.String("UTF-8"),
+			Data:    aws.String(subject),
+		},
+		Body: &types.Body{
+			Text: &types.Content{
+				Charset: aws.String("UTF-8"),
+				Data:    aws.String(textBody),
+			},
+			Html: &types.Content{
+				Charset: aws.String("UTF-8"),
+				Data:    aws.String(htmlBody),
 			},
 		},
+	}
+	if len(extraHeaders) > 0 {
+		msg.Headers = extraHeaders
+	}
+	return &sesv2.SendEmailInput{
+		Destination:      destination,
+		Content:          &types.EmailContent{Simple: msg},
 		FromEmailAddress: aws.String(fromEmail),
 	}
 }
 
 // buildSESSendEmailInput constructs a sesv2.SendEmailInput with the
-// destination To + (optional) Cc list and a plain-text body.
+// destination To + (optional) Cc list and a plain-text body. extraHeaders are
+// appended as-is; use addListUnsubscribeHeaders to build the RFC 8058 pair.
 // See buildSESSendEmailInputMultipart for the header-injection safety note (07-M1).
-func buildSESSendEmailInput(fromEmail, toEmail string, cc []string, subject, body string) *sesv2.SendEmailInput {
+func buildSESSendEmailInput(fromEmail, toEmail string, cc []string, subject, body string, extraHeaders []types.MessageHeader) *sesv2.SendEmailInput {
 	destination := &types.Destination{
 		ToAddresses: []string{toEmail},
 	}
 	if len(cc) > 0 {
 		destination.CcAddresses = cc
 	}
-	return &sesv2.SendEmailInput{
-		Destination: destination,
-		Content: &types.EmailContent{
-			Simple: &types.Message{
-				Subject: &types.Content{
-					Charset: aws.String("UTF-8"),
-					Data:    aws.String(subject),
-				},
-				Body: &types.Body{
-					Text: &types.Content{
-						Charset: aws.String("UTF-8"),
-						Data:    aws.String(body),
-					},
-				},
+	msg := &types.Message{
+		Subject: &types.Content{
+			Charset: aws.String("UTF-8"),
+			Data:    aws.String(subject),
+		},
+		Body: &types.Body{
+			Text: &types.Content{
+				Charset: aws.String("UTF-8"),
+				Data:    aws.String(body),
 			},
 		},
+	}
+	if len(extraHeaders) > 0 {
+		msg.Headers = extraHeaders
+	}
+	return &sesv2.SendEmailInput{
+		Destination:      destination,
+		Content:          &types.EmailContent{Simple: msg},
 		FromEmailAddress: aws.String(fromEmail),
 	}
+}
+
+// addListUnsubscribeHeaders returns the RFC 8058 List-Unsubscribe pair as
+// sesv2 MessageHeader values. Returns nil when headerValue is empty.
+func addListUnsubscribeHeaders(headerValue, postValue string) []types.MessageHeader {
+	if headerValue == "" {
+		return nil
+	}
+	hdrs := []types.MessageHeader{
+		{Name: aws.String("List-Unsubscribe"), Value: aws.String(headerValue)},
+	}
+	if postValue != "" {
+		hdrs = append(hdrs, types.MessageHeader{
+			Name:  aws.String("List-Unsubscribe-Post"),
+			Value: aws.String(postValue),
+		})
+	}
+	return hdrs
+}
+
+// sendToEmailWithCCMultipartHeaders is the internal variant of
+// SendToEmailWithCCMultipart that also accepts custom message headers (e.g.
+// List-Unsubscribe). It is used by the mute-aware send path in
+// SendPurchaseApprovalRequest so we don't expose a wider public API.
+func (s *Sender) sendToEmailWithCCMultipartHeaders(
+	ctx context.Context,
+	toEmail string,
+	ccEmails []string,
+	subject, textBody, htmlBody string,
+	extraHeaders []types.MessageHeader,
+) error {
+	if htmlBody == "" {
+		// Degrade to plain text; headers still carried via the non-multipart path.
+		return s.sendToEmailWithCCHeaders(ctx, toEmail, ccEmails, subject, textBody, extraHeaders)
+	}
+	if s.fromEmail == "" {
+		logging.Debug("No from email configured, skipping direct email")
+		return nil
+	}
+	if s.sesClient == nil {
+		return fmt.Errorf("SES client not initialized")
+	}
+	if err := s.ensureSandboxRecipientVerified(ctx, toEmail); err != nil {
+		return err
+	}
+	cc := dedupeCCAgainstTo(toEmail, ccEmails)
+	input := buildSESSendEmailInputMultipart(s.fromEmail, toEmail, cc, subject, textBody, htmlBody, extraHeaders)
+	if _, err := s.sesClient.SendEmail(ctx, input); err != nil {
+		return fmt.Errorf("failed to send email via SES: %w", err)
+	}
+	if len(cc) > 0 {
+		logging.Debugf("Sent multipart email to %s (cc %d): %s", redactEmail(toEmail), len(cc), subject)
+	} else {
+		logging.Debugf("Sent multipart email to %s: %s", redactEmail(toEmail), subject)
+	}
+	return nil
+}
+
+// sendToEmailWithCCHeaders is the plain-text variant of
+// sendToEmailWithCCMultipartHeaders.
+func (s *Sender) sendToEmailWithCCHeaders(
+	ctx context.Context,
+	toEmail string,
+	ccEmails []string,
+	subject, body string,
+	extraHeaders []types.MessageHeader,
+) error {
+	if s.fromEmail == "" {
+		logging.Debug("No from email configured, skipping direct email")
+		return nil
+	}
+	if s.sesClient == nil {
+		return fmt.Errorf("SES client not initialized")
+	}
+	if err := s.ensureSandboxRecipientVerified(ctx, toEmail); err != nil {
+		return err
+	}
+	cc := dedupeCCAgainstTo(toEmail, ccEmails)
+	input := buildSESSendEmailInput(s.fromEmail, toEmail, cc, subject, body, extraHeaders)
+	if _, err := s.sesClient.SendEmail(ctx, input); err != nil {
+		return fmt.Errorf("failed to send email via SES: %w", err)
+	}
+	if len(cc) > 0 {
+		logging.Debugf("Sent email to %s (cc %d): %s", redactEmail(toEmail), len(cc), subject)
+	} else {
+		logging.Debugf("Sent email to %s: %s", redactEmail(toEmail), subject)
+	}
+	return nil
 }
 
 // dedupeCCAgainstTo returns cc with the to-address removed (case-insensitive)
