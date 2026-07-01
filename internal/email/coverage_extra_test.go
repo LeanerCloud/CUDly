@@ -323,24 +323,30 @@ func TestRenderRegistrationReceivedEmail_NoAdminApprovers(t *testing.T) {
 
 // Tests for SMTPSender RI exchange and approval request methods
 
-func TestSMTPSender_SendRIExchangePendingApproval_NoFromEmail(t *testing.T) {
+func TestSMTPSender_SendRIExchangePendingApproval_NoRecipient(t *testing.T) {
+	// The RI exchange approval body carries live approval tokens, so with no
+	// data.RecipientEmail and no notifyEmail fallback the SMTP sender must
+	// surface ErrNoRecipient rather than silently dropping (or broadcasting)
+	// the email. Mirrors the hardened SendPurchaseApprovalRequest contract
+	// (#1015 / #1036) and the multipart path added in #296.
 	sender := &SMTPSender{
-		host:      "smtp.example.com",
-		port:      587,
-		fromEmail: "",
+		host:        "smtp.example.com",
+		port:        587,
+		fromEmail:   "",
+		notifyEmail: "",
 	}
 
 	data := RIExchangeNotificationData{
 		DashboardURL: "https://dashboard.example.com",
 		TotalPayment: "100.00",
 		Exchanges: []RIExchangeItem{
-			{RecordID: "r1", SourceRIID: "ri-1", SourceInstanceType: "m5.large",
+			{RecordID: "r1", ApprovalToken: "tok-1", SourceRIID: "ri-1", SourceInstanceType: "m5.large",
 				TargetInstanceType: "m5.xlarge", TargetCount: 1, PaymentDue: "100.00"},
 		},
 	}
 
 	err := sender.SendRIExchangePendingApproval(context.Background(), data)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 func TestSMTPSender_SendRIExchangeCompleted_NoFromEmail(t *testing.T) {
