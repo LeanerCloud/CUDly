@@ -199,6 +199,11 @@
     font-size: 0.85em;
 }
 
+/* Term select in Configure Purchase rows: prevent clipping of value/arrow. */
+.purchase-row-term {
+    min-width: 5rem;
+}
+
 /* -----------------------------------------------------------------------
  * Archera Insurance CTA: unobtrusive small-text link shown in the
  * Purchase modal and Plan-creation modal.
