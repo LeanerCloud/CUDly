@@ -126,32 +126,8 @@ func (c *DatabaseClient) GetRegion() string {
 	return c.region
 }
 
-// DatabaseRetailPriceItem is the Azure Retail Prices API item shape for
-// SQL Database products. Lifted from the previous inline anonymous
-// struct so it can serve as the type parameter to pricing.FetchAll.
-type DatabaseRetailPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	Location        string  `json:"location"`
-	MeterName       string  `json:"meterName"`
-	SKUName         string  `json:"skuName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	UnitOfMeasure   string  `json:"unitOfMeasure"`
-	Type            string  `json:"type"`
-	ArmSKUName      string  `json:"armSkuName"`
-	ReservationTerm string  `json:"reservationTerm"`
-}
-
-// AzureRetailPrice is the service-local envelope consumers still reference.
-// The shared pricing walker produces the items slice; this wrapper lets
-// the rest of the package keep its `*AzureRetailPrice` idiom without a
-// wider rename.
-type AzureRetailPrice struct {
-	Items []DatabaseRetailPriceItem `json:"Items"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets SQL Database reservation recommendations from Azure Consumption API
 func (c *DatabaseClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
@@ -574,7 +550,7 @@ func (c *DatabaseClient) fetchAzurePricing(ctx context.Context, filter string) (
 	params.Add("api-version", "2023-01-01-preview")
 
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
-	items, err := pricing.FetchAll[DatabaseRetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return nil, err
 	}
@@ -592,7 +568,7 @@ func azureTermString(termYears int) string {
 }
 
 // extractSQLPricing extracts on-demand and reservation pricing from price items
-func extractSQLPricing(items []DatabaseRetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+func extractSQLPricing(items []pricing.RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 

@@ -110,21 +110,8 @@ func (c *ManagedRedisClient) GetRegion() string {
 	return c.region
 }
 
-// redisPriceItem is a single record from the Azure Retail Prices API used by
-// pricing.FetchAll as the type parameter T. Named so it can satisfy the
-// constraint; the anonymous struct in AzureRetailPrice was the blocker.
-type redisPriceItem struct {
-	CurrencyCode    string  `json:"currencyCode"`
-	RetailPrice     float64 `json:"retailPrice"`
-	UnitPrice       float64 `json:"unitPrice"`
-	ArmRegionName   string  `json:"armRegionName"`
-	ProductName     string  `json:"productName"`
-	ServiceName     string  `json:"serviceName"`
-	ArmSKUName      string  `json:"armSkuName"`
-	MeterName       string  `json:"meterName"`
-	ReservationTerm string  `json:"reservationTerm"`
-	Type            string  `json:"type"`
-}
+// AzureRetailPrice is the response envelope for the Azure Retail Prices API.
+type AzureRetailPrice = pricing.Page[pricing.RetailPriceItem]
 
 // GetRecommendations gets Redis Cache reservation recommendations from the Azure Consumption API.
 func (c *ManagedRedisClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
@@ -457,7 +444,7 @@ func (c *ManagedRedisClient) getRedisPricing(ctx context.Context, sku, region st
 
 	initialURL := "https://prices.azure.com/api/retail/prices?" + params.Encode()
 
-	items, err := pricing.FetchAll[redisPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
+	items, err := pricing.FetchAll[pricing.RetailPriceItem](ctx, c.httpClient, initialURL, pricing.DefaultPageTimeout, pricing.DefaultMaxPages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Redis Cache pricing: %w", err)
 	}
@@ -500,7 +487,7 @@ func azureTermString(termYears int) string {
 
 // parsePriceItems extracts on-demand price, reservation price, and currency
 // from the flat list returned by the Azure Retail Prices API.
-func parsePriceItems(items []redisPriceItem, termYears int) (onDemand, reservation float64, currency string) {
+func parsePriceItems(items []pricing.RetailPriceItem, termYears int) (onDemand, reservation float64, currency string) {
 	currency = "USD"
 	termStr := azureTermString(termYears)
 	for _, item := range items {

@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
+	azpricing "github.com/LeanerCloud/CUDly/providers/azure/internal/pricing"
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
@@ -223,7 +224,7 @@ func TestCacheClient_ValidateOffering_InvalidSKU(t *testing.T) {
 
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
-		Items: []CacheRetailPriceItem{
+		Items: []azpricing.RetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     100.0,
@@ -1293,7 +1294,7 @@ func TestCacheClient_GetValidResourceTypes_PageCapFires(t *testing.T) {
 // skipped and reservationPrice remained 0, causing a false "no reservation
 // pricing found" error even when the pricing row was present.
 func TestExtractRedisPricing_SingularOneYear(t *testing.T) {
-	items := []CacheRetailPriceItem{
+	items := []azpricing.RetailPriceItem{
 		{
 			CurrencyCode: "USD",
 			RetailPrice:  0.68,
@@ -1318,7 +1319,7 @@ func TestExtractRedisPricing_SingularOneYear(t *testing.T) {
 // TestExtractRedisPricing_PluralThreeYears verifies that the plural form
 // "3 Years" continues to work for multi-year terms.
 func TestExtractRedisPricing_PluralThreeYears(t *testing.T) {
-	items := []CacheRetailPriceItem{
+	items := []azpricing.RetailPriceItem{
 		{CurrencyCode: "USD", RetailPrice: 0.68, UnitPrice: 0.68, Type: "Consumption"},
 		{CurrencyCode: "USD", RetailPrice: 11000.0, ReservationTerm: "3 Years", Type: "Reservation"},
 	}
