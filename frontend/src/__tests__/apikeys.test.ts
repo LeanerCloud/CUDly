@@ -289,6 +289,33 @@ describe('API Keys Module', () => {
       expect(api.revokeApiKey).toHaveBeenCalledWith('key-1');
     });
 
+    // Regression for ARCH-07 (issue #1195): the previous local escapeHtml
+    // copy (div.textContent -> div.innerHTML round-trip) did not escape
+    // quote characters, so a key id containing a double quote interpolated
+    // into data-key-id="..." broke out of the attribute and injected a new
+    // attribute (here onmouseover) into the button markup.
+    test('issue #1195: double quote in key id cannot inject attributes', async () => {
+      const hostileId = 'key-1" onmouseover="alert(1)';
+      const mockKeys = [
+        {
+          id: hostileId,
+          name: 'Hostile Key',
+          key_prefix: 'abc123',
+          is_active: true,
+          created_at: '2024-01-15T10:00:00Z'
+        }
+      ];
+
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+
+      await loadApiKeys();
+
+      const deleteBtn = document.querySelector('.delete-key-btn');
+      expect(deleteBtn).not.toBeNull();
+      expect(deleteBtn?.getAttribute('onmouseover')).toBeNull();
+      expect(deleteBtn?.getAttribute('data-key-id')).toBe(hostileId);
+    });
+
     test('adds event listener to delete buttons', async () => {
       const mockKeys = [
         {
