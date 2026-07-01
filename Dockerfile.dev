@@ -1,7 +1,11 @@
 # Development Dockerfile with hot reload using Air
-# TODO: Pin to SHA256 digest for reproducible builds:
-#   docker buildx imagetools inspect golang:1.25.4-alpine3.21
-FROM golang:1.25.4-alpine3.21 AS development
+# Image pinned to a SHA256 digest for reproducible builds; a registry
+# tag mutation (Docker Hub allows re-tagging) cannot poison this build.
+# To refresh: `docker buildx imagetools inspect golang:1.25.4-alpine3.21`
+# (or use the Docker Hub API tags endpoint) and update the digest below.
+# A Renovate / Dependabot config can automate this if desired.
+# Keep this digest in sync with the builder stage in Dockerfile.
+FROM golang:1.25.4-alpine3.21@sha256:3289aac2aac769e031d644313d094dbda745f28af81cd7a94137e73eefd58b33 AS development
 
 # Install development tools and Air for hot reload
 RUN apk add --no-cache \
