@@ -42,7 +42,7 @@ type Pair struct {
 // empty value, matching the convention established when the tag was first
 // rolled out (so callers that haven't set a Source don't poison cloud tag
 // inventories).
-func PurchasePairs(rec common.Recommendation, purpose, resourceKey, source string) []Pair {
+func PurchasePairs(rec *common.Recommendation, purpose, resourceKey, source string) []Pair {
 	pairs := []Pair{
 		{Key: "Purpose", Value: purpose},
 		{Key: resourceKey, Value: rec.ResourceType},

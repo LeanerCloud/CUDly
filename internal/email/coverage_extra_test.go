@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tests for isSecretManagerReference (replaces the deleted containsColon helper -- 07-L2/L3)
+// Tests for isSecretManagerReference (replaces the deleted containsColon helper -- 07-L2/L3).
 func TestIsSecretManagerReference(t *testing.T) {
 	// AWS ARN
 	assert.True(t, isSecretManagerReference("arn:aws:secretsmanager:us-east-1:123:secret:foo"))
@@ -29,7 +29,7 @@ func TestIsSecretManagerReference(t *testing.T) {
 	assert.False(t, isSecretManagerReference("user:password"))
 }
 
-// Tests for warnIfPlaintext – exercising all branches
+// Tests for warnIfPlaintext -- exercising all branches.
 func TestWarnIfPlaintext(t *testing.T) {
 	// Empty value: should be a no-op (no panic)
 	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "") })
@@ -50,7 +50,7 @@ func TestWarnIfPlaintext(t *testing.T) {
 	assert.NotPanics(t, func() { warnIfPlaintext("VAR", "/my/secret/path/that/is/long") })
 }
 
-// Tests for renderTemplate error path
+// Tests for renderTemplate error path.
 func TestRenderTemplate_ParseError(t *testing.T) {
 	// A template with an unclosed action will fail to parse
 	_, err := renderTemplate("bad", "{{.Foo", nil)
@@ -64,7 +64,7 @@ func TestRenderTemplate_ExecuteError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Tests for RenderRIExchangePendingApprovalEmail
+// Tests for RenderRIExchangePendingApprovalEmail.
 func TestRenderRIExchangePendingApprovalEmail(t *testing.T) {
 	data := RIExchangeNotificationData{
 		DashboardURL: "https://dashboard.example.com",
@@ -86,7 +86,7 @@ func TestRenderRIExchangePendingApprovalEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderRIExchangePendingApprovalEmail(data)
+	result, err := RenderRIExchangePendingApprovalEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "ri-aabbccdd")
 	assert.Contains(t, result, "m5.2xlarge")
@@ -115,13 +115,13 @@ func TestRenderRIExchangePendingApprovalEmail_NoSkipped(t *testing.T) {
 		},
 	}
 
-	result, err := RenderRIExchangePendingApprovalEmail(data)
+	result, err := RenderRIExchangePendingApprovalEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "ri-11223344")
 	assert.Contains(t, result, "r5.xlarge")
 }
 
-// Tests for RenderRIExchangeCompletedEmail
+// Tests for RenderRIExchangeCompletedEmail.
 func TestRenderRIExchangeCompletedEmail_AutoMode(t *testing.T) {
 	data := RIExchangeNotificationData{
 		DashboardURL: "https://dashboard.example.com",
@@ -140,7 +140,7 @@ func TestRenderRIExchangeCompletedEmail_AutoMode(t *testing.T) {
 		},
 	}
 
-	result, err := RenderRIExchangeCompletedEmail(data)
+	result, err := RenderRIExchangeCompletedEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "automatically")
 	assert.Contains(t, result, "ri-aaaa")
@@ -169,7 +169,7 @@ func TestRenderRIExchangeCompletedEmail_ManualMode(t *testing.T) {
 		},
 	}
 
-	result, err := RenderRIExchangeCompletedEmail(data)
+	result, err := RenderRIExchangeCompletedEmail(&data)
 	require.NoError(t, err)
 	assert.NotContains(t, result, "automatically")
 	assert.Contains(t, result, "ri-bbbb")
@@ -194,13 +194,13 @@ func TestRenderRIExchangeCompletedEmail_WithError(t *testing.T) {
 		},
 	}
 
-	result, err := RenderRIExchangeCompletedEmail(data)
+	result, err := RenderRIExchangeCompletedEmail(&data)
 	require.NoError(t, err)
 	// ri-fail should not appear since it has an error
 	assert.NotContains(t, result, "ri-fail")
 }
 
-// Tests for RenderPurchaseApprovalRequestEmail
+// Tests for RenderPurchaseApprovalRequestEmail.
 func TestRenderPurchaseApprovalRequestEmail(t *testing.T) {
 	data := NotificationData{
 		DashboardURL:     "https://dashboard.example.com",
@@ -220,7 +220,7 @@ func TestRenderPurchaseApprovalRequestEmail(t *testing.T) {
 		},
 	}
 
-	result, err := RenderPurchaseApprovalRequestEmail(data)
+	result, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Approval Required")
 	assert.Contains(t, result, "4000.00")
@@ -250,16 +250,16 @@ func TestRenderPurchaseApprovalRequestEmail_AuthorizedApprovers(t *testing.T) {
 		AuthorizedApprovers: []string{"contact-a@example.com", "contact-b@example.com"},
 	}
 
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	body, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
-	assert.Contains(t, body, "Authorised approver(s)")
+	assert.Contains(t, body, "Authorized approver(s)")
 	assert.Contains(t, body, "contact-a@example.com")
 	assert.Contains(t, body, "contact-b@example.com")
 	assert.Contains(t, body, "Only the inbox(es) listed above can approve")
 }
 
 // TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers confirms
-// the template omits the authorisation block entirely when no approvers
+// the template omits the authorization block entirely when no approvers
 // are specified (legacy broadcast flow).
 func TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers(t *testing.T) {
 	data := NotificationData{
@@ -269,14 +269,14 @@ func TestRenderPurchaseApprovalRequestEmail_NoAuthorizedApprovers(t *testing.T) 
 		Recommendations: []RecommendationSummary{{Service: "ec2", Count: 1}},
 	}
 
-	body, err := RenderPurchaseApprovalRequestEmail(data)
+	body, err := RenderPurchaseApprovalRequestEmail(&data)
 	require.NoError(t, err)
-	assert.NotContains(t, body, "Authorised approver")
+	assert.NotContains(t, body, "Authorized approver")
 	assert.NotContains(t, body, "Only the inbox(es)")
 }
 
 // TestRenderRegistrationReceivedEmail_AdminApprovers pins the new
-// "authorised reviewer(s)" block on the registration notification
+// "authorized reviewer(s)" block on the registration notification
 // template: when AdminApprovers is populated the body lists each admin
 // verbatim and calls out that CC'd recipients can't approve.
 func TestRenderRegistrationReceivedEmail_AdminApprovers(t *testing.T) {
@@ -289,9 +289,9 @@ func TestRenderRegistrationReceivedEmail_AdminApprovers(t *testing.T) {
 		AdminApprovers: []string{"admin-a@example.com", "admin-b@example.com"},
 	}
 
-	body, err := RenderRegistrationReceivedEmail(data)
+	body, err := RenderRegistrationReceivedEmail(&data)
 	require.NoError(t, err)
-	assert.Contains(t, body, "Authorised reviewer(s)")
+	assert.Contains(t, body, "Authorized reviewer(s)")
 	assert.Contains(t, body, "admin-a@example.com")
 	assert.Contains(t, body, "admin-b@example.com")
 	assert.Contains(t, body, "Only CUDly administrators listed above")
@@ -315,13 +315,13 @@ func TestRenderRegistrationReceivedEmail_NoAdminApprovers(t *testing.T) {
 		DashboardURL: "https://dashboard.example.com",
 	}
 
-	body, err := RenderRegistrationReceivedEmail(data)
+	body, err := RenderRegistrationReceivedEmail(&data)
 	require.NoError(t, err)
-	assert.NotContains(t, body, "Authorised reviewer")
+	assert.NotContains(t, body, "Authorized reviewer")
 	assert.NotContains(t, body, "Only CUDly administrators")
 }
 
-// Tests for SMTPSender RI exchange and approval request methods
+// Tests for SMTPSender RI exchange and approval request methods.
 
 func TestSMTPSender_SendRIExchangePendingApproval_NoFromEmail(t *testing.T) {
 	sender := &SMTPSender{
@@ -339,7 +339,7 @@ func TestSMTPSender_SendRIExchangePendingApproval_NoFromEmail(t *testing.T) {
 		},
 	}
 
-	err := sender.SendRIExchangePendingApproval(context.Background(), data)
+	err := sender.SendRIExchangePendingApproval(context.Background(), &data)
 	require.NoError(t, err)
 }
 
@@ -360,7 +360,7 @@ func TestSMTPSender_SendRIExchangeCompleted_NoFromEmail(t *testing.T) {
 		},
 	}
 
-	err := sender.SendRIExchangeCompleted(context.Background(), data)
+	err := sender.SendRIExchangeCompleted(context.Background(), &data)
 	require.NoError(t, err)
 }
 
@@ -383,11 +383,11 @@ func TestSMTPSender_SendPurchaseApprovalRequest_NoRecipient(t *testing.T) {
 		},
 	}
 
-	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
-// Tests for SMTPSender using notifyEmail (not fromEmail)
+// Tests for SMTPSender using notifyEmail (not fromEmail).
 func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) {
 	sender := &SMTPSender{
 		host:        "smtp.example.com",
@@ -409,14 +409,14 @@ func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) 
 	}
 
 	// Will fail with a network error — just verify it's not the "no from email" no-op.
-	err := sender.SendRIExchangePendingApproval(context.Background(), data)
+	err := sender.SendRIExchangePendingApproval(context.Background(), &data)
 	// The error will be a connection refused / network error (not nil, not "no from email")
 	if err != nil {
 		assert.NotContains(t, err.Error(), "no from email")
 	}
 }
 
-// Tests for Sender.SendRIExchangePendingApproval, SendRIExchangeCompleted, SendPurchaseApprovalRequest
+// Tests for Sender.SendRIExchangePendingApproval, SendRIExchangeCompleted, SendPurchaseApprovalRequest.
 // using the mock SNS sender (no SNS topic → no-op path)
 
 func TestSender_SendRIExchangePendingApproval_NoRecipient(t *testing.T) {
@@ -440,7 +440,7 @@ func TestSender_SendRIExchangePendingApproval_NoRecipient(t *testing.T) {
 		// RecipientEmail intentionally empty
 	}
 
-	err := sender.SendRIExchangePendingApproval(context.Background(), data)
+	err := sender.SendRIExchangePendingApproval(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
@@ -461,7 +461,7 @@ func TestSender_SendRIExchangeCompleted_NoTopic(t *testing.T) {
 		},
 	}
 
-	err := sender.SendRIExchangeCompleted(context.Background(), data)
+	err := sender.SendRIExchangeCompleted(context.Background(), &data)
 	require.NoError(t, err)
 }
 
@@ -485,7 +485,7 @@ func TestSender_SendPurchaseApprovalRequest_NoRecipient(t *testing.T) {
 		},
 	}
 
-	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
@@ -507,7 +507,7 @@ func TestSender_SendPurchaseApprovalRequest_NoFromEmail(t *testing.T) {
 		},
 	}
 
-	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 	require.ErrorIs(t, err, ErrNoFromEmail)
 }
 
@@ -543,7 +543,7 @@ func TestSender_SendPurchaseApprovalRequest_MalformedFromEmail(t *testing.T) {
 					{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1},
 				},
 			}
-			err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+			err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 			require.ErrorIs(t, err, ErrNoFromEmail)
 			require.Equal(t, 0, mockSES.sendEmailCalls, "malformed FROM_EMAIL must not reach SES")
 		})
@@ -553,7 +553,7 @@ func TestSender_SendPurchaseApprovalRequest_MalformedFromEmail(t *testing.T) {
 func TestSender_SendPurchaseApprovalRequest_SendsViaSES(t *testing.T) {
 	// Happy path: both FromEmail and RecipientEmail are set, the sender
 	// routes through SES SendEmail (not SNS Publish). This is the
-	// behavioural contract — approval tokens must target the specific user,
+	// behavioral contract -- approval tokens must target the specific user,
 	// not broadcast to every subscriber of an SNS alerts topic.
 	mockSNS := &mockSNSPublisher{} // must NOT be called
 	mockSES := &mockSESEmailSender{}
@@ -571,7 +571,7 @@ func TestSender_SendPurchaseApprovalRequest_SendsViaSES(t *testing.T) {
 		},
 	}
 
-	err := sender.SendPurchaseApprovalRequest(context.Background(), data)
+	err := sender.SendPurchaseApprovalRequest(context.Background(), &data)
 	require.NoError(t, err)
 	require.Equal(t, 1, mockSES.sendEmailCalls, "expected 1 SES SendEmail call, got %d", mockSES.sendEmailCalls)
 	require.Equal(t, 0, mockSNS.publishCalls, "SNS Publish must not be used for purchase approvals, got %d calls", mockSNS.publishCalls)
@@ -579,7 +579,7 @@ func TestSender_SendPurchaseApprovalRequest_SendsViaSES(t *testing.T) {
 	require.Equal(t, "noreply@cudly.example.com", mockSES.lastFrom, "approval email must use configured FROM_EMAIL")
 }
 
-// Tests for redactEmail edge cases
+// Tests for redactEmail edge cases.
 func TestRedactEmail(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -601,7 +601,7 @@ func TestRedactEmail(t *testing.T) {
 	}
 }
 
-// Tests for sanitizeHeader — it strips CR and LF entirely (does not replace with space)
+// Tests for sanitizeHeader -- it strips CR and LF entirely (does not replace with space).
 func TestSanitizeHeader(t *testing.T) {
 	assert.Equal(t, "helloworld", sanitizeHeader("hello\r\nworld"))
 	assert.Equal(t, "helloworld", sanitizeHeader("hello\nworld"))
@@ -611,20 +611,20 @@ func TestSanitizeHeader(t *testing.T) {
 	assert.Equal(t, "Subject Line", sanitizeHeader("Subject\r Line"))
 }
 
-// Test smtpAuthenticate nil auth path (covered by unit test without real SMTP)
+// Test smtpAuthenticate nil auth path (covered by unit test without real SMTP).
 func TestSmtpAuthenticate_NilAuth(t *testing.T) {
 	// nil auth → immediate return nil
 	err := smtpAuthenticate(nil, nil)
 	require.NoError(t, err)
 }
 
-// Test smtpSendBody — can't call without a real client, but we can test
+// Test smtpSendBody -- can't call without a real client, but we can test.
 // that the function exists and has a valid signature by referencing it.
 // The coverage tool counts the function as covered only when called, so
 // we test the error paths that don't require a live SMTP server via
 // the SendToEmail no-from-email short-circuit above.
 
-// Tests for SMTPSender.notifyEmail defaults to fromEmail when not set
+// Tests for SMTPSender.notifyEmail defaults to fromEmail when not set.
 func TestSMTPSender_NotifyEmailDefaultsToFromEmail(t *testing.T) {
 	cfg := SMTPConfig{
 		Host:        "smtp.example.com",
@@ -634,7 +634,7 @@ func TestSMTPSender_NotifyEmailDefaultsToFromEmail(t *testing.T) {
 		UseTLS:      false,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "from@example.com", sender.notifyEmail)
 }
@@ -648,7 +648,7 @@ func TestSMTPSender_NotifyEmailExplicit(t *testing.T) {
 		UseTLS:      false,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "notify@example.com", sender.notifyEmail)
 }
@@ -674,9 +674,9 @@ func (m *mockSNSPublisher) Publish(ctx context.Context, params *sns.PublishInput
 // / lastTo / lastFrom let happy-path tests assert the SES wire was exercised
 // with the right addressing.
 type mockSESEmailSender struct {
-	sendEmailCalls int
 	lastTo         string
 	lastFrom       string
+	sendEmailCalls int
 }
 
 func (m *mockSESEmailSender) SendEmail(ctx context.Context, params *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {

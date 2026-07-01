@@ -14,7 +14,7 @@ func setupTestRegistry(t *testing.T) *Registry {
 	r := NewRegistry()
 
 	// Register test providers
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{
 			name:             config.Name,
 			displayName:      config.Name + " Provider",
@@ -31,12 +31,12 @@ func setupTestRegistry(t *testing.T) *Registry {
 	return r
 }
 
-// registerGlobalTestProvider registers a provider in the global registry for testing
+// registerGlobalTestProvider registers a provider in the global registry for testing.
 func registerGlobalTestProvider(t *testing.T, name string, configured bool, credentialsError error) {
 	t.Helper()
 	GetRegistry().Unregister(name) // Clean up first
 
-	factory := func(config *ProviderConfig) (Provider, error) {
+	factory := func(config *Config) (Provider, error) {
 		return &MockProvider{
 			name:             config.Name,
 			displayName:      config.Name + " Provider",
@@ -56,7 +56,7 @@ func TestCreateProvider_WithGlobalRegistry(t *testing.T) {
 	defer GetRegistry().Unregister(testName)
 
 	// Test with config
-	config := &ProviderConfig{Name: testName, Region: "us-east-1"}
+	config := &Config{Name: testName, Region: "us-east-1"}
 	provider, err := CreateProvider(testName, config)
 	require.NoError(t, err)
 	require.NotNil(t, provider)
@@ -143,14 +143,14 @@ func TestCreateProvider(t *testing.T) {
 	r := setupTestRegistry(t)
 
 	// Test with config
-	config := &ProviderConfig{Name: "test-aws", Region: "us-east-1"}
+	config := &Config{Name: "test-aws", Region: "us-east-1"}
 	provider, err := r.GetProviderWithConfig("test-aws", config)
 	require.NoError(t, err)
 	require.NotNil(t, provider)
 	assert.Equal(t, "test-aws", provider.Name())
 
 	// Test with nil config
-	provider, err = r.GetProviderWithConfig("test-azure", &ProviderConfig{Name: "test-azure"})
+	provider, err = r.GetProviderWithConfig("test-azure", &Config{Name: "test-azure"})
 	require.NoError(t, err)
 	require.NotNil(t, provider)
 
@@ -164,10 +164,10 @@ func TestCreateProviders(t *testing.T) {
 	r := setupTestRegistry(t)
 
 	// Create multiple providers
-	providers := make([]Provider, 0)
 	names := []string{"test-aws", "test-azure"}
+	providers := make([]Provider, 0, len(names))
 	for _, name := range names {
-		provider, err := r.GetProviderWithConfig(name, &ProviderConfig{Name: name})
+		provider, err := r.GetProviderWithConfig(name, &Config{Name: name})
 		require.NoError(t, err)
 		providers = append(providers, provider)
 	}
@@ -175,9 +175,9 @@ func TestCreateProviders(t *testing.T) {
 	assert.Len(t, providers, 2)
 }
 
-func TestProviderConfig_DefaultValues(t *testing.T) {
+func TestConfig_DefaultValues(t *testing.T) {
 	t.Parallel()
-	config := &ProviderConfig{}
+	config := &Config{}
 
 	// Test zero values
 	assert.Equal(t, "", config.Name)
@@ -187,9 +187,9 @@ func TestProviderConfig_DefaultValues(t *testing.T) {
 	assert.Equal(t, "", config.Endpoint)
 }
 
-func TestProviderConfig_WithAllFields(t *testing.T) {
+func TestConfig_WithAllFields(t *testing.T) {
 	t.Parallel()
-	config := &ProviderConfig{
+	config := &Config{
 		Name:           "aws",
 		Profile:        "prod",
 		Region:         "us-west-2",

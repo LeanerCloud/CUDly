@@ -22,12 +22,12 @@ type fakeItem struct {
 
 // fakeHTTPClient is a scripted HTTP client — Do returns a fixed response
 // or error per URL. Keeping the fake inside this file avoids depending on
-// testify/mock for a simple behaviour contract.
+// testify/mock for a simple behavior contract.
 type fakeHTTPClient struct {
 	responses map[string]*http.Response
 	errors    map[string]error
-	calls     []*http.Request
 	beforeDo  func(*http.Request)
+	calls     []*http.Request
 }
 
 func newFakeHTTPClient() *fakeHTTPClient {
@@ -65,12 +65,16 @@ func okJSONResponse(body string) *http.Response {
 // merged into the returned slice in order.
 func TestFetchAll_MergesPages(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/page1"] = okJSONResponse(
+	pricingResp5 := okJSONResponse(
 		`{"Items":[{"name":"a"}],"NextPageLink":"https://prices.example/page2"}`,
 	)
-	client.responses["https://prices.example/page2"] = okJSONResponse(
+	_ = pricingResp5.Body.Close()
+	client.responses["https://prices.example/page1"] = pricingResp5
+	pricingResp4 := okJSONResponse(
 		`{"Items":[{"name":"b"},{"name":"c"}],"NextPageLink":""}`,
 	)
+	_ = pricingResp4.Body.Close()
+	client.responses["https://prices.example/page2"] = pricingResp4
 
 	items, err := FetchAll[fakeItem](context.Background(), client, "https://prices.example/page1", DefaultPageTimeout, DefaultMaxPages)
 	require.NoError(t, err)
@@ -85,9 +89,11 @@ func TestFetchAll_MergesPages(t *testing.T) {
 // it. Without the seen-URL set the walker would loop forever.
 func TestFetchAll_RejectsSelfReferentialNextPageLink(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/loop"] = okJSONResponse(
+	pricingResp3 := okJSONResponse(
 		`{"Items":[],"NextPageLink":"https://prices.example/loop"}`,
 	)
+	_ = pricingResp3.Body.Close()
+	client.responses["https://prices.example/loop"] = pricingResp3
 
 	_, err := FetchAll[fakeItem](context.Background(), client, "https://prices.example/loop", DefaultPageTimeout, DefaultMaxPages)
 	require.Error(t, err)
@@ -105,9 +111,11 @@ func TestFetchAll_HonoursMaxPagesCap(t *testing.T) {
 		if i < 9 {
 			next = "https://prices.example/page" + string(rune('a'+i+1))
 		}
-		client.responses[url] = okJSONResponse(
+		pricingResp2 := okJSONResponse(
 			`{"Items":[{"name":"` + string(rune('a'+i)) + `"}],"NextPageLink":"` + next + `"}`,
 		)
+		_ = pricingResp2.Body.Close()
+		client.responses[url] = pricingResp2
 	}
 
 	// Cap at 3 — walker should read pages a, b, c only.
@@ -124,9 +132,11 @@ func TestFetchAll_HonoursMaxPagesCap(t *testing.T) {
 // a deadline, and a page failure does NOT cancel the outer ctx.
 func TestFetchAll_PerPageTimeout(t *testing.T) {
 	client := newFakeHTTPClient()
-	client.responses["https://prices.example/page1"] = okJSONResponse(
+	pricingResp1 := okJSONResponse(
 		`{"Items":[{"name":"a"}],"NextPageLink":"https://prices.example/page2"}`,
 	)
+	_ = pricingResp1.Body.Close()
+	client.responses["https://prices.example/page1"] = pricingResp1
 	client.errors["https://prices.example/page2"] = context.DeadlineExceeded
 
 	client.beforeDo = func(req *http.Request) {
@@ -144,7 +154,7 @@ func TestFetchAll_PerPageTimeout(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "page 1")
 	assert.Contains(t, err.Error(), "timeout")
-	assert.NoError(t, outerCtx.Err(), "outer ctx must not be cancelled by a per-page timeout")
+	assert.NoError(t, outerCtx.Err(), "outer ctx must not be canceled by a per-page timeout")
 }
 
 // TestFetchAll_RejectsNonOKStatus covers the HTTP-error path: any non-200

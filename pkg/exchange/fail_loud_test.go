@@ -19,13 +19,12 @@ import (
 // sequentialFakeEC2 returns successive quoteOutputs for each GetQuote call
 // so we can simulate pricing increasing between the first and second quote.
 type sequentialFakeEC2 struct {
+	acceptErr    error
+	acceptInput  *ec2.AcceptReservedInstancesExchangeQuoteInput
+	acceptOutput *ec2.AcceptReservedInstancesExchangeQuoteOutput
 	quoteOutputs []*ec2.GetReservedInstancesExchangeQuoteOutput
 	quoteErrors  []error
 	quoteCall    int
-
-	acceptInput  *ec2.AcceptReservedInstancesExchangeQuoteInput
-	acceptOutput *ec2.AcceptReservedInstancesExchangeQuoteOutput
-	acceptErr    error
 }
 
 func (f *sequentialFakeEC2) GetReservedInstancesExchangeQuote(_ context.Context, _ *ec2.GetReservedInstancesExchangeQuoteInput, _ ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error) {
@@ -69,9 +68,9 @@ func TestExecute_OverCapReQuoteAbortsBeforeAccept(t *testing.T) {
 		quoteErrors:  []error{nil, nil},
 		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("should-not-be-called")},
 	}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	_, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+	_, _, err := c.Execute(context.Background(), &ExecuteRequest{
 		ReservedIDs:      []string{"ri-1"},
 		TargetOfferingID: "off-A",
 		TargetCount:      1,
@@ -108,9 +107,9 @@ func TestExecute_ReQuoteWithinCapProceedsToAccept(t *testing.T) {
 		quoteErrors:  []error{nil, nil},
 		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("exch-ok")},
 	}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	exchangeID, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+	exchangeID, _, err := c.Execute(context.Background(), &ExecuteRequest{
 		ReservedIDs:      []string{"ri-1"},
 		TargetOfferingID: "off-A",
 		TargetCount:      1,
@@ -207,14 +206,14 @@ func TestValidateTargets_LegacyNegativeCountErrors(t *testing.T) {
 }
 
 // TestGetQuote_ZeroCountRejected (L2):
-// GetQuote via ExchangeClient must reject a zero-count target before calling AWS.
+// GetQuote via Client must reject a zero-count target before calling AWS.
 func TestGetQuote_ZeroCountRejected(t *testing.T) {
 	t.Parallel()
 
 	f := &fakeEC2{}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	_, err := c.GetQuote(context.Background(), ExchangeQuoteRequest{
+	_, err := c.GetQuote(context.Background(), &QuoteRequest{
 		ReservedIDs:      []string{"ri-1"},
 		TargetOfferingID: "off-A",
 		TargetCount:      0,

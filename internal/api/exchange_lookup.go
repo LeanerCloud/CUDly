@@ -14,7 +14,7 @@ import (
 // reshape lookup needs. Scoped here so the closure stays unit-testable
 // against a tiny fake instead of the full StoreInterface mock.
 type recsLister interface {
-	ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListStoredRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 }
 
 // purchaseRecLookupFromStore builds an exchange.PurchaseRecLookup that
@@ -29,7 +29,7 @@ type recsLister interface {
 //   - CurrencyCode   = currencyCode            (propagated; recs don't carry it)
 //
 // Where termMonths = rec.Term × 12 (rec.Term is in years, AWS standard
-// for RIs / Savings Plans). Term ≤ 0 means we can't amortise upfront,
+// for RIs / Savings Plans). Term ≤ 0 means we can't amortize upfront,
 // so we fall back to MonthlyCost alone — the dollar-units check will
 // then accept or reject based on monthly recurring vs. source.
 //
@@ -40,7 +40,7 @@ type recsLister interface {
 // caller couldn't (or chose not to) resolve the source account.
 func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.PurchaseRecLookup {
 	return func(ctx context.Context, region, currencyCode string) ([]exchange.OfferingOption, error) {
-		filter := config.RecommendationFilter{
+		filter := &config.RecommendationFilter{
 			Provider: "aws",
 			Service:  "ec2",
 			Region:   region,
@@ -53,8 +53,8 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 			return nil, err
 		}
 		out := make([]exchange.OfferingOption, 0, len(recs))
-		for _, rec := range recs {
-			out = append(out, recommendationToOffering(rec, currencyCode))
+		for i := range recs {
+			out = append(out, recommendationToOffering(&recs[i], currencyCode))
 		}
 		return out, nil
 	}
@@ -70,7 +70,7 @@ func purchaseRecLookupFromStore(store recsLister, accountID string) exchange.Pur
 // SDK reports on ec2.ReservedInstance.Duration so the term-match guard
 // in pkg/exchange.fillAlternativesFromRecs can compare apples-to-apples
 // against RIInfo.TermSeconds populated from ec2.ConvertibleRI.Duration.
-func recommendationToOffering(rec config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
+func recommendationToOffering(rec *config.RecommendationRecord, currencyCode string) exchange.OfferingOption {
 	// AWS Cost Explorer returns MonthlyCost and UpfrontCost as totals for
 	// the recommended Count of instances, not per-instance. The reshape
 	// layer compares OfferingOption.EffectiveMonthlyCost against
@@ -88,7 +88,7 @@ func recommendationToOffering(rec config.RecommendationRecord, currencyCode stri
 	}
 	monthly := monthlyCost / count
 	if rec.Term > 0 {
-		// rec.Term is in years; canonical AWS RI/SP amortisation uses
+		// rec.Term is in years; canonical AWS RI/SP amortization uses
 		// 12 months per year regardless of leap years.
 		termMonths := float64(rec.Term * 12)
 		if termMonths > 0 {
@@ -194,9 +194,9 @@ func (h *Handler) resolveAWSCloudAccountID(ctx context.Context) (string, error) 
 		// no-op rather than a leak.
 		return "", nil
 	}
-	for _, a := range accounts {
-		if a.ExternalID == awsAccountID {
-			return a.ID, nil
+	for i := range accounts {
+		if accounts[i].ExternalID == awsAccountID {
+			return accounts[i].ID, nil
 		}
 	}
 	// Resolved-but-unregistered: AWS host has accounts, but the running

@@ -174,7 +174,7 @@ func TestCloudStorageClient_ValidateOffering_ValidClasses(t *testing.T) {
 			rec := common.Recommendation{
 				ResourceType: class,
 			}
-			err := client.ValidateOffering(ctx, rec)
+			err := client.ValidateOffering(ctx, &rec)
 			assert.NoError(t, err)
 		})
 	}
@@ -192,7 +192,7 @@ func TestCloudStorageClient_ValidateOffering_InvalidClass(t *testing.T) {
 		ResourceType: "INVALID_CLASS",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Cloud Storage class")
 }
@@ -330,7 +330,7 @@ func TestCloudStorageClient_PurchaseCommitment_NotSupported(t *testing.T) {
 		CommitmentCost: 100.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
@@ -376,7 +376,7 @@ func TestCloudStorageClient_GetRecommendations_WithMock(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -394,7 +394,7 @@ func TestCloudStorageClient_GetRecommendations_Empty(t *testing.T) {
 	}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }
@@ -411,7 +411,7 @@ func TestCloudStorageClient_GetRecommendations_IteratorError(t *testing.T) {
 	// Iterator errors now propagate (issue #1022 H2 fix) -- they must not be
 	// silently swallowed, as that would mask auth/quota failures and cause callers
 	// to act on a partial (empty) recommendation list.
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cloudstorage: iterate recommendations")
 	assert.Nil(t, recommendations)
@@ -481,7 +481,7 @@ func TestCloudStorageClient_GetOfferingDetails_WithMock(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "STANDARD", details.ResourceType)
 	assert.Equal(t, "1yr", details.Term)
@@ -509,7 +509,7 @@ func TestCloudStorageClient_GetOfferingDetails_3yr(t *testing.T) {
 		PaymentOption: "monthly",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "NEARLINE", details.ResourceType)
 	assert.Equal(t, "3yr", details.Term)
@@ -532,7 +532,7 @@ func TestCloudStorageClient_GetOfferingDetails_NoPricing(t *testing.T) {
 		ResourceType: "STANDARD",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing found")
 }
@@ -550,7 +550,7 @@ func TestCloudStorageClient_GetOfferingDetails_BillingError(t *testing.T) {
 		ResourceType: "STANDARD",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list SKUs")
 }
@@ -573,7 +573,7 @@ func TestCloudStorageClient_GetOfferingDetails_DefaultPaymentOption(t *testing.T
 		PaymentOption: "unknown", // Default case
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Greater(t, details.UpfrontCost, float64(0))
 }

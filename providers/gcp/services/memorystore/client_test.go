@@ -274,7 +274,7 @@ func TestMemorystoreClient_ValidateOffering_ValidTier(t *testing.T) {
 		ResourceType: "BASIC",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.NoError(t, err)
 }
 
@@ -286,7 +286,7 @@ func TestMemorystoreClient_ValidateOffering_InvalidTier(t *testing.T) {
 		ResourceType: "INVALID_TIER",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Memorystore tier")
 }
@@ -343,7 +343,7 @@ func TestMemorystoreClient_PurchaseCommitment_NotSupported(t *testing.T) {
 		CommitmentCost: 100.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, common.ErrCommitmentPurchaseNotSupported)
@@ -503,7 +503,7 @@ func TestMemorystoreClient_GetOfferingDetails_WithMockService(t *testing.T) {
 			}
 			client.SetBillingService(mockBilling)
 
-			details, err := client.GetOfferingDetails(ctx, tt.rec)
+			details, err := client.GetOfferingDetails(ctx, &tt.rec)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -574,7 +574,7 @@ func TestMemorystoreClient_GetRecommendations_WithMockClient(t *testing.T) {
 			}
 			client.SetRecommenderClient(mockClient)
 
-			recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+			recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 
 			if tt.wantErr {
 				require.Error(t, err)

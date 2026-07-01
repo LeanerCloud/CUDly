@@ -7,38 +7,27 @@ import (
 	"time"
 )
 
-// Config holds database configuration
+// Config holds database configuration.
 type Config struct {
-	// Connection details
-	Host     string
-	Port     int
-	Database string
-	User     string
-
-	// Password can be direct value or secret reference
-	Password       string // Direct password (local dev only)
-	PasswordSecret string // Secret ARN/ID/name for cloud secret managers
-
-	// SSL configuration
-	SSLMode string // disable, require, verify-ca, verify-full
-
-	// Connection pool settings
-	MaxConnections    int
+	Host              string
+	LogLevel          string
+	Database          string
+	User              string
+	Password          string `json:"-"` // excluded from JSON serialization to prevent accidental secret exposure
+	PasswordSecret    string
+	SSLMode           string
+	MigrationsPath    string
 	MinConnections    int
 	MaxConnLifetime   time.Duration
 	MaxConnIdleTime   time.Duration
 	HealthCheckPeriod time.Duration
 	ConnectTimeout    time.Duration
-
-	// Migration settings
-	AutoMigrate    bool
-	MigrationsPath string
-
-	// Logging
-	LogLevel string // error, warn, info, debug
+	MaxConnections    int
+	Port              int
+	AutoMigrate       bool
 }
 
-// LoadFromEnv loads database configuration from environment variables
+// LoadFromEnv loads database configuration from environment variables.
 func LoadFromEnv() (*Config, error) {
 	config := &Config{
 		// Required fields
@@ -78,7 +67,7 @@ func LoadFromEnv() (*Config, error) {
 	return config, nil
 }
 
-// Validate checks if the configuration is valid
+// Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if err := c.validateRequiredFields(); err != nil {
 		return err
@@ -89,7 +78,7 @@ func (c *Config) Validate() error {
 	return c.validatePoolSettings()
 }
 
-// validateRequiredFields checks that all required configuration fields are set
+// validateRequiredFields checks that all required configuration fields are set.
 func (c *Config) validateRequiredFields() error {
 	if c.Host == "" {
 		return fmt.Errorf("DB_HOST is required")
@@ -114,7 +103,7 @@ func (c *Config) validateRequiredFields() error {
 	return nil
 }
 
-// validateSSLMode checks that SSL mode is valid and warns about insecure production settings
+// validateSSLMode checks that SSL mode is valid and warns about insecure production settings.
 func (c *Config) validateSSLMode() error {
 	validSSLModes := map[string]bool{
 		"disable":     true,
@@ -133,7 +122,7 @@ func (c *Config) validateSSLMode() error {
 	return nil
 }
 
-// validatePoolSettings validates connection pool configuration
+// validatePoolSettings validates connection pool configuration.
 func (c *Config) validatePoolSettings() error {
 	if c.MaxConnections < 1 {
 		return fmt.Errorf("DB_MAX_CONNECTIONS must be at least 1")
@@ -164,7 +153,7 @@ func (c *Config) dsn(password string) string {
 }
 
 // DSN generates a PostgreSQL connection string
-// If passwordOverride is provided, it's used instead of config.Password
+// If passwordOverride is provided, it's used instead of config.Password.
 func (c *Config) DSN(passwordOverride string) string {
 	password := c.Password
 	if passwordOverride != "" {
@@ -173,7 +162,7 @@ func (c *Config) DSN(passwordOverride string) string {
 	return c.dsn(password)
 }
 
-// RedactedDSN returns a DSN string with the password masked, safe for logging
+// RedactedDSN returns a DSN string with the password masked, safe for logging.
 func (c *Config) RedactedDSN() string {
 	return c.dsn("*****")
 }

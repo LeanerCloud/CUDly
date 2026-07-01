@@ -20,7 +20,7 @@ func TestNewManager(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	cfg := ManagerConfig{
+	cfg := &ManagerConfig{
 		ConfigStore:            mockStore,
 		EmailSender:            mockEmail,
 		NotificationDaysBefore: 7,
@@ -43,7 +43,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestPurchaseDefaults(t *testing.T) {
-	defaults := PurchaseDefaults{
+	defaults := Defaults{
 		Term:         3,
 		Payment:      "partial-upfront",
 		Coverage:     70,
@@ -214,7 +214,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimedExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-456").Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
@@ -228,7 +228,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)
@@ -262,7 +262,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 		{
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
-			Status:        "cancelled",
+			Status:        "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 			ScheduledDate: pastDate,
 		},
 	}
@@ -279,7 +279,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)
 
-	// Cancelled executions are skipped without being re-executed; processed counter
+	// Canceled executions are skipped without being re-executed; processed counter
 	// reflects only actually-attempted executions, not skipped ones.
 	assert.Equal(t, 0, result.Processed)
 	assert.Equal(t, 0, result.Executed)
@@ -412,7 +412,7 @@ func TestManager_RecoverStrandedApprovals_FreshRowUntouched(t *testing.T) {
 
 // TestManager_RecoverStrandedApprovals_AWSOnlyRedrives is the regression test for
 // issue #632 Option 5: a stranded AWS-only execution with a durable ExecutionID is
-// re-driven via executeAndFinalize rather than failed. All AWS executors honour
+// re-driven via executeAndFinalize rather than failed. All AWS executors honor
 // opts.IdempotencyToken via DeriveIdempotencyToken(exec.ExecutionID, i), so the
 // second call is a safe no-op on the AWS side and the row transitions directly to
 // "completed" without requiring a manual Retry.
@@ -463,7 +463,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
@@ -477,7 +477,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	// CreateAndValidateProvider, so we must match any context, not ctx itself.
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-idempotent-12345",
 	}, nil)
@@ -498,7 +498,7 @@ func TestManager_RecoverStrandedApprovals_AWSOnlyRedrives(t *testing.T) {
 	assert.Equal(t, "completed", saved.Status, "successfully re-driven AWS execution must be completed, not failed")
 
 	// The provider was reached: the re-drive called PurchaseCommitment exactly once.
-	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
+	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// The CAS claim (approved -> running) was called; "failed" transition was not.
 	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-aws-stranded", []string{"approved"}, "running", (*string)(nil))
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
@@ -551,7 +551,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-azure-res").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
@@ -560,7 +560,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "azure-res-idempotent-order-id",
 	}, nil)
@@ -580,7 +580,7 @@ func TestManager_RecoverStrandedApprovals_AzureReservationRedrives(t *testing.T)
 	assert.Equal(t, "completed", saved.Status, "successfully re-driven Azure reservation must be completed, not failed")
 
 	// Provider was reached: re-drive called PurchaseCommitment exactly once.
-	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
+	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// CAS claim (approved -> running) was called; "failed" transition was not.
 	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-azure-res-stranded", []string{"approved"}, "running", (*string)(nil))
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
@@ -632,7 +632,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-gcp").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	var saved *config.PurchaseExecution
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
@@ -641,7 +641,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "gcp", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceCompute, "us-central1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "cud-idempotent-gcp",
 	}, nil)
@@ -661,7 +661,7 @@ func TestManager_RecoverStrandedApprovals_GCPRedrives(t *testing.T) {
 	assert.Equal(t, "completed", saved.Status, "successfully re-driven GCP execution must be completed, not failed")
 
 	// Provider was reached: re-drive called PurchaseCommitment exactly once.
-	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
+	mockServiceClient.AssertCalled(t, "PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"))
 	// CAS claim (approved -> running) was called; "failed" transition was not.
 	mockStore.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-gcp-stranded", []string{"approved"}, "running", (*string)(nil))
 	mockStore.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, "failed", mock.Anything)
@@ -813,7 +813,7 @@ func TestManager_RecoverStrandedApprovals_LateCompletionNotClobbered(t *testing.
 	// When TransitionExecutionStatus fails the manager calls GetExecutionByID to
 	// distinguish a race (row already left "approved") from a real store error.
 	// Returning a "completed" row causes RecoverStrandedApprovals to skip the
-	// execution, which is the behaviour this test asserts.
+	// execution, which is the behavior this test asserts.
 	mockStore.On("GetExecutionByID", ctx, "exec-raced").
 		Return(&config.PurchaseExecution{ExecutionID: "exec-raced", Status: "completed"}, nil)
 
@@ -960,7 +960,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 		Return(&runningRow, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-aws-persist-456").Return(plan, nil).Once()
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	// SavePurchaseExecution fails AFTER the CAS-to-running succeeded.
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Return(saveErr)
@@ -970,7 +970,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-persist-fail-12345",
 	}, nil)

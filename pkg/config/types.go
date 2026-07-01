@@ -10,17 +10,17 @@ import (
 
 // Config is the fully resolved CLI configuration (all layers merged).
 type Config struct {
-	DryRun            bool          // default: true — no purchases without explicit opt-out
-	AutoApprove       bool          // default: false
-	AuditLog          string        // default: "./cudly-audit.jsonl"
-	EnabledClouds     []string      // default: ["aws","azure","gcp"]
-	IdempotencyWindow time.Duration // default: 24h
-	ConfigFile        string
-	Scorer            scorer.Config
-	AWS               AWSConfig
 	Azure             AzureConfig
+	AuditLog          string
+	ConfigFile        string
+	AWS               AWSConfig
 	GCP               GCPConfig
 	Server            ServerConfig
+	EnabledClouds     []string
+	Scorer            scorer.Config
+	IdempotencyWindow time.Duration
+	DryRun            bool
+	AutoApprove       bool
 }
 
 // AWSConfig holds AWS-specific settings.
@@ -43,30 +43,30 @@ type GCPConfig struct {
 
 // ServerConfig holds HTTP API server settings.
 type ServerConfig struct {
-	Enabled   bool   // default: false
-	Listen    string // default: ":8080"
-	APIKeyEnv string // env var name holding the API key; default: "CUDLY_API_KEY"
+	Listen    string
+	APIKeyEnv string
+	Enabled   bool
 }
 
 // yamlConfig mirrors Config for YAML unmarshalling (snake_case keys).
 type yamlConfig struct {
-	DryRun            bool       `yaml:"dry_run"`
-	AutoApprove       bool       `yaml:"auto_approve"`
-	AuditLog          string     `yaml:"audit_log"`
-	EnabledClouds     []string   `yaml:"enabled_clouds"`
-	IdempotencyWindow string     `yaml:"idempotency_window"` // parsed as duration string
-	Scorer            yamlScorer `yaml:"scorer"`
-	AWS               yamlAWS    `yaml:"aws"`
 	Azure             yamlAzure  `yaml:"azure"`
+	AuditLog          string     `yaml:"audit_log"`
+	IdempotencyWindow string     `yaml:"idempotency_window"`
+	AWS               yamlAWS    `yaml:"aws"`
 	GCP               yamlGCP    `yaml:"gcp"`
 	Server            yamlServer `yaml:"server"`
+	EnabledClouds     []string   `yaml:"enabled_clouds"`
+	Scorer            yamlScorer `yaml:"scorer"`
+	DryRun            bool       `yaml:"dry_run"`
+	AutoApprove       bool       `yaml:"auto_approve"`
 }
 
 type yamlScorer struct {
+	EnabledServices    []string `yaml:"enabled_services"`
 	MinSavingsPct      float64  `yaml:"min_savings_pct"`
 	MaxBreakEvenMonths int      `yaml:"max_break_even_months"`
 	MinCount           int      `yaml:"min_count"`
-	EnabledServices    []string `yaml:"enabled_services"`
 }
 
 type yamlAWS struct {
@@ -85,7 +85,7 @@ type yamlGCP struct {
 }
 
 type yamlServer struct {
-	Enabled   bool   `yaml:"enabled"`
 	Listen    string `yaml:"listen"`
 	APIKeyEnv string `yaml:"api_key_env"`
+	Enabled   bool   `yaml:"enabled"`
 }

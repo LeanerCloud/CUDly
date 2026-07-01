@@ -83,7 +83,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		return "", "", false
 	}
 
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(filePath) // #nosec G304 G703 -- path is validated by isPathContainedIn above
 	if err != nil || info.IsDir() {
 		if path.Ext(cleanPath) != "" {
 			return "", "", false
@@ -91,7 +91,7 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 		// SPA fallback
 		filePath = filepath.Join(dir, "index.html")
 		cleanPath = "/index.html"
-		if _, err := os.Stat(filePath); err != nil {
+		if _, err := os.Stat(filePath); err != nil { // #nosec G304 G703 -- SPA fallback is always index.html, not user-controlled
 			return "", "", false
 		}
 	}
@@ -114,7 +114,7 @@ func cacheControlForExt(ext string) string {
 
 // serveStaticForLambda checks if the request path matches a static file in dir.
 // Returns the file content, content type, cache header, and whether a file was found.
-func serveStaticForLambda(dir, urlPath string) (content []byte, contentType string, cacheControl string, found bool) {
+func serveStaticForLambda(dir, urlPath string) (content []byte, contentType, cacheControl string, found bool) {
 	filePath, cleanPath, ok := resolveStaticFilePath(dir, urlPath)
 	if !ok {
 		return nil, "", "", false
@@ -142,14 +142,14 @@ func staticDirFromEnv() string {
 	}
 	// Verify the directory and index.html exist
 	indexPath := filepath.Join(dir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
+	if _, err := os.Stat(indexPath); err != nil { // #nosec G304 G703 -- dir is operator-supplied via STATIC_DIR env var, not user input
 		if !os.IsNotExist(err) {
 			log.Printf("STATIC_DIR set to %s but index.html not accessible: %v", dir, err)
 		}
 		return ""
 	}
 	// Verify it's actually a directory
-	info, err := os.Stat(dir)
+	info, err := os.Stat(dir) // #nosec G304 G703 -- dir is operator-supplied via STATIC_DIR env var, not user input
 	if err != nil || !info.IsDir() {
 		log.Printf("STATIC_DIR %s is not a directory", dir)
 		return ""

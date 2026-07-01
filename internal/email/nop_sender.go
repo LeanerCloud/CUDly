@@ -13,7 +13,7 @@ import (
 //
 // PII hygiene: logs only the method name and (for multi-recipient methods)
 // the recipient counts. We deliberately avoid logging email addresses,
-// subjects, or template-data payloads — even in dev, log files commonly
+// subjects, or template-data payloads - even in dev, log files commonly
 // leak into shared environments (terminal scrollback, screen-shares,
 // support tickets), and addresses are sufficient identifying information
 // to require treating them as PII.
@@ -40,22 +40,22 @@ func (n *NopSender) SendToEmailWithCCMultipart(_ context.Context, _ string, ccEm
 	return nil
 }
 
-func (n *NopSender) SendNewRecommendationsNotification(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendNewRecommendationsNotification(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendNewRecommendationsNotification suppressed")
 	return nil
 }
 
-func (n *NopSender) SendScheduledPurchaseNotification(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendScheduledPurchaseNotification(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendScheduledPurchaseNotification suppressed")
 	return nil
 }
 
-func (n *NopSender) SendPurchaseConfirmation(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendPurchaseConfirmation(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendPurchaseConfirmation suppressed")
 	return nil
 }
 
-func (n *NopSender) SendPurchaseFailedNotification(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendPurchaseFailedNotification(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendPurchaseFailedNotification suppressed")
 	return nil
 }
@@ -75,32 +75,32 @@ func (n *NopSender) SendUserInviteEmail(_ context.Context, _, _ string) error {
 	return nil
 }
 
-func (n *NopSender) SendRIExchangePendingApproval(_ context.Context, _ RIExchangeNotificationData) error {
+func (n *NopSender) SendRIExchangePendingApproval(_ context.Context, _ *RIExchangeNotificationData) error {
 	logging.Debugf("email/nop: SendRIExchangePendingApproval suppressed")
 	return nil
 }
 
-func (n *NopSender) SendRIExchangeCompleted(_ context.Context, _ RIExchangeNotificationData) error {
+func (n *NopSender) SendRIExchangeCompleted(_ context.Context, _ *RIExchangeNotificationData) error {
 	logging.Debugf("email/nop: SendRIExchangeCompleted suppressed")
 	return nil
 }
 
-func (n *NopSender) SendPurchaseApprovalRequest(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendPurchaseApprovalRequest(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendPurchaseApprovalRequest suppressed")
 	return nil
 }
 
-func (n *NopSender) SendPurchaseScheduledNotification(_ context.Context, _ NotificationData) error {
+func (n *NopSender) SendPurchaseScheduledNotification(_ context.Context, _ *NotificationData) error {
 	logging.Debugf("email/nop: SendPurchaseScheduledNotification suppressed")
 	return nil
 }
 
-func (n *NopSender) SendRegistrationReceivedNotification(_ context.Context, _ RegistrationNotificationData) error {
+func (n *NopSender) SendRegistrationReceivedNotification(_ context.Context, _ *RegistrationNotificationData) error {
 	logging.Debugf("email/nop: SendRegistrationReceivedNotification suppressed")
 	return nil
 }
 
-func (n *NopSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ RegistrationDecisionData) error {
+func (n *NopSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *RegistrationDecisionData) error {
 	logging.Debugf("email/nop: SendRegistrationDecisionNotification suppressed")
 	return nil
 }

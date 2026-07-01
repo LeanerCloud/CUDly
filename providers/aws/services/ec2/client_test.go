@@ -103,7 +103,7 @@ func TestClient_GetRegion(t *testing.T) {
 func TestClient_GetRecommendations(t *testing.T) {
 	t.Parallel()
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -316,7 +316,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockEC2.AssertExpectations(t)
 }
@@ -366,7 +366,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 	mockEC2.On("CreateTags", mock.Anything, mock.Anything).
 		Return(&ec2.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -418,7 +418,7 @@ func TestClient_PurchaseCommitment_StampsPurchaseAutomationTag(t *testing.T) {
 		return false
 	})).Return(&ec2.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	mockEC2.AssertExpectations(t)
@@ -462,7 +462,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 			},
 		}, nil).Twice()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -765,7 +765,7 @@ func TestClient_PurchaseCommitment_NameTagInCreateTagsRequest(t *testing.T) {
 		return false
 	})).Return(&ec2.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 

@@ -97,7 +97,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -269,7 +269,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockRS.AssertExpectations(t)
 }
@@ -318,7 +318,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -378,7 +378,7 @@ func TestClient_PurchaseCommitment_TagsWithResolvedARN(t *testing.T) {
 		return false
 	})).Return(&redshift.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	mockRS.AssertExpectations(t)
@@ -451,7 +451,7 @@ func TestClient_PurchaseCommitment_TagsCarryRichDescriptors(t *testing.T) {
 			name[:8] == "redshift"
 	})).Return(&redshift.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	mockRS.AssertExpectations(t)
@@ -586,7 +586,7 @@ func TestClient_PurchaseCommitment_FindOfferingError(t *testing.T) {
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -630,7 +630,7 @@ func TestClient_PurchaseCommitment_PurchaseAPIError(t *testing.T) {
 	mockRS.On("PurchaseReservedNodeOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed")).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -676,7 +676,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedNode: nil,
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -741,7 +741,7 @@ func TestClient_GetOfferingDetails_Success(t *testing.T) {
 		},
 	}, nil).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -777,7 +777,7 @@ func TestClient_GetOfferingDetails_NotFound(t *testing.T) {
 			ReservedNodeOfferings: []types.ReservedNodeOffering{},
 		}, nil).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -806,7 +806,7 @@ func TestClient_GetOfferingDetails_APIError(t *testing.T) {
 	mockRS.On("DescribeReservedNodeOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -852,7 +852,7 @@ func TestClient_GetOfferingDetails_EmptyResponseAfterFind(t *testing.T) {
 		return input.ReservedNodeOfferingId != nil
 	})).Return(nil, fmt.Errorf("API error during details fetch")).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -901,7 +901,7 @@ func TestClient_GetOfferingDetails_EmptyOfferingsAfterFind(t *testing.T) {
 		ReservedNodeOfferings: []types.ReservedNodeOffering{},
 	}, nil).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -956,7 +956,7 @@ func TestClient_FindOfferingID_NoMatchingNodeType(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
@@ -990,7 +990,7 @@ func TestClient_FindOfferingID_NoMatchingDuration(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no offerings found")
@@ -1027,7 +1027,7 @@ func TestClient_FindOfferingID_UnknownOfferingType(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected type")
@@ -1089,7 +1089,8 @@ func TestClient_PurchaseCommitment_Idempotent_TagGuardShortCircuits(t *testing.T
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	rsIdemRecVal := rsIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &rsIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "rn-existing", result.CommitmentID)
@@ -1120,7 +1121,8 @@ func TestClient_PurchaseCommitment_Idempotent_NoTagProceeds(t *testing.T) {
 		return false
 	})).Return(&redshift.CreateTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	rsIdemRecVal2 := rsIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &rsIdemRecVal2, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "rn-new", result.CommitmentID)
@@ -1142,7 +1144,8 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	mockRS.On("DescribeTags", mock.Anything, mock.Anything).
 		Return((*redshift.DescribeTagsOutput)(nil), fmt.Errorf("access denied"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rsIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	rsIdemRecVal3 := rsIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &rsIdemRecVal3, common.PurchaseOptions{IdempotencyToken: token})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")

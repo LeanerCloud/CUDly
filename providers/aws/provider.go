@@ -98,7 +98,7 @@ type AWSProvider struct {
 // Profile resolution order:
 //  1. config.AWSProfile (typed field, preferred)
 //  2. config.Profile (deprecated overload — kept for backwards compatibility)
-func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
+func NewAWSProvider(config *provider.Config) (*AWSProvider, error) {
 	p := &AWSProvider{}
 
 	if config != nil {
@@ -112,7 +112,7 @@ func NewAWSProvider(config *provider.ProviderConfig) (*AWSProvider, error) {
 
 // resolveAWSProfile picks the AWS profile name from the typed field,
 // falling back to the deprecated Profile field.
-func resolveAWSProfile(config *provider.ProviderConfig) string {
+func resolveAWSProfile(config *provider.Config) string {
 	if config.AWSProfile != "" {
 		return config.AWSProfile
 	}
@@ -502,7 +502,7 @@ func (p *AWSProvider) GetRecommendationsClient(ctx context.Context) (provider.Re
 
 // Register the AWS provider with the global registry
 func init() {
-	provider.RegisterProvider("aws", func(config *provider.ProviderConfig) (provider.Provider, error) {
+	provider.RegisterProvider("aws", func(config *provider.Config) (provider.Provider, error) {
 		return NewAWSProvider(config)
 	})
 }

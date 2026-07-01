@@ -45,18 +45,18 @@ func AdjustExistingCoverageForExpiringCommitments(
 // coverage are counted (queued / retired RIs aren't covering demand now).
 func expiringCountsByPool(commitments []common.Commitment, cutoff time.Time) map[string]int {
 	out := make(map[string]int)
-	for _, c := range commitments {
-		if !commitmentIsActive(c) {
+	for i := range commitments {
+		if !commitmentIsActive(&commitments[i]) {
 			continue
 		}
-		if c.EndDate.IsZero() || c.EndDate.After(cutoff) {
+		if commitments[i].EndDate.IsZero() || commitments[i].EndDate.After(cutoff) {
 			continue
 		}
-		key := commitmentPoolKey(c)
+		key := commitmentPoolKey(&commitments[i])
 		if key == "" {
 			continue
 		}
-		out[key] += c.Count
+		out[key] += commitments[i].Count
 	}
 	return out
 }
@@ -94,7 +94,7 @@ func applyExpiringAdjustments(recs []common.Recommendation, expiringByPool map[s
 // commitmentIsActive returns true for commitments whose State indicates
 // they're currently providing coverage. Matches the state set used by
 // DuplicateChecker for consistency.
-func commitmentIsActive(c common.Commitment) bool {
+func commitmentIsActive(c *common.Commitment) bool {
 	return c.State == "active" || c.State == "payment-pending"
 }
 
@@ -108,7 +108,7 @@ func commitmentIsActive(c common.Commitment) bool {
 // on Recommendation, so a Multi-AZ commitment's expiry adjusts only the
 // Multi-AZ pool's existing-coverage signal (a Single-AZ RI cannot cover
 // Multi-AZ demand and vice versa).
-func commitmentPoolKey(c common.Commitment) string {
+func commitmentPoolKey(c *common.Commitment) string {
 	if c.Service == common.ServiceRDS || c.Service == common.ServiceRelationalDB {
 		return rdsPoolKey(c.Region, c.ResourceType, c.Engine, c.Deployment)
 	}

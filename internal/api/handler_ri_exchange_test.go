@@ -26,7 +26,7 @@ func TestListConvertibleRIs_RequiresAdmin(t *testing.T) {
 	assert.Contains(t, err.Error(), "authentication")
 }
 
-// issue #871: the AWS convertible-RI list must honour the Main Header global
+// issue #871: the AWS convertible-RI list must honor the Main Header global
 // account filter. When the ?account_id= chip selects an account other than the
 // running (ambient) AWS account, none of these RIs belong to it, so the
 // handler returns an empty list without touching AWS config.
@@ -262,7 +262,8 @@ func TestRejectRIExchange_AlreadyCompleted(t *testing.T) {
 		ExchangeID:    "exch-already-done",
 	}, nil)
 
-	// Transition from pending→cancelled fails (record is not pending)
+	// Transition from pending to cancelled fails (record is not pending).
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
@@ -283,14 +284,14 @@ func TestApproveRIExchange_AlreadyCancelled(t *testing.T) {
 	id := "550e8400-e29b-41d4-a716-446655440001"
 	token := "valid-token-456"
 
-	// Record exists but was cancelled by a newer analysis run
+	// Record exists but was canceled by a newer analysis run
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID:            id,
 		ApprovalToken: token,
-		Status:        "cancelled",
+		Status:        "cancelled", //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	}, nil)
 
-	// Transition from pending→processing fails (record is cancelled)
+	// Transition from pending→processing fails (record is canceled)
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return((*config.RIExchangeRecord)(nil), nil)
 
@@ -529,7 +530,7 @@ func TestRejectRIExchange_MissingToken(t *testing.T) {
 
 // TestRejectRIExchange_EmptyStoredToken is a regression test for issue #399.
 // A record with an empty ApprovalToken must be rejected with 403 rather than
-// being cancelled by any caller passing an empty token string, because
+// being canceled by any caller passing an empty token string, because
 // crypto/subtle.ConstantTimeCompare([]byte(""), []byte("")) == 1.
 func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
 	mockStore := new(MockConfigStore)
@@ -615,11 +616,11 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	// the return value. Returning nil/nil from ListStoredRecommendations
 	// means "no recs in this region" which the downstream pipeline
 	// treats as empty alternatives — fine for our purposes.
-	var capturedFilters []config.RecommendationFilter
+	var capturedFilters []*config.RecommendationFilter
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil).
 		Run(func(args mock.Arguments) {
-			capturedFilters = append(capturedFilters, args.Get(1).(config.RecommendationFilter))
+			capturedFilters = append(capturedFilters, args.Get(1).(*config.RecommendationFilter))
 		})
 
 	h := &Handler{
@@ -703,8 +704,8 @@ var _ = config.RIExchangeRecord{}
 // stubAzureExchangeClient is a minimal implementation of azureExchangeClient
 // for unit tests.
 type stubAzureExchangeClient struct {
-	reservations []azurecompute.ExchangeableReservation
 	err          error
+	reservations []azurecompute.ExchangeableReservation
 }
 
 func (s *stubAzureExchangeClient) ListExchangeableReservations(_ context.Context) ([]azurecompute.ExchangeableReservation, error) {
@@ -1056,9 +1057,9 @@ func (m *mockAuthForExchange) MFARegenerateRecoveryCodesAPI(_ context.Context, _
 // step. Both are configurable per-test so we can exercise the 404 and
 // happy paths without live AWS.
 type stubTargetOfferingsEC2 struct {
+	err       error
 	instances []ec2svc.ConvertibleRI
 	offerings []ec2svc.TargetOffering
-	err       error
 }
 
 func (s *stubTargetOfferingsEC2) ListConvertibleReservedInstances(_ context.Context) ([]ec2svc.ConvertibleRI, error) {
@@ -1251,7 +1252,7 @@ func TestMapAWSExchangeError_ClientFault4xx(t *testing.T) {
 }
 
 func TestMapAWSExchangeError_ServerFault5xx(t *testing.T) {
-	// An AWS error with an unrecognised code must stay 500
+	// An AWS error with an unrecognized code must stay 500
 	apiErr := &fakeAPIError{code: "InternalError", message: "AWS is having a bad day"}
 	mapped := mapAWSExchangeError("exchange quote failed", apiErr)
 	ce, ok := IsClientError(mapped)
@@ -1371,18 +1372,18 @@ func TestClassifyRecsAge(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		age  time.Duration
 		want string
+		age  time.Duration
 	}{
-		{"zero age is fresh", 0, ""},
-		{"30 minutes is fresh", 30 * time.Minute, ""},
-		{"just under soft threshold", reshapeSoftStaleThreshold - time.Minute, ""},
-		{"exactly soft threshold", reshapeSoftStaleThreshold, "soft"},
-		{"13 hours is soft", 13 * time.Hour, "soft"},
-		{"just under hard threshold", reshapeHardStaleThreshold - time.Minute, "soft"},
-		{"exactly hard threshold", reshapeHardStaleThreshold, "hard"},
-		{"25 hours is hard", 25 * time.Hour, "hard"},
-		{"48 hours is hard", 48 * time.Hour, "hard"},
+		{name: "zero age is fresh", age: 0, want: ""},
+		{name: "30 minutes is fresh", age: 30 * time.Minute, want: ""},
+		{name: "just under soft threshold", age: reshapeSoftStaleThreshold - time.Minute, want: ""},
+		{name: "exactly soft threshold", age: reshapeSoftStaleThreshold, want: "soft"},
+		{name: "13 hours is soft", age: 13 * time.Hour, want: "soft"},
+		{name: "just under hard threshold", age: reshapeHardStaleThreshold - time.Minute, want: "soft"},
+		{name: "exactly hard threshold", age: reshapeHardStaleThreshold, want: "hard"},
+		{name: "25 hours is hard", age: 25 * time.Hour, want: "hard"},
+		{name: "48 hours is hard", age: 48 * time.Hour, want: "hard"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -1449,9 +1450,10 @@ func TestRejectRIExchange_TokenPathActorIsNil(t *testing.T) {
 		ID: id, Status: "pending", ApprovalToken: "tok",
 	}, nil)
 	// Token path: actor must be nil.
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "cancelled",
 		(*string)(nil),
-	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil)
+	).Return(&config.RIExchangeRecord{ID: id, Status: "cancelled"}, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 
 	_, err := (&Handler{config: mockStore}).rejectRIExchange(ctx, id, "tok")
 	require.NoError(t, err)

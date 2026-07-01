@@ -69,11 +69,11 @@ func TestRDSProber_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &RDSProber{NewClient: func(cfg aws.Config) RDSDescribeOfferings { return fake }}
+	p := &RDSProber{NewClient: func(cfg *aws.Config) RDSDescribeOfferings { return fake }}
 
 	assert.Equal(t, "rds", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -90,14 +90,14 @@ func TestRDSProber_ErrorPropagates(t *testing.T) {
 	fake := &fakeRDS{fn: func(*rds.DescribeReservedDBInstancesOfferingsInput) (*rds.DescribeReservedDBInstancesOfferingsOutput, error) {
 		return nil, boom
 	}}
-	p := &RDSProber{NewClient: func(cfg aws.Config) RDSDescribeOfferings { return fake }}
-	_, err := p.Probe(context.Background(), aws.Config{})
+	p := &RDSProber{NewClient: func(cfg *aws.Config) RDSDescribeOfferings { return fake }}
+	_, err := p.Probe(context.Background(), &aws.Config{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 }
 
 func TestRDSProber_PageCap(t *testing.T) {
-	// Integration-level check that the RDS prober honours the page cap
+	// Integration-level check that the RDS prober honors the page cap
 	// when wired through walkPaginated. The cap itself is exercised in
 	// detail by TestWalkPaginated_StopsAtPageCap; this test guards the
 	// wiring (RDS uses Marker rather than NextToken) so a refactor that
@@ -109,8 +109,8 @@ func TestRDSProber_PageCap(t *testing.T) {
 			Marker: aws.String("more"),
 		}, nil
 	}}
-	p := &RDSProber{NewClient: func(cfg aws.Config) RDSDescribeOfferings { return fake }}
-	_, err := p.Probe(context.Background(), aws.Config{})
+	p := &RDSProber{NewClient: func(cfg *aws.Config) RDSDescribeOfferings { return fake }}
+	_, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	assert.Equal(t, maxPages, calls)
 }
@@ -141,10 +141,10 @@ func TestElastiCacheProber_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &ElastiCacheProber{NewClient: func(cfg aws.Config) ElastiCacheDescribeOfferings { return fake }}
+	p := &ElastiCacheProber{NewClient: func(cfg *aws.Config) ElastiCacheDescribeOfferings { return fake }}
 	assert.Equal(t, "elasticache", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -191,10 +191,10 @@ func TestOpenSearchProber_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &OpenSearchProber{NewClient: func(cfg aws.Config) OpenSearchDescribeOfferings { return fake }}
+	p := &OpenSearchProber{NewClient: func(cfg *aws.Config) OpenSearchDescribeOfferings { return fake }}
 	assert.Equal(t, "opensearch", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -241,10 +241,10 @@ func TestRedshiftProber_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &RedshiftProber{NewClient: func(cfg aws.Config) RedshiftDescribeOfferings { return fake }}
+	p := &RedshiftProber{NewClient: func(cfg *aws.Config) RedshiftDescribeOfferings { return fake }}
 	assert.Equal(t, "redshift", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -280,10 +280,10 @@ func TestMemoryDBProber_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &MemoryDBProber{NewClient: func(cfg aws.Config) MemoryDBDescribeOfferings { return fake }}
+	p := &MemoryDBProber{NewClient: func(cfg *aws.Config) MemoryDBDescribeOfferings { return fake }}
 	assert.Equal(t, "memorydb", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -325,10 +325,10 @@ func TestEC2Prober_Probe(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &EC2Prober{NewClient: func(cfg aws.Config) EC2DescribeOfferings { return fake }}
+	p := &EC2Prober{NewClient: func(cfg *aws.Config) EC2DescribeOfferings { return fake }}
 	assert.Equal(t, "ec2", p.Service())
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	got = sortCombos(got)
 	want := []Combo{
@@ -352,7 +352,7 @@ func TestDefaultProbers(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // walkPaginated — the shared pagination helper every prober runs through.
-// Testing the helper once covers the page-cap behaviour for all six
+// Testing the helper once covers the page-cap behavior for all six
 // services in lieu of six near-identical Test{Service}Prober_PageCap tests.
 // The per-prober Probe tests above still exercise the wiring (which token
 // field each AWS API uses, per-item conversion, optional client-side
@@ -502,9 +502,9 @@ func TestSavingsPlansProber_Probe(t *testing.T) {
 			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 
 	var computeCombos []Combo
@@ -538,9 +538,9 @@ func TestSavingsPlansProber_AllPlanTypes(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 
 	byService := make(map[string][]Combo)
@@ -572,9 +572,9 @@ func TestSavingsPlansProber_EmptyResultDropped(t *testing.T) {
 			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	assert.Empty(t, got, "empty offerings should produce no combos")
 }
@@ -588,9 +588,9 @@ func TestSavingsPlansProber_ErrorPropagates(t *testing.T) {
 			return nil, boom
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	_, err := p.Probe(context.Background(), aws.Config{})
+	_, err := p.Probe(context.Background(), &aws.Config{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 }
@@ -610,9 +610,9 @@ func TestSavingsPlansProber_PageCap(t *testing.T) {
 			}, nil
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	_, err := p.Probe(context.Background(), aws.Config{})
+	_, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 	// 4 plan types x maxPages calls each
 	assert.Equal(t, 4*maxPages, calls)
@@ -637,9 +637,9 @@ func TestSavingsPlansProber_DedupedAcrossProductTypes(t *testing.T) {
 			return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
 		},
 	}
-	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+	p := &SavingsPlansProber{NewClient: func(_ *aws.Config) SavingsPlansDescribeOfferings { return fake }}
 
-	got, err := p.Probe(context.Background(), aws.Config{})
+	got, err := p.Probe(context.Background(), &aws.Config{})
 	require.NoError(t, err)
 
 	var compute []Combo

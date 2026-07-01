@@ -15,7 +15,7 @@ import (
 
 // failingRoundTripper is an http.RoundTripper that fails every request
 // with a fixed error. Used to inject an STS GetCallerIdentity failure
-// into a Handler's pre-seeded aws.Config without dialling the network
+// into a Handler's pre-seeded aws.Config without dialing the network
 // or relying on real AWS credentials.
 type failingRoundTripper struct{ err error }
 
@@ -27,13 +27,13 @@ func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) 
 // so tests can assert region / account / provider scoping landed in the
 // SQL query. Returns a configurable result set or error.
 type fakeRecsLister struct {
-	gotFilter config.RecommendationFilter
-	calls     int
-	out       []config.RecommendationRecord
 	err       error
+	out       []config.RecommendationRecord
+	gotFilter *config.RecommendationFilter
+	calls     int
 }
 
-func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (f *fakeRecsLister) ListStoredRecommendations(_ context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	f.calls++
 	f.gotFilter = filter
 	return f.out, f.err
@@ -127,11 +127,11 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 				Region:       "us-east-1",
 				ResourceType: "m6i.large",
 				Term:         1,               // 1 year term
-				UpfrontCost:  120,             // 120 / 12 = 10/mo amortised
+				UpfrontCost:  120,             // 120 / 12 = 10/mo amortized
 				MonthlyCost:  aws.Float64(20), // + 20/mo recurring = 30
 			},
 			{
-				// Term=0 → no upfront amortisation; effective = MonthlyCost only.
+				// Term=0 → no upfront amortization; effective = MonthlyCost only.
 				ID:           "rec-2",
 				Provider:     "aws",
 				Service:      "ec2",
@@ -157,20 +157,20 @@ func TestPurchaseRecLookupFromStore_MapsFields(t *testing.T) {
 
 	assert.Equal(t, "c5.xlarge", got[1].InstanceType)
 	assert.InDelta(t, 50.0, got[1].EffectiveMonthlyCost, 0.001,
-		"Term==0 means upfront cannot be amortised; fall back to MonthlyCost")
+		"Term==0 means upfront cannot be amortized; fall back to MonthlyCost")
 	assert.InDelta(t, 8.0, got[1].NormalizationFactor, 0.001, "xlarge → NF 8")
 
 	// Term plumbing: 1y rec → 31_536_000 seconds (AWS canonical RI
 	// duration); Term==0 → TermSeconds==0 (the reshape term-match guard
 	// then falls back to "skip the gate" rather than blocking the rec).
 	assert.Equal(t, int64(365*24*60*60), got[0].TermSeconds,
-		"1-year rec must serialise to 31_536_000s for the term-match guard")
+		"1-year rec must serialize to 31_536_000s for the term-match guard")
 	assert.Equal(t, int64(0), got[1].TermSeconds,
-		"Term==0 rec must not synthesise a fake duration — TermSeconds stays zero")
+		"Term==0 rec must not synthesize a fake duration — TermSeconds stays zero")
 }
 
 // TestPurchaseRecLookupFromStore_ThreeYearTerm pins the multi-year
-// path: rec.Term=3 must serialise to exactly 3 × 31_536_000s so the
+// path: rec.Term=3 must serialize to exactly 3 × 31_536_000s so the
 // reshape term-match guard treats it as 3y rather than rounding it
 // onto a 1y surface.
 func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
@@ -188,12 +188,12 @@ func TestPurchaseRecLookupFromStore_ThreeYearTerm(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(3*365*24*60*60), got[0].TermSeconds,
-		"3-year rec must serialise to 3 × 31_536_000s for the term-match guard")
+		"3-year rec must serialize to 3 × 31_536_000s for the term-match guard")
 }
 
 // TestPurchaseRecLookupFromStore_NilMonthlyCost pins the nil-path: when
 // MonthlyCost is nil (provider didn't expose a monthly breakdown) the lookup
-// must not panic and must compute EffectiveMonthlyCost from amortised upfront
+// must not panic and must compute EffectiveMonthlyCost from amortized upfront
 // alone.
 func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
 	t.Parallel()
@@ -205,7 +205,7 @@ func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
 				Service:      "ec2",
 				Region:       "us-east-1",
 				ResourceType: "m5.large",
-				Term:         1, // 1 year: 120 / 12 = 10/mo amortised
+				Term:         1, // 1 year: 120 / 12 = 10/mo amortized
 				UpfrontCost:  120,
 				MonthlyCost:  nil, // provider API didn't return monthly breakdown
 			},
@@ -215,9 +215,9 @@ func TestPurchaseRecLookupFromStore_NilMonthlyCost(t *testing.T) {
 	got, err := lookup(context.Background(), "us-east-1", "USD")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	// No recurring monthly charge (nil → 0), so effective cost = amortised upfront only.
+	// No recurring monthly charge (nil → 0), so effective cost = amortized upfront only.
 	assert.InDelta(t, 10.0, got[0].EffectiveMonthlyCost, 0.001,
-		"nil MonthlyCost + 120 upfront / 12mo = 10/mo effective")
+		"nil MonthlyCost + 120 upfront / 12 months = 10/mo effective")
 }
 
 // TestResolveAWSCloudAccountID_FailsClosedOnSTSError pins the

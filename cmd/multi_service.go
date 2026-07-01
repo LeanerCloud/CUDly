@@ -135,7 +135,7 @@ func runToolMultiService(ctx context.Context, cfg Config) {
 	if !isDryRun {
 		totalInstances, totalSavings := sumPassedRecs(scoredResult.Passed)
 		if !ConfirmPurchase(totalInstances, totalSavings, cfg.SkipConfirmation) {
-			AppLogger.Printf("\n❌ Purchase cancelled.\n")
+			AppLogger.Printf("\n❌ Purchase canceled.\n")
 			return
 		}
 	}
@@ -199,8 +199,10 @@ func executePurchasePipeline(ctx context.Context, awsCfg aws.Config, recs []comm
 		}
 		result, status := purchaseSingleRec(ctx, awsCfg, rec, i+1, isDryRun, cfg)
 		results = append(results, result)
-		auditRec := common.NewAuditRecord(runID, rec, result, status, isDryRun, common.PurchaseSourceCLI)
-		if err := common.WriteAuditRecord(auditRec, cfg.AuditLog); err != nil {
+		auditRec, auditErr := common.NewAuditRecord(runID, &rec, &result, status, isDryRun, common.PurchaseSourceCLI)
+		if auditErr != nil {
+			log.Printf("Warning: failed to build audit record: %v", auditErr)
+		} else if err := common.WriteAuditRecord(&auditRec, cfg.AuditLog); err != nil {
 			log.Printf("Warning: failed to write audit record: %v", err)
 		}
 		if !isDryRun && i < len(recs)-1 && os.Getenv("DISABLE_PURCHASE_DELAY") != "true" {
@@ -262,7 +264,7 @@ func runToolFromCSV(ctx context.Context, cfg Config) {
 	isDryRun := !cfg.ActualPurchase
 	printRunMode(isDryRun)
 
-	csvModeCoverage := determineCSVCoverage(cfg)
+	csvModeCoverage := determineCSVCoverage(&cfg)
 
 	AppLogger.Printf("📄 Reading recommendations from CSV: %s\n", cfg.CSVInput)
 
@@ -479,7 +481,7 @@ func processPurchaseLoop(ctx context.Context, recs []common.Recommendation, regi
 				}
 
 				if !ConfirmPurchase(totalInstances, totalSavings, cfg.SkipConfirmation) {
-					// User cancelled - return cancelled results for all
+					// User canceled - return canceled results for all
 					return createCancelledResults(recs, region, cfg)
 				}
 			}

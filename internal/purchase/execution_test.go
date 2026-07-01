@@ -77,7 +77,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-123").Return(plan, nil)
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -85,7 +85,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 	// Mock provider factory to return a mock provider
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-12345",
 	}, nil)
@@ -139,7 +139,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-web").Return(plan, nil)
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -148,7 +148,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 	// The deterministic idempotency token (issue #636) is derived per-rec from
 	// the execution ID and the rec's index, so the web path now also carries it.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           common.PurchaseSourceWeb,
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-web", 0),
@@ -195,7 +195,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-bad").Return(plan, nil)
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -204,7 +204,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 	// Expect EMPTY source, not "cudly-evil" — NormalizeSource must have wiped it.
 	// The idempotency token (issue #636) is still derived regardless of source.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		common.PurchaseOptions{
 			Source:           "",
 			IdempotencyToken: common.DeriveIdempotencyToken("exec-bad", 0),
@@ -296,7 +296,7 @@ func TestManager_ExecutePurchase_NoRecommendations(t *testing.T) {
 	}
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-123").Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -516,11 +516,11 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 	}
 	// SavePurchaseHistory and SendPurchaseConfirmation are called once per account.
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Times(2)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Times(2)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil).Times(2)
 
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success: true, CommitmentID: "ri-99999",
 	}, nil)
 
@@ -749,13 +749,13 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil).Once()
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Once()
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: commitmentV}, nil).Once()
 
 	// Only account-V triggers history + notification.
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Once()
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil).Once()
 
 	// Credential store: V gets valid key JSON; I gets nil (no credentials stored).
 	credStore := &MockCredentialStore{
@@ -918,7 +918,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	// execution the total elapsed time would exceed serialBoundary; under
 	// errgroup-style parallelism it stays close to perCallDelay.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-parallel"}, nil).
 		Run(func(_ mock.Arguments) {
@@ -926,7 +926,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 		}).Twice()
 
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Twice()
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Twice()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil).Twice()
 
 	credStore := &MockCredentialStore{
 		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
@@ -976,7 +976,7 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 //
 // After the fix, singleCloudAccountIDFromRecs derives the account from the recs,
 // GetCloudAccount fetches the CloudAccount record, and resolveAccountProvider
-// constructs a provider.ProviderConfig with explicit creds. The factory receives
+// constructs a provider.Config with explicit creds. The factory receives
 // a non-nil provCfg, which the assertion captures via MatchedBy.
 func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	ctx := context.Background()
@@ -1021,7 +1021,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// GetCloudAccount is called with the account ID derived from the recs.
 	mockStore.On("GetCloudAccount", ctx, acctID).Return(azureAccount, nil)
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
@@ -1030,7 +1030,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// Before the fix, nil was passed and Azure SDK fell back to DefaultAzureCredential.
 	// After the fix, resolveAzureProvider populates ProviderOverride on the config.
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "azure",
-		mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+		mock.MatchedBy(func(cfg *provider.Config) bool {
 			return cfg != nil && cfg.ProviderOverride != nil
 		}),
 	).Return(mockProviderInst, nil)
@@ -1041,7 +1041,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	// regardless of the ServiceType passed in.
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceCompute, "eastus").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.AnythingOfType("common.Recommendation"),
+		mock.AnythingOfType("*common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-1"}, nil)
 
@@ -1153,13 +1153,13 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 
 			mockStore.On("GetCloudAccount", ctx, acctID).Return(azureAccount, nil)
 			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 			mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 				Account: aws.String("123456789012"),
 			}, nil)
 
 			mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "azure",
-				mock.MatchedBy(func(cfg *provider.ProviderConfig) bool {
+				mock.MatchedBy(func(cfg *provider.Config) bool {
 					return cfg != nil && cfg.ProviderOverride != nil
 				}),
 			).Return(mockProviderInst, nil)
@@ -1167,7 +1167,7 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 			// the canonical ServiceType — not an AWS-legacy constant.
 			mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.expectedType, "eastus").Return(mockServiceClient, nil)
 			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "azure-res-" + tc.name}, nil)
 
@@ -1283,9 +1283,9 @@ func TestSingleCloudAccountIDFromRecs(t *testing.T) {
 	aid2 := "acct-2"
 
 	tests := []struct {
+		want *string
 		name string
 		recs []config.RecommendationRecord
-		want *string
 	}{
 		{
 			name: "empty slice returns nil",
@@ -1377,13 +1377,13 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(saveErr)
 	// The execution record itself must still be persisted (with the audit marker).
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
 	}, nil)
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(common.PurchaseResult{
 		Success:      true,
 		CommitmentID: "ri-auditgap",
 	}, nil)
@@ -1449,7 +1449,7 @@ func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 	})).Return(nil).Once()
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// Confirmation must still go out (the issue's core complaint).
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil).Once()
 	// Ambient STS only consulted as a fallback (no account resolved here).
 	mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).Return(&sts.GetCallerIdentityOutput{
 		Account: aws.String("123456789012"),
@@ -1459,11 +1459,11 @@ func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	// m5.large succeeds; c5.xlarge fails.
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
+		mock.MatchedBy(func(r *common.Recommendation) bool { return r != nil && r.ResourceType == "m5.large" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
+		mock.MatchedBy(func(r *common.Recommendation) bool { return r != nil && r.ResourceType == "c5.xlarge" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
 
@@ -1529,7 +1529,7 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 	mockStore.On("SavePurchaseHistory", ctx, mock.MatchedBy(func(r *config.PurchaseHistoryRecord) bool {
 		return r.ResourceType == "m5.large"
 	})).Return(nil).Once()
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil).Once()
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil).Once()
 
 	credStore := &MockCredentialStore{
 		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
@@ -1540,11 +1540,11 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "m5.large" }),
+		mock.MatchedBy(func(r *common.Recommendation) bool { return r != nil && r.ResourceType == "m5.large" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Once()
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-		mock.MatchedBy(func(r common.Recommendation) bool { return r.ResourceType == "c5.xlarge" }),
+		mock.MatchedBy(func(r *common.Recommendation) bool { return r != nil && r.ResourceType == "c5.xlarge" }),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{}, errors.New("offering not available")).Once()
 
@@ -1670,7 +1670,7 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 				Run(func(args mock.Arguments) {
 					stampedAccount = args.Get(1).(*config.PurchaseHistoryRecord).AccountID
 				}).Return(nil).Once()
-			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 			// Ambient STS — if the host account leaks onto history this is where
 			// it would come from; it must NOT be the stamped value.
 			mockSTS.On("GetCallerIdentity", ctx, mock.AnythingOfType("*sts.GetCallerIdentityInput")).
@@ -1679,7 +1679,7 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 			mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.provider, mock.Anything).Return(mockProviderInst, nil)
 			mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.expectedType, tc.region).Return(mockServiceClient, nil)
 			mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Return(common.PurchaseResult{Success: true, CommitmentID: "commit-1"}, nil)
 

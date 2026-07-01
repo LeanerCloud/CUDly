@@ -63,9 +63,6 @@ type DisplayNameFields struct {
 	// ResourceType is the Azure SKU name (e.g. "Standard_D2a_v4").
 	ResourceType string
 
-	// Count is the reservation quantity. Always rendered as "{N}x".
-	Count int
-
 	// Term is the commitment term, normalized to "1yr" / "3yr" by upstream
 	// recommendation parsers. Pass through as-is; the builder collapses
 	// it to "1yr"/"3yr" when possible, and sanitizes otherwise.
@@ -87,13 +84,19 @@ type DisplayNameFields struct {
 	// When nil (production), the builder reads from crypto/rand. Tests set
 	// it via WithRandSource to make output deterministic.
 	randSource []byte
+
+	// Count is the reservation quantity. Always rendered as "{N}x".
+	// Placed last to minimize GC scan range (no pointer; all pointer fields precede it).
+	Count int
 }
 
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
-func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
+//
+
+func (f *DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 	f.randSource = b
-	return f
+	return *f
 }
 
 // BuildDisplayName composes a rich, parseable identifier for an Azure
@@ -108,10 +111,12 @@ func (f DisplayNameFields) WithRandSource(b []byte) DisplayNameFields {
 // 64 characters. If the composed string would exceed 64, fields are
 // progressively dropped from the tail (random suffix first, then
 // timestamp, then payment-option) until it fits. The service code,
-// region, SKU, count, and term are NEVER dropped — those are the
+// region, SKU, count, and term are NEVER dropped -- those are the
 // high-signal segments operators rely on to identify the reservation in
 // the Azure portal.
-func BuildDisplayName(f DisplayNameFields) string {
+//
+
+func BuildDisplayName(f *DisplayNameFields) string {
 	svc := normalizeSegment(f.Service)
 	region := normalizeSegment(f.Region)
 	sku := normalizeSegment(f.ResourceType)

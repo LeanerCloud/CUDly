@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// StoreInterface defines the methods required for configuration storage
+// StoreInterface defines the methods required for configuration storage.
 type StoreInterface interface {
 	// Global configuration
 	GetGlobalConfig(ctx context.Context) (*GlobalConfig, error)
@@ -51,7 +51,7 @@ type StoreInterface interface {
 	// Distinct from GetExecutionsByStatuses (which is DESC for History's
 	// "newest first" semantics): when the result set exceeds `limit`, an
 	// ORDER-BY-DESC + LIMIT in SQL truncates away the soonest rows, exactly
-	// the rows this list must surface. Secondary sort by id ASC stabilises
+	// the rows this list must surface. Secondary sort by id ASC stabilizes
 	// ordering when multiple rows share a scheduled_date.
 	GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	// GetStaleApprovedExecutions returns executions stuck in the "approved"
@@ -82,25 +82,27 @@ type StoreInterface interface {
 	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
 	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
-	// CancelExecutionAtomic atomically flips status from pending / notified /
-	// scheduled to cancelled, setting cancelled_by. The 'scheduled' status
-	// supports the Gmail-style pre-fire delay revoke path (issue #290).
-	// Returns (true, "cancelled", nil) on success and (false, currentStatus,
-	// nil) when zero rows were affected (the execution had already been
-	// approved or otherwise transitioned). Must be called inside a WithTx
-	// block so the suppression cleanup and the status flip commit atomically.
-	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	// CancelExecutionAtomic atomically flips status from pending / notified to
+	// canceled, setting canceled_by. The 'scheduled' status is NOT handled here
+	// -- it is canceled via CancelScheduledExecutionAtomic, which surfaces a
+	// distinct CAS race outcome for the Gmail-style pre-fire delay revoke path.
+	// Returns (true, currentStatus, nil) on success -- currentStatus is the
+	// persisted post-cancel DB value -- and (false, currentStatus, nil) when
+	// zero rows were affected (the execution had already been approved or
+	// otherwise transitioned). Must be called inside a WithTx block so the
+	// suppression cleanup and the status flip commit atomically.
+	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
-	// 'cancelled', setting cancelled_by. Used by the Gmail-style pre-fire delay
+	// 'canceled', setting canceled_by. Used by the Gmail-style pre-fire delay
 	// revoke path (issue #291 wave-2) to cancel a scheduled execution at $0 before
 	// the scheduler fires the SDK call. The 'pending'/'notified' set accepted by
 	// CancelExecutionAtomic is intentionally not extended here so the two revoke
 	// flows surface distinct CAS race outcomes -- a scheduled row that the
 	// scheduler has already transitioned to 'approved' / 'running' must surface as
 	// a 410 ("window closed") rather than a 409 ("not pending"). Returns
-	// (true, "cancelled", nil) on success and (false, currentStatus, nil) when
+	// (true, currentStatus, nil) on success and (false, currentStatus, nil) when
 	// zero rows were affected. Must be called inside a WithTx block.
-	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error)
 	// ListStuckExecutions returns executions in any of the given statuses
 	// whose updated_at is older than the given duration. Used by the
 	// reaper sweep (issue #678) to find rows stuck in approved/running
@@ -245,7 +247,7 @@ type StoreInterface interface {
 	// SuccessfulCollect for the per-row semantics.
 	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
-	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
+	ListStoredRecommendations(ctx context.Context, filter *RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now

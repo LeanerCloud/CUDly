@@ -42,9 +42,9 @@ type AccountAliasGetter interface {
 
 // AccountAliasCache caches account ID to alias mappings
 type AccountAliasCache struct {
-	mu        sync.RWMutex
-	cache     map[string]string
 	orgClient OrganizationsAPI
+	cache     map[string]string
+	mu        sync.RWMutex
 }
 
 // NewAccountAliasCache creates a new account alias cache
@@ -144,7 +144,7 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 			if details, ok := rec.Details.(*common.SavingsPlanDetails); ok {
 				newDetails := *details // Copy the struct
 				newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
-				adjusted = common.ScaleRecommendationCosts(adjusted, ratio)
+				adjusted = common.ScaleRecommendationCosts(&adjusted, ratio)
 				adjusted.Details = &newDetails
 			} else {
 				AppLogger.Printf("WARNING: SP recommendation for service %q has unexpected Details type %T; passing through unscaled\n", rec.Service, rec.Details)
@@ -165,7 +165,7 @@ func ApplyCoverage(recs []common.Recommendation, coverage float64) []common.Reco
 		newCount := int(float64(rec.Count) * ratio)
 		if newCount > 0 {
 			sizedRatio := float64(newCount) / float64(rec.Count)
-			adjusted = common.ScaleRecommendationCosts(adjusted, sizedRatio)
+			adjusted = common.ScaleRecommendationCosts(&adjusted, sizedRatio)
 			adjusted.Count = newCount
 			result = append(result, adjusted)
 		}
@@ -382,7 +382,7 @@ func applyTargetCoverageRI(rec common.Recommendation, targetPct float64) (common
 	} else {
 		ratio = float64(nTarget)
 	}
-	adjusted := common.ScaleRecommendationCosts(rec, ratio)
+	adjusted := common.ScaleRecommendationCosts(&rec, ratio)
 	adjusted.Count = nTarget
 
 	// Projection metrics. ProjectedCoverage is TOTAL coverage (existing +
@@ -439,7 +439,7 @@ func applyTargetCoverageSP(rec common.Recommendation, targetPct float64) (common
 	ratio := targetPct / 100.0
 	newDetails := *details // copy
 	newDetails.HourlyCommitment = newDetails.HourlyCommitment * ratio
-	adjusted := common.ScaleRecommendationCosts(rec, ratio)
+	adjusted := common.ScaleRecommendationCosts(&rec, ratio)
 	adjusted.Details = &newDetails
 	// Shrinking commitment raises projected utilization by 1/ratio
 	// (used is fixed = orig_commit * RecUtil, bought is orig_commit * ratio).

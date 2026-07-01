@@ -10,45 +10,45 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// ExchangeRecord is a lightweight record type for the auto exchange logic.
-// It mirrors config.RIExchangeRecord but lives in pkg/exchange to avoid
+// Record is a lightweight record type for the auto exchange logic.
+// It mirrors config.RIRecord but lives in pkg/exchange to avoid
 // cross-module imports (pkg/ is a separate Go module from internal/).
-type ExchangeRecord struct {
+type Record struct {
+	CompletedAt        *time.Time
+	ExpiresAt          *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 	ID                 string
 	AccountID          string
 	ExchangeID         string
 	Region             string
-	SourceRIIDs        []string
 	SourceInstanceType string
-	SourceCount        int
 	TargetOfferingID   string
 	TargetInstanceType string
-	TargetCount        int
 	PaymentDue         string
 	Status             string
 	ApprovalToken      string
 	Error              string
 	Mode               string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	CompletedAt        *time.Time
-	ExpiresAt          *time.Time
+	SourceRIIDs        []string
+	SourceCount        int
+	TargetCount        int
 }
 
 // RIExchangeStore is the subset of store operations needed by RunAutoExchange.
 type RIExchangeStore interface {
-	SaveRIExchangeRecord(ctx context.Context, record *ExchangeRecord) error
+	SaveRIRecord(ctx context.Context, record *Record) error
 	CancelAllPendingExchanges(ctx context.Context) (int64, error)
-	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]ExchangeRecord, error)
+	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]Record, error)
 	GetRIExchangeDailySpend(ctx context.Context, date time.Time) (string, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
 	FailRIExchange(ctx context.Context, id string, errorMsg string) error
 }
 
-// ExchangeClientInterface abstracts the ExchangeClient for testability.
-type ExchangeClientInterface interface {
-	GetQuote(ctx context.Context, req ExchangeQuoteRequest) (*ExchangeQuoteSummary, error)
-	Execute(ctx context.Context, req ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error)
+// ClientInterface abstracts the Client for testability.
+type ClientInterface interface {
+	GetQuote(ctx context.Context, req *QuoteRequest) (*QuoteSummary, error)
+	Execute(ctx context.Context, req *ExecuteRequest) (string, *QuoteSummary, error)
 }
 
 // RIExchangeConfig holds the runtime configuration for auto exchange.
@@ -66,17 +66,16 @@ type LookupOfferingFunc func(ctx context.Context, instanceType, productDesc, ten
 // RunAutoExchangeParams holds all dependencies for RunAutoExchange.
 type RunAutoExchangeParams struct {
 	Store          RIExchangeStore
-	ExchangeClient ExchangeClientInterface
+	Client         ClientInterface
 	LookupOffering LookupOfferingFunc
 	RIs            []RIInfo
 	Utilization    []UtilizationInfo
-	Config         RIExchangeConfig
 	AccountID      string
 	Region         string
 	DashboardURL   string
-
 	// RIMetadata maps RI ID to its metadata (product description, tenancy, scope, duration).
 	RIMetadata map[string]RIMetadataInfo
+	Config     RIExchangeConfig
 }
 
 // RIMetadataInfo holds the offering metadata for a specific RI.
@@ -90,25 +89,25 @@ type RIMetadataInfo struct {
 // AutoExchangeResult contains the outcome of an auto exchange run.
 type AutoExchangeResult struct {
 	Mode      string
-	Completed []ExchangeOutcome
-	Pending   []ExchangeOutcome
-	Failed    []ExchangeOutcome
+	Completed []Outcome
+	Pending   []Outcome
+	Failed    []Outcome
 	Skipped   []SkippedRecommendation
 }
 
-// ExchangeOutcome captures the result of a single exchange attempt.
-type ExchangeOutcome struct {
+// Outcome captures the result of a single exchange attempt.
+type Outcome struct {
 	RecordID           string
 	ApprovalToken      string
 	SourceRIID         string
 	SourceInstanceType string
 	TargetInstanceType string
 	TargetOfferingID   string
-	TargetCount        int32
 	PaymentDue         string
 	ExchangeID         string
-	UtilizationPct     float64
 	Error              string
+	UtilizationPct     float64
+	TargetCount        int32
 }
 
 // SkippedRecommendation captures a recommendation that was not processed.
@@ -121,19 +120,22 @@ type SkippedRecommendation struct {
 const staleProcessingThreshold = 15 * time.Minute
 
 // RunAutoExchange orchestrates automated RI exchanges.
-func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoExchangeResult, error) {
+func RunAutoExchange(ctx context.Context, params *RunAutoExchangeParams) (*AutoExchangeResult, error) {
+	if params == nil {
+		return nil, fmt.Errorf("run auto exchange: params is nil")
+	}
 	result := &AutoExchangeResult{Mode: params.Config.Mode}
 
 	// 1. Cancel all stale pending records.
 	// Race condition note: if a user clicks approve at 5h59m while this new run
 	// fires and cancels pending records, the TransitionRIExchangeStatus atomic
-	// WHERE clause prevents the exchange from executing (record already cancelled
-	// → returns nil → handler returns 409).
-	cancelled, err := params.Store.CancelAllPendingExchanges(ctx)
+	// WHERE clause prevents the exchange from executing (record already canceled
+	// -> returns nil -> handler returns 409).
+	canceled, err := params.Store.CancelAllPendingExchanges(ctx)
 	if err != nil {
 		logging.Warnf("failed to cancel pending exchanges: %v", err)
-	} else if cancelled > 0 {
-		logging.Infof("cancelled %d stale pending exchange records", cancelled)
+	} else if canceled > 0 {
+		logging.Infof("canceled %d stale pending exchange records", canceled)
 	}
 
 	// 2. Log warning for stale processing records
@@ -141,9 +143,9 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 	if err != nil {
 		logging.Warnf("failed to check stale processing exchanges: %v", err)
 	}
-	for _, s := range stale {
+	for i := range stale {
 		logging.Warnf("stale processing exchange: record_id=%s account_id=%s source_ri_ids=%v updated_at=%s",
-			s.ID, s.AccountID, s.SourceRIIDs, s.UpdatedAt.Format(time.RFC3339))
+			stale[i].ID, stale[i].AccountID, stale[i].SourceRIIDs, stale[i].UpdatedAt.Format(time.RFC3339))
 	}
 
 	// 3. Analyze reshaping
@@ -157,8 +159,8 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 
 	perExchangeCap := new(big.Rat).SetFloat64(params.Config.MaxPaymentPerExchangeUSD)
 
-	for _, rec := range recs {
-		processRecommendation(ctx, params, rec, perExchangeCap, result)
+	for i := range recs {
+		processRecommendation(ctx, params, &recs[i], perExchangeCap, result)
 	}
 
 	return result, nil
@@ -166,7 +168,7 @@ func RunAutoExchange(ctx context.Context, params RunAutoExchangeParams) (*AutoEx
 
 // processRecommendation handles a single reshape recommendation: validates,
 // quotes, and either creates a pending record (manual) or executes (auto).
-func processRecommendation(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) {
+func processRecommendation(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation, perExchangeCap *big.Rat, result *AutoExchangeResult) {
 	// Skip idle RIs with no target
 	if rec.TargetInstanceType == "" {
 		result.Skipped = append(result.Skipped, SkippedRecommendation{
@@ -213,7 +215,7 @@ func processRecommendation(ctx context.Context, params RunAutoExchangeParams, re
 
 // resolveOffering looks up RI metadata and finds the target offering ID.
 // Returns the offering ID on success, or a SkippedRecommendation on failure.
-func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation) (string, *SkippedRecommendation) {
+func resolveOffering(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation) (string, *SkippedRecommendation) {
 	meta, ok := params.RIMetadata[rec.SourceRIID]
 	if !ok {
 		return "", &SkippedRecommendation{
@@ -238,8 +240,8 @@ func resolveOffering(ctx context.Context, params RunAutoExchangeParams, rec Resh
 
 // getValidatedQuote fetches and validates an exchange quote.
 // Returns the quote on success, or a SkippedRecommendation on failure.
-func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID string, perExchangeCap *big.Rat) (*ExchangeQuoteSummary, *SkippedRecommendation) {
-	quote, err := params.ExchangeClient.GetQuote(ctx, ExchangeQuoteRequest{
+func getValidatedQuote(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation, offeringID string, perExchangeCap *big.Rat) (*QuoteSummary, *SkippedRecommendation) {
+	quote, err := params.Client.GetQuote(ctx, &QuoteRequest{
 		Region:           params.Region,
 		ReservedIDs:      []string{rec.SourceRIID},
 		TargetOfferingID: offeringID,
@@ -274,7 +276,7 @@ func getValidatedQuote(ctx context.Context, params RunAutoExchangeParams, rec Re
 	return quote, nil
 }
 
-func processManualExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string) ExchangeOutcome {
+func processManualExchange(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation, offeringID, paymentDueStr string) Outcome {
 	token, err := common.GenerateApprovalToken()
 	if err != nil {
 		logging.Errorf("failed to generate approval token for %s: %v", rec.SourceRIID, err)
@@ -283,8 +285,8 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		// failure, mirroring the auto-mode failure paths in
 		// processAutoExchange. crypto/rand failures are rare in practice
 		// but still merit an audit trail.
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, errMsg, ExchangeModeManual)
-		return ExchangeOutcome{
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, errMsg, ModeManual)
+		return Outcome{
 			SourceRIID:         rec.SourceRIID,
 			SourceInstanceType: rec.SourceInstanceType,
 			TargetInstanceType: rec.TargetInstanceType,
@@ -301,7 +303,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 	// is delayed or disabled.
 	expiresAt := time.Now().Add(24 * time.Hour)
 
-	record := &ExchangeRecord{
+	record := &Record{
 		AccountID:          params.AccountID,
 		Region:             params.Region,
 		SourceRIIDs:        []string{rec.SourceRIID},
@@ -313,13 +315,13 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		PaymentDue:         paymentDueStr,
 		Status:             "pending",
 		ApprovalToken:      token,
-		Mode:               string(ExchangeModeManual),
+		Mode:               string(ModeManual),
 		ExpiresAt:          &expiresAt,
 	}
 
-	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
+	if err := params.Store.SaveRIRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save pending exchange record for %s: %v", rec.SourceRIID, err)
-		return ExchangeOutcome{
+		return Outcome{
 			SourceRIID:         rec.SourceRIID,
 			SourceInstanceType: rec.SourceInstanceType,
 			TargetInstanceType: rec.TargetInstanceType,
@@ -331,7 +333,7 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 		}
 	}
 
-	return ExchangeOutcome{
+	return Outcome{
 		RecordID:           record.ID,
 		ApprovalToken:      token,
 		SourceRIID:         rec.SourceRIID,
@@ -349,8 +351,8 @@ func processManualExchange(ctx context.Context, params RunAutoExchangeParams, re
 // succeeds and the second fails because AWS replaces the source RI atomically.
 // No DB-level mutex is needed — AWS itself guarantees idempotency (an RI can
 // only be exchanged once). The failed attempt is recorded with status=failed.
-func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) ExchangeOutcome {
-	outcome := ExchangeOutcome{
+func processAutoExchange(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation, offeringID, paymentDueStr string, perExchangeCap *big.Rat) Outcome {
+	outcome := Outcome{
 		SourceRIID:         rec.SourceRIID,
 		SourceInstanceType: rec.SourceInstanceType,
 		TargetInstanceType: rec.TargetInstanceType,
@@ -365,7 +367,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("daily cap check failed for %s: %v", rec.SourceRIID, err)
 		outcome.Error = fmt.Sprintf("daily cap check failed: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ModeAuto)
 		return outcome
 	}
 
@@ -374,7 +376,7 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if err != nil {
 		logging.Errorf("failed to parse daily spend %q: %v", dailySpendStr, err)
 		outcome.Error = fmt.Sprintf("failed to parse daily spend: %v", err)
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ModeAuto)
 		return outcome
 	}
 
@@ -392,12 +394,12 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 			dailySpent.FloatString(2), paymentDue.FloatString(2), params.Config.MaxPaymentDailyUSD)
 		logging.Warnf("skipping exchange for %s: %s", rec.SourceRIID, reason)
 		outcome.Error = reason
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, ExchangeModeAuto)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, reason, ModeAuto)
 		return outcome
 	}
 
 	// Execute the exchange
-	exchangeID, _, execErr := params.ExchangeClient.Execute(ctx, ExchangeExecuteRequest{
+	exchangeID, _, execErr := params.Client.Execute(ctx, &ExecuteRequest{
 		Region:           params.Region,
 		ReservedIDs:      []string{rec.SourceRIID},
 		TargetOfferingID: offeringID,
@@ -408,13 +410,13 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	if execErr != nil {
 		logging.Errorf("exchange execution failed for %s: %v", rec.SourceRIID, execErr)
 		outcome.Error = execErr.Error()
-		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ExchangeModeAuto)
+		saveFailedRecord(ctx, params, rec, offeringID, paymentDueStr, outcome.Error, ModeAuto)
 		return outcome
 	}
 
 	// Save completed record
 	now := time.Now()
-	record := &ExchangeRecord{
+	record := &Record{
 		AccountID:          params.AccountID,
 		Region:             params.Region,
 		ExchangeID:         exchangeID,
@@ -426,11 +428,11 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 		TargetCount:        int(rec.TargetCount),
 		PaymentDue:         paymentDueStr,
 		Status:             "completed",
-		Mode:               string(ExchangeModeAuto),
+		Mode:               string(ModeAuto),
 		CompletedAt:        &now,
 	}
 
-	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
+	if err := params.Store.SaveRIRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save completed exchange record for %s: %v", rec.SourceRIID, err)
 	}
 
@@ -439,22 +441,22 @@ func processAutoExchange(ctx context.Context, params RunAutoExchangeParams, rec 
 	return outcome
 }
 
-// ExchangeMode constrains the originating code path of an exchange record so
+// Mode constrains the originating code path of an exchange record so
 // `saveFailedRecord` (and any future caller) can't silently leak a typo into
-// `ExchangeRecord.Mode`. The storage field stays `string` for serialization
+// `Record.Mode`. The storage field stays `string` for serialization
 // stability — this is a call-site discipline, not a schema change.
-type ExchangeMode string
+type Mode string
 
 const (
-	ExchangeModeAuto   ExchangeMode = "auto"
-	ExchangeModeManual ExchangeMode = "manual"
+	ModeAuto   Mode = "auto"
+	ModeManual Mode = "manual"
 )
 
 // saveFailedRecord persists a failed exchange attempt for DB audit.
 // `mode` distinguishes auto-mode failures from manual-mode failures so
 // downstream filters/UI can split the two.
-func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode ExchangeMode) {
-	record := &ExchangeRecord{
+func saveFailedRecord(ctx context.Context, params *RunAutoExchangeParams, rec *ReshapeRecommendation, offeringID, paymentDueStr, errMsg string, mode Mode) {
+	record := &Record{
 		AccountID:          params.AccountID,
 		Region:             params.Region,
 		SourceRIIDs:        []string{rec.SourceRIID},
@@ -468,7 +470,7 @@ func saveFailedRecord(ctx context.Context, params RunAutoExchangeParams, rec Res
 		Error:              errMsg,
 		Mode:               string(mode),
 	}
-	if err := params.Store.SaveRIExchangeRecord(ctx, record); err != nil {
+	if err := params.Store.SaveRIRecord(ctx, record); err != nil {
 		logging.Errorf("failed to save failed exchange record for %s: %v", rec.SourceRIID, err)
 	}
 }

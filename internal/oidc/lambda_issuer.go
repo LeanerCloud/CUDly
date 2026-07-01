@@ -12,9 +12,19 @@ import (
 
 // LambdaFunctionURLClient is the subset of the AWS Lambda API the
 // issuer-cache primer needs. Exposed as an interface so tests can
-// inject a fake without dialling AWS.
+// inject a fake without dialing AWS.
 type LambdaFunctionURLClient interface {
-	GetFunctionUrlConfig(ctx context.Context, params *lambda.GetFunctionUrlConfigInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error)
+	GetFunctionURLConfig(ctx context.Context, params *lambda.GetFunctionUrlConfigInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error)
+}
+
+// lambdaClientAdapter wraps *lambda.Client to bridge the AWS SDK method name
+// (GetFunctionUrlConfig) to the Go-idiomatic interface name (GetFunctionURLConfig).
+type lambdaClientAdapter struct {
+	client *lambda.Client
+}
+
+func (a *lambdaClientAdapter) GetFunctionURLConfig(ctx context.Context, params *lambda.GetFunctionUrlConfigInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error) {
+	return a.client.GetFunctionUrlConfig(ctx, params, optFns...)
 }
 
 // PrimeIssuerURLFromLambda looks up the running Lambda's own Function
@@ -28,7 +38,7 @@ type LambdaFunctionURLClient interface {
 // No-op (and returns nil) when not running in Lambda
 // (AWS_LAMBDA_FUNCTION_NAME is empty). Errors are returned to the
 // caller so startup code can log them, but they should not fail cold
-// start — the request-driven population path is still a backstop.
+// start - the request-driven population path is still a backstop.
 func PrimeIssuerURLFromLambda(ctx context.Context) error {
 	fn := os.Getenv("AWS_LAMBDA_FUNCTION_NAME")
 	if fn == "" {
@@ -38,13 +48,13 @@ func PrimeIssuerURLFromLambda(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("oidc: load aws config for function url lookup: %w", err)
 	}
-	return primeIssuerURLFromLambdaClient(ctx, lambda.NewFromConfig(cfg), fn)
+	return primeIssuerURLFromLambdaClient(ctx, &lambdaClientAdapter{client: lambda.NewFromConfig(cfg)}, fn)
 }
 
 // primeIssuerURLFromLambdaClient is the test-seam variant of
 // PrimeIssuerURLFromLambda that accepts an injected client.
 func primeIssuerURLFromLambdaClient(ctx context.Context, client LambdaFunctionURLClient, functionName string) error {
-	out, err := client.GetFunctionUrlConfig(ctx, &lambda.GetFunctionUrlConfigInput{
+	out, err := client.GetFunctionURLConfig(ctx, &lambda.GetFunctionUrlConfigInput{
 		FunctionName: &functionName,
 	})
 	if err != nil {

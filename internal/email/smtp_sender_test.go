@@ -22,7 +22,7 @@ func TestNewSMTPSender_Success(t *testing.T) {
 		UseTLS:    true,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -41,7 +41,7 @@ func TestNewSMTPSender_MissingHost(t *testing.T) {
 		// Host intentionally not set
 	}
 
-	_, err := NewSMTPSender(cfg)
+	_, err := NewSMTPSender(&cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SMTP host is required")
@@ -53,7 +53,7 @@ func TestNewSMTPSender_MissingFromEmail(t *testing.T) {
 		// FromEmail intentionally not set
 	}
 
-	_, err := NewSMTPSender(cfg)
+	_, err := NewSMTPSender(&cfg)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "from email is required")
@@ -66,7 +66,7 @@ func TestNewSMTPSender_DefaultPort(t *testing.T) {
 		// Port intentionally not set - should default to 587
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.Equal(t, 587, sender.port)
@@ -81,7 +81,7 @@ func TestNewSMTPSender_CustomPort(t *testing.T) {
 		UseTLS:    false,
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.Equal(t, 465, sender.port)
@@ -96,7 +96,7 @@ func TestNewSMTPSender_Port587AutoTLS(t *testing.T) {
 		UseTLS:    false, // Even with UseTLS=false, port 587 should enable TLS
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	assert.True(t, sender.useTLS) // TLS should be auto-enabled for port 587
@@ -190,7 +190,7 @@ func TestSMTPSender_SendNewRecommendationsNotification_NoFromEmail(t *testing.T)
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -209,7 +209,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_NoFromEmail(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -227,7 +227,7 @@ func TestSMTPSender_SendPurchaseConfirmation_NoFromEmail(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -244,12 +244,12 @@ func TestSMTPSender_SendPurchaseFailedNotification_NoFromEmail(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
 
-// Test that SMTPSender implements SenderInterface
+// Test that SMTPSender implements SenderInterface.
 func TestSMTPSender_ImplementsInterface(t *testing.T) {
 	var sender SenderInterface = &SMTPSender{}
 	assert.NotNil(t, sender)
@@ -264,7 +264,7 @@ func TestNewSMTPSender_NoAuth(t *testing.T) {
 		// Username and Password not set - no auth
 	}
 
-	sender, err := NewSMTPSender(cfg)
+	sender, err := NewSMTPSender(&cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, sender)
@@ -305,14 +305,8 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	injectedProvider := "aws\r\nX-Injected: yes"
 
 	data := RegistrationNotificationData{
-		AccountName:    injectedName,
-		Provider:       injectedProvider,
-		RecipientEmail: "", // will fall back to notifyEmail
-	}
-
-	s := &SMTPSender{
-		fromEmail:   "noreply@example.com",
-		notifyEmail: "admin@example.com",
+		AccountName: injectedName,
+		Provider:    injectedProvider,
 	}
 
 	// Build the subject the same way the method does, then verify it is clean.
@@ -328,7 +322,6 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 	if strings.ContainsAny(cleaned, "\r\n") {
 		t.Errorf("sanitizeHeader did not remove CR/LF from %q; got %q", injectedName, cleaned)
 	}
-	_ = s
 }
 
 // Regression test for #410: the StartTLS call must use MinVersion: tls.VersionTLS12
@@ -345,7 +338,7 @@ func TestSMTPStartTLS_MinVersionTLS12(t *testing.T) {
 	}
 
 	// Build the config the same way sendMailTLS does and confirm MinVersion.
-	cfg := &tls.Config{ServerName: "smtp.example.com", MinVersion: tls.VersionTLS12}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if cfg.MinVersion != tls.VersionTLS12 {
 		t.Errorf("TLS config MinVersion is %d; want tls.VersionTLS12 (%d) (regression of #410)",
 			cfg.MinVersion, tls.VersionTLS12)

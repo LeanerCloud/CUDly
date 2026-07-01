@@ -146,8 +146,8 @@ func anyRecPurchased(recs []config.RecommendationRecord) bool {
 // the accounts that already succeeded (which #1012's stable key would otherwise
 // dedupe, but the contract should not depend on that second line of defence).
 type multiAccountPartialError struct {
-	committed int
 	errors    []string
+	committed int
 }
 
 func (e *multiAccountPartialError) Error() string {
@@ -308,7 +308,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 // resolved (lookup failed, the account does not exist, or credentials could
 // not be derived); the caller must NOT fall back to ambient credentials on
 // error, as that would purchase/stamp against the wrong account (#646).
-func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
+func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.Config, string, error) {
 	// Skip credential resolution when nothing is selected. Approval-only
 	// flows may carry an account ID on the recs solely for the contact-email
 	// gate; attempting resolution there would fail on accounts with no
@@ -361,11 +361,11 @@ func (e *partialPurchaseError) Error() string {
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
 // for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
-func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAccountProvider]: resolving credentials for provider=%s account=%s",
 		account.Provider, account.ID)
-	var cfg *provider.ProviderConfig
+	var cfg *provider.Config
 	var err error
 	switch account.Provider {
 	case "aws":
@@ -387,7 +387,7 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 	return cfg, nil
 }
 
-func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAWSProvider]: resolving AWS credentials for account=%s authMode=%s",
 		account.ID, account.AWSAuthMode)
@@ -403,10 +403,10 @@ func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAc
 	}
 	logging.Infof("purchase[resolveAWSProvider]: AWS credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
+	return &provider.Config{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
-func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAzureProvider]: resolving Azure credentials for account=%s authMode=%s",
 		account.ID, account.AzureAuthMode)
@@ -422,7 +422,7 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
+	azProv, err := azureprovider.NewAzureProvider(&provider.Config{Profile: account.AzureSubscriptionID})
 	if err != nil {
 		logging.Errorf("purchase[resolveAzureProvider]: Azure provider construction failed for account=%s after %s: %v",
 			account.ID, time.Since(t0), err)
@@ -431,10 +431,10 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 	azProv.SetCredential(azCred)
 	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
+	return &provider.Config{ProviderOverride: azProv}, nil
 }
 
-func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveGCPProvider]: resolving GCP credentials for account=%s authMode=%s",
 		account.ID, account.GCPAuthMode)
@@ -459,7 +459,7 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
 	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
+	return &provider.Config{ProviderOverride: gcpProv}, nil
 }
 
 // getMaxAccountParallelism is a thin alias over the shared
@@ -474,12 +474,12 @@ func getMaxAccountParallelism() int {
 // savePurchaseHistory from a single goroutine (no concurrent map / slice
 // mutation). The index field is the position in exec.Recommendations.
 type recPurchaseOutcome struct {
-	index    int
-	purchase common.PurchaseResult
 	err      error
+	purchase common.PurchaseResult
+	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.Config) (float64, float64, []string) {
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -771,7 +771,7 @@ func (m *Manager) savePurchaseHistory(ctx context.Context, exec *config.Purchase
 
 func (m *Manager) sendPurchaseNotification(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) error {
 	data := m.buildPurchaseConfirmationData(exec, plan, totalSavings, totalUpfront)
-	return m.email.SendPurchaseConfirmation(ctx, data)
+	return m.email.SendPurchaseConfirmation(ctx, &data)
 }
 
 func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, plan *config.PurchasePlan, totalSavings, totalUpfront float64) email.NotificationData {
@@ -824,7 +824,7 @@ func logRecCtxErr(executionID, recTuple string, elapsed time.Duration, recCtxErr
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
 // opts carries execution-level metadata (the source surface) that providers stamp
 // onto the commitment they create.
-func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.Config, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Per-purchase Info logs tagged with the owning execution ID so a
 	// CloudWatch filter on the execution UUID surfaces every step of the
 	// purchase attempt -- provider construction, service-client lookup,
@@ -921,7 +921,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
-	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
+	result, err := serviceClient.PurchaseCommitment(recCtx, &recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {
 		logRecCtxErr(opts.ExecutionID, recTuple, elapsed, recCtx.Err())

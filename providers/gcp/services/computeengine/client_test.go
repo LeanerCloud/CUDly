@@ -310,7 +310,7 @@ func TestComputeEngineClient_ValidateOffering_NoCredentials(t *testing.T) {
 	}
 
 	// Will fail without credentials
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 }
 
@@ -437,7 +437,7 @@ func TestComputeEngineClient_ValidateOffering_Valid(t *testing.T) {
 	client.SetMachineTypesService(mockService)
 
 	rec := common.Recommendation{ResourceType: "n1-standard-1"}
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.NoError(t, err)
 }
 
@@ -454,7 +454,7 @@ func TestComputeEngineClient_ValidateOffering_Invalid(t *testing.T) {
 	client.SetMachineTypesService(mockService)
 
 	rec := common.Recommendation{ResourceType: "invalid-type"}
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid GCP machine type")
 }
@@ -476,7 +476,7 @@ func TestComputeEngineClient_PurchaseCommitment_WithMock(t *testing.T) {
 		Details:        common.ComputeDetails{MemoryGB: 20.0}, // 5 vCPU * 4 GB
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.NotEmpty(t, result.CommitmentID)
@@ -497,7 +497,7 @@ func TestComputeEngineClient_PurchaseCommitment_EncodesSourceInDescription(t *te
 		Details:      common.ComputeDetails{MemoryGB: 4.0}, // 1 vCPU * 4 GB
 	}
 
-	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	_, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
 	require.NoError(t, err)
 	require.NotNil(t, mockService.lastInsertReq)
 	require.NotNil(t, mockService.lastInsertReq.CommitmentResource)
@@ -519,7 +519,7 @@ func TestComputeEngineClient_PurchaseCommitment_OmitsTagWhenSourceEmpty(t *testi
 		Details:      common.ComputeDetails{MemoryGB: 4.0},
 	}
 
-	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, mockService.lastInsertReq)
 	desc := mockService.lastInsertReq.CommitmentResource.GetDescription()
@@ -548,11 +548,11 @@ func TestComputeEngineClient_PurchaseCommitment_IdempotentReDrive(t *testing.T) 
 	token := common.DeriveIdempotencyToken("exec-654", 0)
 	opts := common.PurchaseOptions{Source: common.PurchaseSourceWeb, IdempotencyToken: token}
 
-	r1, err := client.PurchaseCommitment(ctx, rec, opts)
+	r1, err := client.PurchaseCommitment(ctx, &rec, opts)
 	require.NoError(t, err)
 	require.True(t, r1.Success)
 
-	r2, err := client.PurchaseCommitment(ctx, rec, opts)
+	r2, err := client.PurchaseCommitment(ctx, &rec, opts)
 	require.NoError(t, err)
 	require.True(t, r2.Success)
 
@@ -592,7 +592,7 @@ func TestComputeEngineClient_PurchaseCommitment_EmptyTokenNoRequestID(t *testing
 		Details:      common.ComputeDetails{MemoryGB: 4.0},
 	}
 
-	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, mockService.lastInsertReq)
 	assert.Empty(t, mockService.lastInsertReq.GetRequestId(), "empty token must not set a RequestId")
@@ -617,7 +617,7 @@ func TestComputeEngineClient_PurchaseCommitment_3Year(t *testing.T) {
 		Details:      common.ComputeDetails{MemoryGB: 16.0}, // 4 vCPU * 4 GB
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 }
@@ -640,7 +640,7 @@ func TestComputeEngineClient_PurchaseCommitment_InsertError(t *testing.T) {
 		Details:      common.ComputeDetails{MemoryGB: 8.0},
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to create commitment")
@@ -664,7 +664,7 @@ func TestComputeEngineClient_PurchaseCommitment_WaitError(t *testing.T) {
 		Details:      common.ComputeDetails{MemoryGB: 8.0},
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "commitment creation failed")
@@ -728,7 +728,7 @@ func TestComputeEngineClient_GetOfferingDetails_WithMock(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	assert.Equal(t, "n1-standard-1", details.ResourceType)
 	assert.Equal(t, "1yr", details.Term)
@@ -749,7 +749,7 @@ func TestComputeEngineClient_GetOfferingDetails_NoPricing(t *testing.T) {
 
 	rec := common.Recommendation{ResourceType: "n1-standard-1"}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no on-demand pricing found")
 }
@@ -791,7 +791,7 @@ func TestComputeEngineClient_GetRecommendations_WithMock(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Len(t, recommendations, 1)
 	assert.Equal(t, common.ProviderGCP, recommendations[0].Provider)
@@ -815,7 +815,7 @@ func TestComputeEngineClient_GetRecommendations_IteratorError(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "computeengine: iterate recommendations")
 	assert.Nil(t, recs, "partial data must not leak on iterator failure")
@@ -833,7 +833,7 @@ func TestComputeEngineClient_GetRecommendations_Empty(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	recommendations, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recommendations, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recommendations)
 }
@@ -930,7 +930,7 @@ func TestComputeEngineClient_GetRecommendations_CtxCancelReturnsError(t *testing
 	require.NoError(t, err)
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
-	_, err = client.GetRecommendations(ctx, common.RecommendationParams{})
+	_, err = client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.Error(t, err, "cancelled context must surface an error, not a partial result set")
 }
 
@@ -941,7 +941,7 @@ func TestComputeEngineClient_GetRecommendations_PageCapFires(t *testing.T) {
 	require.NoError(t, err)
 	client.SetRecommenderClient(&infiniteRecommenderClient{})
 
-	_, err = client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	_, err = client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	require.Error(t, err, "page cap must surface an error when the iterator never terminates")
 }
 
@@ -1175,7 +1175,7 @@ func TestBuildInsertRequest_RefusesZeroCount(t *testing.T) {
 	// PurchaseCommitment must also surface the error and not call Insert.
 	mockSvc := &MockCommitmentsService{operation: &MockOperation{}}
 	client.SetCommitmentsService(mockSvc)
-	result, purchaseErr := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, purchaseErr := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.Error(t, purchaseErr)
 	assert.False(t, result.Success)
 	assert.Empty(t, mockSvc.insertReqs, "Insert must not be called when Count <= 0")
@@ -1402,7 +1402,7 @@ func TestBuildInsertRequest_RefusesMissingMemory(t *testing.T) {
 	// PurchaseCommitment must surface the error and not call Insert.
 	mockSvc := &MockCommitmentsService{operation: &MockOperation{}}
 	client.SetCommitmentsService(mockSvc)
-	result, purchaseErr := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, purchaseErr := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.Error(t, purchaseErr)
 	assert.False(t, result.Success)
 	assert.Empty(t, mockSvc.insertReqs, "Insert must not be called when memory is absent")
@@ -1556,7 +1556,7 @@ func TestGetRecommendations_FiltersNonActiveStates(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	results, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, results, 1,
 		"only the ACTIVE recommendation must be returned; CLAIMED/SUCCEEDED/FAILED/DISMISSED must be filtered (H-1)")
@@ -1589,7 +1589,7 @@ func TestGetRecommendations_ActiveRecIncluded(t *testing.T) {
 	mockClient := &MockRecommenderClient{iterator: mockIterator}
 	client.SetRecommenderClient(mockClient)
 
-	results, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	results, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	require.Len(t, results, 1, "an ACTIVE recommendation must be included")
 }

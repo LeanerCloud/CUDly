@@ -22,7 +22,7 @@ type MockProviderFactory struct {
 	mock.Mock
 }
 
-func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (m *MockProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	args := m.Called(ctx, name, cfg)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -105,12 +105,12 @@ type MockServiceClient struct {
 	mock.Mock
 }
 
-func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (m *MockServiceClient) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	args := m.Called(ctx, rec, opts)
 	return args.Get(0).(common.PurchaseResult), args.Error(1)
 }
 
-func (m *MockServiceClient) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (m *MockServiceClient) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -136,12 +136,12 @@ func (m *MockServiceClient) GetExistingCommitments(ctx context.Context) ([]commo
 	return args.Get(0).([]common.Commitment), args.Error(1)
 }
 
-func (m *MockServiceClient) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
+func (m *MockServiceClient) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
 	args := m.Called(ctx, rec)
 	return args.Error(0)
 }
 
-func (m *MockServiceClient) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
+func (m *MockServiceClient) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
 	args := m.Called(ctx, rec)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -176,22 +176,22 @@ func (m *MockEmailSender) SendToEmailWithCCMultipart(_ context.Context, _ string
 	return nil
 }
 
-func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendNewRecommendationsNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseConfirmation(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
@@ -211,27 +211,27 @@ func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, se
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *MockEmailSender) SendRIExchangePendingApproval(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (m *MockEmailSender) SendRIExchangeCompleted(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data *email.NotificationData) error {
 	args := m.Called(ctx, data)
 	return args.Error(0)
 }
-func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+func (m *MockEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+func (m *MockEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ *email.RegistrationNotificationData) error {
 	return nil
 }
-func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+func (m *MockEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *email.RegistrationDecisionData) error {
 	return nil
 }
 

@@ -122,7 +122,7 @@ func TestDBRateLimiter_WindowExpiry_AtomicReset(t *testing.T) {
 // burst that exceeds MaxAttempts within a single window must produce
 // some `false` returns. With the always-increment approach we expect
 // MaxAttempts allows followed by deny(s); count may exceed
-// MaxAttempts after the burst, which is documented behaviour.
+// MaxAttempts after the burst, which is documented behavior.
 func TestDBRateLimiter_ExceedsLimitDenies(t *testing.T) {
 	ctx := context.Background()
 	pool, cleanup := setupRateLimitIntegration(ctx, t)

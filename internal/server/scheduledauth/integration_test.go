@@ -28,7 +28,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 	// JWKS, so tokens signed by it must fail.
 	jwksSrv := newJWKSServer(t, jwks(signingKey))
 
-	v, err := New(Config{
+	v, err := New(&Config{
 		Mode:      ModeOIDC,
 		Issuer:    "https://accounts.example.com",
 		JWKSURL:   jwksSrv.URL,
@@ -56,8 +56,8 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	type tc struct {
-		name           string
 		buildAuth      func(t *testing.T) string
+		name           string
 		wantStatus     int
 		wantHandlerHit bool
 	}

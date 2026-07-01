@@ -127,8 +127,8 @@ func TestComputeDetails_GetDetailDescription(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		details  ComputeDetails
 		expected string
+		details  ComputeDetails
 	}{
 		{
 			name: "Linux default",
@@ -344,8 +344,17 @@ func TestRecommendation_Struct(t *testing.T) {
 
 	assert.Equal(t, ProviderAWS, rec.Provider)
 	assert.Equal(t, "123456789012", rec.Account)
+	assert.Equal(t, "prod", rec.AccountName)
 	assert.Equal(t, ServiceRDS, rec.Service)
+	assert.Equal(t, "us-east-1", rec.Region)
+	assert.Equal(t, "db.t3.medium", rec.ResourceType)
 	assert.Equal(t, 2, rec.Count)
+	assert.Equal(t, CommitmentReservedInstance, rec.CommitmentType)
+	assert.Equal(t, "1yr", rec.Term)
+	assert.Equal(t, "all-upfront", rec.PaymentOption)
+	assert.Equal(t, 1000.0, rec.OnDemandCost)
+	assert.Equal(t, 600.0, rec.CommitmentCost)
+	assert.Equal(t, 400.0, rec.EstimatedSavings)
 	assert.Equal(t, 40.0, rec.SavingsPercentage)
 }
 
@@ -379,7 +388,13 @@ func TestCommitment_Struct(t *testing.T) {
 	}
 
 	assert.Equal(t, ProviderAWS, commitment.Provider)
+	assert.Equal(t, "123456789012", commitment.Account)
 	assert.Equal(t, "ri-12345", commitment.CommitmentID)
+	assert.Equal(t, CommitmentReservedInstance, commitment.CommitmentType)
+	assert.Equal(t, ServiceRDS, commitment.Service)
+	assert.Equal(t, "us-east-1", commitment.Region)
+	assert.Equal(t, "db.t3.medium", commitment.ResourceType)
+	assert.Equal(t, 2, commitment.Count)
 	assert.Equal(t, "active", commitment.State)
 }
 
@@ -398,7 +413,13 @@ func TestOfferingDetails_Struct(t *testing.T) {
 	}
 
 	assert.Equal(t, "offering-123", offering.OfferingID)
+	assert.Equal(t, "db.t3.medium", offering.ResourceType)
+	assert.Equal(t, "1yr", offering.Term)
+	assert.Equal(t, "all-upfront", offering.PaymentOption)
+	assert.Equal(t, 500.0, offering.UpfrontCost)
+	assert.Equal(t, 0.0, offering.RecurringCost)
 	assert.Equal(t, 500.0, offering.TotalCost)
+	assert.Equal(t, 0.057, offering.EffectiveHourlyRate)
 	assert.Equal(t, "USD", offering.Currency)
 }
 
@@ -416,8 +437,13 @@ func TestRecommendationParams_Struct(t *testing.T) {
 	}
 
 	assert.Equal(t, ServiceRDS, params.Service)
+	assert.Equal(t, "us-east-1", params.Region)
 	assert.Equal(t, "30d", params.LookbackPeriod)
+	assert.Equal(t, "1yr", params.Term)
+	assert.Equal(t, "all-upfront", params.PaymentOption)
+	assert.Equal(t, []string{"123456789012"}, params.AccountFilter)
 	assert.Len(t, params.IncludeRegions, 2)
+	assert.Equal(t, []string{"eu-west-1"}, params.ExcludeRegions)
 }
 
 func TestAccount_Struct(t *testing.T) {
@@ -432,6 +458,8 @@ func TestAccount_Struct(t *testing.T) {
 
 	assert.Equal(t, ProviderAWS, account.Provider)
 	assert.Equal(t, "123456789012", account.ID)
+	assert.Equal(t, "prod-account", account.Name)
+	assert.Equal(t, "Production Account", account.DisplayName)
 	assert.True(t, account.IsDefault)
 }
 
@@ -446,6 +474,7 @@ func TestRegion_Struct(t *testing.T) {
 
 	assert.Equal(t, ProviderAWS, region.Provider)
 	assert.Equal(t, "us-east-1", region.ID)
+	assert.Equal(t, "us-east-1", region.Name)
 	assert.Equal(t, "US East (N. Virginia)", region.DisplayName)
 }
 
@@ -480,4 +509,12 @@ func TestNormalizeSource(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestScaleRecommendationCosts_NilReturnsZero is the CR #1276 guard: the
+// exported in-place-style scaler must return the zero Recommendation as a safe
+// no-op on a nil pointer argument rather than panicking.
+func TestScaleRecommendationCosts_NilReturnsZero(t *testing.T) {
+	got := ScaleRecommendationCosts(nil, 0.5)
+	assert.Equal(t, Recommendation{}, got, "nil rec must yield the zero Recommendation, not panic")
 }

@@ -38,33 +38,29 @@ type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// SchedulerConfig holds configuration for the scheduler
-type SchedulerConfig struct {
+// Config holds configuration for the scheduler.
+type Config struct {
 	ConfigStore     config.StoreInterface
 	PurchaseManager ManagerInterface
 	EmailSender     email.SenderInterface
-	DashboardURL    string
-	// Provider factory for creating cloud providers (allows injection for testing)
 	ProviderFactory provider.FactoryInterface
-	// Per-account credential resolution (mirrors purchase manager)
 	CredentialStore credentials.CredentialStore
 	OIDCSigner      oidc.Signer
-	OIDCIssuerURL   string
 	AssumeRoleSTS   credentials.STSClient
-
 	// STSClient is the runtime AWS STS client used to discover the
 	// Lambda's own AWS account ID on the ambient collection path. When
 	// the discovered ID matches a registered cloud_accounts row (by
 	// external_id), the ambient path stamps that account's UUID onto
 	// every rec it returns so the approve modal shows the registered
-	// name instead of `(ambient)`. Optional — when nil, the ambient
+	// name instead of `(ambient)`. Optional -- when nil, the ambient
 	// path keeps its pre-fix behaviour (CloudAccountID = nil), which
 	// preserves the truly-orphan case.
-	STSClient STSClient
-
+	STSClient     STSClient
+	DashboardURL  string
+	OIDCIssuerURL string
 	// IsLambda gates the stale-while-revalidate background goroutine.
-	// On Lambda, goroutines freeze between invocations — firing one from
-	// a request handler would corrupt state — so we fall back to the
+	// On Lambda, goroutines freeze between invocations -- firing one from
+	// a request handler would corrupt state -- so we fall back to the
 	// scheduled cron + manual refresh. Cloud Run / Container Apps run
 	// long-lived processes where the goroutine is safe.
 	IsLambda bool
@@ -77,13 +73,13 @@ type SchedulerConfig struct {
 // clause to providers that actually ran, and the frontend banner can
 // surface the specific failures.
 type CollectResult struct {
+	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
+	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
 	Recommendations     int               `json:"recommendations"`
 	TotalSavings        float64           `json:"total_savings"`
-	SuccessfulProviders []string          `json:"successful_providers,omitempty"`
-	FailedProviders     map[string]string `json:"failed_providers,omitempty"`
 }
 
-// ManagerInterface defines the purchase manager methods used by scheduler
+// ManagerInterface defines the purchase manager methods used by scheduler.
 type ManagerInterface interface {
 	ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)
@@ -93,31 +89,28 @@ type ManagerInterface interface {
 	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
 }
 
-// Scheduler handles scheduled tasks
+// Scheduler handles scheduled tasks.
 type Scheduler struct {
-	config          config.StoreInterface
+	stsClient       STSClient
 	purchase        ManagerInterface
 	email           email.SenderInterface
-	dashboardURL    string
 	providerFactory provider.FactoryInterface
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
-	oidcIssuerURL   string
 	assumeRoleSTS   credentials.STSClient
-	stsClient       STSClient
-
-	// isLambda gates the stale-while-revalidate background goroutine. See
-	// SchedulerConfig.IsLambda for the rationale.
-	isLambda bool
-
+	config        config.StoreInterface
+	dashboardURL  string
+	oidcIssuerURL string
 	// cacheTTL is the age past which opportunistic background refresh kicks
 	// in on non-Lambda runtimes. Parsed from CUDLY_RECOMMENDATION_CACHE_TTL
 	// at NewScheduler time; defaults to 6h.
 	cacheTTL time.Duration
-
 	// collecting is a single-flight guard so N concurrent stale reads only
 	// trigger ONE background refresh.
 	collecting atomic.Bool
+	// isLambda gates the stale-while-revalidate background goroutine. See
+	// SchedulerConfig.IsLambda for the rationale.
+	isLambda bool
 }
 
 // defaultCacheTTL is the fallback when CUDLY_RECOMMENDATION_CACHE_TTL is
@@ -125,8 +118,8 @@ type Scheduler struct {
 // opportunistic refresh closes the gap when users are active.
 const defaultCacheTTL = 6 * time.Hour
 
-// NewScheduler creates a new scheduler
-func NewScheduler(cfg SchedulerConfig) *Scheduler {
+// NewScheduler creates a new scheduler.
+func NewScheduler(cfg *Config) *Scheduler {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -220,37 +213,38 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 	//
 	// Provider-level fan-out under errgroup. Each goroutine returns nil to the
 	// group so a single provider's failure does not cancel siblings — matches
-	// the previous loop's `continue`-on-error behaviour. Per-provider results
+	// the previous loop's `continue`-on-error behavior. Per-provider results
 	// are written into a map under a single mutex; the merge then walks
 	// EnabledProviders in config order so successfulProviders ordering is
 	// deterministic regardless of goroutine completion order. After Wait, ctx
 	// cancellation is propagated. No concurrency cap — the universe is at
 	// most 3 providers.
-	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, err := s.collectAllProviders(ctx, globalCfg)
+	collected, err := s.collectAllProviders(ctx, globalCfg)
 	if err != nil {
 		return nil, err
 	}
 
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
-		len(allRecommendations), totalSavings)
+		len(collected.recommendations), collected.totalSavings)
 
-	s.persistCollection(ctx, allRecommendations, successfulCollects, failedProviders)
+	s.persistCollection(ctx, collected.recommendations, collected.successfulCollects, collected.failedProviders)
 
 	// Send notification if we have recommendations
-	if len(allRecommendations) > 0 && totalSavings > 0 {
+	if len(collected.recommendations) > 0 && collected.totalSavings > 0 {
 		// Sort by savings descending to show top recommendations in email
-		sort.Slice(allRecommendations, func(i, j int) bool {
-			return allRecommendations[i].Savings > allRecommendations[j].Savings
+		sort.Slice(collected.recommendations, func(i, j int) bool {
+			return collected.recommendations[i].Savings > collected.recommendations[j].Savings
 		})
 
 		data := email.NotificationData{
 			DashboardURL: s.dashboardURL,
-			TotalSavings: totalSavings,
+			TotalSavings: collected.totalSavings,
 		}
-		for _, rec := range allRecommendations {
+		for i := range collected.recommendations {
 			if len(data.Recommendations) >= 10 { // Limit to top 10 in email
 				break
 			}
+			rec := &collected.recommendations[i]
 			data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
 				Service:        rec.Service,
 				ResourceType:   rec.ResourceType,
@@ -261,16 +255,16 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 			})
 		}
 
-		if err := s.email.SendNewRecommendationsNotification(ctx, data); err != nil {
+		if err := s.email.SendNewRecommendationsNotification(ctx, &data); err != nil {
 			logging.Errorf("Failed to send notification: %v", err)
 		}
 	}
 
 	return &CollectResult{
-		Recommendations:     len(allRecommendations),
-		TotalSavings:        totalSavings,
-		SuccessfulProviders: successfulProviders,
-		FailedProviders:     failedProviders,
+		Recommendations:     len(collected.recommendations),
+		TotalSavings:        collected.totalSavings,
+		SuccessfulProviders: collected.successfulProviders,
+		FailedProviders:     collected.failedProviders,
 	}, nil
 }
 
@@ -295,9 +289,20 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context) (*CollectResult,
 // succeeded (possibly partially — partial-account-failure semantics live in
 // fanOutPerAccount, not here).
 type providerOutcome struct {
+	err                 error
 	recs                []config.RecommendationRecord
 	succeededAccountIDs []string
-	err                 error
+}
+
+// allProvidersResult bundles the five non-error return values of
+// collectAllProviders into a single struct so the function does not exceed the
+// tooManyResultsChecker threshold.
+type allProvidersResult struct {
+	failedProviders     map[string]string
+	recommendations     []config.RecommendationRecord
+	successfulProviders []string
+	successfulCollects  []config.SuccessfulCollect
+	totalSavings        float64
 }
 
 // collectAllProviders fans out provider collection (AWS / Azure / GCP) under
@@ -305,22 +310,17 @@ type providerOutcome struct {
 // cancel siblings; per-provider results are written into a map under a single
 // mutex. After Wait, ctx cancellation is propagated. The merge then walks
 // EnabledProviders in config order so successfulProviders / successfulCollects
-// / allRecommendations ordering is deterministic regardless of goroutine
-// completion order — keeps existing tests stable. No concurrency cap; the
+// / recommendations ordering is deterministic regardless of goroutine
+// completion order -- keeps existing tests stable. No concurrency cap; the
 // universe is at most 3 providers.
 //
 // Extracted from CollectRecommendations to keep that function under the
 // project's gocyclo gate (.golangci.yml min-complexity: 15) after the
 // errgroup + post-Wait ctx.Err() block was added.
-func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (
-	allRecommendations []config.RecommendationRecord,
-	totalSavings float64,
-	successfulProviders []string,
-	successfulCollects []config.SuccessfulCollect,
-	failedProviders map[string]string,
-	err error,
-) {
-	failedProviders = map[string]string{}
+func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.GlobalConfig) (allProvidersResult, error) {
+	res := allProvidersResult{
+		failedProviders: map[string]string{},
+	}
 
 	var (
 		mu       sync.Mutex
@@ -349,14 +349,16 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 	// goroutine returns nil. After Wait, propagate ctx cancellation so
 	// callers can distinguish "all providers completed" from "the parent
 	// ctx was canceled mid-fan-out".
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return allProvidersResult{}, err
+	}
 	if cerr := ctx.Err(); cerr != nil {
-		return nil, 0, nil, nil, nil, cerr
+		return allProvidersResult{}, cerr
 	}
 
 	// Deterministic merge: walk EnabledProviders in config order so
 	// successfulProviders ordering is independent of goroutine completion
-	// order — keeps existing tests stable.
+	// order -- keeps existing tests stable.
 	for _, providerName := range globalCfg.EnabledProviders {
 		out, ok := outcomes[providerName]
 		if !ok {
@@ -364,17 +366,17 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		}
 		if out.err != nil {
 			logging.Errorf("Failed to collect %s recommendations: %v", providerName, out.err)
-			failedProviders[providerName] = out.err.Error()
+			res.failedProviders[providerName] = out.err.Error()
 			continue
 		}
-		successfulProviders = append(successfulProviders, providerName)
-		successfulCollects = append(successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
-		for _, rec := range out.recs {
-			totalSavings += rec.Savings
+		res.successfulProviders = append(res.successfulProviders, providerName)
+		res.successfulCollects = append(res.successfulCollects, expandSuccessfulCollects(providerName, out.succeededAccountIDs)...)
+		for i := range out.recs {
+			res.totalSavings += out.recs[i].Savings
 		}
-		allRecommendations = append(allRecommendations, out.recs...)
+		res.recommendations = append(res.recommendations, out.recs...)
 	}
-	return allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, nil
+	return res, nil
 }
 
 // clearCollectionStartedBestEffort clears last_collection_started_at on the
@@ -457,7 +459,7 @@ func expandSuccessfulCollects(providerName string, accountIDs []string) []config
 // If no accounts are registered and CUDly runs on AWS, it falls back to
 // ambient credentials (backward compatibility with single-account setups).
 // Returns the merged recommendations + the IDs of accounts that succeeded
-// (or [""] for the ambient path so the caller can synthesise a nil
+// (or [""] for the ambient path so the caller can synthesize a nil
 // CloudAccountID for eviction).
 func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
 	accounts := s.enabledAccounts(ctx, "aws")
@@ -481,7 +483,7 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		return recs, []string{""}, nil
 	}
 
-	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 		return s.collectAWSForAccount(ctx, globalCfg, acct)
 	})
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
@@ -506,10 +508,10 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // account-scoped eviction. Order is not preserved — the eviction
 // query treats it as a set.
 type accountOutcome struct {
-	SucceededCount      int
-	FailedCount         int
 	LastErr             string   // most-recent per-account error message, for surfacing in the banner
 	SucceededAccountIDs []string // IDs of accounts that succeeded this run
+	SucceededCount      int
+	FailedCount         int
 }
 
 // fanOutPerAccount runs fn concurrently across accounts, bounded by the
@@ -526,7 +528,7 @@ func fanOutPerAccount(
 	ctx context.Context,
 	providerLabel string,
 	accounts []config.CloudAccount,
-	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error),
+	fn func(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error),
 ) ([]config.RecommendationRecord, accountOutcome) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(execution.ConcurrencyFromEnv())
@@ -537,8 +539,8 @@ func fanOutPerAccount(
 	var all []config.RecommendationRecord
 	var outcome accountOutcome
 
-	for _, acct := range accounts {
-		acct := acct // capture
+	for i := range accounts {
+		acct := &accounts[i]
 		g.Go(func() error {
 			recs, err := fn(gctx, acct)
 			if err != nil {
@@ -567,7 +569,9 @@ func fanOutPerAccount(
 			return nil
 		})
 	}
-	_ = g.Wait() // errs are always nil (swallowed above)
+	if err := g.Wait(); err != nil { // errs are always nil (swallowed above per-goroutine)
+		logging.Warnf("collectAcrossAccounts: unexpected error from errgroup: %v", err)
+	}
 	return all, outcome
 }
 
@@ -580,7 +584,7 @@ func fanOutPerAccount(
 //
 // Currently dispatches per provider:
 //   - "GCP": gcpprovider.IsPermissionError (HTTP 403 / gRPC PermissionDenied)
-//   - other providers: false (existing ERROR behaviour preserved until
+//   - other providers: false (existing ERROR behavior preserved until
 //     analogous predicates are added for AWS/Azure)
 func isAccountPermissionError(providerLabel string, err error) bool {
 	if err == nil {
@@ -652,17 +656,17 @@ func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
 // resolveAmbientHostAccountID: given the host's external identifier (subscription
 // ID for Azure, project ID for GCP) it checks whether a registered cloud_accounts
 // row exists for (provider, externalID) and returns its UUID. Returns "" on any
-// error or when no row matches, preserving the pre-fix nil-tagging behaviour so
+// error or when no row matches, preserving the pre-fix nil-tagging behavior so
 // truly-orphan deployments are unaffected. All errors are intentionally swallowed
 // (logged at warn) — this is a best-effort UX improvement on the ambient path
 // and must not break the collection.
-func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, externalID string) string {
+func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, providerName, externalID string) string {
 	if externalID == "" {
 		return ""
 	}
-	acct, err := s.config.GetCloudAccountByExternalID(ctx, provider, externalID)
+	acct, err := s.config.GetCloudAccountByExternalID(ctx, providerName, externalID)
 	if err != nil {
-		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", provider, externalID, err)
+		logging.Warnf("ambient host-account lookup: GetCloudAccountByExternalID(%s,%s) failed: %v", providerName, externalID, err)
 		return ""
 	}
 	if acct == nil {
@@ -678,7 +682,7 @@ func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, provider, exter
 // subscriptionID is passed explicitly to avoid an unnecessary Azure API round-trip
 // to auto-discover subscriptions — the caller already resolved it from env.
 func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, error) {
-	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.ProviderConfig{
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.Config{
 		AzureSubscriptionID: subscriptionID,
 	})
 	if err != nil {
@@ -714,7 +718,7 @@ func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.Recommendat
 	return s.convertRecommendations(recs, "gcp"), nil
 }
 
-func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
+func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
 	// Self-account (role_arn with no role ARN) or ambient modes use ambient credentials
 	if acct.AWSRoleARN == "" {
 		prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
@@ -723,11 +727,11 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	cfg := &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+	cfg := &provider.Config{Name: "aws", AWSCredentialsProvider: awsCreds}
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
@@ -771,15 +775,15 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
-	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
+func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
+	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, acct, s.credStore, credentials.AzureResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
+	azProv, err := azureprovider.NewAzureProvider(&provider.Config{Profile: acct.AzureSubscriptionID})
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
 	}
@@ -832,8 +836,8 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 	return recs, outcome.SucceededAccountIDs, nil
 }
 
-func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, error) {
-	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &acct, s.credStore, credentials.GCPResolveOptions{
+func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct *config.CloudAccount) ([]config.RecommendationRecord, error) {
+	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, acct, s.credStore, credentials.GCPResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
 	})
@@ -846,9 +850,9 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
 	} else {
 		// ADC mode (application_default): use ambient credentials
-		created, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
-		if err != nil {
-			return nil, fmt.Errorf("create ambient GCP provider: %w", err)
+		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
+		if createErr != nil {
+			return nil, fmt.Errorf("create ambient GCP provider: %w", createErr)
 		}
 		prov = created
 	}
@@ -898,7 +902,11 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 			PaymentOption:  globalCfg.DefaultPayment,
 			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
-		recs, _ = recClient.GetRecommendations(ctx, params)
+		var recsErr error
+		recs, recsErr = recClient.GetRecommendations(ctx, &params)
+		if recsErr != nil {
+			logging.Warnf("GetRecommendations (fallback) for %s: %v", providerName, recsErr)
+		}
 	}
 	result := s.convertRecommendations(recs, providerName)
 	if accountID != nil {
@@ -930,7 +938,7 @@ func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID str
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
-func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (s *Scheduler) ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
 	freshness, err := s.config.GetRecommendationsFreshness(ctx)
@@ -940,8 +948,8 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 
 	if freshness.LastCollectedAt == nil {
 		logging.Info("Recommendations cache is empty; performing synchronous cold-start collect")
-		if _, err := s.CollectRecommendations(ctx); err != nil {
-			return nil, fmt.Errorf("cold-start collect failed: %w", err)
+		if _, collectErr := s.CollectRecommendations(ctx); collectErr != nil {
+			return nil, fmt.Errorf("cold-start collect failed: %w", collectErr)
 		}
 	}
 
@@ -995,7 +1003,7 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 //
 // Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
 func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
-	recs, err := s.config.ListStoredRecommendations(ctx, config.RecommendationFilter{ID: id})
+	recs, err := s.config.ListStoredRecommendations(ctx, &config.RecommendationFilter{ID: id})
 	if err != nil {
 		return nil, nil, fmt.Errorf("GetRecommendationByID: store lookup: %w", err)
 	}
@@ -1085,10 +1093,10 @@ type suppressionKey struct {
 // "Xd remaining"), and the execution whose suppression contributed
 // the most (drives the badge deep-link).
 type suppressionAgg struct {
-	suppressedCount         int
 	earliestExpiresAt       time.Time
-	primaryExecutionID      string
 	primaryExecutionCreated time.Time
+	primaryExecutionID      string
+	suppressedCount         int
 	primaryExecutionContrib int
 }
 
@@ -1148,7 +1156,8 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 	// Allocate a fresh backing array so callers that hold a reference to
 	// the original recs slice do not see mutations (05-M1).
 	out := make([]config.RecommendationRecord, 0, len(recs))
-	for _, rec := range recs {
+	for i := range recs {
+		rec := recs[i]
 		accountID := ""
 		if rec.CloudAccountID != nil {
 			accountID = *rec.CloudAccountID
@@ -1269,23 +1278,24 @@ func extractEngine(details common.ServiceDetails) string {
 // without Details and falls through to the graceful-degradation path in
 // common.DecodeServiceDetailsFor. Extracted from convertRecommendations
 // to keep that function under the gocyclo budget.
-func marshalRecDetails(rec common.Recommendation, providerName string) []byte {
+func marshalRecDetails(rec *common.Recommendation, providerName string) []byte {
 	blob, err := common.MarshalServiceDetails(rec.Details)
 	if err != nil {
-		logging.Warnf("Failed to marshal service details for %s/%s rec (%s): %v — persisting without Details",
+		logging.Warnf("Failed to marshal service details for %s/%s rec (%s): %v -- persisting without Details",
 			providerName, rec.Service, rec.ResourceType, err)
 		return nil
 	}
 	return blob
 }
 
-// convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice
+// convertRecommendations converts common.Recommendation slice to config.RecommendationRecord slice.
 func (s *Scheduler) convertRecommendations(recs []common.Recommendation, providerName string) []config.RecommendationRecord {
 	records := make([]config.RecommendationRecord, 0, len(recs))
 
-	for _, rec := range recs {
+	for i := range recs {
+		rec := recs[i]
 		engine := extractEngine(rec.Details)
-		detailsBlob := marshalRecDetails(rec, providerName)
+		detailsBlob := marshalRecDetails(&rec, providerName)
 
 		// Canonicalize PaymentOption at the emission boundary so a downstream
 		// plan-validator round-trip never sees a cross-provider/AWS-style

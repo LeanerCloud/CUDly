@@ -20,7 +20,7 @@ import (
 // to the calling user. There is no separate "revoke" action in the permission
 // model, so revoke reuses "delete".
 
-// listAPIKeys handles GET /api/api-keys
+// listAPIKeys handles GET /api/api-keys.
 func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "view", "api-keys")
 	if err != nil {
@@ -35,7 +35,7 @@ func (h *Handler) listAPIKeys(ctx context.Context, req *events.LambdaFunctionURL
 	return keys, nil
 }
 
-// createAPIKey handles POST /api/api-keys
+// createAPIKey handles POST /api/api-keys.
 func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "create", "api-keys")
 	if err != nil {
@@ -47,7 +47,8 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	// surface is lower than the unauthenticated credential endpoints. Emit a
 	// high-severity alert so the fail-open window is observable (02-M1).
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
+		var allowed bool
+		allowed, err = h.rateLimiter.AllowWithUser(ctx, session.UserID, "admin")
 		if err != nil {
 			logging.Errorf("ALERT: rate limiter error on admin operation for user %s; proceeding fail-open (02-M1): %v",
 				session.UserID, err)
@@ -57,7 +58,8 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	var createReq CreateAPIKeyRequest
-	if err := json.Unmarshal([]byte(req.Body), &createReq); err != nil {
+	err = json.Unmarshal([]byte(req.Body), &createReq)
+	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
@@ -69,7 +71,7 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	return result, nil
 }
 
-// deleteAPIKey handles DELETE /api/api-keys/{id}
+// deleteAPIKey handles DELETE /api/api-keys/{id}.
 func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
 	if err != nil {
@@ -81,14 +83,15 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	if err := h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
+	err = h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to delete API key: %w", err)
 	}
 
 	return map[string]string{"status": "deleted"}, nil
 }
 
-// revokeAPIKey handles POST /api/api-keys/{id}/revoke
+// revokeAPIKey handles POST /api/api-keys/{id}/revoke.
 func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	// No "revoke" verb in the permission model — reuse "delete".
 	session, err := h.requirePermission(ctx, req, "delete", "api-keys")
@@ -101,7 +104,8 @@ func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	if err := h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
+	err = h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to revoke API key: %w", err)
 	}
 
@@ -130,7 +134,7 @@ func apiKeyIDFromPath(path string, hasTrailingAction bool) (string, error) {
 	return keyID, nil
 }
 
-// Helper function to format time pointer as string
+// Helper function to format time pointer as string.
 func formatTimePtr(t *time.Time) string {
 	if t == nil {
 		return ""

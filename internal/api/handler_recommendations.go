@@ -13,7 +13,7 @@ import (
 )
 
 // parseRecommendationFilter validates all query parameters and builds the DB
-// filter. It centralises the parameter-validation logic so getRecommendations
+// filter. It centralizes the parameter-validation logic so getRecommendations
 // stays below the cyclomatic-complexity threshold.
 //
 // account_ids filter semantics (issue #211):
@@ -37,16 +37,16 @@ import (
 // min_savings_pct: effective savings percentage floor (0-100 scale).
 // Both are optional; absent or "0" means no floor. Fractions are rejected (a
 // user typing "30%" expects a percentage, not $30.5).
-func parseRecommendationFilter(params map[string]string) (config.RecommendationFilter, error) {
+func parseRecommendationFilter(params map[string]string) (*config.RecommendationFilter, error) {
 	// Validate input parameters to prevent injection attacks.
 	if err := validateProvider(params["provider"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if err := validateServiceName(params["service"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if err := validateRegion(params["region"]); err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 
 	// parseAccountIDs splits, trims, and UUID-validates the comma-separated
@@ -55,22 +55,22 @@ func parseRecommendationFilter(params map[string]string) (config.RecommendationF
 	// MaxAccountIDsPerRequest (200). See validation.go::parseAccountIDs.
 	accountIDs, err := parseAccountIDs(params["account_ids"])
 	if err != nil {
-		return config.RecommendationFilter{}, NewClientError(400, err.Error())
+		return nil, NewClientError(400, err.Error())
 	}
 
 	minSavingsUSD, err := parseMinSavingsParam(params["min_savings_usd"], "min_savings_usd")
 	if err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	minSavingsPct, err := parseMinSavingsParam(params["min_savings_pct"], "min_savings_pct")
 	if err != nil {
-		return config.RecommendationFilter{}, err
+		return nil, err
 	}
 	if minSavingsPct < 0 || minSavingsPct > 100 {
-		return config.RecommendationFilter{}, NewClientError(400, "min_savings_pct must be between 0 and 100")
+		return nil, NewClientError(400, "min_savings_pct must be between 0 and 100")
 	}
 
-	return config.RecommendationFilter{
+	return &config.RecommendationFilter{
 		Provider:      params["provider"],
 		Service:       params["service"],
 		Region:        params["region"],
@@ -80,7 +80,7 @@ func parseRecommendationFilter(params map[string]string) (config.RecommendationF
 	}, nil
 }
 
-// Recommendations handlers
+// Recommendations handlers.
 func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
 	// Require view:recommendations permission
 	session, err := h.requirePermission(ctx, req, "view", "recommendations")
@@ -129,18 +129,18 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
 	}
 	nameByID := make(map[string]string, len(accounts))
-	for _, a := range accounts {
-		nameByID[a.ID] = a.Name
+	for i := range accounts {
+		nameByID[accounts[i].ID] = accounts[i].Name
 	}
 
 	filtered := recs[:0]
-	for _, rec := range recs {
-		if rec.CloudAccountID == nil {
+	for i := range recs {
+		if recs[i].CloudAccountID == nil {
 			continue
 		}
-		id := *rec.CloudAccountID
+		id := *recs[i].CloudAccountID
 		if auth.MatchesAccount(allowedAccounts, id, nameByID[id]) {
-			filtered = append(filtered, rec)
+			filtered = append(filtered, recs[i])
 		}
 	}
 	return filtered, nil
@@ -216,7 +216,7 @@ func stampComputeCapacity(rec *config.RecommendationRecord) {
 		return
 	}
 	if compute.VCPU <= 0 || compute.MemoryGB <= 0 {
-		// Unknown size (converter didn't wire a catalogue lookup): keep
+		// Unknown size (converter didn't wire a catalog lookup): keep
 		// both absent so the frontend renders "—".
 		return
 	}
@@ -259,7 +259,7 @@ func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.L
 // used by handler_accounts.go's account lookup).
 //
 // usage_history is intentionally empty in this first pass: the collector
-// pipeline does not yet persist time-series utilisation per
+// pipeline does not yet persist time-series utilization per
 // recommendation. Surfacing the missing field as an empty slice (rather
 // than a 501) keeps the drawer functional today and means the day the
 // collector starts populating it, the frontend automatically picks it
@@ -324,7 +324,7 @@ func (h *Handler) buildRecommendationDetail(ctx context.Context, rec *config.Rec
 }
 
 // confidenceBucketFor mirrors the heuristic that previously lived
-// client-side in frontend/src/recommendations.ts. Centralising it on
+// client-side in frontend/src/recommendations.ts. Centralizing it on
 // the server lets future provider-specific tuning land in one place
 // without a frontend deploy. Thresholds intentionally match the original
 // shim 1:1 so the drawer label doesn't visibly shift on rollout.

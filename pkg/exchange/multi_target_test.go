@@ -11,7 +11,7 @@ import (
 
 // fakeEC2 is a test double for EC2ExchangeAPI that records inputs and
 // returns caller-supplied outputs. Enough for verifying request shape —
-// tests that need live EC2 behaviour go in the sanity-test suite.
+// tests that need live EC2 behavior go in the sanity-test suite.
 type fakeEC2 struct {
 	quoteInput   *ec2.GetReservedInstancesExchangeQuoteInput
 	quoteOutput  *ec2.GetReservedInstancesExchangeQuoteOutput
@@ -41,9 +41,9 @@ func validQuoteOutput(paymentDue string) *ec2.GetReservedInstancesExchangeQuoteO
 func TestGetQuote_SingleTargetLegacyAlias(t *testing.T) {
 	t.Parallel()
 	f := &fakeEC2{quoteOutput: validQuoteOutput("10.00")}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	_, err := c.GetQuote(context.Background(), ExchangeQuoteRequest{
+	_, err := c.GetQuote(context.Background(), &QuoteRequest{
 		ReservedIDs:      []string{"ri-1"},
 		TargetOfferingID: "off-A",
 		TargetCount:      2,
@@ -63,9 +63,9 @@ func TestGetQuote_SingleTargetLegacyAlias(t *testing.T) {
 func TestGetQuote_MultiTargetOverridesLegacy(t *testing.T) {
 	t.Parallel()
 	f := &fakeEC2{quoteOutput: validQuoteOutput("25.00")}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	_, err := c.GetQuote(context.Background(), ExchangeQuoteRequest{
+	_, err := c.GetQuote(context.Background(), &QuoteRequest{
 		ReservedIDs: []string{"ri-1", "ri-2"},
 		Targets: []TargetConfig{
 			{OfferingID: "off-A", Count: 3},
@@ -73,7 +73,7 @@ func TestGetQuote_MultiTargetOverridesLegacy(t *testing.T) {
 		},
 		// When Targets is set, these legacy fields must be ignored —
 		// silently preferring one over the other would otherwise leak
-		// surprising behaviour to callers that populate both.
+		// surprising behavior to callers that populate both.
 		TargetOfferingID: "off-LEGACY",
 		TargetCount:      99,
 	})
@@ -95,8 +95,8 @@ func TestGetQuote_MultiTargetOverridesLegacy(t *testing.T) {
 func TestGetQuote_EmptyTargetOfferingRejected(t *testing.T) {
 	t.Parallel()
 	f := &fakeEC2{}
-	c := NewExchangeClientFromAPI(f)
-	_, err := c.GetQuote(context.Background(), ExchangeQuoteRequest{
+	c := NewClientFromAPI(f)
+	_, err := c.GetQuote(context.Background(), &QuoteRequest{
 		ReservedIDs: []string{"ri-1"},
 		Targets: []TargetConfig{
 			{OfferingID: "", Count: 1},
@@ -115,9 +115,9 @@ func TestExecute_MultiTargetAppliesTotalSpendCap(t *testing.T) {
 	// though each individual target's payment is unknown to us. This
 	// locks in the intended "cap is a total, not per-target" semantic.
 	f := &fakeEC2{quoteOutput: validQuoteOutput("30.00")}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	_, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+	_, _, err := c.Execute(context.Background(), &ExecuteRequest{
 		ReservedIDs: []string{"ri-1"},
 		Targets: []TargetConfig{
 			{OfferingID: "off-A", Count: 1},
@@ -140,9 +140,9 @@ func TestExecute_MultiTargetPassesSliceToAccept(t *testing.T) {
 		quoteOutput:  validQuoteOutput("10.00"),
 		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("exch-123")},
 	}
-	c := NewExchangeClientFromAPI(f)
+	c := NewClientFromAPI(f)
 
-	exchangeID, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+	exchangeID, _, err := c.Execute(context.Background(), &ExecuteRequest{
 		ReservedIDs: []string{"ri-1"},
 		Targets: []TargetConfig{
 			{OfferingID: "off-A", Count: 2},
@@ -170,8 +170,8 @@ func TestExecute_LegacyAliasStillWorks(t *testing.T) {
 		quoteOutput:  validQuoteOutput("5.00"),
 		acceptOutput: &ec2.AcceptReservedInstancesExchangeQuoteOutput{ExchangeId: sdkaws.String("exch-legacy")},
 	}
-	c := NewExchangeClientFromAPI(f)
-	id, _, err := c.Execute(context.Background(), ExchangeExecuteRequest{
+	c := NewClientFromAPI(f)
+	id, _, err := c.Execute(context.Background(), &ExecuteRequest{
 		ReservedIDs:      []string{"ri-1"},
 		TargetOfferingID: "off-LEGACY",
 		TargetCount:      1,

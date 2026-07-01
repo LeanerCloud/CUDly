@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
-// StartLambdaHandler starts the AWS Lambda handler
+// StartLambdaHandler starts the AWS Lambda handler.
 func StartLambdaHandler(app *Application) {
 	log.Println("Starting Lambda handler mode...")
 	lambda.Start(func(ctx context.Context, rawEvent json.RawMessage) (any, error) {
@@ -20,7 +20,7 @@ func StartLambdaHandler(app *Application) {
 	})
 }
 
-// HandleLambdaEvent processes any Lambda event type
+// HandleLambdaEvent processes any Lambda event type.
 func (app *Application) HandleLambdaEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	// Ensure database connection is established (lazy initialization)
 	// Safe to call on every request - mutex guards connection and allows retry on transient failures
@@ -40,14 +40,14 @@ func (app *Application) HandleLambdaEvent(ctx context.Context, rawEvent json.Raw
 	case "scheduled":
 		return app.handleLambdaScheduledEvent(ctx, rawEvent)
 	default:
-		// Return a distinct error instead of silently treating an unrecognised
+		// Return a distinct error instead of silently treating an unrecognized
 		// payload as a scheduled event. Masking the event shape as "unknown
 		// scheduled task action" makes the real cause hard to diagnose (04-N4).
-		return nil, fmt.Errorf("unrecognised Lambda event shape (size %d bytes); not an HTTP/SQS/scheduled event", len(rawEvent))
+		return nil, fmt.Errorf("unrecognized Lambda event shape (size %d bytes); not an HTTP/SQS/scheduled event", len(rawEvent))
 	}
 }
 
-// detectLambdaEventType determines the type of Lambda event
+// detectLambdaEventType determines the type of Lambda event.
 func detectLambdaEventType(rawEvent json.RawMessage) string {
 	// Check for Lambda Function URL / API Gateway event
 	var httpEvent struct {
@@ -199,7 +199,7 @@ func isTextContentType(ct string) bool {
 	return false
 }
 
-// handleLambdaSQSEvent processes SQS messages (for async purchase processing)
+// handleLambdaSQSEvent processes SQS messages (for async purchase processing).
 func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	var sqsEvent events.SQSEvent
 	if err := json.Unmarshal(rawEvent, &sqsEvent); err != nil {
@@ -208,7 +208,8 @@ func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.
 	}
 
 	var failures []string
-	for _, record := range sqsEvent.Records {
+	for i := range sqsEvent.Records {
+		record := &sqsEvent.Records[i]
 		log.Printf("Processing SQS message: %s", record.MessageId)
 		if err := app.HandleSQSMessage(ctx, record.Body); err != nil {
 			log.Printf("Failed to process message %s: %v", record.MessageId, err)
@@ -223,7 +224,7 @@ func (app *Application) handleLambdaSQSEvent(ctx context.Context, rawEvent json.
 	return map[string]string{"status": "processed"}, nil
 }
 
-// handleLambdaScheduledEvent processes scheduled/cron events
+// handleLambdaScheduledEvent processes scheduled/cron events.
 func (app *Application) handleLambdaScheduledEvent(ctx context.Context, rawEvent json.RawMessage) (any, error) {
 	taskType, err := ParseScheduledEvent(rawEvent)
 	if err != nil {

@@ -12,7 +12,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// ProviderType represents the cloud provider for email services
+// ProviderType represents the cloud provider for email services.
 type ProviderType string
 
 const (
@@ -21,7 +21,7 @@ const (
 	ProviderAzure ProviderType = "azure"
 )
 
-// FactoryConfig holds configuration for creating email senders
+// FactoryConfig holds configuration for creating email senders.
 type FactoryConfig struct {
 	// Common configuration
 	FromEmail string
@@ -88,7 +88,7 @@ func NewSenderFromEnvironment(ctx context.Context) (SenderInterface, error) {
 }
 
 // isSecretManagerReference reports whether value looks like a secret manager
-// reference rather than a plaintext credential (07-L3). Recognised patterns:
+// reference rather than a plaintext credential (07-L3). Recognized patterns:
 //   - AWS ARN:       starts with "arn:"
 //   - GCP resource:  starts with "projects/"
 //   - Azure Key Vault secret URL: contains ".vault.azure.net/"
@@ -116,7 +116,7 @@ func warnIfPlaintext(envVar, value string) {
 	}
 }
 
-// newGCPSenderFromEnv creates a SendGrid-based email sender from environment variables
+// newGCPSenderFromEnv creates a SendGrid-based email sender from environment variables.
 func newGCPSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	apiKey := os.Getenv("SENDGRID_API_KEY")
 	warnIfPlaintext("SENDGRID_API_KEY", apiKey)
@@ -137,7 +137,7 @@ func newGCPSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("SENDGRID_API_KEY or SENDGRID_API_KEY_SECRET environment variable required for GCP email")
 	}
-	return NewSMTPSender(SMTPConfig{
+	return NewSMTPSender(&SMTPConfig{
 		Host:      "smtp.sendgrid.net",
 		Port:      587,
 		Username:  "apikey", // SendGrid uses literal "apikey" as username
@@ -162,7 +162,7 @@ func resolveAzureSMTPCredentials(ctx context.Context) (username, password string
 	usernameSecret := os.Getenv("AZURE_SMTP_USERNAME_SECRET")
 	passwordSecret := os.Getenv("AZURE_SMTP_PASSWORD_SECRET")
 	if usernameSecret == "" || passwordSecret == "" {
-		return "", "", fmt.Errorf("Azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
+		return "", "", fmt.Errorf("azure SMTP credentials required: set AZURE_SMTP_USERNAME/AZURE_SMTP_PASSWORD or AZURE_SMTP_USERNAME_SECRET/AZURE_SMTP_PASSWORD_SECRET")
 	}
 
 	resolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
@@ -182,7 +182,7 @@ func resolveAzureSMTPCredentials(ctx context.Context) (username, password string
 	return username, password, nil
 }
 
-// newAzureSenderFromEnv creates an Azure Communication Services email sender from environment variables
+// newAzureSenderFromEnv creates an Azure Communication Services email sender from environment variables.
 func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	username, password, err := resolveAzureSMTPCredentials(ctx)
 	if err != nil {
@@ -193,7 +193,7 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	if host == "" {
 		host = "smtp.azurecomm.net"
 	}
-	return NewSMTPSender(SMTPConfig{
+	return NewSMTPSender(&SMTPConfig{
 		Host:      host,
 		Port:      587,
 		Username:  username,
@@ -204,8 +204,11 @@ func newAzureSenderFromEnv(ctx context.Context) (SenderInterface, error) {
 	})
 }
 
-// NewSenderWithConfig creates an email sender with explicit configuration
-func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterface, error) {
+// NewSenderWithConfig creates an email sender with explicit configuration.
+func NewSenderWithConfig(ctx context.Context, cfg *FactoryConfig) (SenderInterface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("email factory config is nil")
+	}
 	switch cfg.Provider {
 	case ProviderAWS:
 		return NewSender(SenderConfig{
@@ -218,7 +221,7 @@ func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterfac
 		if cfg.SendGridAPIKey == "" {
 			return nil, fmt.Errorf("SendGrid API key required for GCP email")
 		}
-		return NewSMTPSender(SMTPConfig{
+		return NewSMTPSender(&SMTPConfig{
 			Host:      "smtp.sendgrid.net",
 			Port:      587,
 			Username:  "apikey",
@@ -236,7 +239,7 @@ func NewSenderWithConfig(ctx context.Context, cfg FactoryConfig) (SenderInterfac
 		if host == "" {
 			host = "smtp.azurecomm.net"
 		}
-		return NewSMTPSender(SMTPConfig{
+		return NewSMTPSender(&SMTPConfig{
 			Host:      host,
 			Port:      587,
 			Username:  cfg.AzureSMTPUsername,

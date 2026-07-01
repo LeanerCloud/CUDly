@@ -87,7 +87,7 @@ type stubProber struct {
 }
 
 func (s *stubProber) Service() string { return s.name }
-func (s *stubProber) Probe(ctx context.Context, _ aws.Config) ([]Combo, error) {
+func (s *stubProber) Probe(ctx context.Context, _ *aws.Config) ([]Combo, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -281,6 +281,6 @@ type proberFunc struct {
 }
 
 func (p proberFunc) Service() string { return p.name }
-func (p proberFunc) Probe(ctx context.Context, _ aws.Config) ([]Combo, error) {
+func (p proberFunc) Probe(ctx context.Context, _ *aws.Config) ([]Combo, error) {
 	return p.fn()
 }

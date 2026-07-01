@@ -10,7 +10,7 @@ import (
 
 // WriteAuditRecord marshals record to a single JSON line and appends it to path.
 // Returns an error if RunID is empty or if any I/O step fails.
-func WriteAuditRecord(record AuditRecord, path string) error {
+func WriteAuditRecord(record *AuditRecord, path string) error {
 	if record.RunID == "" {
 		return fmt.Errorf("audit record RunID must not be empty")
 	}
@@ -39,9 +39,14 @@ func WriteAuditRecord(record AuditRecord, path string) error {
 
 // NewAuditRecord constructs an AuditRecord from a Recommendation and a PurchaseResult.
 // status must be one of: "success", "error", "skipped" (dry-run), "skipped_covered" (idempotency).
-// source is the CUDly surface that triggered the run — copied into the JSONL so CLI
+// source is the CUDly surface that triggered the run -- copied into the JSONL so CLI
 // audit logs can be reconciled against the DB's purchase_history.source column.
-func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, status string, dryRun bool, source string) AuditRecord {
+// It returns an error when rec or result is nil rather than panicking, so an
+// exported constructor never crashes on a nil pointer argument.
+func NewAuditRecord(runID string, rec *Recommendation, result *PurchaseResult, status string, dryRun bool, source string) (AuditRecord, error) {
+	if rec == nil || result == nil {
+		return AuditRecord{}, fmt.Errorf("NewAuditRecord: rec and result must be non-nil")
+	}
 	errMsg := ""
 	if result.Error != nil {
 		errMsg = result.Error.Error()
@@ -66,7 +71,7 @@ func NewAuditRecord(runID string, rec Recommendation, result PurchaseResult, sta
 		DryRun:            dryRun,
 		RawRecommendation: rec.RawRecommendation,
 		Source:            source,
-	}
+	}, nil
 }
 
 // termMonths converts a term string ("1yr", "3yr") to months.

@@ -8,27 +8,27 @@ import (
 	secretsmgrtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
-// SecretsStore interface for storing credentials
+// SecretsStore interface for storing credentials.
 type SecretsStore interface {
-	// ListSecrets returns a list of secret ARNs matching the filter
+	// ListSecrets returns a list of secret ARNs matching the filter.
 	ListSecrets(ctx context.Context, filter string) ([]string, error)
-	// UpdateSecret updates a secret with the given ID and value
-	UpdateSecret(ctx context.Context, secretID string, secretValue string) error
+	// UpdateSecret updates a secret with the given ID and value.
+	UpdateSecret(ctx context.Context, secretID, secretValue string) error
 }
 
-// AWSSecretsStore implements SecretsStore using AWS Secrets Manager
+// AWSSecretsStore implements SecretsStore using AWS Secrets Manager.
 type AWSSecretsStore struct {
 	client *secretsmanager.Client
 }
 
-// NewAWSSecretsStore creates a new AWS Secrets Manager store
+// NewAWSSecretsStore creates a new AWS Secrets Manager store.
 func NewAWSSecretsStore(client *secretsmanager.Client) *AWSSecretsStore {
 	return &AWSSecretsStore{
 		client: client,
 	}
 }
 
-// ListSecrets lists secrets matching the filter (by name)
+// ListSecrets lists secrets matching the filter (by name).
 func (s *AWSSecretsStore) ListSecrets(ctx context.Context, filter string) ([]string, error) {
 	input := &secretsmanager.ListSecretsInput{
 		Filters: []secretsmgrtypes.Filter{
@@ -45,17 +45,17 @@ func (s *AWSSecretsStore) ListSecrets(ctx context.Context, filter string) ([]str
 	}
 
 	arns := make([]string, 0, len(result.SecretList))
-	for _, secret := range result.SecretList {
-		if secret.ARN != nil {
-			arns = append(arns, *secret.ARN)
+	for i := range result.SecretList {
+		if result.SecretList[i].ARN != nil {
+			arns = append(arns, *result.SecretList[i].ARN)
 		}
 	}
 
 	return arns, nil
 }
 
-// UpdateSecret updates a secret with the given value
-func (s *AWSSecretsStore) UpdateSecret(ctx context.Context, secretID string, secretValue string) error {
+// UpdateSecret updates a secret with the given value.
+func (s *AWSSecretsStore) UpdateSecret(ctx context.Context, secretID, secretValue string) error {
 	input := &secretsmanager.UpdateSecretInput{
 		SecretId:     aws.String(secretID),
 		SecretString: aws.String(secretValue),

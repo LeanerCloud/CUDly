@@ -18,8 +18,8 @@ import (
 //
 // Set via SetIssuerURL, read via IssuerURL. Safe for concurrent use.
 type issuerCache struct {
-	mu  sync.RWMutex
 	url string
+	mu  sync.RWMutex
 }
 
 var globalIssuer issuerCache

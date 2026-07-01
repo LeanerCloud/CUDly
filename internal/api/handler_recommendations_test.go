@@ -470,7 +470,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("min_savings_usd filter is wired to RecommendationFilter.MinSavingsUSD not MinSavingsPct", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f *config.RecommendationFilter) bool {
 			// Dollar filter must be set; percentage filter must be zero.
 			return f.MinSavingsUSD == 30 && f.MinSavingsPct == 0
 		})).Return([]config.RecommendationRecord{}, nil)
@@ -487,7 +487,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("min_savings_pct filter is wired to RecommendationFilter.MinSavingsPct not MinSavingsUSD", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f *config.RecommendationFilter) bool {
 			// Percentage filter must be set; dollar filter must be zero.
 			return f.MinSavingsPct == 30 && f.MinSavingsUSD == 0
 		})).Return([]config.RecommendationRecord{}, nil)
@@ -505,7 +505,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("both filters can be combined independently", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f *config.RecommendationFilter) bool {
 			return f.MinSavingsUSD == 50 && f.MinSavingsPct == 20
 		})).Return([]config.RecommendationRecord{}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
@@ -560,7 +560,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("absent filters pass through zero values in RecommendationFilter", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f *config.RecommendationFilter) bool {
 			return f.MinSavingsUSD == 0 && f.MinSavingsPct == 0
 		})).Return([]config.RecommendationRecord{}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
@@ -577,15 +577,15 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 func TestConfidenceBucketFor(t *testing.T) {
 	cases := []struct {
 		name    string
+		want    string
 		savings float64
 		count   int
-		want    string
 	}{
-		{"high requires both signals", 250, 4, "high"},
-		{"savings without fleet falls to medium", 250, 1, "medium"},
-		{"medium on savings alone", 60, 1, "medium"},
-		{"low when neither threshold is met", 10, 1, "low"},
-		{"count clamped to >=1 — savings still drives bucket", 60, 0, "medium"},
+		{name: "high requires both signals", savings: 250, count: 4, want: "high"},
+		{name: "savings without fleet falls to medium", savings: 250, count: 1, want: "medium"},
+		{name: "medium on savings alone", savings: 60, count: 1, want: "medium"},
+		{name: "low when neither threshold is met", savings: 10, count: 1, want: "low"},
+		{name: "count clamped to >=1 — savings still drives bucket", savings: 60, count: 0, want: "medium"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

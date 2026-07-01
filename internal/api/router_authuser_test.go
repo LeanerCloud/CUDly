@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests cover the defence-in-depth AuthUser enforcement added to
+// These tests cover the defense-in-depth AuthUser enforcement added to
 // Router.Route — see issue #60. Before the fix, AuthUser routes (e.g.
 // /api/auth/logout, /api/api-keys, /api/federation/iac) fell through the
 // router with no auth check; only the validateSecurity middleware
@@ -37,7 +37,7 @@ func TestRouterAuthUser_NoCredentials_Rejects(t *testing.T) {
 }
 
 // TestRouterAuthUser_InvalidBearerToken_Rejects verifies that an AuthUser
-// route returns 401 when the bearer token is not recognised by the auth
+// route returns 401 when the bearer token is not recognized by the auth
 // service.
 func TestRouterAuthUser_InvalidBearerToken_Rejects(t *testing.T) {
 	ctx := context.Background()
@@ -85,7 +85,7 @@ func TestRouterAuthUser_ValidUserSession_Accepts(t *testing.T) {
 
 // TestRouterAuthPublic_NoCredentials_Accepts verifies that AuthPublic
 // routes still dispatch with no credentials — the new switch in
-// Router.Route must not regress public-endpoint behaviour.
+// Router.Route must not regress public-endpoint behavior.
 func TestRouterAuthPublic_NoCredentials_Accepts(t *testing.T) {
 	ctx := context.Background()
 	h := &Handler{}

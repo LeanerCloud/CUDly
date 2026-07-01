@@ -164,7 +164,7 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 
 // azureExchangeClient is the narrow interface that listExchangeableAzureRIs
 // needs from the Azure compute client. Satisfied by
-// *azurecompute.ComputeClient; a stub can be injected via
+// *azurecompute.Client; a stub can be injected via
 // Handler.azureExchangeFactory for tests.
 type azureExchangeClient interface {
 	ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error)
@@ -491,9 +491,9 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 
 // reshapeRequestParams groups parsed query parameters for getReshapeRecommendations.
 type reshapeRequestParams struct {
+	region       string
 	threshold    float64
 	lookbackDays int
-	region       string
 }
 
 // parseReshapeParams parses the threshold, lookback_days, and region query
@@ -669,7 +669,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	}
 	region := cfg.Region
 
-	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
+	quote, err := exchange.GetExchangeQuote(ctx, &exchange.QuoteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -735,7 +735,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 
 	region := body.Region
 
-	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	exchangeID, quote, err := exchange.ExecuteExchange(ctx, &exchange.ExecuteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -806,9 +806,9 @@ type RIUtilizationResponse struct {
 // RecsCollectedAt carries the raw timestamp so the frontend can build
 // its own relative-time label ("last collected 23h ago").
 type ReshapeRecommendationsResponse struct {
-	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
-	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
 	RecsCollectedAt *time.Time                       `json:"recs_collected_at,omitempty"`
+	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
+	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
 }
 
 // reshapeSoftStaleThreshold is the age at which the reshape recs banner
@@ -848,11 +848,11 @@ type ExchangeTargetBody struct {
 // both are present, `targets` wins. Exactly one of them must be
 // provided (or the handler returns 400).
 type ExchangeQuoteRequestBody struct {
+	TargetOfferingID string               `json:"target_offering_id,omitempty"`
+	Region           string               `json:"region,omitempty"`
 	RIIDs            []string             `json:"ri_ids"`
 	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
-	TargetOfferingID string               `json:"target_offering_id,omitempty"`
 	TargetCount      int32                `json:"target_count,omitempty"`
-	Region           string               `json:"region,omitempty"`
 }
 
 // ExchangeExecuteRequestBody is the request body for the execute endpoint.
@@ -862,12 +862,12 @@ type ExchangeQuoteRequestBody struct {
 // checking naturally becomes a total when `targets[]` has multiple
 // entries.
 type ExchangeExecuteRequestBody struct {
-	RIIDs            []string             `json:"ri_ids"`
-	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
 	TargetOfferingID string               `json:"target_offering_id,omitempty"`
-	TargetCount      int32                `json:"target_count,omitempty"`
 	MaxPaymentDueUSD string               `json:"max_payment_due_usd"`
 	Region           string               `json:"region,omitempty"`
+	RIIDs            []string             `json:"ri_ids"`
+	Targets          []ExchangeTargetBody `json:"targets,omitempty"`
+	TargetCount      int32                `json:"target_count,omitempty"`
 }
 
 // toExchangeTargets converts the HTTP-shaped targets into the
@@ -887,8 +887,8 @@ func toExchangeTargets(targets []ExchangeTargetBody) []exchange.TargetConfig {
 
 // ExchangeExecuteResponse is the response from a successful exchange execution.
 type ExchangeExecuteResponse struct {
-	ExchangeID string                         `json:"exchange_id"`
-	Quote      *exchange.ExchangeQuoteSummary `json:"quote"`
+	Quote      *exchange.QuoteSummary `json:"quote"`
+	ExchangeID string                 `json:"exchange_id"`
 }
 
 // getRIExchangeConfig returns the current RI exchange automation settings.
@@ -1260,7 +1260,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 	}
 
 	perExchangeCap := new(big.Rat).SetFloat64(globalCfg.RIExchangeMaxPerExchangeUSD)
-	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	exchangeID, _, execErr := exchange.ExecuteExchange(ctx, &exchange.ExecuteRequest{
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,
@@ -1342,22 +1342,22 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 
 // RIExchangeConfigResponse is the response for GET /api/ri-exchange/config.
 type RIExchangeConfigResponse struct {
-	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 	Mode                     string  `json:"mode"`
 	UtilizationThreshold     float64 `json:"utilization_threshold"`
 	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
 	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
 	LookbackDays             int     `json:"lookback_days"`
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 }
 
 // RIExchangeConfigUpdateRequest is the request body for PUT /api/ri-exchange/config.
 type RIExchangeConfigUpdateRequest struct {
-	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 	Mode                     string  `json:"mode"`
 	UtilizationThreshold     float64 `json:"utilization_threshold"`
 	MaxPaymentPerExchangeUSD float64 `json:"max_payment_per_exchange_usd"`
 	MaxPaymentDailyUSD       float64 `json:"max_payment_daily_usd"`
 	LookbackDays             int     `json:"lookback_days"`
+	AutoExchangeEnabled      bool    `json:"auto_exchange_enabled"`
 }
 
 func (r *RIExchangeConfigUpdateRequest) validate() error {

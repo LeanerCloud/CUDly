@@ -33,39 +33,15 @@ import (
 // reservation recommendation services, normalised across both Legacy
 // and Modern API response shapes.
 type ExtractedFields struct {
-	Region           string
-	ResourceType     string
-	Count            int
-	OnDemandCost     float64
-	CommitmentCost   float64
-	EstimatedSavings float64
-	Term             string
-	// Scope is populated from the API response ("Shared" or a subscription ID)
-	// but is not yet threaded into the purchase body. All service clients
-	// currently hardcode "appliedScopeType": "Shared", which is correct because
-	// the recommendation filter in recommendations.go already asserts
-	// "properties/scope eq 'Shared'" — only Shared-scope recommendations are
-	// ever requested. This field is retained for future wiring if single-
-	// subscription scoped recommendations are ever requested. See finding M1/M2
-	// in docs/code-review/09-provider-azure.md.
-	Scope string
-	// RecurringMonthlyCost is the covered/effective recurring cost for this
-	// commitment, i.e. what the customer pays WITH the reservation in place.
-	// The frontend renders this column as the "covered" spend; leaving it 0
-	// makes the GUI fall back to displaying OnDemandCost (the spend WITHOUT
-	// any reservation), which is the opposite of the intended figure.
-	//
-	// The value is sourced from TotalCostWithReservedInstances (preferred);
-	// if that field is absent it is reconstructed as OnDemandCost - NetSavings
-	// (covered = on-demand minus net savings). Like OnDemandCost and
-	// EstimatedSavings, the figure is over Azure's lookback period and is
-	// treated downstream as a monthly run-rate.
-	//
-	// nil means the provider returned neither a total-with-RI nor an
-	// (on-demand, net-savings) pair to reconstruct it from. nil renders as
-	// "—" (data not available); it is NEVER set to a fabricated 0 (which
-	// would falsely claim "free recurring charge").
 	RecurringMonthlyCost *float64
+	Region               string
+	ResourceType         string
+	Term                 string
+	Scope                string
+	OnDemandCost         float64
+	CommitmentCost       float64
+	EstimatedSavings     float64
+	Count                int
 }
 
 // float64Ptr returns a pointer to the given float64 value. Used to
@@ -289,7 +265,7 @@ func normaliseTerm(term *string) string {
 	case "P3Y":
 		return "3yr"
 	default:
-		logging.Warnf("azure recommendations: unrecognised Term value %q; passing through verbatim", *term)
+		logging.Warnf("azure recommendations: unrecognized Term value %q; passing through verbatim", *term)
 		return *term
 	}
 }
@@ -355,7 +331,7 @@ func termToMonths(term string) int {
 // fields are forced to zero to avoid a divide-by-zero; if CommitmentCost is
 // zero both variants are still emitted with zero costs (caller's responsibility
 // to validate upstream).
-func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
+func ExpandPaymentVariants(base *common.Recommendation) []common.Recommendation {
 	totalReservation := base.CommitmentCost
 	totalOnDemand := base.OnDemandCost
 
@@ -369,13 +345,13 @@ func ExpandPaymentVariants(base common.Recommendation) []common.Recommendation {
 	months := termToMonths(base.Term)
 	recurringMonthly := totalReservation / float64(months)
 
-	allUpfront := base
+	allUpfront := *base
 	allUpfront.PaymentOption = "upfront"
 	allUpfront.EstimatedSavings = savings
 	allUpfront.SavingsPercentage = savingsPct
 	allUpfront.RecurringMonthlyCost = float64Ptr(0)
 
-	noUpfront := base
+	noUpfront := *base
 	noUpfront.PaymentOption = "monthly"
 	noUpfront.EstimatedSavings = savings
 	noUpfront.SavingsPercentage = savingsPct

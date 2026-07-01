@@ -43,7 +43,14 @@ const (
 // to HTTPTimeout, preserving any custom Transport, Jar, or CheckRedirect the
 // caller installed. If base.HTTPClient is nil or a non-*http.Client
 // implementation, a fresh *http.Client{Timeout: HTTPTimeout} is used instead.
-func NewConfig(base aws.Config) aws.Config {
+func NewConfig(base *aws.Config) aws.Config {
+	if base == nil {
+		// All call sites pass &localConfig (provably non-nil); a nil base is a
+		// programmer error. Return the zero aws.Config as a safe no-op so an
+		// exported helper never panics -- a downstream SDK call then fails
+		// loudly on the empty (credential-less) config instead.
+		return aws.Config{}
+	}
 	cfg := base.Copy()
 	cfg.RetryMaxAttempts = MaxAttempts
 	if hc, ok := base.HTTPClient.(*http.Client); ok && hc != nil {

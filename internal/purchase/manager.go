@@ -17,38 +17,31 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
-// STSClient interface for AWS STS operations
+// STSClient interface for AWS STS operations.
 type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// ManagerConfig holds configuration for the purchase manager
+// ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
-	ConfigStore            config.StoreInterface
+	AmbientAWSCreds        aws.CredentialsProvider
 	EmailSender            email.SenderInterface
 	STSClient              STSClient
-	AssumeRoleSTS          credentials.STSClient // used for cross-account role assumption
+	AssumeRoleSTS          credentials.STSClient
 	CredentialStore        credentials.CredentialStore
 	ProviderFactory        provider.FactoryInterface
-	NotificationDaysBefore int
-	DefaultTerm            int
+	ConfigStore            config.StoreInterface
+	OIDCSigner             oidc.Signer
+	OIDCIssuerURL          string
 	DefaultPaymentOption   string
-	DefaultCoverage        float64
 	DefaultRampSchedule    string
 	DashboardURL           string
-	// AmbientAWSCreds is the host Lambda / EC2 instance credentials provider,
-	// used when resolving a Self account (auth_mode=role_arn with empty role ARN).
-	AmbientAWSCreds aws.CredentialsProvider
-	// OIDCSigner and OIDCIssuerURL enable the secret-free Azure
-	// federated credential path. When both are set, Azure accounts in
-	// workload_identity_federation mode with no stored PEM are routed
-	// through BuildAzureFederatedCredential. Optional — when unset,
-	// the legacy cert-based path is used for backward compatibility.
-	OIDCSigner    oidc.Signer
-	OIDCIssuerURL string
+	NotificationDaysBefore int
+	DefaultCoverage        float64
+	DefaultTerm            int
 }
 
-// Manager handles purchase workflow
+// Manager handles purchase workflow.
 type Manager struct {
 	config          config.StoreInterface
 	email           email.SenderInterface
@@ -57,31 +50,28 @@ type Manager struct {
 	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
-	notifyDays      int
-	defaults        PurchaseDefaults
-	dashboardURL    string
 	oidcSigner      oidc.Signer
+	dashboardURL    string
 	oidcIssuerURL   string
+	defaults        Defaults
+	notifyDays      int
 }
 
-// PurchaseDefaults holds default purchase settings
-type PurchaseDefaults struct {
-	Term         int
+// Defaults holds default purchase settings.
+type Defaults struct {
 	Payment      string
-	Coverage     float64
 	RampSchedule string
+	Term         int
+	Coverage     float64
 }
 
-// ProcessResult holds the result of processing scheduled purchases
+// ProcessResult holds the result of processing scheduled purchases.
 type ProcessResult struct {
-	Processed int `json:"processed"`
-	Executed  int `json:"executed"`
-	Failed    int `json:"failed"`
-	// Recovered counts executions that were stuck in "approved" and were
-	// re-driven into a terminal "failed" state by the recovery sweep
-	// (issue #632).
-	Recovered int      `json:"recovered,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
+	Processed int      `json:"processed"`
+	Executed  int      `json:"executed"`
+	Failed    int      `json:"failed"`
+	Recovered int      `json:"recovered,omitempty"`
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
@@ -102,13 +92,13 @@ type ProcessResult struct {
 // single env-configurable threshold.
 const staleApprovedThreshold = 15 * time.Minute
 
-// NotificationResult holds the result of sending notifications
+// NotificationResult holds the result of sending notifications.
 type NotificationResult struct {
 	Notified int `json:"notified"`
 }
 
-// NewManager creates a new purchase manager
-func NewManager(cfg ManagerConfig) *Manager {
+// NewManager creates a new purchase manager.
+func NewManager(cfg *ManagerConfig) *Manager {
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = &provider.DefaultFactory{}
@@ -123,7 +113,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		credStore:       cfg.CredentialStore,
 		providerFactory: factory,
 		notifyDays:      cfg.NotificationDaysBefore,
-		defaults: PurchaseDefaults{
+		defaults: Defaults{
 			Term:         cfg.DefaultTerm,
 			Payment:      cfg.DefaultPaymentOption,
 			Coverage:     cfg.DefaultCoverage,
@@ -242,7 +232,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		// original execErr as the innermost %w so errors.As/errors.Is can still
 		// reach it from callers (e.g. claimAndRedrive checking ErrAuditLoss).
 		if execErr != nil {
-			execErr = fmt.Errorf("%w: terminal save failed (%v); original execution error: %w",
+			execErr = fmt.Errorf("%w: terminal save failed (%w); original execution error: %w",
 				config.ErrAuditLoss, err, execErr)
 		} else {
 			execErr = fmt.Errorf("%w: %w", config.ErrAuditLoss, err)
@@ -284,8 +274,8 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 	if len(exec.Recommendations) == 0 {
 		return false
 	}
-	for _, rec := range exec.Recommendations {
-		if !recIsSafeToRedrive(rec) {
+	for i := range exec.Recommendations {
+		if !recIsSafeToRedrive(&exec.Recommendations[i]) {
 			return false
 		}
 	}
@@ -295,10 +285,10 @@ func allRecsSafeToRedrive(exec *config.PurchaseExecution) bool {
 // recIsSafeToRedrive reports whether a single recommendation can be safely
 // re-driven. Extracted from allRecsSafeToRedrive to keep that function under
 // the gocyclo budget and to make per-rec exclusions explicit.
-func recIsSafeToRedrive(rec config.RecommendationRecord) bool {
+func recIsSafeToRedrive(rec *config.RecommendationRecord) bool {
 	switch rec.Provider {
 	case "", "aws":
-		// Empty provider is legacy AWS. All AWS services honour IdempotencyToken.
+		// Empty provider is legacy AWS. All AWS services honor IdempotencyToken.
 		return true
 	case "azure":
 		// Azure savings-plans uses a timestamp-based alias name and has no
@@ -450,7 +440,7 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 // without a stable ExecutionID (legacy rows) also fall through because
 // idempotencyLineageKey(exec) falls back to "" for them and
 // DeriveIdempotencyToken("", i) would produce the same token set for every
-// such row. These fall through to the original behaviour: the row is atomically
+// such row. These fall through to the original behavior: the row is atomically
 // transitioned to "failed" so it surfaces in History and can be Retry-ed by
 // an operator after confirming the cloud-side state.
 //
@@ -468,7 +458,7 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	for i := range stranded {
 		exec := &stranded[i]
 
-		// Idempotent re-drive path (issue #639): all recs honour
+		// Idempotent re-drive path (issue #639): all recs honor
 		// opts.IdempotencyToken via DeriveIdempotencyToken(idempotencyLineageKey(exec), i),
 		// so a second in-place call on the same row is a safe no-op on the
 		// provider side. The ExecutionID must be non-empty so the lineage key
@@ -498,7 +488,7 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 	return recovered, nil
 }
 
-// ProcessScheduledPurchases checks for and executes scheduled purchases
+// ProcessScheduledPurchases checks for and executes scheduled purchases.
 func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult, error) {
 	logging.Info("Processing scheduled purchases...")
 
@@ -535,7 +525,7 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 		// pre-purchase states proceed. The query already filters to
 		// pending/notified, but a row another worker transitioned in the gap
 		// between SELECT and here (approved/running/failed/...) must be skipped.
-		// The atomic claim below is the real guard; this is defence-in-depth.
+		// The atomic claim below is the real guard; this is defense-in-depth.
 		if exec.Status != "pending" && exec.Status != "notified" {
 			continue
 		}

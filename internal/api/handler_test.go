@@ -839,6 +839,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	var body map[string]string
 	err = json.Unmarshal([]byte(resp.Body), &body)
 	require.NoError(t, err)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 	assert.Equal(t, "cancelled", body["status"])
 }
 
@@ -1171,8 +1172,9 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}
-	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil)
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	cancelled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "cancelled"}                                                         //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "cancelled", mock.Anything).Return(cancelled, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1437,7 +1439,7 @@ func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	assert.Equal(t, 400, resp.StatusCode)
 }
 
-// Nil-body success responses (e.g. DELETE /accounts/:id) must serialise as
+// Nil-body success responses (e.g. DELETE /accounts/:id) must serialize as
 // "{}" rather than the empty string. Empty-string bodies caused
 // `response.json()` in the frontend to throw SyntaxError, surfacing as a
 // "JSON format error" toast even though the underlying delete succeeded.
@@ -1448,7 +1450,7 @@ func TestHandler_buildResponse_NilBodyEmitsEmptyJSONObject(t *testing.T) {
 	resp, err := h.buildResponse(200, headers, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "{}", resp.Body, "nil-body success must serialise as {} so the frontend's response.json() doesn't throw")
+	assert.Equal(t, "{}", resp.Body, "nil-body success must serialize as {} so the frontend's response.json() doesn't throw")
 }
 
 func TestHandler_buildResponse_BodyMarshalsAsBefore(t *testing.T) {

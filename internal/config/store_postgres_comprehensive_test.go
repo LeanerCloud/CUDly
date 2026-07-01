@@ -15,7 +15,7 @@ import (
 )
 
 // mockablePostgresStore is a test wrapper that allows direct pgxmock integration
-// This mirrors the actual PostgresStore logic for testing
+// This mirrors the actual PostgresStore logic for testing.
 type mockablePostgresStore struct {
 	mock pgxmock.PgxPoolIface
 }
@@ -1697,9 +1697,9 @@ func TestConstants_TokenConstants(t *testing.T) {
 // CONFIGSETTING TYPE TESTS
 // ==========================================
 
-func TestConfigSetting_Fields(t *testing.T) {
+func TestSetting_Fields(t *testing.T) {
 	now := time.Now()
-	setting := ConfigSetting{
+	setting := Setting{
 		Key:         "test.key",
 		Value:       "test-value",
 		Type:        "string",
@@ -1716,7 +1716,7 @@ func TestConfigSetting_Fields(t *testing.T) {
 	assert.Equal(t, now, setting.UpdatedAt)
 }
 
-func TestConfigSetting_DifferentValueTypes(t *testing.T) {
+func TestSetting_DifferentValueTypes(t *testing.T) {
 	tests := []struct {
 		name     string
 		value    interface{}
@@ -1731,11 +1731,12 @@ func TestConfigSetting_DifferentValueTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setting := ConfigSetting{
+			setting := Setting{
 				Key:   "test." + tt.dataType,
 				Value: tt.value,
 				Type:  tt.dataType,
 			}
+			assert.Equal(t, "test."+tt.dataType, setting.Key)
 			assert.Equal(t, tt.value, setting.Value)
 			assert.Equal(t, tt.dataType, setting.Type)
 		})

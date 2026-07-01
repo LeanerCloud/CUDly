@@ -34,7 +34,7 @@ type Client struct {
 // NewClient creates a new MemoryDB client with purchase-path retry/timeout
 // settings. See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client: memorydb.NewFromConfig(pcfg),
 		region: cfg.Region,
@@ -57,7 +57,7 @@ func (c *Client) GetRegion() string {
 }
 
 // GetRecommendations returns empty as MemoryDB uses centralized Cost Explorer recommendations
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 
@@ -111,15 +111,15 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 }
 
 // PurchaseCommitment purchases a MemoryDB Reserved Node
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
+	offeringID, err := c.findOfferingID(ctx, *rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
@@ -134,7 +134,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 	// AWS console without cross-referencing CUDly's purchase audit log.
 	reservationID := common.IdempotentReservationID("memorydb-id-", opts.IdempotencyToken)
 	if reservationID == "" {
-		reservationID = common.BuildReservationName(common.ReservationNameFields{
+		rnf := common.ReservationNameFields{
 			Service:      "memdb",
 			Region:       rec.Region,
 			ResourceType: rec.ResourceType,
@@ -142,7 +142,8 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 			Term:         rec.Term,
 			Payment:      rec.PaymentOption,
 			Now:          time.Now(),
-		}, "memorydb-reserved-")
+		}
+		reservationID = common.BuildReservationName(&rnf, "memorydb-reserved-")
 	}
 
 	// Idempotency dedupe guard (issue #641): short-circuit if a reserved node
@@ -160,7 +161,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		ReservedNodesOfferingId: aws.String(offeringID),
 		ReservationId:           aws.String(reservationID),
 		NodeCount:               aws.Int32(int32(rec.Count)),
-		Tags:                    c.createPurchaseTags(rec, opts.Source),
+		Tags:                    c.createPurchaseTags(*rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedNodesOffering(ctx, input)
@@ -388,14 +389,14 @@ func (c *Client) getDurationStringForAPI(term string) string {
 }
 
 // ValidateOffering checks if an offering exists without purchasing
-func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
+	_, err := c.findOfferingID(ctx, *rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
-func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
+	offeringID, err := c.findOfferingID(ctx, *rec, "")
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +479,7 @@ func (c *Client) GetValidResourceTypes(ctx context.Context) ([]string, error) {
 // only per-service customizations are the Purpose string and the AWS
 // convention for the instance-type tag key.
 func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
-	pairs := tagging.PurchasePairs(rec, "Reserved Node Purchase", "NodeType", source)
+	pairs := tagging.PurchasePairs(&rec, "Reserved Node Purchase", "NodeType", source)
 	out := make([]types.Tag, len(pairs))
 	for i, p := range pairs {
 		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}

@@ -1,4 +1,4 @@
-// Package provider provides a registry for cloud providers
+// Package provider provides a registry for cloud providers.
 package provider
 
 import (
@@ -12,23 +12,23 @@ var (
 	globalRegistryOnce sync.Once
 )
 
-// Registry manages registered cloud providers
+// Registry manages registered cloud providers.
 type Registry struct {
-	providers map[string]ProviderFactory
+	providers map[string]Factory
 	mu        sync.RWMutex
 }
 
-// ProviderFactory is a function that creates a new provider instance
-type ProviderFactory func(config *ProviderConfig) (Provider, error)
+// Factory is a function that creates a new provider instance.
+type Factory func(config *Config) (Provider, error)
 
-// NewRegistry creates a new provider registry
+// NewRegistry creates a new provider registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		providers: make(map[string]ProviderFactory),
+		providers: make(map[string]Factory),
 	}
 }
 
-// GetRegistry returns the global provider registry
+// GetRegistry returns the global provider registry.
 func GetRegistry() *Registry {
 	globalRegistryOnce.Do(func() {
 		globalRegistry = NewRegistry()
@@ -36,8 +36,8 @@ func GetRegistry() *Registry {
 	return globalRegistry
 }
 
-// Register registers a provider factory with the registry
-func (r *Registry) Register(name string, factory ProviderFactory) error {
+// Register registers a provider factory with the registry.
+func (r *Registry) Register(name string, factory Factory) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -71,15 +71,15 @@ func (r *Registry) GetProvider(name string) (Provider, error) {
 		return nil, fmt.Errorf("provider %s not registered", name)
 	}
 
-	provider, err := factory(&ProviderConfig{Name: name})
+	provider, err := factory(&Config{Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("provider %s factory failed: %w", name, err)
 	}
 	return provider, nil
 }
 
-// GetProviderWithConfig creates a provider instance with custom config
-func (r *Registry) GetProviderWithConfig(name string, config *ProviderConfig) (Provider, error) {
+// GetProviderWithConfig creates a provider instance with custom config.
+func (r *Registry) GetProviderWithConfig(name string, config *Config) (Provider, error) {
 	// Snapshot the factory under the lock, call it lock-free (see GetProvider).
 	r.mu.RLock()
 	factory, exists := r.providers[name]
@@ -92,14 +92,14 @@ func (r *Registry) GetProviderWithConfig(name string, config *ProviderConfig) (P
 	return factory(config)
 }
 
-// GetAllProviders returns instances of all registered providers
+// GetAllProviders returns instances of all registered providers.
 func (r *Registry) GetAllProviders() []Provider {
 	// Copy the name->factory map under the lock, then release it and construct
 	// the providers lock-free. Factories may do network I/O (see GetProvider);
 	// running them under r.mu would serialize every provider's network init and
 	// block other registry users for the whole fan-out.
 	r.mu.RLock()
-	factories := make(map[string]ProviderFactory, len(r.providers))
+	factories := make(map[string]Factory, len(r.providers))
 	for name, factory := range r.providers {
 		factories[name] = factory
 	}
@@ -107,7 +107,7 @@ func (r *Registry) GetAllProviders() []Provider {
 
 	providers := make([]Provider, 0, len(factories))
 	for name, factory := range factories {
-		provider, err := factory(&ProviderConfig{Name: name})
+		provider, err := factory(&Config{Name: name})
 		if err != nil {
 			log.Printf("provider %q factory error: %v", name, err)
 			continue
@@ -118,7 +118,7 @@ func (r *Registry) GetAllProviders() []Provider {
 	return providers
 }
 
-// GetProviderNames returns the names of all registered providers
+// GetProviderNames returns the names of all registered providers.
 func (r *Registry) GetProviderNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -131,7 +131,7 @@ func (r *Registry) GetProviderNames() []string {
 	return names
 }
 
-// IsRegistered checks if a provider is registered
+// IsRegistered checks if a provider is registered.
 func (r *Registry) IsRegistered(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -140,7 +140,7 @@ func (r *Registry) IsRegistered(name string) bool {
 	return exists
 }
 
-// Unregister removes a provider from the registry
+// Unregister removes a provider from the registry.
 func (r *Registry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -148,7 +148,7 @@ func (r *Registry) Unregister(name string) {
 	delete(r.providers, name)
 }
 
-// RegisterProvider is a convenience function to register with the global registry
-func RegisterProvider(name string, factory ProviderFactory) error {
+// RegisterProvider is a convenience function to register with the global registry.
+func RegisterProvider(name string, factory Factory) error {
 	return GetRegistry().Register(name, factory)
 }

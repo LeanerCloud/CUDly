@@ -1,4 +1,4 @@
-// Package provider defines the core abstractions for multi-cloud support
+// Package provider defines the core abstractions for multi-cloud support.
 package provider
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// Provider represents a cloud provider (AWS, Azure, GCP)
+// Provider represents a cloud provider (AWS, Azure, GCP).
 type Provider interface {
 	// Identity
 	Name() string        // "aws", "azure", "gcp"
@@ -34,29 +34,29 @@ type Provider interface {
 	GetRecommendationsClient(ctx context.Context) (RecommendationsClient, error)
 }
 
-// ServiceClient handles operations for a specific service in a specific region
+// ServiceClient handles operations for a specific service in a specific region.
 type ServiceClient interface {
 	// Service identity
 	GetServiceType() common.ServiceType
 	GetRegion() string
 
 	// Recommendations
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Commitments (RI/SP/CUD/etc)
 	GetExistingCommitments(ctx context.Context) ([]common.Commitment, error)
-	PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error)
-	ValidateOffering(ctx context.Context, rec common.Recommendation) error
-	GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error)
+	PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error)
+	ValidateOffering(ctx context.Context, rec *common.Recommendation) error
+	GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error)
 
 	// Resource validation
 	GetValidResourceTypes(ctx context.Context) ([]string, error)
 }
 
-// RecommendationsClient provides centralized recommendations across all services
+// RecommendationsClient provides centralized recommendations across all services.
 type RecommendationsClient interface {
 	// Get recommendations with filtering
-	GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error)
+	GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error)
 
 	// Get recommendations for a specific service
 	GetRecommendationsForService(ctx context.Context, service common.ServiceType) ([]common.Recommendation, error)
@@ -65,15 +65,19 @@ type RecommendationsClient interface {
 	GetAllRecommendations(ctx context.Context) ([]common.Recommendation, error)
 }
 
-// Credentials represents cloud provider credentials
+// Credentials represents cloud provider credentials.
 type Credentials interface {
 	IsValid() bool
 	GetType() string // "environment", "file", "iam-role", "msi", "adc", etc.
 }
 
-// ProviderConfig represents configuration for a provider
-type ProviderConfig struct {
-	Name string
+// Config represents configuration for a provider.
+type Config struct {
+	AWSCredentialsProvider aws.CredentialsProvider
+	AzureTokenCredential   any
+	GCPTokenSource         any
+	ProviderOverride       Provider
+	Name                   string
 
 	// Deprecated: Profile is overloaded with provider-specific semantics
 	// (AWS: named profile, Azure: subscription ID, GCP: project ID). Prefer
@@ -83,7 +87,7 @@ type ProviderConfig struct {
 
 	// Typed per-provider identity fields. When set, these take precedence
 	// over Profile. Each provider only reads its own field and ignores the
-	// others, so a single ProviderConfig can be reused across providers.
+	// others, so a single Config can be reused across providers.
 	AWSProfile          string // AWS named profile from ~/.aws/credentials or ~/.aws/config
 	AzureSubscriptionID string // Azure subscription ID (UUID)
 	GCPProjectID        string // GCP project ID (e.g. "my-project")
@@ -99,12 +103,4 @@ type ProviderConfig struct {
 	//   - GCPTokenSource:        golang.org/x/oauth2.TokenSource
 	// When unset (nil), providers fall back to ambient credentials
 	// (DefaultAzureCredential / Application Default Credentials).
-	AWSCredentialsProvider aws.CredentialsProvider // optional: override ambient AWS credentials
-	AzureTokenCredential   any
-	GCPTokenSource         any
-
-	// ProviderOverride, if non-nil, is returned directly by CreateProvider without
-	// going through the registry. Use this to inject a pre-built, pre-authenticated
-	// provider when the typed credential slots above aren't expressive enough.
-	ProviderOverride Provider
 }

@@ -44,7 +44,7 @@ func TestAnalyzeReshaping_StandardRIStillSkipped(t *testing.T) {
 }
 
 // TestAnalyzeReshapingWithRecs_RecommendationDrivenAlternatives — the
-// fake lookup returns offerings spanning m5/c5/r5; an underutilised m5
+// fake lookup returns offerings spanning m5/c5/r5; an underutilized m5
 // RI should surface c5 + r5 alternatives (cross-family), with the same
 // family (m5) excluded so the alternatives slice carries only options
 // that differ meaningfully from the primary target. Sort order is
@@ -124,7 +124,7 @@ func TestAnalyzeReshapingWithRecs_EmptyLookupReturnsNoAlternatives(t *testing.T)
 
 // TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter — alternatives
 // that would fail AWS's $-units exchange check are dropped before
-// reaching the UI, matching the existing behaviour of the local
+// reaching the UI, matching the existing behavior of the local
 // pre-filter. Source pricing must be supplied (NF + MonthlyCost) for
 // the gate to engage.
 func TestAnalyzeReshapingWithRecs_AppliesDollarUnitsFilter(t *testing.T) {
@@ -168,7 +168,7 @@ func TestAnalyzeReshapingWithRecs_NoSourcePricingSkipsFilter(t *testing.T) {
 		return []OfferingOption{
 			// Would normally be dropped if the filter ran, but no source
 			// pricing means we keep today's "show every cross-family match"
-			// behaviour.
+			// behavior.
 			{InstanceType: "c5.large", OfferingID: "off-c5", EffectiveMonthlyCost: 5.0, NormalizationFactor: 4},
 			{InstanceType: "r5.large", OfferingID: "off-r5", EffectiveMonthlyCost: 50.0, NormalizationFactor: 4},
 		}, nil
@@ -258,7 +258,7 @@ func TestAnalyzeReshapingWithRecs_NilLookupUsesBaseRecs(t *testing.T) {
 // TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives —
 // post-refactor, "legacy family" support is no longer hand-curated:
 // any cross-family offering returned by the cached recs surfaces as
-// long as it passes the dollar-units check. An underutilised m4 RI
+// long as it passes the dollar-units check. An underutilized m4 RI
 // paired against c5 / r5 / m5 recs surfaces all three (m5 because it
 // is a different family from m4 and the gate accepts).
 func TestAnalyzeReshapingWithRecs_LegacyFamilyM4GeneratesAlternatives(t *testing.T) {
@@ -357,7 +357,7 @@ func TestAnalyzeReshapingWithRecs_TermZeroSkipsTermGuard(t *testing.T) {
 	)
 	require.Len(t, recs, 1)
 	require.Len(t, recs[0].AlternativeTargets, 1,
-		"source TermSeconds==0 must skip the term gate so today's behaviour is preserved")
+		"source TermSeconds==0 must skip the term gate so today's behavior is preserved")
 	assert.Equal(t, "r5.large", recs[0].AlternativeTargets[0].InstanceType)
 }
 
@@ -371,10 +371,10 @@ func TestPassesDollarUnitsCheck(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		srcNF       float64
-		srcMC       float64
 		srcCurrency string
 		target      OfferingOption
+		srcNF       float64
+		srcMC       float64
 		want        bool
 	}{
 		{
@@ -441,7 +441,7 @@ func TestPassesDollarUnitsCheck(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := passesDollarUnitsCheck(c.srcNF, c.srcMC, c.srcCurrency, c.target)
+			got := passesDollarUnitsCheck(c.srcNF, c.srcMC, c.srcCurrency, &c.target)
 			assert.Equal(t, c.want, got)
 		})
 	}
@@ -477,8 +477,8 @@ func TestCompositeScore_SameGenOutranksTermMismatch(t *testing.T) {
 		EffectiveMonthlyCost: 80, // same cost as source -- better raw price
 		NormalizationFactor:  8,
 	}
-	scoreNearPerfect := compositeScore(nearPerfect, src)
-	scoreCrossFamily := compositeScore(crossFamily, src)
+	scoreNearPerfect := compositeScore(&nearPerfect, &src)
+	scoreCrossFamily := compositeScore(&crossFamily, &src)
 	assert.Greater(t, scoreNearPerfect, scoreCrossFamily,
 		"same-gen m6i should outrank cross-family r5 despite being slightly more expensive")
 }
@@ -507,7 +507,7 @@ func TestCompositeScore_SameArchOutranksCrossArch(t *testing.T) {
 		EffectiveMonthlyCost: 90,
 		NormalizationFactor:  8,
 	}
-	assert.Greater(t, compositeScore(sameArch, src), compositeScore(crossArch, src),
+	assert.Greater(t, compositeScore(&sameArch, &src), compositeScore(&crossArch, &src),
 		"x86->x86 should outrank x86->ARM when family-gen bonus is equal for both")
 }
 
@@ -535,12 +535,12 @@ func TestCompositeScore_HighConfidenceOutranksLow(t *testing.T) {
 		SavingsAbs:           floatPtr(10),
 		RecommendationCount:  1,
 	}
-	assert.Greater(t, compositeScore(highConf, src), compositeScore(lowConf, src),
+	assert.Greater(t, compositeScore(&highConf, &src), compositeScore(&lowConf, &src),
 		"high-confidence CE rec should outrank low-confidence at equal cost")
 }
 
 // TestCompositeScore_AbsentSavingsIsNeutral asserts that an offering with
-// nil SavingsAbs does not get penalised relative to a low-confidence one.
+// nil SavingsAbs does not get penalized relative to a low-confidence one.
 // Per the nullable-not-zero rule, absent data must not be coerced to 0.
 func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
 	t.Parallel()
@@ -562,7 +562,7 @@ func TestCompositeScore_AbsentSavingsIsNeutral(t *testing.T) {
 		SavingsAbs:           floatPtr(5), // explicitly low confidence
 	}
 	// absent must score >= low confidence (neutral 0.5 vs. 0.0)
-	assert.GreaterOrEqual(t, compositeScore(absentSavings, src), compositeScore(lowConf, src),
+	assert.GreaterOrEqual(t, compositeScore(&absentSavings, &src), compositeScore(&lowConf, &src),
 		"nil SavingsAbs should be treated as neutral (0.5), not as low confidence (0.0)")
 }
 

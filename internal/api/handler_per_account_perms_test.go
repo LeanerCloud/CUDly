@@ -838,7 +838,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", ctx, mock.Anything).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -909,7 +909,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", ctx, mock.Anything).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)

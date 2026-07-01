@@ -37,7 +37,7 @@ func TestSender_SendNewRecommendationsNotification_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -69,7 +69,7 @@ func TestSender_SendScheduledPurchaseNotification_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -91,7 +91,7 @@ func TestSender_SendPurchaseConfirmation_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -114,7 +114,7 @@ func TestSender_SendPurchaseFailedNotification_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -158,7 +158,7 @@ func TestSender_SendWelcomeEmail_Success(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-// Test template success paths with no recommendations (edge case)
+// Test template success paths with no recommendations (edge case).
 func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
@@ -175,13 +175,13 @@ func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testi
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
 }
 
-// Test when topic/from email are empty (early return paths)
+// Test when topic/from email are empty (early return paths).
 func TestSender_SendNewRecommendationsNotification_NoTopic(t *testing.T) {
 	sender := &Sender{
 		topicARN: "",
@@ -192,7 +192,7 @@ func TestSender_SendNewRecommendationsNotification_NoTopic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -212,7 +212,7 @@ func TestSender_SendScheduledPurchaseNotification_NoRecipient(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
@@ -227,7 +227,7 @@ func TestSender_SendPurchaseConfirmation_NoTopic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -242,7 +242,7 @@ func TestSender_SendPurchaseFailedNotification_NoTopic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -269,7 +269,7 @@ func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test error cases for template functions
+// Test error cases for template functions.
 func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	sender := &Sender{
@@ -288,7 +288,7 @@ func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 		},
 	}
 
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 	require.Error(t, err)
 }
 
@@ -315,7 +315,7 @@ func TestSender_SendScheduledPurchaseNotification_SESError(t *testing.T) {
 		PlanName:          "Plan A",
 	}
 
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 	require.Error(t, err)
 }
 
@@ -333,7 +333,7 @@ func TestSender_SendPurchaseConfirmation_SNSError(t *testing.T) {
 		DashboardURL: "https://example.com",
 	}
 
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 	require.Error(t, err)
 }
 
@@ -351,7 +351,7 @@ func TestSender_SendPurchaseFailedNotification_SNSError(t *testing.T) {
 		DashboardURL: "https://example.com",
 	}
 
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 	require.Error(t, err)
 }
 
@@ -389,7 +389,7 @@ func TestSender_SendWelcomeEmail_SESError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Test multiple recommendations in templates
+// Test multiple recommendations in templates.
 func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *testing.T) {
 	mockSNS := new(MockSNSClient)
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
@@ -431,7 +431,7 @@ func TestSender_SendNewRecommendationsNotification_MultipleRecommendations(t *te
 	}
 
 	ctx := context.Background()
-	err := sender.SendNewRecommendationsNotification(ctx, data)
+	err := sender.SendNewRecommendationsNotification(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -472,7 +472,7 @@ func TestSender_SendScheduledPurchaseNotification_WithUpfrontCost(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	err := sender.SendScheduledPurchaseNotification(ctx, data)
+	err := sender.SendScheduledPurchaseNotification(ctx, &data)
 
 	require.NoError(t, err)
 }
@@ -511,7 +511,7 @@ func TestSender_SendPurchaseConfirmation_WithMultipleRecommendations(t *testing.
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseConfirmation(ctx, data)
+	err := sender.SendPurchaseConfirmation(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -553,7 +553,7 @@ func TestSender_SendPurchaseFailedNotification_MultipleFailures(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := sender.SendPurchaseFailedNotification(ctx, data)
+	err := sender.SendPurchaseFailedNotification(ctx, &data)
 
 	require.NoError(t, err)
 	mockSNS.AssertExpectations(t)
@@ -582,7 +582,7 @@ func TestRenderScheduledPurchaseEmail_TokenNotInReviewEditLinks(t *testing.T) {
 		PlanName:          "Test Plan",
 	}
 
-	body, err := RenderScheduledPurchaseEmail(data)
+	body, err := RenderScheduledPurchaseEmail(&data)
 	require.NoError(t, err)
 
 	// The cancel link must use the direct API path with the execution ID and token.
@@ -670,7 +670,7 @@ func TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection(t *t
 	}
 
 	ctx := context.Background()
-	err := sender.SendRegistrationReceivedNotification(ctx, data)
+	err := sender.SendRegistrationReceivedNotification(ctx, &data)
 	require.NoError(t, err)
 	mockSES.AssertExpectations(t)
 

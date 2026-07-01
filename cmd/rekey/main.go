@@ -18,8 +18,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/secrets"
@@ -175,7 +173,7 @@ func rekeyOne(ctx context.Context, db *database.Connection, id, blob string, zer
 		log.Printf("rekey: encrypt id=%s: %v", id, err)
 		return outcomeErrored
 	}
-	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		log.Printf("rekey: begin tx id=%s: %v", id, err)
 		return outcomeErrored

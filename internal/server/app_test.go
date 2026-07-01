@@ -18,7 +18,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/LeanerCloud/CUDly/internal/email"
 	"github.com/LeanerCloud/CUDly/internal/purchase"
-	"github.com/LeanerCloud/CUDly/internal/runtime"
+	runtime "github.com/LeanerCloud/CUDly/internal/runtime"
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 	"github.com/LeanerCloud/CUDly/internal/testutil"
 	"github.com/aws/aws-lambda-go/events"
@@ -78,19 +78,19 @@ func TestGetEnvFloat(t *testing.T) {
 	defer os.Unsetenv(key)
 
 	// Default value
-	testutil.AssertEqual(t, 80.0, getEnvFloat(key, 80.0))
+	testutil.AssertEqual(t, 80.0, getEnvFloat(key))
 
 	// Valid float
 	os.Setenv(key, "95.5")
-	testutil.AssertEqual(t, 95.5, getEnvFloat(key, 80.0))
+	testutil.AssertEqual(t, 95.5, getEnvFloat(key))
 
 	// Invalid float - returns default
 	os.Setenv(key, "not-a-float")
-	testutil.AssertEqual(t, 80.0, getEnvFloat(key, 80.0))
+	testutil.AssertEqual(t, 80.0, getEnvFloat(key))
 }
 
 func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 	req.Header.Set("User-Agent", "TestAgent/1.0")
 
@@ -101,7 +101,7 @@ func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
 }
 
 func TestHttpToLambdaRequest_NilBody(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Body = nil
 
 	lambdaReq := httpToLambdaRequest(req)
@@ -147,7 +147,7 @@ func TestHandleHTTPRequest(t *testing.T) {
 		API: api.NewHandler(api.HandlerConfig{}),
 	}
 
-	req := httptest.NewRequest("GET", "/api/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/health", nil)
 	w := httptest.NewRecorder()
 
 	app.handleHTTPRequest(w, req)
@@ -162,7 +162,7 @@ func TestHandleHTTPRequest_WithBody(t *testing.T) {
 	}
 
 	body := bytes.NewReader([]byte(`{"test":"data"}`))
-	req := httptest.NewRequest("POST", "/api/test", body)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/test", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -178,7 +178,7 @@ func TestHandleScheduledHTTP_TaskError(t *testing.T) {
 	}
 
 	// Unknown task type causes error
-	req := httptest.NewRequest("POST", "/api/scheduled/invalid_task_type", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/invalid_task_type", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -195,7 +195,7 @@ func TestHandleScheduledHTTP_ProcessPurchases(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/process_scheduled_purchases", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/process_scheduled_purchases", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -212,7 +212,7 @@ func TestHandleScheduledHTTP_SendNotifications(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/send_notifications", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/send_notifications", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -266,7 +266,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 }
 
-// noopEmailSender is a minimal email.SenderInterface for unit tests
+// noopEmailSender is a minimal email.SenderInterface for unit tests.
 var _ email.SenderInterface = (*noopEmailSender)(nil)
 
 type noopEmailSender struct{}
@@ -280,16 +280,16 @@ func (n *noopEmailSender) SendToEmail(ctx context.Context, toEmail, subject, bod
 func (n *noopEmailSender) SendToEmailWithCCMultipart(_ context.Context, _ string, _ []string, _, _, _ string) error {
 	return nil
 }
-func (n *noopEmailSender) SendNewRecommendationsNotification(ctx context.Context, data email.NotificationData) error {
+func (n *noopEmailSender) SendNewRecommendationsNotification(ctx context.Context, data *email.NotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data email.NotificationData) error {
+func (n *noopEmailSender) SendScheduledPurchaseNotification(ctx context.Context, data *email.NotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error {
+func (n *noopEmailSender) SendPurchaseConfirmation(ctx context.Context, data *email.NotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error {
+func (n *noopEmailSender) SendPurchaseFailedNotification(ctx context.Context, data *email.NotificationData) error {
 	return nil
 }
 func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
@@ -301,22 +301,22 @@ func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashb
 func (n *noopEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
 	return nil
 }
-func (n *noopEmailSender) SendRIExchangePendingApproval(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (n *noopEmailSender) SendRIExchangePendingApproval(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data email.RIExchangeNotificationData) error {
+func (n *noopEmailSender) SendRIExchangeCompleted(ctx context.Context, data *email.RIExchangeNotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
+func (n *noopEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data *email.NotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ email.NotificationData) error {
+func (n *noopEmailSender) SendPurchaseScheduledNotification(_ context.Context, _ *email.NotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ email.RegistrationNotificationData) error {
+func (n *noopEmailSender) SendRegistrationReceivedNotification(_ context.Context, _ *email.RegistrationNotificationData) error {
 	return nil
 }
-func (n *noopEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ email.RegistrationDecisionData) error {
+func (n *noopEmailSender) SendRegistrationDecisionNotification(_ context.Context, _ string, _ *email.RegistrationDecisionData) error {
 	return nil
 }
 
@@ -408,7 +408,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			DBConfig:    validDBConfig,
 		}
 
-		app, err := NewApplicationFromDeps(ctx, baseCfg, deps)
+		app, err := NewApplicationFromDeps(ctx, &baseCfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertTrue(t, app != nil, "App should not be nil")
 		testutil.AssertEqual(t, "test-v1", app.Version)
@@ -432,7 +432,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			DBConfig:    validDBConfig,
 		}
 
-		app, err := NewApplicationFromDeps(ctx, lambdaCfg, deps)
+		app, err := NewApplicationFromDeps(ctx, &lambdaCfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertTrue(t, app.RateLimiter != nil, "Rate limiter must not be nil for Lambda (fix for issue #420: cold-start requests must be rate-limited)")
 	})
@@ -443,7 +443,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			DBConfig:    nil,
 		}
 
-		app, err := NewApplicationFromDeps(ctx, baseCfg, deps)
+		app, err := NewApplicationFromDeps(ctx, &baseCfg, deps)
 		testutil.AssertError(t, err)
 		testutil.AssertTrue(t, app == nil, "App should be nil on error")
 		testutil.AssertContains(t, err.Error(), "database configuration required")
@@ -455,7 +455,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			DBConfig:    validDBConfig,
 		}
 
-		app, err := NewApplicationFromDeps(ctx, baseCfg, deps)
+		app, err := NewApplicationFromDeps(ctx, &baseCfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertTrue(t, app != nil, "App should be created even with nil email sender")
 	})
@@ -480,7 +480,7 @@ func TestNewApplicationFromDeps(t *testing.T) {
 			DBConfig:    validDBConfig,
 		}
 
-		app, err := NewApplicationFromDeps(ctx, cfg, deps)
+		app, err := NewApplicationFromDeps(ctx, &cfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, "v2.0", app.Version)
 		testutil.AssertEqual(t, cfg.DashboardURL, app.appConfig.DashboardURL)
@@ -502,7 +502,7 @@ func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
 			DefaultPaymentOption: "AllUpfront", // typo: should be "all-upfront"
 		}
 		deps := ExternalDeps{DBConfig: validDBConfig}
-		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		_, err := NewApplicationFromDeps(ctx, &cfg, deps)
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "DEFAULT_PAYMENT_OPTION")
 	})
@@ -512,7 +512,7 @@ func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
 			DefaultRampSchedule: "Immediate", // wrong case
 		}
 		deps := ExternalDeps{DBConfig: validDBConfig}
-		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		_, err := NewApplicationFromDeps(ctx, &cfg, deps)
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "DEFAULT_RAMP_SCHEDULE")
 	})
@@ -524,7 +524,7 @@ func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
 			EmailSender: &noopEmailSender{},
 			DBConfig:    validDBConfig,
 		}
-		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		_, err := NewApplicationFromDeps(ctx, &cfg, deps)
 		// Error is expected for other reasons (e.g. scheduledauth or DB), but
 		// NOT for the payment option: verify the message does not mention it.
 		if err != nil {
@@ -541,7 +541,7 @@ func TestNewApplicationFromDepsValidatesEnvDefaults(t *testing.T) {
 			EmailSender: &noopEmailSender{},
 			DBConfig:    validDBConfig,
 		}
-		_, err := NewApplicationFromDeps(ctx, cfg, deps)
+		_, err := NewApplicationFromDeps(ctx, &cfg, deps)
 		// Error may occur for unrelated reasons but must not mention payment option.
 		if err != nil {
 			testutil.AssertTrue(t, !strings.Contains(err.Error(), "DEFAULT_PAYMENT_OPTION"),
@@ -582,7 +582,7 @@ func TestGetEnvFloatLogsOnBadValue(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(orig) })
 
-	result := getEnvFloat("TEST_ENV_FLOAT_BAD", 80.0)
+	result := getEnvFloat("TEST_ENV_FLOAT_BAD")
 	logged = buf.String()
 
 	testutil.AssertEqual(t, 80.0, result)
@@ -596,7 +596,7 @@ func TestInitConfigStore(t *testing.T) {
 	t.Run("missing DB_HOST returns error", func(t *testing.T) {
 		testutil.SetEnv(t, "DB_HOST", "")
 
-		_, _, _, err := initConfigStore(context.Background())
+		_, _, err := initConfigStore(context.Background())
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "DB_HOST must be set")
 	})
@@ -608,9 +608,8 @@ func TestInitConfigStore(t *testing.T) {
 		testutil.SetEnv(t, "SECRET_PROVIDER", "env")
 		testutil.SetEnv(t, "AWS_REGION_CONFIG", "us-east-1")
 
-		configStore, dbConfig, resolver, err := initConfigStore(context.Background())
+		dbConfig, resolver, err := initConfigStore(context.Background())
 		testutil.AssertNoError(t, err)
-		testutil.AssertTrue(t, configStore == nil, "Config store should be nil (lazy init)")
 		testutil.AssertTrue(t, dbConfig != nil, "DB config should not be nil")
 		testutil.AssertTrue(t, resolver != nil, "Secret resolver should not be nil")
 		testutil.AssertEqual(t, "localhost", dbConfig.Host)
@@ -624,7 +623,7 @@ func TestHandleHTTPRequest_EnsureDBError(t *testing.T) {
 		dbErr:    fmt.Errorf("connection failed"),
 	}
 
-	req := httptest.NewRequest("GET", "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	w := httptest.NewRecorder()
 
 	app.handleHTTPRequest(w, req)
@@ -651,7 +650,7 @@ func TestHandleScheduledHTTP_EnsureDBError(t *testing.T) {
 		dbErr:    fmt.Errorf("db error"),
 	}
 
-	req := httptest.NewRequest("POST", "/api/scheduled/collect_recommendations", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/collect_recommendations", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
@@ -799,14 +798,14 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 	}
 
 	// Both set: secret-store value must win; no error on success.
-	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, &cfg, resolver)
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "from-secret-store", got)
 }
 
 // TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver verifies the
 // dev-only path: when no resolver is available, the plaintext value is
-// used (expected behaviour for local development).
+// used (expected behavior for local development).
 func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 	ctx := context.Background()
 
@@ -814,7 +813,7 @@ func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 		ScheduledTaskSecret: "plaintext-dev",
 	}
 
-	got, err := resolveScheduledTaskSecret(ctx, cfg, nil)
+	got, err := resolveScheduledTaskSecret(ctx, &cfg, nil)
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "plaintext-dev", got)
 }
@@ -831,7 +830,7 @@ func TestResolveScheduledTaskSecret_SecretNameFallback(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, &cfg, resolver)
 	testutil.AssertError(t, err) // error is returned so bearer-mode callers can fail-fast
 	testutil.AssertEqual(t, "fallback-plaintext", got)
 }
@@ -846,7 +845,7 @@ func TestResolveScheduledTaskSecret_SecretNameOnly(t *testing.T) {
 		ScheduledTaskSecretName: "arn:aws:secretsmanager:us-east-1:123:secret:my-secret",
 	}
 
-	got, err := resolveScheduledTaskSecret(ctx, cfg, resolver)
+	got, err := resolveScheduledTaskSecret(ctx, &cfg, resolver)
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "prod-secret", got)
 }
@@ -870,7 +869,7 @@ func TestNewApplicationFromDeps_BearerModeSecretResolutionFails(t *testing.T) {
 		SecretResolver: &mockSecretResolver{getErr: errors.New("key vault unreachable")},
 	}
 
-	_, err := NewApplicationFromDeps(ctx, cfg, deps)
+	_, err := NewApplicationFromDeps(ctx, &cfg, deps)
 	testutil.AssertError(t, err)
 	testutil.AssertContains(t, err.Error(), "arn:aws:secretsmanager:us-east-1:123:secret:task-secret")
 	testutil.AssertContains(t, err.Error(), "key vault unreachable")

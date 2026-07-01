@@ -37,10 +37,10 @@ func TestHandler_isPublicEndpoint(t *testing.T) {
 
 func TestHandler_authenticate(t *testing.T) {
 	tests := []struct {
-		name     string
-		apiKey   string
 		headers  map[string]string
 		params   map[string]string
+		name     string
+		apiKey   string
 		expected bool
 	}{
 		{

@@ -23,47 +23,22 @@ const awsReservationNameMaxLen = 60
 // deterministic assertions. Production callers leave randSource nil (the
 // builder then uses crypto/rand) and pass time.Now().
 type ReservationNameFields struct {
-	// Service is the short identifier for the AWS service, e.g. "rds",
-	// "cache", "memdb", "opensearch", "redshift". Set per-call by the
-	// service client; the builder treats it as opaque and sanitizes it.
-	Service string
-
-	// Region is the AWS region string (e.g. "us-east-1", "eu-west-1").
-	Region string
-
-	// ResourceType is the AWS instance/node type (e.g. "db.t4g.medium",
-	// "m5.large"). Dots are converted to hyphens by SanitizeReservationID.
+	Now          time.Time
+	Service      string
+	Region       string
 	ResourceType string
-
-	// Count is the reservation quantity. Always rendered as "{N}x".
-	Count int
-
-	// Term is the commitment term, normalized to "1yr" / "3yr" by upstream
-	// recommendation parsers. The builder collapses it to "1yr"/"3yr" when
-	// possible, and sanitizes otherwise.
-	Term string
-
-	// Payment is the payment-option string from the recommendation
-	// ("all-upfront", "no-upfront", "partial-upfront"). The builder
-	// normalizes to a short form ("allup", "noup", "partup") so the
-	// segment stays under 8 chars.
-	Payment string
-
-	// Now is the timestamp baseline. Must be non-zero for production calls.
-	// Tests inject a fixed value for determinism.
-	Now time.Time
-
-	// randSource is an optional 4-byte source for the random suffix.
-	// When nil (production), the builder reads from crypto/rand. Tests set
-	// it via WithRandSource to make output deterministic.
-	randSource []byte
+	Term         string
+	Payment      string
+	randSource   []byte
+	Count        int
 }
 
 // WithRandSource returns a copy of f with the given bytes used as the
 // random suffix source (test hook). Production code does not call this.
-func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
-	f.randSource = b
-	return f
+func (f *ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
+	cp := *f
+	cp.randSource = b
+	return cp
 }
 
 // BuildReservationName composes a rich, parseable identifier for an AWS
@@ -86,9 +61,17 @@ func (f ReservationNameFields) WithRandSource(b []byte) ReservationNameFields {
 //
 // fallbackPrefix is the prefix passed to SanitizeReservationID for the
 // unreachable empty-output fallback (e.g. "rds-reserved-"); it preserves
-// the prior call-site behaviour at every service when the builder ever
-// emits an unsanitisable input.
-func BuildReservationName(f ReservationNameFields, fallbackPrefix string) string {
+// the prior call-site behavior at every service when the builder ever
+// emits an unsanitizable input.
+func BuildReservationName(f *ReservationNameFields, fallbackPrefix string) string {
+	if f == nil {
+		// Nil fields are a programmer error (every call site passes &localStruct).
+		// Return the caller's fallbackPrefix rather than panicking -- the name is
+		// only a console-display tag, so the same unsanitizable-input fallback
+		// path keeps an exported helper from crashing on a nil pointer argument.
+		// The cap must hold on this path too (a long fallbackPrefix could bust it).
+		return capReservationName(SanitizeReservationID("", fallbackPrefix))
+	}
 	svc := normalizeReservationSegment(f.Service)
 	region := normalizeReservationSegment(f.Region)
 	sku := normalizeReservationSegment(f.ResourceType)
@@ -141,14 +124,20 @@ func BuildReservationName(f ReservationNameFields, fallbackPrefix string) string
 		sku = sku[:newLen]
 		required[2] = sku
 	}
-	out := SanitizeReservationID(joinReservationNonEmpty(required, "-"), fallbackPrefix)
-	if len(out) > awsReservationNameMaxLen {
-		// Last-resort hard cap if the SKU truncation above wasn't enough
-		// (e.g. a region name longer than expected). All output is ASCII
-		// so byte index == rune index.
-		out = strings.TrimRight(out[:awsReservationNameMaxLen], "-")
+	// Last-resort hard cap if the SKU truncation above wasn't enough (e.g. a
+	// region name longer than expected).
+	return capReservationName(SanitizeReservationID(joinReservationNonEmpty(required, "-"), fallbackPrefix))
+}
+
+// capReservationName enforces the AWS reservation-name length limit on any
+// return path of BuildReservationName. All output is ASCII so the byte index
+// equals the rune index; the trailing-hyphen trim keeps the invariant that a
+// name never ends in "-".
+func capReservationName(name string) string {
+	if len(name) > awsReservationNameMaxLen {
+		name = strings.TrimRight(name[:awsReservationNameMaxLen], "-")
 	}
-	return out
+	return name
 }
 
 // normalizeReservationSegment strips disallowed characters from a single

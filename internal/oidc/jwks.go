@@ -69,7 +69,7 @@ func BuildJWKS(ctx context.Context, signer Signer) (JWKS, error) {
 func bigEndianExponent(e int) []byte {
 	buf := make([]byte, 0, 4)
 	for shift := 24; shift >= 0; shift -= 8 {
-		b := byte(e >> shift)
+		b := byte((e >> shift) & 0xFF)
 		if b != 0 || len(buf) > 0 {
 			buf = append(buf, b)
 		}

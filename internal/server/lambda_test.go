@@ -134,9 +134,9 @@ func TestHandleLambdaHTTPEvent(t *testing.T) {
 
 func TestHandleLambdaSQSEvent(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockPurchaseManager)
 		name        string
 		rawEvent    string
-		setupMocks  func(*testutil.MockPurchaseManager)
 		expectError bool
 	}{
 		{
@@ -214,9 +214,9 @@ func TestHandleLambdaSQSEvent(t *testing.T) {
 
 func TestHandleLambdaScheduledEvent(t *testing.T) {
 	tests := []struct {
+		setupMocks  func(*testutil.MockScheduler)
 		name        string
 		rawEvent    string
-		setupMocks  func(*testutil.MockScheduler)
 		expectError bool
 	}{
 		{
@@ -270,10 +270,10 @@ func TestHandleLambdaScheduledEvent(t *testing.T) {
 }
 
 // TestHandleLambdaEvent_UnknownEventReturnsError is a regression test for
-// 04-N4: before the fix, unrecognised payloads were silently routed to
+// 04-N4: before the fix, unrecognized payloads were silently routed to
 // handleLambdaScheduledEvent, which then failed with "unknown scheduled task
 // action" -- masking the real root cause. The fix returns a distinct error
-// so callers (and logs) see "unrecognised Lambda event shape" instead.
+// so callers (and logs) see "unrecognized Lambda event shape" instead.
 func TestHandleLambdaEvent_UnknownEventReturnsError(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
@@ -283,15 +283,15 @@ func TestHandleLambdaEvent_UnknownEventReturnsError(t *testing.T) {
 
 	_, err := app.HandleLambdaEvent(ctx, json.RawMessage(`{"unknown": "event"}`))
 	testutil.AssertError(t, err)
-	testutil.AssertTrue(t, strings.Contains(err.Error(), "unrecognised"),
-		"expected 'unrecognised' in error, got: "+err.Error())
+	testutil.AssertTrue(t, strings.Contains(err.Error(), "unrecognized"),
+		"expected 'unrecognized' in error, got: "+err.Error())
 }
 
 func TestHandleLambdaEvent(t *testing.T) {
 	tests := []struct {
+		setupApp    func(*Application)
 		name        string
 		rawEvent    string
-		setupApp    func(*Application)
 		expectError bool
 	}{
 		{

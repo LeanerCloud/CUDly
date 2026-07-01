@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// MockStore is a mock implementation of the auth store for testing
+// MockStore is a mock implementation of the auth store for testing.
 type MockStore struct {
 	mock.Mock
 }
@@ -20,7 +20,11 @@ func (m *MockStore) GetUserByID(ctx context.Context, userID string) (*User, erro
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	v, ok := args.Get(0).(*User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
@@ -28,7 +32,11 @@ func (m *MockStore) GetUserByEmail(ctx context.Context, email string) (*User, er
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	v, ok := args.Get(0).(*User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) CreateUser(ctx context.Context, user *User) error {
@@ -51,7 +59,11 @@ func (m *MockStore) ListUsers(ctx context.Context) ([]User, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]User), args.Error(1)
+	v, ok := args.Get(0).([]User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
@@ -59,7 +71,11 @@ func (m *MockStore) GetUserByResetToken(ctx context.Context, token string) (*Use
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	v, ok := args.Get(0).(*User)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) AdminExists(ctx context.Context) (bool, error) {
@@ -77,7 +93,11 @@ func (m *MockStore) GetGroup(ctx context.Context, groupID string) (*Group, error
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*Group), args.Error(1)
+	v, ok := args.Get(0).(*Group)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) CreateGroup(ctx context.Context, group *Group) error {
@@ -100,7 +120,11 @@ func (m *MockStore) ListGroups(ctx context.Context) ([]Group, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]Group), args.Error(1)
+	v, ok := args.Get(0).([]Group)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
@@ -118,7 +142,11 @@ func (m *MockStore) GetSession(ctx context.Context, token string) (*Session, err
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*Session), args.Error(1)
+	v, ok := args.Get(0).(*Session)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) DeleteSession(ctx context.Context, token string) error {
@@ -136,7 +164,7 @@ func (m *MockStore) CleanupExpiredSessions(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// API Key operations
+// API Key operations.
 func (m *MockStore) CreateAPIKey(ctx context.Context, key *UserAPIKey) error {
 	args := m.Called(ctx, key)
 	return args.Error(0)
@@ -147,7 +175,11 @@ func (m *MockStore) GetAPIKeyByID(ctx context.Context, keyID string) (*UserAPIKe
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*UserAPIKey), args.Error(1)
+	v, ok := args.Get(0).(*UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error) {
@@ -155,7 +187,11 @@ func (m *MockStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserA
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*UserAPIKey), args.Error(1)
+	v, ok := args.Get(0).(*UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error) {
@@ -163,7 +199,11 @@ func (m *MockStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*Us
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*UserAPIKey), args.Error(1)
+	v, ok := args.Get(0).([]*UserAPIKey)
+	if !ok {
+		return nil, args.Error(1)
+	}
+	return v, args.Error(1)
 }
 
 func (m *MockStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error {
@@ -186,7 +226,7 @@ func (m *MockStore) Ping(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// MockEmailSender is a mock implementation of the email sender for testing
+// MockEmailSender is a mock implementation of the email sender for testing.
 type MockEmailSender struct {
 	mock.Mock
 }
@@ -206,10 +246,10 @@ func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupU
 	return args.Error(0)
 }
 
-// Verify that MockStore implements StoreInterface
+// Verify that MockStore implements StoreInterface.
 var _ StoreInterface = (*MockStore)(nil)
 
-// Verify that MockEmailSender implements EmailSenderInterface
+// Verify that MockEmailSender implements EmailSenderInterface.
 var _ EmailSenderInterface = (*MockEmailSender)(nil)
 
 // testCSRFKey is a fixed 32-byte key used across all test services so that
@@ -245,7 +285,7 @@ func newTestService() *Service {
 	}
 }
 
-// createTestService creates a service with mocks for testing
+// createTestService creates a service with mocks for testing.
 func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Service {
 	return &Service{
 		store:              mockStore,
@@ -257,7 +297,7 @@ func createTestService(mockStore *MockStore, mockEmail *MockEmailSender) *Servic
 	}
 }
 
-// createTestUser creates a user with hashed password for testing
+// createTestUser creates a user with hashed password for testing.
 func createTestUser(t *testing.T, password string) *User {
 	t.Helper()
 

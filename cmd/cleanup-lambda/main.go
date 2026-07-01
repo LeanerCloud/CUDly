@@ -2,20 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/database"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/jackc/pgx/v5"
 )
 
-// CleanupEvent represents the input to the cleanup function
+// CleanupEvent represents the input to the cleanup function.
 type CleanupEvent struct {
 	DryRun bool `json:"dryRun,omitempty"`
 }
 
-// CleanupResult represents the cleanup operation results
+// CleanupResult represents the cleanup operation results.
 type CleanupResult struct {
 	SessionsDeleted   int64 `json:"sessionsDeleted"`
 	ExecutionsDeleted int64 `json:"executionsDeleted"`
@@ -74,8 +76,8 @@ func deleteExpired(ctx context.Context, db *database.Connection, now time.Time, 
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			log.Printf("Warning: failed to rollback transaction: %v", rbErr)
 		}
 	}()
 

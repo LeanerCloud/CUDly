@@ -120,17 +120,16 @@ func standardUserSession() *Session {
 // setupStandardUserAuth stubs ValidateSession + a single HasPermissionAPI verb
 // for the Standard user. It deliberately does NOT grant view:accounts so a test
 // can assert the full listAccounts handler 403s while the minimal one succeeds.
-func setupStandardUserAuth(ctx context.Context, mockAuth *MockAuthService, verb, resource string, allow bool, allowed []string) {
+func setupStandardUserAuth(ctx context.Context, mockAuth *MockAuthService, resource string, allow bool, allowed []string) {
 	session := standardUserSession()
 	mockAuth.On("ValidateSession", ctx, "standard-token").Return(session, nil)
-	mockAuth.On("HasPermissionAPI", ctx, session.UserID, verb, resource).Return(allow, nil)
+	mockAuth.On("HasPermissionAPI", ctx, session.UserID, "view", resource).Return(allow, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, session.UserID).Return(allowed, nil).Maybe()
 }
 
-func standardRequest(body string) *events.LambdaFunctionURLRequest {
+func standardRequest() *events.LambdaFunctionURLRequest {
 	return &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer standard-token"},
-		Body:    body,
 	}
 }
 
@@ -139,7 +138,7 @@ func standardRequest(body string) *events.LambdaFunctionURLRequest {
 func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
+	setupStandardUserAuth(ctx, mockAuth, "recommendations", true, []string{"*"})
 
 	full := sampleAccount()
 	full.AWSAuthMode = "role_arn"
@@ -153,7 +152,7 @@ func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T)
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}
-	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	result, err := handler.listAccountsMinimal(ctx, standardRequest())
 	require.NoError(t, err)
 
 	got := result.([]AccountSummary)
@@ -163,7 +162,7 @@ func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T)
 	assert.Equal(t, full.ExternalID, got[0].ExternalID)
 	assert.Equal(t, full.Provider, got[0].Provider)
 
-	// Defence-in-depth: the JSON-serialized summary must not leak any sensitive
+	// Defense-in-depth: the JSON-serialized summary must not leak any sensitive
 	// field, even by accident (e.g. a future struct-embedding refactor).
 	blob, marshalErr := json.Marshal(got)
 	require.NoError(t, marshalErr)
@@ -182,10 +181,10 @@ func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T)
 func TestListAccounts_StandardUserDenied_403(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "accounts", false, nil)
+	setupStandardUserAuth(ctx, mockAuth, "accounts", false, nil)
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
-	result, err := handler.listAccounts(ctx, standardRequest(""))
+	result, err := handler.listAccounts(ctx, standardRequest())
 	assert.Nil(t, result)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -198,10 +197,10 @@ func TestListAccounts_StandardUserDenied_403(t *testing.T) {
 func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", false, nil)
+	setupStandardUserAuth(ctx, mockAuth, "recommendations", false, nil)
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
-	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	result, err := handler.listAccountsMinimal(ctx, standardRequest())
 	assert.Nil(t, result)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -214,7 +213,7 @@ func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"Production"})
+	setupStandardUserAuth(ctx, mockAuth, "recommendations", true, []string{"Production"})
 
 	prod := sampleAccount()
 	prod.Name = "Production"
@@ -227,7 +226,7 @@ func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}
-	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	result, err := handler.listAccountsMinimal(ctx, standardRequest())
 	require.NoError(t, err)
 	got := result.([]AccountSummary)
 	require.Len(t, got, 1)
@@ -239,10 +238,10 @@ func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 func TestListAccountsMinimal_ReturnsEmptySlice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
+	setupStandardUserAuth(ctx, mockAuth, "recommendations", true, []string{"*"})
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
-	result, err := handler.listAccountsMinimal(ctx, standardRequest(""))
+	result, err := handler.listAccountsMinimal(ctx, standardRequest())
 	require.NoError(t, err)
 	got := result.([]AccountSummary)
 	assert.NotNil(t, got)
@@ -1198,7 +1197,7 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	store := setupAdminMock(ctx)
 	// Plan with an empty services map — derived provider set is empty;
 	// the validation block skips and the assignment passes through.
-	// Pins the defensive behaviour so a future change is conscious.
+	// Pins the defensive behavior so a future change is conscious.
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID209, Name: "no-services"}, nil
 	}
@@ -1424,7 +1423,7 @@ func TestDiscoverOrgAccounts_CredResolutionFailureIs5xx(t *testing.T) {
 		// discoverOrgFn must NOT be reached — credential resolution fails
 		// upstream of it. If the test triggers this, the test is
 		// mis-wired (or the handler stopped failing on cred error).
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			t.Fatal("discoverOrgFn must not be called when credential resolution fails")
 			return nil, nil
 		},
@@ -1495,7 +1494,7 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 		auth:      mockAuth,
 		config:    store,
 		credStore: credStore,
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return &accounts.OrgDiscoveryResult{
 				Accounts: []config.CloudAccount{
 					{Provider: "aws", ExternalID: "200000000002", Name: "Already Known"}, // dedupe: skipped
@@ -1576,7 +1575,7 @@ func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
 			},
 		},
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return &accounts.OrgDiscoveryResult{
 				Accounts: []config.CloudAccount{
 					{Provider: "aws", ExternalID: "300000000003", Name: "Dup On Insert"},
@@ -1627,7 +1626,7 @@ func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
 				root.ID + "::aws_access_keys": []byte(`{"access_key_id":"AKIATEST","secret_access_key":"shh"}`),
 			},
 		},
-		discoverOrgFn: func(_ context.Context, _ aws.Config) (*accounts.OrgDiscoveryResult, error) {
+		discoverOrgFn: func(_ context.Context, _ *aws.Config) (*accounts.OrgDiscoveryResult, error) {
 			return nil, nil
 		},
 	}
@@ -1705,12 +1704,11 @@ func scopedUserSession() *Session {
 	}
 }
 
-func setupScopedAuth(ctx context.Context, mockAuth *MockAuthService, userID, verb, resource string, allowed []string) {
+func setupScopedAuth(ctx context.Context, mockAuth *MockAuthService, verb string, allowed []string) {
 	session := scopedUserSession()
-	session.UserID = userID
 	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(session, nil)
-	mockAuth.On("HasPermissionAPI", ctx, userID, verb, resource).Return(true, nil)
-	mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return(allowed, nil)
+	mockAuth.On("HasPermissionAPI", ctx, session.UserID, verb, "accounts").Return(true, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, session.UserID).Return(allowed, nil)
 }
 
 func scopedRequest(body string) *events.LambdaFunctionURLRequest {
@@ -1727,7 +1725,7 @@ const outOfScopeID = "22222222-2222-2222-2222-222222222222"
 func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+	setupScopedAuth(ctx, mockAuth, "view", []string{"Production"})
 
 	acct := sampleAccount()
 	acct.ID = outOfScopeID
@@ -1748,7 +1746,7 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	// allowed_accounts = ["Production"] matches acct.Name
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+	setupScopedAuth(ctx, mockAuth, "view", []string{"Production"})
 
 	acct := sampleAccount()
 	acct.Name = "Production"
@@ -1767,7 +1765,7 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "delete", "accounts", []string{"Production"})
+	setupScopedAuth(ctx, mockAuth, "delete", []string{"Production"})
 
 	acct := sampleAccount()
 	acct.ID = outOfScopeID
@@ -1791,7 +1789,7 @@ func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
 func TestSaveAccountCredentials_OutOfScope_Returns404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "update", "accounts", []string{"Production"})
+	setupScopedAuth(ctx, mockAuth, "update", []string{"Production"})
 
 	acct := sampleAccount()
 	acct.ID = outOfScopeID
@@ -1809,13 +1807,13 @@ func TestSaveAccountCredentials_OutOfScope_Returns404(t *testing.T) {
 
 // mockConfigStoreAccounts embeds MockConfigStore and allows overriding specific account methods.
 type mockConfigStoreAccounts struct {
+	createErr error
+	updateErr error
 	*MockConfigStore
 	getResult           *config.CloudAccount
 	listResult          []config.CloudAccount
 	planAccountsResult  []config.CloudAccount
 	listOverridesResult []config.AccountServiceOverride
-	createErr           error // optional override: return this err from CreateCloudAccount
-	updateErr           error // optional override: return this err from UpdateCloudAccount
 }
 
 func (m *mockConfigStoreAccounts) GetCloudAccount(ctx context.Context, id string) (*config.CloudAccount, error) {
@@ -1895,7 +1893,7 @@ func TestUpdateAccount_DuplicateKey_Returns409(t *testing.T) {
 	assert.Contains(t, ce.Error(), "already exists")
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreAccounts) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

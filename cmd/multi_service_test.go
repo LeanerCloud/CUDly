@@ -281,7 +281,7 @@ func TestProcessServiceWithMocks(t *testing.T) {
 					IncludeSPTypes: toolCfg.IncludeSPTypes,
 					ExcludeSPTypes: toolCfg.ExcludeSPTypes,
 				}
-				mockClient.On("GetRecommendations", ctx, params).Return(tt.mockRecs, nil)
+				mockClient.On("GetRecommendations", ctx, &params).Return(tt.mockRecs, nil)
 			}
 
 			// Set regions in toolCfg for this test
@@ -349,7 +349,7 @@ func TestProcessService_SavingsPlansAccountLevel(t *testing.T) {
 	mockRecs := []common.Recommendation{
 		{Service: common.ServiceSavingsPlansCompute, ResourceType: "ComputeSP", Count: 1, Region: "us-east-1", EstimatedSavings: 1000},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, results := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceSavingsPlansCompute, true, toolCfg, engineVersionData{})
@@ -396,7 +396,7 @@ func TestProcessService_WithInstanceLimit(t *testing.T) {
 		{ResourceType: "db.t3.micro", Count: 10, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "db.t3.small", Count: 10, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceRDS, true, toolCfg, engineVersionData{})
@@ -438,7 +438,7 @@ func TestProcessService_WithOverrideCount(t *testing.T) {
 		{ResourceType: "cache.t3.micro", Count: 10, Region: "us-east-1", EstimatedSavings: 100},
 		{ResourceType: "cache.t3.small", Count: 5, Region: "us-east-1", EstimatedSavings: 200},
 	}
-	mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+	mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 
 	accountCache := NewAccountAliasCache(awsCfg)
 	recs, _ := processService(ctx, awsCfg, mockClient, accountCache, common.ServiceElastiCache, true, toolCfg, engineVersionData{})
@@ -479,7 +479,7 @@ func TestProcessService_MultipleRegions(t *testing.T) {
 		mockRecs := []common.Recommendation{
 			{ResourceType: "db.t3.small", Count: 2, Region: region, EstimatedSavings: 100},
 		}
-		mockClient.On("GetRecommendations", ctx, params).Return(mockRecs, nil)
+		mockClient.On("GetRecommendations", ctx, &params).Return(mockRecs, nil)
 	}
 
 	accountCache := NewAccountAliasCache(awsCfg)
@@ -1219,7 +1219,7 @@ func TestProcessPurchaseLoopPurchaseFailure(t *testing.T) {
 		Error:          fmt.Errorf("API error: quota exceeded"),
 		Timestamp:      time.Now(),
 	}
-	mockClient.On("PurchaseCommitment", ctx, recs[0], mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(failureResult, nil)
+	mockClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("*common.Recommendation"), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(failureResult, nil)
 
 	t.Setenv("DISABLE_PURCHASE_DELAY", "true")
 
@@ -1261,7 +1261,7 @@ func TestProcessPurchaseLoopUserCancellation(t *testing.T) {
 			CommitmentID:   "test-id",
 			Timestamp:      time.Now(),
 		}
-		mockClient.On("PurchaseCommitment", ctx, rec, mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
+		mockClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("*common.Recommendation"), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
 	}
 
 	t.Setenv("DISABLE_PURCHASE_DELAY", "true")
@@ -1310,7 +1310,7 @@ func TestProcessServicePurchasesUserCancellation(t *testing.T) {
 		CommitmentID:   "cache-purchase-123",
 		Timestamp:      time.Now(),
 	}
-	mockClient.On("PurchaseCommitment", ctx, recs[0], mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
+	mockClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("*common.Recommendation"), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
 
 	t.Setenv("DISABLE_PURCHASE_DELAY", "true")
 
@@ -1381,7 +1381,7 @@ func TestExecutePurchaseWithEmptyPurchaseID(t *testing.T) {
 		Error:          nil,
 		Timestamp:      time.Now(),
 	}
-	mockClient.On("PurchaseCommitment", ctx, rec, mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(expectedResult, nil)
+	mockClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("*common.Recommendation"), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(expectedResult, nil)
 
 	// Logger output disabled for testing
 
@@ -1447,14 +1447,17 @@ func TestProcessPurchaseLoopActualPurchase(t *testing.T) {
 
 	mockClient := &MockServiceClient{}
 	for i, rec := range recs {
+		recCopy := rec
 		result := common.PurchaseResult{
-			Recommendation: rec,
+			Recommendation: recCopy,
 			Success:        true,
 			CommitmentID:   fmt.Sprintf("purchase-id-%d", i),
 			Error:          nil,
 			Timestamp:      time.Now(),
 		}
-		mockClient.On("PurchaseCommitment", ctx, rec, mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
+		mockClient.On("PurchaseCommitment", ctx, mock.MatchedBy(func(r *common.Recommendation) bool {
+			return r != nil && r.ResourceType == recCopy.ResourceType
+		}), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
 	}
 
 	// Logger output disabled for testing
@@ -1498,7 +1501,7 @@ func TestProcessPurchaseLoopWithConfirmation(t *testing.T) {
 		Error:          nil,
 		Timestamp:      time.Now(),
 	}
-	mockClient.On("PurchaseCommitment", ctx, recs[0], mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
+	mockClient.On("PurchaseCommitment", ctx, mock.AnythingOfType("*common.Recommendation"), mock.MatchedBy(func(o common.PurchaseOptions) bool { return o.Source == common.PurchaseSourceCLI })).Return(result, nil)
 
 	// Logger output disabled for testing
 

@@ -12,14 +12,14 @@ import (
 
 // mockExchangeStore implements RIExchangeStore for testing.
 type mockExchangeStore struct {
-	savedRecords   []*ExchangeRecord
-	cancelledCount int64
-	staleRecords   []ExchangeRecord
-	dailySpend     string
-	dailySpendErr  error
+	dailySpendErr error
+	dailySpend    string
+	savedRecords  []*Record
+	staleRecords  []Record
+	canceledCount int64
 }
 
-func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *ExchangeRecord) error {
+func (m *mockExchangeStore) SaveRIRecord(_ context.Context, record *Record) error {
 	if record.ID == "" {
 		record.ID = fmt.Sprintf("test-id-%d", len(m.savedRecords))
 	}
@@ -28,10 +28,10 @@ func (m *mockExchangeStore) SaveRIExchangeRecord(_ context.Context, record *Exch
 }
 
 func (m *mockExchangeStore) CancelAllPendingExchanges(_ context.Context) (int64, error) {
-	return m.cancelledCount, nil
+	return m.canceledCount, nil
 }
 
-func (m *mockExchangeStore) GetStaleProcessingExchanges(_ context.Context, _ time.Duration) ([]ExchangeRecord, error) {
+func (m *mockExchangeStore) GetStaleProcessingExchanges(_ context.Context, _ time.Duration) ([]Record, error) {
 	return m.staleRecords, nil
 }
 
@@ -50,25 +50,25 @@ func (m *mockExchangeStore) FailRIExchange(_ context.Context, _ string, _ string
 	return nil
 }
 
-// mockExchangeClient implements ExchangeClientInterface for testing.
-type mockExchangeClient struct {
-	quoteResult   *ExchangeQuoteSummary
+// mockClient implements ClientInterface for testing.
+type mockClient struct {
+	quoteResult   *QuoteSummary
 	quoteErr      error
-	executeResult string
 	executeErr    error
+	executeResult string
 }
 
-func (m *mockExchangeClient) GetQuote(_ context.Context, _ ExchangeQuoteRequest) (*ExchangeQuoteSummary, error) {
+func (m *mockClient) GetQuote(_ context.Context, _ *QuoteRequest) (*QuoteSummary, error) {
 	return m.quoteResult, m.quoteErr
 }
 
-func (m *mockExchangeClient) Execute(_ context.Context, _ ExchangeExecuteRequest) (string, *ExchangeQuoteSummary, error) {
+func (m *mockClient) Execute(_ context.Context, _ *ExecuteRequest) (string, *QuoteSummary, error) {
 	return m.executeResult, m.quoteResult, m.executeErr
 }
 
-func defaultQuote() *ExchangeQuoteSummary {
+func defaultQuote() *QuoteSummary {
 	due, _ := ParseDecimalRat("0.000000")
-	return &ExchangeQuoteSummary{
+	return &QuoteSummary{
 		IsValidExchange:  true,
 		PaymentDueRaw:    "0.000000",
 		PaymentDueUSD:    due,
@@ -77,10 +77,10 @@ func defaultQuote() *ExchangeQuoteSummary {
 	}
 }
 
-func defaultParams(store RIExchangeStore, client ExchangeClientInterface) RunAutoExchangeParams {
+func defaultParams(store RIExchangeStore, client ClientInterface) RunAutoExchangeParams {
 	return RunAutoExchangeParams{
-		Store:          store,
-		ExchangeClient: client,
+		Store:  store,
+		Client: client,
 		LookupOffering: func(_ context.Context, _, _, _, _ string, _ int64) (string, error) {
 			return "offering-123", nil
 		},
@@ -109,10 +109,10 @@ func defaultParams(store RIExchangeStore, client ExchangeClientInterface) RunAut
 func TestRunAutoExchange_ManualMode_CreatesPendingRecords(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	client := &mockClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Equal(t, "manual", result.Mode)
@@ -134,11 +134,11 @@ func TestRunAutoExchange_ManualMode_CreatesPendingRecords(t *testing.T) {
 func TestRunAutoExchange_AutoMode_ExecutesExchange(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: defaultQuote(), executeResult: "exch-abc-123"}
+	client := &mockClient{quoteResult: defaultQuote(), executeResult: "exch-abc-123"}
 	params := defaultParams(store, client)
 	params.Config.Mode = "auto"
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Equal(t, "auto", result.Mode)
@@ -157,12 +157,12 @@ func TestRunAutoExchange_AutoMode_ExecutesExchange(t *testing.T) {
 func TestRunAutoExchange_NoRecommendations(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	client := &mockClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
 	// All RIs well-utilized
 	params.Utilization = []UtilizationInfo{{RIID: "ri-001", UtilizationPercent: 99.0}}
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Empty(t, result.Pending)
@@ -175,13 +175,13 @@ func TestRunAutoExchange_NoRecommendations(t *testing.T) {
 func TestRunAutoExchange_OfferingLookupFails(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	client := &mockClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
 	params.LookupOffering = func(_ context.Context, _, _, _, _ string, _ int64) (string, error) {
 		return "", fmt.Errorf("no offering found")
 	}
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Skipped, 1)
@@ -191,10 +191,10 @@ func TestRunAutoExchange_OfferingLookupFails(t *testing.T) {
 func TestRunAutoExchange_QuoteFails(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteErr: fmt.Errorf("API throttled")}
+	client := &mockClient{quoteErr: fmt.Errorf("API throttled")}
 	params := defaultParams(store, client)
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Skipped, 1)
@@ -205,7 +205,7 @@ func TestRunAutoExchange_PerExchangeCapExceeded(t *testing.T) {
 	t.Parallel()
 	due, _ := ParseDecimalRat("200.00")
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
+	client := &mockClient{quoteResult: &QuoteSummary{
 		IsValidExchange:  true,
 		PaymentDueRaw:    "200.00",
 		PaymentDueUSD:    due,
@@ -215,7 +215,7 @@ func TestRunAutoExchange_PerExchangeCapExceeded(t *testing.T) {
 	params := defaultParams(store, client)
 	params.Config.MaxPaymentPerExchangeUSD = 100.0
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Skipped, 1)
@@ -226,7 +226,7 @@ func TestRunAutoExchange_AutoMode_DailyCapExceeded(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "450.00"}
 	due, _ := ParseDecimalRat("60.00")
-	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
+	client := &mockClient{quoteResult: &QuoteSummary{
 		IsValidExchange:  true,
 		PaymentDueRaw:    "60.00",
 		PaymentDueUSD:    due,
@@ -238,7 +238,7 @@ func TestRunAutoExchange_AutoMode_DailyCapExceeded(t *testing.T) {
 	params.Config.MaxPaymentPerExchangeUSD = 100.0
 	params.Config.MaxPaymentDailyUSD = 500.0
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Failed, 1)
@@ -248,11 +248,11 @@ func TestRunAutoExchange_AutoMode_DailyCapExceeded(t *testing.T) {
 func TestRunAutoExchange_AutoMode_DailySpendDBError_FailsClosed(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpendErr: fmt.Errorf("connection refused")}
-	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	client := &mockClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
 	params.Config.Mode = "auto"
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Failed, 1)
@@ -262,14 +262,14 @@ func TestRunAutoExchange_AutoMode_DailySpendDBError_FailsClosed(t *testing.T) {
 func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{
+	client := &mockClient{
 		quoteResult: defaultQuote(),
 		executeErr:  fmt.Errorf("exchange not valid"),
 	}
 	params := defaultParams(store, client)
 	params.Config.Mode = "auto"
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Failed, 1)
@@ -284,13 +284,13 @@ func TestRunAutoExchange_AutoMode_ExecutionFails(t *testing.T) {
 func TestRunAutoExchange_InvalidExchange(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: &ExchangeQuoteSummary{
+	client := &mockClient{quoteResult: &QuoteSummary{
 		IsValidExchange:         false,
 		ValidationFailureReason: "source RI expired",
 	}}
 	params := defaultParams(store, client)
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Skipped, 1)
@@ -300,11 +300,11 @@ func TestRunAutoExchange_InvalidExchange(t *testing.T) {
 func TestRunAutoExchange_IdleRI_Skipped(t *testing.T) {
 	t.Parallel()
 	store := &mockExchangeStore{dailySpend: "0"}
-	client := &mockExchangeClient{quoteResult: defaultQuote()}
+	client := &mockClient{quoteResult: defaultQuote()}
 	params := defaultParams(store, client)
 	params.Utilization = []UtilizationInfo{{RIID: "ri-001", UtilizationPercent: 0.0}}
 
-	result, err := RunAutoExchange(context.Background(), params)
+	result, err := RunAutoExchange(context.Background(), &params)
 	require.NoError(t, err)
 
 	assert.Len(t, result.Skipped, 1)

@@ -5,7 +5,7 @@ import "time"
 // DefaultSettings defines the default configuration values for CUDly.
 // UpdatedAt is the zero time.Time{} for every entry: these are static
 // compile-time defaults and have never been "updated" by a user.
-var DefaultSettings = []ConfigSetting{
+var DefaultSettings = []Setting{
 	// Purchase Defaults
 	{
 		Key:         "purchase_defaults.term",
@@ -379,7 +379,7 @@ var DefaultSettings = []ConfigSetting{
 	},
 }
 
-// GetDefaultValue returns the default value for a given key
+// GetDefaultValue returns the default value for a given key.
 func GetDefaultValue(key string) any {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
@@ -389,8 +389,8 @@ func GetDefaultValue(key string) any {
 	return nil
 }
 
-// GetDefaultSetting returns the complete default setting for a given key
-func GetDefaultSetting(key string) *ConfigSetting {
+// GetDefaultSetting returns the complete default setting for a given key.
+func GetDefaultSetting(key string) *Setting {
 	for _, setting := range DefaultSettings {
 		if setting.Key == key {
 			// Return a copy
@@ -401,9 +401,9 @@ func GetDefaultSetting(key string) *ConfigSetting {
 	return nil
 }
 
-// GetDefaultsByCategory returns all default settings for a given category
-func GetDefaultsByCategory(category string) []ConfigSetting {
-	var result []ConfigSetting
+// GetDefaultsByCategory returns all default settings for a given category.
+func GetDefaultsByCategory(category string) []Setting {
+	var result []Setting
 	for _, setting := range DefaultSettings {
 		if setting.Category == category {
 			result = append(result, setting)
@@ -412,7 +412,7 @@ func GetDefaultsByCategory(category string) []ConfigSetting {
 	return result
 }
 
-// GetAllCategories returns a list of all configuration categories
+// GetAllCategories returns a list of all configuration categories.
 func GetAllCategories() []string {
 	categoryMap := make(map[string]bool)
 	for _, setting := range DefaultSettings {

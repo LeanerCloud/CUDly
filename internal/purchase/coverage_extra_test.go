@@ -210,7 +210,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-approved",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
 	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("IncrementPlanCurrentStep", ctx, "plan-approved").Return(nil)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -695,7 +695,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, "plan-not-success").Return(plan, nil)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceElastiCache, "ap-southeast-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: false}, nil,
 	)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -748,7 +748,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 	mockStore.On("GetPurchasePlan", ctx, "plan-err-result").Return(plan, nil)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceOpenSearch, "us-west-2").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: false, Error: specificErr}, nil,
 	)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -801,10 +801,10 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 
 	mockStore.On("GetPurchasePlan", ctx, "plan-engine").Return(plan, nil)
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceRDS, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: true, CommitmentID: "ri-engine-001"}, nil,
 	)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -858,10 +858,10 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	mockStore.On("GetPurchasePlan", ctx, "plan-hist-err").Return(plan, nil)
 	// SavePurchaseHistory returns error — should be logged but not fail executePurchase
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(errors.New("history write error"))
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
-	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
+	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions")).Return(
 		common.PurchaseResult{Success: true, CommitmentID: "ri-hist-001"}, nil,
 	)
 	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
@@ -965,17 +965,14 @@ func TestManager_SavePurchaseHistory_RevocationWindow(t *testing.T) {
 // A second sub-test below covers the legacy fallback (empty Details JSON).
 func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 	cases := []struct {
-		name        string
-		service     string
-		serviceType common.ServiceType
-		region      string
-		resource    string
-		engine      string
-		details     common.ServiceDetails
-		// assertDetails inspects the rec.Details captured by the mock
-		// PurchaseCommitment call and asserts both the concrete pointer
-		// type and the per-service fields the AWS client reads.
+		details       common.ServiceDetails
 		assertDetails func(t *testing.T, d common.ServiceDetails)
+		name          string
+		service       string
+		serviceType   common.ServiceType
+		region        string
+		resource      string
+		engine        string
 	}{
 		{
 			name:        "ec2_windows",
@@ -1156,19 +1153,19 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 
 			// Capture the rec passed to PurchaseCommitment so we can
 			// inspect Details after the call.
-			var capturedRec common.Recommendation
+			var capturedRec *common.Recommendation
 			mockStore.On("GetPurchasePlan", ctx, plan.ID).Return(plan, nil)
 			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 			mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 			mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.serviceType, tc.region).Return(mockServiceClient, nil)
 			mockServiceClient.On(
 				"PurchaseCommitment",
 				mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Run(func(args mock.Arguments) {
-				capturedRec = args.Get(1).(common.Recommendation)
+				capturedRec = args.Get(1).(*common.Recommendation)
 			}).Return(
 				common.PurchaseResult{Success: true, CommitmentID: "ri-" + tc.name},
 				nil,
@@ -1187,6 +1184,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 			require.NoError(t, err, "purchase should not return the regression error 'invalid service details for <Service>'")
 			assert.True(t, exec.Recommendations[0].Purchased, "rec should be marked purchased")
 			assert.Empty(t, exec.Recommendations[0].Error, "rec error should be empty")
+			require.NotNil(t, capturedRec, "PurchaseCommitment must have been called with a non-nil rec")
 			require.NotNil(t, capturedRec.Details, "rec.Details handed to the cloud client must be non-nil")
 			tc.assertDetails(t, capturedRec.Details)
 		})
@@ -1203,13 +1201,13 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 // mis-purchase as the default.
 func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 	cases := []struct {
+		assertDetails func(t *testing.T, d common.ServiceDetails)
 		name          string
 		service       string
 		serviceType   common.ServiceType
 		region        string
 		resource      string
 		engine        string
-		assertDetails func(t *testing.T, d common.ServiceDetails)
 	}{
 		{
 			name:        "legacy_ec2",
@@ -1294,19 +1292,19 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 				},
 			}
 
-			var capturedRec common.Recommendation
+			var capturedRec *common.Recommendation
 			mockStore.On("GetPurchasePlan", ctx, plan.ID).Return(plan, nil)
 			mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+			mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 			mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProvider, nil)
 			mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), tc.serviceType, tc.region).Return(mockServiceClient, nil)
 			mockServiceClient.On(
 				"PurchaseCommitment",
 				mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
-				mock.AnythingOfType("common.Recommendation"),
+				mock.AnythingOfType("*common.Recommendation"),
 				mock.AnythingOfType("common.PurchaseOptions"),
 			).Run(func(args mock.Arguments) {
-				capturedRec = args.Get(1).(common.Recommendation)
+				capturedRec = args.Get(1).(*common.Recommendation)
 			}).Return(
 				common.PurchaseResult{Success: true, CommitmentID: "ri-" + tc.name},
 				nil,
@@ -1323,6 +1321,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 
 			_, err := manager.executePurchase(ctx, exec)
 			require.NoError(t, err, "legacy empty-Details rec must still purchase cleanly")
+			require.NotNil(t, capturedRec, "PurchaseCommitment must have been called with a non-nil rec")
 			require.NotNil(t, capturedRec.Details, "rec.Details handed to the cloud client must be non-nil even for legacy rows")
 			tc.assertDetails(t, capturedRec.Details)
 		})

@@ -22,7 +22,7 @@ import (
 	"github.com/LeanerCloud/CUDly/providers/azure/mocks"
 )
 
-// MockRecommendationsPager mocks the RecommendationsPager interface
+// MockRecommendationsPager mocks the RecommendationsPager interface.
 type MockRecommendationsPager struct {
 	pages []armconsumption.ReservationRecommendationsClientListResponse
 	index int
@@ -41,11 +41,11 @@ func (m *MockRecommendationsPager) NextPage(ctx context.Context) (armconsumption
 	return page, nil
 }
 
-// MockReservationsDetailsPager mocks the ReservationsDetailsPager interface
+// MockReservationsDetailsPager mocks the ReservationsDetailsPager interface.
 type MockReservationsDetailsPager struct {
+	err   error
 	pages []armconsumption.ReservationsDetailsClientListResponse
 	index int
-	err   error
 }
 
 func (m *MockReservationsDetailsPager) More() bool {
@@ -68,8 +68,8 @@ func (m *MockReservationsDetailsPager) NextPage(ctx context.Context) (armconsump
 // CallCount tracks how many times ListByLocation was invoked — used by
 // the cachedSKULookup-fetched-once test to pin the perf invariant.
 type MockCapabilitiesClient struct {
-	response  armsql.CapabilitiesClientListByLocationResponse
 	err       error
+	response  armsql.CapabilitiesClientListByLocationResponse
 	CallCount int
 }
 
@@ -81,7 +81,7 @@ func (m *MockCapabilitiesClient) ListByLocation(ctx context.Context, locationNam
 	return m.response, nil
 }
 
-// MockHTTPClient mocks HTTP client for testing
+// MockHTTPClient mocks HTTP client for testing.
 type MockHTTPClient struct {
 	mock.Mock
 }
@@ -212,7 +212,7 @@ func TestSQLPricingStructure(t *testing.T) {
 
 func TestAzureRetailPriceStructure(t *testing.T) {
 	price := AzureRetailPrice{
-		Items: []DatabaseRetailPriceItem{
+		Items: []RetailPriceItem{
 			{
 				CurrencyCode:    "USD",
 				RetailPrice:     500.0,
@@ -261,8 +261,10 @@ func TestDatabaseClient_GetOfferingDetails_WithMock(t *testing.T) {
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
+	mockResp1 := createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse())
+	_ = mockResp1.Body.Close()
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse()),
+		mockResp1,
 		nil,
 	)
 
@@ -272,7 +274,7 @@ func TestDatabaseClient_GetOfferingDetails_WithMock(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 	assert.Equal(t, "Standard_S0", details.ResourceType)
@@ -285,8 +287,10 @@ func TestDatabaseClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
+	mockResp2 := createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse())
+	_ = mockResp2.Body.Close()
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse()),
+		mockResp2,
 		nil,
 	)
 
@@ -296,7 +300,7 @@ func TestDatabaseClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 		PaymentOption: "monthly",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 	assert.Equal(t, "3yr", details.Term)
@@ -308,8 +312,10 @@ func TestDatabaseClient_GetOfferingDetails_NoUpfront(t *testing.T) {
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
+	mockResp3 := createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse())
+	_ = mockResp3.Body.Close()
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, createSampleSQLPricingResponse()),
+		mockResp3,
 		nil,
 	)
 
@@ -319,7 +325,7 @@ func TestDatabaseClient_GetOfferingDetails_NoUpfront(t *testing.T) {
 		PaymentOption: "no-upfront",
 	}
 
-	details, err := client.GetOfferingDetails(ctx, rec)
+	details, err := client.GetOfferingDetails(ctx, &rec)
 	require.NoError(t, err)
 	require.NotNil(t, details)
 	assert.Equal(t, float64(0), details.UpfrontCost)
@@ -331,8 +337,10 @@ func TestDatabaseClient_GetOfferingDetails_APIError(t *testing.T) {
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
+	mockResp4 := createMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error")
+	_ = mockResp4.Body.Close()
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusInternalServerError, "Internal Server Error"),
+		mockResp4,
 		nil,
 	)
 
@@ -342,7 +350,7 @@ func TestDatabaseClient_GetOfferingDetails_APIError(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "pricing API returned status 500")
 }
@@ -352,8 +360,10 @@ func TestDatabaseClient_GetOfferingDetails_NoPricing(t *testing.T) {
 	mockHTTP := &MockHTTPClient{}
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
 
+	mockResp5 := createMockHTTPResponse(http.StatusOK, `{"Items": []}`)
+	_ = mockResp5.Body.Close()
 	mockHTTP.On("Do", mock.Anything).Return(
-		createMockHTTPResponse(http.StatusOK, `{"Items": []}`),
+		mockResp5,
 		nil,
 	)
 
@@ -363,7 +373,7 @@ func TestDatabaseClient_GetOfferingDetails_NoPricing(t *testing.T) {
 		PaymentOption: "upfront",
 	}
 
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no pricing data found")
 }
@@ -391,15 +401,17 @@ func TestDatabaseClient_GetOfferingDetails_NoReservationPricing(t *testing.T) {
 	}`
 
 	mockHTTP := &MockHTTPClient{}
+	mockResp6 := createMockHTTPResponse(http.StatusOK, onDemandOnly)
+	_ = mockResp6.Body.Close()
 	client := NewClientWithHTTP(nil, "test-subscription", "eastus", mockHTTP)
-	mockHTTP.On("Do", mock.Anything).Return(createMockHTTPResponse(http.StatusOK, onDemandOnly), nil)
+	mockHTTP.On("Do", mock.Anything).Return(mockResp6, nil)
 
 	rec := common.Recommendation{
 		ResourceType:  "Standard_S0",
 		Term:          "1yr",
 		PaymentOption: "upfront",
 	}
-	_, err := client.GetOfferingDetails(ctx, rec)
+	_, err := client.GetOfferingDetails(ctx, &rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no reservation pricing found")
 }
@@ -434,7 +446,7 @@ func TestDatabaseClient_GetRecommendations_WithMockPager(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -461,7 +473,7 @@ func TestDatabaseClient_GetRecommendations_MultiplePages(t *testing.T) {
 
 	client.SetRecommendationsPager(mockPager)
 
-	recs, err := client.GetRecommendations(ctx, common.RecommendationParams{})
+	recs, err := client.GetRecommendations(ctx, &common.RecommendationParams{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -748,7 +760,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	assert.Equal(t, "upfront", out.PaymentOption)
 
 	// Details carries Engine=sqlserver + InstanceClass from the SKU
-	// string. EngineVersion stays empty when the catalogue has no
+	// string. EngineVersion stays empty when the catalog has no
 	// matching SKU (no signal); AZConfig/Deployment still need a
 	// per-server lookup and remain deferred.
 	require.NotNil(t, out.Details)
@@ -756,12 +768,12 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesAllFields(t *test
 	require.True(t, ok, "Details must be a common.DatabaseDetails value")
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, "GeneralPurpose_Gen5_2", details.InstanceClass)
-	assert.Empty(t, details.EngineVersion, "EngineVersion empty when no matching SKU in catalogue")
+	assert.Empty(t, details.EngineVersion, "EngineVersion empty when no matching SKU in catalog")
 	assert.Empty(t, details.AZConfig, "AZConfig is deferred to batched enrichment")
 }
 
 // TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion
-// asserts the new batched-SKU-catalogue lookup populates
+// asserts the new batched-SKU-catalog lookup populates
 // DatabaseDetails.EngineVersion when the recommendation's SKU appears
 // in the location capabilities response.
 func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion(t *testing.T) {
@@ -802,7 +814,7 @@ func TestDatabaseClient_ConvertAzureSQLRecommendation_PopulatesEngineVersion(t *
 	require.True(t, ok)
 	assert.Equal(t, "sqlserver", details.Engine)
 	assert.Equal(t, skuName, details.InstanceClass)
-	assert.Equal(t, "12.0", details.EngineVersion, "EngineVersion must be enriched from the cached SKU catalogue")
+	assert.Equal(t, "12.0", details.EngineVersion, "EngineVersion must be enriched from the cached SKU catalog")
 }
 
 // TestDatabaseClient_ConvertAzureSQLRecommendation_CapabilitiesErrorFallsBack
@@ -858,13 +870,13 @@ func TestDatabaseClient_CachedSKULookup_FetchedOnce(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		_, _ = client.cachedSKULookup(context.Background(), skuName)
 	}
-	assert.Equal(t, 1, mockClient.CallCount, "capabilities catalogue must be fetched ONCE regardless of lookup count")
+	assert.Equal(t, 1, mockClient.CallCount, "capabilities catalog must be fetched ONCE regardless of lookup count")
 }
 
-// MockTokenCredential for testing PurchaseCommitment
+// MockTokenCredential for testing PurchaseCommitment.
 type MockTokenCredential struct {
-	token string
 	err   error
+	token string
 }
 
 func (m *MockTokenCredential) GetToken(ctx context.Context, options policy.TokenRequestOptions) (azcore.AccessToken, error) {
@@ -888,12 +900,16 @@ func TestDatabaseClient_PurchaseCommitment_Success(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
+	mockResp7 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-001"))
+	_ = mockResp7.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-001")), nil).Once()
+	})).Return(mockResp7, nil).Once()
+	mockResp8 := createMockHTTPResponse(http.StatusOK, `{}`)
+	_ = mockResp8.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/db-order-001/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mockResp8, nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "GP_Gen5_8",
@@ -902,7 +918,7 @@ func TestDatabaseClient_PurchaseCommitment_Success(t *testing.T) {
 		CommitmentCost: 5000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "db-order-001", result.CommitmentID)
@@ -916,12 +932,16 @@ func TestDatabaseClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
+	mockResp9 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-3yr"))
+	_ = mockResp9.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-3yr")), nil).Once()
+	})).Return(mockResp9, nil).Once()
+	mockResp10 := createMockHTTPResponse(http.StatusCreated, `{}`)
+	_ = mockResp10.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/db-order-3yr/purchase"
-	})).Return(createMockHTTPResponse(http.StatusCreated, `{}`), nil).Once()
+	})).Return(mockResp10, nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "GP_Gen5_8",
@@ -930,7 +950,7 @@ func TestDatabaseClient_PurchaseCommitment_3YearTerm(t *testing.T) {
 		CommitmentCost: 12000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "db-order-3yr", result.CommitmentID)
@@ -943,12 +963,16 @@ func TestDatabaseClient_PurchaseCommitment_Accepted(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
+	mockResp11 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-202"))
+	_ = mockResp11.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-202")), nil).Once()
+	})).Return(mockResp11, nil).Once()
+	mockResp12 := createMockHTTPResponse(http.StatusAccepted, `{}`)
+	_ = mockResp12.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/db-order-202/purchase"
-	})).Return(createMockHTTPResponse(http.StatusAccepted, `{}`), nil).Once()
+	})).Return(mockResp12, nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "GP_Gen5_8",
@@ -957,7 +981,7 @@ func TestDatabaseClient_PurchaseCommitment_Accepted(t *testing.T) {
 		CommitmentCost: 5000.0,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	mockHTTP.AssertExpectations(t)
@@ -975,7 +999,7 @@ func TestDatabaseClient_PurchaseCommitment_TokenError(t *testing.T) {
 		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "failed to get access token")
@@ -997,7 +1021,7 @@ func TestDatabaseClient_PurchaseCommitment_HTTPError(t *testing.T) {
 		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "calculatePrice HTTP call")
@@ -1009,12 +1033,16 @@ func TestDatabaseClient_PurchaseCommitment_BadStatus(t *testing.T) {
 	mockCred := &MockTokenCredential{token: "test-token"}
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
+	mockResp13 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-bad"))
+	_ = mockResp13.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/calculatePrice"
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON("db-order-bad")), nil).Once()
+	})).Return(mockResp13, nil).Once()
+	mockResp14 := createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`)
+	_ = mockResp14.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/db-order-bad/purchase"
-	})).Return(createMockHTTPResponse(http.StatusBadRequest, `{"error": "invalid request"}`), nil).Once()
+	})).Return(mockResp14, nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType: "GP_Gen5_8",
@@ -1022,7 +1050,7 @@ func TestDatabaseClient_PurchaseCommitment_BadStatus(t *testing.T) {
 		Count:        1,
 	}
 
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "reservation purchase failed with status 400")
@@ -1045,6 +1073,8 @@ func TestDatabaseClient_PurchaseCommitment_TagInjection(t *testing.T) {
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
 	var capturedBody []byte
+	mockResp15 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID))
+	_ = mockResp15.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		if r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
 			return false
@@ -1052,13 +1082,15 @@ func TestDatabaseClient_PurchaseCommitment_TagInjection(t *testing.T) {
 		capturedBody, _ = io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(capturedBody))
 		return true
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(mockResp15, nil).Once()
+	mockResp16 := createMockHTTPResponse(http.StatusOK, `{}`)
+	_ = mockResp16.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mockResp16, nil).Once()
 
 	rec := common.Recommendation{ResourceType: "GP_Gen5_8", Term: "1yr", Count: 1, CommitmentCost: 5000.0}
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: source})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: source})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 
@@ -1083,7 +1115,7 @@ func TestDatabaseClient_PurchaseCommitment_RequiresSource(t *testing.T) {
 	client := NewClientWithHTTP(mockCred, "test-subscription", "eastus", mockHTTP)
 
 	rec := common.Recommendation{ResourceType: "GP_Gen5_8", Term: "1yr", Count: 1}
-	result, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{})
 	require.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "purchase source is required")
@@ -1119,7 +1151,7 @@ func TestDatabaseClient_ValidateOffering_Valid(t *testing.T) {
 		ResourceType: "GP_Gen5_8",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.NoError(t, err)
 }
 
@@ -1152,7 +1184,7 @@ func TestDatabaseClient_ValidateOffering_Invalid(t *testing.T) {
 		ResourceType: "InvalidSKU",
 	}
 
-	err := client.ValidateOffering(ctx, rec)
+	err := client.ValidateOffering(ctx, &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid Azure SQL Database SKU")
 }
@@ -1183,7 +1215,7 @@ func TestDatabaseClient_ValidateOffering_CaseInsensitive(t *testing.T) {
 		client := NewClient(nil, "test-subscription", "eastus")
 		client.SetCapabilitiesClient(mockCapabilities)
 		rec := common.Recommendation{ResourceType: "gp_gen5_8"}
-		err := client.ValidateOffering(ctx, rec)
+		err := client.ValidateOffering(ctx, &rec)
 		assert.NoError(t, err)
 	})
 
@@ -1191,7 +1223,7 @@ func TestDatabaseClient_ValidateOffering_CaseInsensitive(t *testing.T) {
 		client := NewClient(nil, "test-subscription", "eastus")
 		client.SetCapabilitiesClient(mockCapabilities)
 		rec := common.Recommendation{ResourceType: "  GP_Gen5_8  "}
-		err := client.ValidateOffering(ctx, rec)
+		err := client.ValidateOffering(ctx, &rec)
 		assert.NoError(t, err)
 	})
 }
@@ -1207,6 +1239,8 @@ func TestDatabaseClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 
 	const orderID = "azure-db-displayname"
 	var capturedDisplayName string
+	mockResp17 := createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID))
+	_ = mockResp17.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		if r.Method != http.MethodPost || r.URL.Path != "/providers/Microsoft.Capacity/calculatePrice" {
 			return false
@@ -1225,11 +1259,13 @@ func TestDatabaseClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 			}
 		}
 		return true
-	})).Return(createMockHTTPResponse(http.StatusOK, calcPriceRespJSON(orderID)), nil).Once()
+	})).Return(mockResp17, nil).Once()
+	mockResp18 := createMockHTTPResponse(http.StatusOK, `{}`)
+	_ = mockResp18.Body.Close()
 	mockHTTP.On("Do", mock.MatchedBy(func(r *http.Request) bool {
 		return r.Method == http.MethodPost &&
 			r.URL.Path == "/providers/Microsoft.Capacity/reservationOrders/"+orderID+"/purchase"
-	})).Return(createMockHTTPResponse(http.StatusOK, `{}`), nil).Once()
+	})).Return(mockResp18, nil).Once()
 
 	rec := common.Recommendation{
 		ResourceType:   "GP_Gen5_2",
@@ -1237,7 +1273,7 @@ func TestDatabaseClient_PurchaseCommitment_DisplayNameConformsToAzureAllowlist(t
 		Count:          1,
 		CommitmentCost: 1500.0,
 	}
-	_, err := client.PurchaseCommitment(ctx, rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	_, err := client.PurchaseCommitment(ctx, &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	require.NoError(t, err)
 	assert.NotEmpty(t, capturedDisplayName)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, capturedDisplayName)

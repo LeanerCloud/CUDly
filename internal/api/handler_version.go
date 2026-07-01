@@ -24,12 +24,12 @@ type VersionResponse struct {
 // from env avoids an import cycle between this package and main). When the
 // binary was built without ldflags (e.g. a bare `go run`), the fields fall
 // back to the same "dev"/"unknown" sentinels main.go declares.
-func (h *Handler) getVersion(_ context.Context, _ *events.LambdaFunctionURLRequest) (*VersionResponse, error) {
+func (h *Handler) getVersion(_ context.Context, _ *events.LambdaFunctionURLRequest) *VersionResponse {
 	return &VersionResponse{
 		Version:   envOrDefault("VERSION", "dev"),
 		GitSHA:    envOrDefault("GIT_SHA", "unknown"),
 		BuildTime: envOrDefault("BUILD_TIME", "unknown"),
-	}, nil
+	}
 }
 
 // envOrDefault returns the value of the named env var, or def when it is unset

@@ -55,7 +55,7 @@ func TestPostgresStore_ReplaceRecommendations(t *testing.T) {
 	}
 	require.NoError(t, store.ReplaceRecommendations(ctx, now, initial))
 
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 
@@ -65,7 +65,7 @@ func TestPostgresStore_ReplaceRecommendations(t *testing.T) {
 	}
 	require.NoError(t, store.ReplaceRecommendations(ctx, now.Add(time.Minute), replacement))
 
-	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+	got, err = store.ListStoredRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "eu-west-1", got[0].Region)
@@ -99,7 +99,7 @@ func TestPostgresStore_UpsertRecommendations_PartialCollect(t *testing.T) {
 		{Provider: "aws"},
 	}))
 
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 2, "azure row should survive partial-aws collect")
 
@@ -143,7 +143,7 @@ func TestPostgresStore_UpsertRecommendations_EvictsStaleInSuccessfulProvider(t *
 		{Provider: "aws"},
 	}))
 
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "unseen aws row should be evicted")
 	assert.Equal(t, "m5.xlarge", got[0].ResourceType)
@@ -164,17 +164,17 @@ func TestPostgresStore_ListStoredRecommendations_FilterPushdown(t *testing.T) {
 	require.NoError(t, store.ReplaceRecommendations(ctx, now, recs))
 
 	// Filter by provider.
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "aws"})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{Provider: "aws"})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 
 	// Filter by service.
-	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{Service: "ec2"})
+	got, err = store.ListStoredRecommendations(ctx, &config.RecommendationFilter{Service: "ec2"})
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 
 	// Filter by min savings (dollar floor, pushed down to SQL).
-	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{MinSavingsUSD: 25})
+	got, err = store.ListStoredRecommendations(ctx, &config.RecommendationFilter{MinSavingsUSD: 25})
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 	assert.Equal(t, "rds", got[0].Service)
@@ -210,7 +210,7 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 }
 
 // TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins
-// the broadened-natural-key behaviour from migration 000032: when
+// the broadened-natural-key behavior from migration 000032: when
 // Azure returns multiple `(term, payment)` variants for the same
 // (account, provider, service, region, resource_type) SKU, all of
 // them must round-trip through the cache as distinct rows. Pre-fix
@@ -242,7 +242,7 @@ func TestPostgresStore_UpsertRecommendations_StoresAllTermVariants(t *testing.T)
 		{Provider: "azure"},
 	}))
 
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "azure"})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{Provider: "azure"})
 	require.NoError(t, err)
 	require.Len(t, got, 3, "all 3 (term, payment) variants must round-trip — pre-fix this would have collapsed to 1")
 
@@ -296,7 +296,7 @@ func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T)
 
 	// Assert: acct-1's stale rows (D2 + D4 from t0) are evicted; acct-1
 	// keeps the new D8 row; acct-2's two rows survive.
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "azure"})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{Provider: "azure"})
 	require.NoError(t, err)
 
 	byAccountAndType := map[string]bool{}
@@ -347,7 +347,7 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 		{Provider: "aws", CloudAccountID: &registeredAcctID},
 	}))
 
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "aws"})
+	got, err := store.ListStoredRecommendations(ctx, &config.RecommendationFilter{Provider: "aws"})
 	require.NoError(t, err)
 	require.Len(t, got, 2, "ambient row must survive; registered row must be upserted")
 

@@ -91,7 +91,7 @@ func gcpOIDCIssuerURI(source, tenantID string) string {
 }
 
 // renderTemplate renders a named template from the embedded iacfiles.Templates FS.
-func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
+func renderTemplate(tmplPath string, data *federationIaCData) (string, error) {
 	tmplBytes, err := iacfiles.Templates.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("read template %s: %w", tmplPath, err)
@@ -138,16 +138,16 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	// Reject impossible target/source combinations early — before bundle
 	// construction — so the caller gets a clear 400 instead of a downloadable
 	// bundle that fails at terraform apply with a cryptic IAM error. See #42.
-	if err = validateFederationTargetSource(target, source); err != nil {
+	if err := validateFederationTargetSource(target, source); err != nil {
 		return nil, err
 	}
 
 	apiURL := deriveFederationAPIURL(h.dashboardURL, req.RequestContext.DomainName)
 	data := buildGenericIaCData(target, source, apiURL)
-	if err = h.populateSourceAccountID(ctx, source, &data); err != nil {
+	if err := h.populateSourceAccountID(ctx, source, &data); err != nil {
 		return nil, err
 	}
-	if err = h.validateSourceIdentity(ctx); err != nil {
+	if err := h.validateSourceIdentity(ctx); err != nil {
 		return nil, err
 	}
 	// ContactEmail is always the email of the authenticated user who requested
@@ -157,9 +157,9 @@ func (h *Handler) getFederationIaC(ctx context.Context, req *events.LambdaFuncti
 	data.ContactEmail = session.Email
 
 	if formatNeedsZip(format) {
-		return h.buildZipResponse(data, target, source, format, "target")
+		return h.buildZipResponse(&data, target, source, format, "target")
 	}
-	return h.renderSingleFile(data, target, source, format)
+	return h.renderSingleFile(&data, target, source, format)
 }
 
 // deriveFederationAPIURL returns the configured dashboard URL, or derives it
@@ -255,14 +255,15 @@ func validateFederationTargetSource(target, source string) error {
 }
 
 // renderSingleFile renders a single-file IaC template (currently only "cli" is supported).
-func (h *Handler) renderSingleFile(data federationIaCData, target, source, format string) (*FederationIaCResponse, error) {
+func (h *Handler) renderSingleFile(data *federationIaCData, target, source, format string) (*FederationIaCResponse, error) {
 	tmplPath, filename, contentType, err := singleFileSpec(target, source, format, "target")
 	if err != nil {
 		return nil, err
 	}
 	renderData := data
 	if format == "cli" {
-		renderData = shellEscapeData(data)
+		escaped := shellEscapeData(data)
+		renderData = &escaped
 	}
 	content, err := renderTemplate(tmplPath, renderData)
 	if err != nil {
@@ -273,8 +274,8 @@ func (h *Handler) renderSingleFile(data federationIaCData, target, source, forma
 
 // shellEscapeData returns a copy of data with all fields interpolated into CLI
 // shell templates escaped for safe use inside double-quoted bash strings.
-func shellEscapeData(data federationIaCData) federationIaCData {
-	d := data
+func shellEscapeData(data *federationIaCData) federationIaCData {
+	d := *data
 	d.AccountName = shellEscape(data.AccountName)
 	d.AccountExternalID = shellEscape(data.AccountExternalID)
 	d.AccountSlug = shellEscape(data.AccountSlug)
@@ -305,7 +306,7 @@ func formatNeedsZip(format string) bool {
 // buildZipResponse is the single encoder for zip-format IaC downloads. It dispatches
 // to the appropriate builder, which returns raw bytes + filename, then base64-wraps
 // the result into a FederationIaCResponse.
-func (h *Handler) buildZipResponse(data federationIaCData, target, source, format, slug string) (*FederationIaCResponse, error) {
+func (h *Handler) buildZipResponse(data *federationIaCData, target, source, format, slug string) (*FederationIaCResponse, error) {
 	var (
 		zipBytes []byte
 		filename string
@@ -384,7 +385,7 @@ func federationIaCParams(q map[string]string) (target, source, format string, er
 }
 
 // shellEscape escapes a string for safe use inside a double-quoted bash argument.
-// It escapes characters that have special meaning in double-quoted strings: \, $, `, "
+// It escapes characters that have special meaning in double-quoted strings: \, $, `, ".
 func shellEscape(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
 	return r.Replace(s)
@@ -431,22 +432,22 @@ func cliScriptSpec(target, source, slug string) (tmplPath, filename, contentType
 //
 // Returns the raw zip bytes and output filename. base64 wrapping happens in
 // buildZipResponse.
-func buildFederationBundle(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildFederationBundle(data *federationIaCData, target, source, slug string) (zipBytes []byte, filename string, err error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	if err := addBundleTerraform(zw, data, target, source, slug); err != nil {
+	if err = addBundleTerraform(zw, data, target, source, slug); err != nil {
 		return nil, "", err
 	}
-	if err := addBundleCFN(zw, data, target, source, slug); err != nil {
+	if err = addBundleCFN(zw, data, target, source, slug); err != nil {
 		return nil, "", err
 	}
 
 	readme := buildBundleReadme(data, target, source)
-	if err := addStringToZip(zw, "README.txt", readme); err != nil {
+	if err = addStringToZip(zw, "README.txt", readme); err != nil {
 		return nil, "", fmt.Errorf("bundle: write readme: %w", err)
 	}
-	if err := zw.Close(); err != nil {
+	if err = zw.Close(); err != nil {
 		return nil, "", fmt.Errorf("bundle: finalize zip: %w", err)
 	}
 
@@ -455,16 +456,16 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 
 // buildCFNZip creates a self-contained CloudFormation zip with template.yaml,
 // the parameters JSON, and deploy-cfn.sh. Returns raw zip bytes + filename.
-func buildCFNZip(data federationIaCData, target, source, slug string) ([]byte, string, error) {
+func buildCFNZip(data *federationIaCData, target, source, slug string) (zipBytes []byte, filename string, err error) {
 	if target != "aws" {
 		return nil, "", NewClientError(400, "format=cfn requires target=aws")
 	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	if err := writeCFNFiles(zw, data, source, slug); err != nil {
+	if err = writeCFNFiles(zw, data, source, slug); err != nil {
 		return nil, "", err
 	}
-	if err := zw.Close(); err != nil {
+	if err = zw.Close(); err != nil {
 		return nil, "", fmt.Errorf("cfn: finalize zip: %w", err)
 	}
 	zipName := slug + "-aws-wif-cfn.zip"
@@ -492,7 +493,7 @@ func azureTemplateName(format string) string {
 // identity, then deploy this template to assign the Reservation Purchaser role).
 //
 // format must be "bicep" or "arm". target must be "azure".
-func buildAzureTemplateZip(format string, data federationIaCData, target, slug string) ([]byte, string, error) {
+func buildAzureTemplateZip(format string, data *federationIaCData, target, slug string) (zipBytes []byte, filename string, err error) {
 	if target != "azure" {
 		return nil, "", NewClientError(400, "format="+format+" requires target=azure")
 	}
@@ -502,10 +503,10 @@ func buildAzureTemplateZip(format string, data federationIaCData, target, slug s
 	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	if err := writeAzureTemplateFiles(zw, data, format, templateName); err != nil {
+	if err = writeAzureTemplateFiles(zw, data, format, templateName); err != nil {
 		return nil, "", err
 	}
-	if err := zw.Close(); err != nil {
+	if err = zw.Close(); err != nil {
 		return nil, "", fmt.Errorf("azure %s: finalize zip: %w", format, err)
 	}
 	return buf.Bytes(), slug + "-azure-wif-" + format + ".zip", nil
@@ -514,7 +515,7 @@ func buildAzureTemplateZip(format string, data federationIaCData, target, slug s
 // writeAzureTemplateFiles reads the static Azure template, renders the
 // parameters file, deploy script, and README, then writes all four into the zip.
 // The deploy script is marked executable (mode 0755) in the zip header.
-func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, templateName string) error {
+func writeAzureTemplateFiles(zw *zip.Writer, data *federationIaCData, format, templateName string) error {
 	templateBytes, err := cudlyiac.Modules.ReadFile("federation/azure-target/bicep/" + templateName)
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
@@ -550,7 +551,7 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	return nil
 }
 
-func buildAzureTemplateReadme(data federationIaCData, format string) string {
+func buildAzureTemplateReadme(data *federationIaCData, format string) string {
 	var sb strings.Builder
 	sb.WriteString("CUDly Azure Federation — ")
 	if format == "bicep" {
@@ -560,7 +561,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 		sb.WriteString("ARM deployment\n")
 		sb.WriteString("================================\n\n")
 	}
-	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID))
+	fmt.Fprintf(&sb, "Account : %s (%s)\n\n", data.AccountName, data.AccountExternalID)
 	sb.WriteString("The deploy script creates an Azure AD App Registration with a federated\n")
 	sb.WriteString("identity credential bound to CUDly's OIDC issuer, then deploys the role\n")
 	sb.WriteString("assignment template. No certificate or secret is created.\n\n")
@@ -573,7 +574,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 }
 
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
-func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
+func addBundleTerraform(zw *zip.Writer, data *federationIaCData, target, source, slug string) error {
 	tfDir := bundleModuleDir(target, source) + "/terraform"
 	if err := addDirToZip(zw, cudlyiac.Modules, tfDir, "terraform"); err != nil {
 		return fmt.Errorf("bundle: terraform dir: %w", err)
@@ -591,7 +592,7 @@ func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, 
 
 // addBundleCFN adds CloudFormation files to the zip for AWS target bundles
 // (both cross-account and WIF). Thin wrapper around writeCFNFiles.
-func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
+func addBundleCFN(zw *zip.Writer, data *federationIaCData, target, source, slug string) error {
 	if target != "aws" {
 		return nil
 	}
@@ -604,7 +605,7 @@ func addBundleCFN(zw *zip.Writer, data federationIaCData, target, source, slug s
 //
 // Dispatches on source: "aws" → cross-account IAM role template; anything else
 // → AWS WIF template.
-func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) error {
+func writeCFNFiles(zw *zip.Writer, data *federationIaCData, source, slug string) error {
 	cfTemplatePath := "federation/aws-target/cloudformation/template.yaml"
 	deployTmplPath := "templates/aws-cfn-deploy.sh.tmpl"
 	if source == "aws" {
@@ -627,8 +628,8 @@ func writeCFNFiles(zw *zip.Writer, data federationIaCData, source, slug string) 
 	}
 	// Shell-escape template values before rendering the deploy script to prevent
 	// injection via account names or OIDC URLs containing shell metacharacters.
-	escapedData := shellEscapeData(data)
-	deployScript, err := renderTemplate(deployTmplPath, escapedData)
+	escaped := shellEscapeData(data)
+	deployScript, err := renderTemplate(deployTmplPath, &escaped)
 	if err != nil {
 		return fmt.Errorf("cfn: %w", err)
 	}
@@ -689,13 +690,13 @@ func bundleZipName(target, source, slug string) string {
 	}
 }
 
-func buildBundleReadme(data federationIaCData, target, source string) string {
+func buildBundleReadme(data *federationIaCData, target, source string) string {
 	var sb strings.Builder
 	sb.WriteString("CUDly Federation IaC Bundle\n")
 	sb.WriteString("===========================\n\n")
-	sb.WriteString(fmt.Sprintf("Account : %s (%s)\n", data.AccountName, data.AccountExternalID))
-	sb.WriteString(fmt.Sprintf("Target  : %s\n", target))
-	sb.WriteString(fmt.Sprintf("Source  : %s\n\n", source))
+	fmt.Fprintf(&sb, "Account : %s (%s)\n", data.AccountName, data.AccountExternalID)
+	fmt.Fprintf(&sb, "Target  : %s\n", target)
+	fmt.Fprintf(&sb, "Source  : %s\n\n", source)
 
 	switch {
 	case target == "aws" && source == "aws":
@@ -754,7 +755,7 @@ type cfParam struct {
 //
 // Dispatches on source: "aws" → cross-account params (SourceAccountID, ExternalID);
 // anything else → AWS WIF params (OIDC values).
-func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
+func buildCFParamsJSON(data *federationIaCData, source string) (string, error) {
 	var params []cfParam
 	if source == "aws" {
 		params = []cfParam{

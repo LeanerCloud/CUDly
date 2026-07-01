@@ -16,7 +16,7 @@ const (
 )
 
 // RenderTable returns a formatted table of recommendations that passed the scorer.
-// Columns: Cloud, Account, Region, Service, Type, Term, Count, Est. Cost, Est. Savings, Savings%, Break-even, Commitment
+// Columns: Cloud, Account, Region, Service, Type, Term, Count, Est. Cost, Est. Savings, Savings%, Break-even, Commitment.
 func RenderTable(result scorer.ScoredResult) string {
 	if len(result.Passed) == 0 {
 		return "No recommendations passed the filters.\n"
@@ -27,7 +27,8 @@ func RenderTable(result scorer.ScoredResult) string {
 	fmt.Fprintln(w, "Cloud\tAccount\tRegion\tService\tType\tTerm\tCount\tEst.Cost\tEst.Savings\tSavings%\tBreak-even\tCommitment")
 	fmt.Fprintln(w, "-----\t-------\t------\t-------\t----\t----\t-----\t--------\t-----------\t---------\t----------\t----------")
 
-	for _, rec := range result.Passed {
+	for i := range result.Passed {
+		rec := &result.Passed[i]
 		breakEven := "-"
 		if rec.BreakEvenMonths > 0 {
 			breakEven = fmt.Sprintf("%.1f mo", rec.BreakEvenMonths)
@@ -52,7 +53,7 @@ func RenderTable(result scorer.ScoredResult) string {
 }
 
 // RenderExcluded returns a formatted table of recommendations that were filtered out.
-// Columns: Cloud, Account, Region, Service, Type, Term, Savings%, FilterReason
+// Columns: Cloud, Account, Region, Service, Type, Term, Savings%, FilterReason.
 func RenderExcluded(result scorer.ScoredResult) string {
 	if len(result.Filtered) == 0 {
 		return ""
@@ -63,8 +64,9 @@ func RenderExcluded(result scorer.ScoredResult) string {
 	fmt.Fprintln(w, "Cloud\tAccount\tRegion\tService\tType\tTerm\tSavings%\tFilterReason")
 	fmt.Fprintln(w, "-----\t-------\t------\t-------\t----\t----\t---------\t------------")
 
-	for _, fr := range result.Filtered {
-		rec := fr.Recommendation
+	for i := range result.Filtered {
+		fr := &result.Filtered[i]
+		rec := &fr.Recommendation
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.1f%%\t%s\n",
 			rec.Provider,
 			rec.AccountName,
@@ -88,9 +90,9 @@ func RenderExcluded(result scorer.ScoredResult) string {
 // upfront portion (one-time), so the two figures are NOT on the same timescale.
 func RenderSummary(result scorer.ScoredResult) string {
 	var totalSavings, totalCost float64
-	for _, rec := range result.Passed {
-		totalSavings += rec.EstimatedSavings
-		totalCost += rec.CommitmentCost
+	for i := range result.Passed {
+		totalSavings += result.Passed[i].EstimatedSavings
+		totalCost += result.Passed[i].CommitmentCost
 	}
 
 	var sb strings.Builder
@@ -98,11 +100,11 @@ func RenderSummary(result scorer.ScoredResult) string {
 		len(result.Passed), totalSavings, totalCost)
 
 	if len(result.Filtered) > 0 {
-		// Group filtered reasons
+		// Group filtered reasons.
 		reasons := make(map[string]int)
-		for _, fr := range result.Filtered {
-			// Use the first word as the reason category
-			key := firstWord(fr.FilterReason)
+		for i := range result.Filtered {
+			// Use the first word as the reason category.
+			key := firstWord(result.Filtered[i].FilterReason)
 			reasons[key]++
 		}
 		fmt.Fprintf(&sb, "Filtered: %d recommendations", len(result.Filtered))

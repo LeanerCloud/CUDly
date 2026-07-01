@@ -41,7 +41,7 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -49,9 +49,9 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 	var mu sync.Mutex
 	tokens := map[string]string{}
 	mockServiceClient.On("PurchaseCommitment", mock.Anything,
-		mock.AnythingOfType("common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"),
+		mock.AnythingOfType("*common.Recommendation"), mock.AnythingOfType("common.PurchaseOptions"),
 	).Run(func(args mock.Arguments) {
-		rec := args.Get(1).(common.Recommendation)
+		rec := args.Get(1).(*common.Recommendation)
 		opts := args.Get(2).(common.PurchaseOptions)
 		mu.Lock()
 		tokens[rec.ResourceType] = opts.IdempotencyToken
@@ -171,7 +171,7 @@ func TestMultiAccountSeedsStablePerAccountKey(t *testing.T) {
 			return nil
 		}
 		mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-		mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+		mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 
 		mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 		mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -246,7 +246,7 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 	mockStore.On("GetPurchasePlan", ctx, mock.Anything).Return(&config.PurchasePlan{Name: "p"}, nil).Maybe()
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
@@ -329,7 +329,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 		return nil
 	}
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("*email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)

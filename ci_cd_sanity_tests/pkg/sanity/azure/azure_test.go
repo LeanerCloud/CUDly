@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func accountJSON(id, tenantID, name, state string) []byte {
+func accountJSON(id, tenantID string) []byte {
 	b, err := json.Marshal(azAccountShow{
 		ID:       id,
 		TenantID: tenantID,
-		Name:     name,
-		State:    state,
+		Name:     "My Sub",
+		State:    "Enabled",
 	})
 	if err != nil {
 		panic(err)
@@ -25,16 +25,16 @@ func accountJSON(id, tenantID, name, state string) []byte {
 func TestValidateAccountExpectations(t *testing.T) {
 	tests := []struct {
 		name        string
+		wantStatus  report.Status
+		wantMsgPart string
 		opts        Options
 		accountOut  []byte
-		wantStatus  report.Status
-		wantMsgPart string // substring expected in Message when non-empty
 	}{
 		{
 			name: "valid json, no expectations",
 			opts: Options{},
 			accountOut: accountJSON(
-				"sub-123", "tenant-456", "My Sub", "Enabled",
+				"sub-123", "tenant-456",
 			),
 			wantStatus: report.StatusPass,
 		},
@@ -45,7 +45,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 				ExpectedTenantID: "tenant-456",
 			},
 			accountOut: accountJSON(
-				"sub-123", "tenant-456", "My Sub", "Enabled",
+				"sub-123", "tenant-456",
 			),
 			wantStatus: report.StatusPass,
 		},
@@ -55,7 +55,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 				ExpectedSubID: "sub-expected",
 			},
 			accountOut: accountJSON(
-				"sub-actual", "tenant-456", "My Sub", "Enabled",
+				"sub-actual", "tenant-456",
 			),
 			wantStatus:  report.StatusFail,
 			wantMsgPart: "unexpected subscription",
@@ -66,7 +66,7 @@ func TestValidateAccountExpectations(t *testing.T) {
 				ExpectedTenantID: "tenant-expected",
 			},
 			accountOut: accountJSON(
-				"sub-123", "tenant-actual", "My Sub", "Enabled",
+				"sub-123", "tenant-actual",
 			),
 			wantStatus:  report.StatusFail,
 			wantMsgPart: "unexpected tenant",

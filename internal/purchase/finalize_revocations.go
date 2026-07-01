@@ -7,7 +7,7 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/logging"
 )
 
-// FinalizeResult summarises one sweep of FinalizeInFlightRevocations.
+// FinalizeResult summarizes one sweep of FinalizeInFlightRevocations.
 // Returned for the scheduled-task handler to log and surface in CloudWatch.
 type FinalizeResult struct {
 	// Found is the number of purchase_history rows with revocation_in_flight=true

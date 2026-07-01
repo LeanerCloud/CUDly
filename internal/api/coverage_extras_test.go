@@ -330,6 +330,7 @@ func TestHandler_rejectRIExchange_AlreadyProcessed(t *testing.T) {
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: "tok"}, nil)
 	// Transition returns nil indicating already processed
+	//nolint:misspell // DB schema value 'cancelled' -- see migration 000009_ri_exchange_history.up.sql
 	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "cancelled", mock.Anything).
 		Return(nil, nil)
 

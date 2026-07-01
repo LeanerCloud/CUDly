@@ -20,8 +20,8 @@ func TestWriteAuditRecord_Append(t *testing.T) {
 	r1 := AuditRecord{RunID: "run-1", Status: "success", Timestamp: time.Now().UTC()}
 	r2 := AuditRecord{RunID: "run-2", Status: "error", Timestamp: time.Now().UTC()}
 
-	require.NoError(t, WriteAuditRecord(r1, path))
-	require.NoError(t, WriteAuditRecord(r2, path))
+	require.NoError(t, WriteAuditRecord(&r1, path))
+	require.NoError(t, WriteAuditRecord(&r2, path))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -42,14 +42,14 @@ func TestWriteAuditRecord_EmptyRunID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
-	err := WriteAuditRecord(AuditRecord{Status: "success"}, path)
+	err := WriteAuditRecord(&AuditRecord{Status: "success"}, path)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "RunID")
 }
 
 func TestWriteAuditRecord_NonwritablePath(t *testing.T) {
 	t.Parallel()
-	err := WriteAuditRecord(AuditRecord{RunID: "x"}, "/nonexistent/dir/audit.jsonl")
+	err := WriteAuditRecord(&AuditRecord{RunID: "x"}, "/nonexistent/dir/audit.jsonl")
 	assert.Error(t, err)
 }
 
@@ -124,7 +124,8 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	}
 	result := PurchaseResult{CommitmentID: "ri-xyz", Success: true}
 
-	ar := NewAuditRecord("run-001", rec, result, "success", false, PurchaseSourceCLI)
+	ar, err := NewAuditRecord("run-001", &rec, &result, "success", false, PurchaseSourceCLI)
+	require.NoError(t, err)
 
 	assert.Equal(t, "run-001", ar.RunID)
 	assert.Equal(t, ProviderAWS, ar.Provider)
@@ -139,6 +140,21 @@ func TestNewAuditRecord_Fields(t *testing.T) {
 	assert.Equal(t, "success", ar.Status)
 	assert.Equal(t, false, ar.DryRun)
 	assert.WithinDuration(t, time.Now().UTC(), ar.Timestamp, 5*time.Second)
+}
+
+// TestNewAuditRecord_NilArgsReturnError is the CR #1276 guard: the exported
+// constructor must fail through the error path on a nil pointer argument, not
+// panic.
+func TestNewAuditRecord_NilArgsReturnError(t *testing.T) {
+	t.Parallel()
+	rec := Recommendation{Provider: ProviderAWS}
+	result := PurchaseResult{CommitmentID: "ri-1"}
+
+	_, err := NewAuditRecord("run", nil, &result, "success", false, PurchaseSourceCLI)
+	require.Error(t, err, "nil rec must return an error, not panic")
+
+	_, err = NewAuditRecord("run", &rec, nil, "success", false, PurchaseSourceCLI)
+	require.Error(t, err, "nil result must return an error, not panic")
 }
 
 func TestTermMonths(t *testing.T) {

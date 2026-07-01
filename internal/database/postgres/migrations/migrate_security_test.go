@@ -122,7 +122,7 @@ func TestBuildMigrateDSN_PasswordNotInLogs(t *testing.T) {
 	require.NoError(t, err, "pgxpool.ParseConfig must accept the sentinel DSN")
 
 	// Call the function under test.
-	result := buildMigrateDSN(poolCfg, "")
+	result := buildMigrateDSN(poolCfg)
 
 	// The sentinel must appear in the returned DSN (proves the function embeds it).
 	assert.Contains(t, result, sentinelPassword,
@@ -131,6 +131,27 @@ func TestBuildMigrateDSN_PasswordNotInLogs(t *testing.T) {
 	// The sentinel must NOT have leaked into the log buffer.
 	assert.NotContains(t, logBuf.String(), sentinelPassword,
 		"buildMigrateDSN must not emit the database password to the log output")
+}
+
+// TestBuildMigrateDSN_PreservesSSLMode is the CR #1276 regression guard: the
+// migration DSN must carry the exact sslmode the application configured, so a
+// strict mode (verify-ca / verify-full) is never silently downgraded to
+// require. The sslmode round-trips DSN -> pgx *tls.Config -> migration DSN, so
+// this also pins the pgx-version-specific TLSConfig mapping in
+// sslModeFromTLSConfig.
+func TestBuildMigrateDSN_PreservesSSLMode(t *testing.T) {
+	for _, mode := range []string{"disable", "require", "verify-ca", "verify-full"} {
+		t.Run(mode, func(t *testing.T) {
+			rawDSN := fmt.Sprintf("postgres://user:pass@localhost:5432/db?sslmode=%s", mode)
+			poolCfg, err := pgxpool.ParseConfig(rawDSN)
+			require.NoError(t, err, "pgxpool.ParseConfig must accept sslmode=%s", mode)
+
+			result := buildMigrateDSN(poolCfg)
+
+			assert.Contains(t, result, "sslmode="+mode,
+				"buildMigrateDSN must preserve the configured sslmode, not downgrade it")
+		})
+	}
 }
 
 // TestMaybeForceVersion_NonNumericError ensures a non-numeric

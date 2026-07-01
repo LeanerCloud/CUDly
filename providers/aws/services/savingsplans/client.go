@@ -40,7 +40,7 @@ type Client struct {
 // GetServiceType returns and which commitments GetExistingCommitments includes.
 // See purchasecfg for retry rationale.
 func NewClient(cfg aws.Config, planType types.SavingsPlanType) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client:   savingsplans.NewFromConfig(pcfg),
 		region:   cfg.Region,
@@ -101,7 +101,7 @@ func (c *Client) GetRegion() string {
 }
 
 // GetRecommendations returns empty as Savings Plans uses centralized Cost Explorer recommendations
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 
@@ -207,9 +207,9 @@ func (c *Client) toCommitment(sp types.SavingsPlan, service common.ServiceType) 
 }
 
 // PurchaseCommitment purchases a Savings Plan
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
@@ -221,7 +221,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		return result, result.Error
 	}
 
-	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
+	offeringID, err := c.findOfferingID(ctx, *rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find Savings Plans offering: %w", err)
 		return result, result.Error
@@ -467,14 +467,14 @@ func (c *Client) lookupOfferingID(ctx context.Context, input *savingsplans.Descr
 }
 
 // ValidateOffering checks if a Savings Plans offering exists
-func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
+	_, err := c.findOfferingID(ctx, *rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
-func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
+	offeringID, err := c.findOfferingID(ctx, *rec, "")
 	if err != nil {
 		return nil, err
 	}

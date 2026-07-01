@@ -449,7 +449,7 @@ func TestHandler_createPlannedPurchases(t *testing.T) {
 // guard: every execution row written through POST /api/plans/{id}/purchases
 // MUST carry the session user's UUID in CreatedByUserID, otherwise the
 // per-row ownership gate (authorizeExecutionManagement in
-// handler_purchases.go) downstream cannot recognise the actor as the
+// handler_purchases.go) downstream cannot recognize the actor as the
 // rightful manager and the user who just scheduled the purchases is
 // locked out of pause / resume / run / delete until an admin steps in.
 //
@@ -780,9 +780,9 @@ func TestCalculateNextExecutionDate(t *testing.T) {
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name     string
-		plan     *config.PurchasePlan
 		expected time.Time
+		plan     *config.PurchasePlan
+		name     string
 	}{
 		{
 			name: "immediate type",

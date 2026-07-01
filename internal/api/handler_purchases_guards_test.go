@@ -44,61 +44,61 @@ func TestValidatePurchaseRecommendation(t *testing.T) {
 		wantError bool
 	}{
 		// --- AWS canonical set ---
-		{"valid aws all-upfront 3y", validRec(), false},
-		{"valid aws no-upfront 1y", mutate(func(r *config.RecommendationRecord) { r.Payment = "no-upfront"; r.Term = 1 }), false},
-		{"valid aws partial-upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "partial-upfront" }), false},
-		{"aws rejects azure-only monthly", mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), true},
-		{"aws rejects azure-only upfront", mutate(func(r *config.RecommendationRecord) { r.Payment = "upfront" }), true},
+		{name: "valid aws all-upfront 3y", rec: validRec()},
+		{name: "valid aws no-upfront 1y", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "no-upfront"; r.Term = 1 })},
+		{name: "valid aws partial-upfront", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "partial-upfront" })},
+		{name: "aws rejects azure-only monthly", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "monthly" }), wantError: true},
+		{name: "aws rejects azure-only upfront", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "upfront" }), wantError: true},
 		// --- Azure canonical set ---
-		{"valid azure upfront", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "upfront" }), false},
-		{"valid azure monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" }), false},
+		{name: "valid azure upfront", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "upfront" })},
+		{name: "valid azure monthly", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "azure"; r.Payment = "monthly" })},
 		// Legacy AWS-style tokens on Azure are normalized to Azure-canonical before validation.
-		{"azure accepts legacy all-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
+		{name: "azure accepts legacy all-upfront (coerced to upfront)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "all-upfront"
-		}), false},
-		{"azure accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "azure accepts legacy no-upfront (coerced to monthly)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "no-upfront"
-		}), false},
-		{"azure accepts legacy partial-upfront (coerced to upfront)", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "azure accepts legacy partial-upfront (coerced to upfront)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "partial-upfront"
-		}), false},
-		{"azure rejects unknown token", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "azure rejects unknown token", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "azure"
 			r.Payment = "foo"
-		}), true},
+		}), wantError: true},
 		// --- GCP canonical set (monthly-only) ---
-		{"valid gcp monthly", mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" }), false},
+		{name: "valid gcp monthly", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "gcp"; r.Payment = "monthly" })},
 		// Legacy tokens on GCP are all normalized to monthly.
-		{"gcp accepts legacy upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		{name: "gcp accepts legacy upfront (coerced to monthly)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "upfront"
-		}), false},
-		{"gcp accepts legacy all-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "gcp accepts legacy all-upfront (coerced to monthly)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "all-upfront"
-		}), false},
-		{"gcp accepts legacy no-upfront (coerced to monthly)", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "gcp accepts legacy no-upfront (coerced to monthly)", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "no-upfront"
-		}), false},
-		{"gcp rejects unknown token", mutate(func(r *config.RecommendationRecord) {
+		})},
+		{name: "gcp rejects unknown token", rec: mutate(func(r *config.RecommendationRecord) {
 			r.Provider = "gcp"
 			r.Payment = "foo"
-		}), true},
+		}), wantError: true},
 		// --- General ---
-		{"payment case-insensitive", mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" }), false},
-		{"invalid term 7", mutate(func(r *config.RecommendationRecord) { r.Term = 7 }), true},
-		{"invalid term 0", mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), true},
-		{"invalid payment foo", mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), true},
-		{"negative count", mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), true},
-		{"zero count", mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), true},
-		{"empty service", mutate(func(r *config.RecommendationRecord) { r.Service = "" }), true},
-		{"empty provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "" }), true},
-		{"all provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "all" }), true},
-		{"unknown provider rejected", mutate(func(r *config.RecommendationRecord) { r.Provider = "ibm" }), true},
+		{name: "payment case-insensitive", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "All-Upfront" })},
+		{name: "invalid term 7", rec: mutate(func(r *config.RecommendationRecord) { r.Term = 7 }), wantError: true},
+		{name: "invalid term 0", rec: mutate(func(r *config.RecommendationRecord) { r.Term = 0 }), wantError: true},
+		{name: "invalid payment foo", rec: mutate(func(r *config.RecommendationRecord) { r.Payment = "foo" }), wantError: true},
+		{name: "negative count", rec: mutate(func(r *config.RecommendationRecord) { r.Count = -1 }), wantError: true},
+		{name: "zero count", rec: mutate(func(r *config.RecommendationRecord) { r.Count = 0 }), wantError: true},
+		{name: "empty service", rec: mutate(func(r *config.RecommendationRecord) { r.Service = "" }), wantError: true},
+		{name: "empty provider rejected", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "" }), wantError: true},
+		{name: "all provider rejected", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "all" }), wantError: true},
+		{name: "unknown provider rejected", rec: mutate(func(r *config.RecommendationRecord) { r.Provider = "ibm" }), wantError: true},
 	}
 	for _, tt := range tests {
 		tt := tt

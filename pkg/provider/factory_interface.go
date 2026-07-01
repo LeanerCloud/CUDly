@@ -5,15 +5,15 @@ import (
 	"context"
 )
 
-// FactoryInterface allows creating cloud providers (enables testing)
+// FactoryInterface allows creating cloud providers (enables testing).
 type FactoryInterface interface {
-	CreateAndValidateProvider(ctx context.Context, name string, cfg *ProviderConfig) (Provider, error)
+	CreateAndValidateProvider(ctx context.Context, name string, cfg *Config) (Provider, error)
 }
 
-// DefaultFactory uses the real provider factory
+// DefaultFactory uses the real provider factory.
 type DefaultFactory struct{}
 
-// CreateAndValidateProvider creates and validates a provider using the real factory
-func (f *DefaultFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *ProviderConfig) (Provider, error) {
+// CreateAndValidateProvider creates and validates a provider using the real factory.
+func (f *DefaultFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *Config) (Provider, error) {
 	return CreateAndValidateProvider(ctx, name, cfg)
 }

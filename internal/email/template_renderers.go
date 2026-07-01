@@ -16,7 +16,7 @@ var templateFuncs = template.FuncMap{
 }
 
 // textTemplateFuncs mirrors templateFuncs for text/template so plain-text
-// renderers share the same urlquery behaviour without crossing package types.
+// renderers share the same urlquery behavior without crossing package types.
 var textTemplateFuncs = texttemplate.FuncMap{
 	"urlquery": url.QueryEscape,
 }
@@ -112,32 +112,32 @@ func RenderUserInviteEmailHTML(email, setupURL string) (string, error) {
 }
 
 // RenderNewRecommendationsEmail renders the plain-text new recommendations email template.
-func RenderNewRecommendationsEmail(data NotificationData) (string, error) {
+func RenderNewRecommendationsEmail(data *NotificationData) (string, error) {
 	return renderTextTemplate("recommendations", newRecommendationsTemplate, data)
 }
 
 // RenderScheduledPurchaseEmail renders the plain-text scheduled purchase email template.
-func RenderScheduledPurchaseEmail(data NotificationData) (string, error) {
+func RenderScheduledPurchaseEmail(data *NotificationData) (string, error) {
 	return renderTextTemplate("scheduled", scheduledPurchaseTemplate, data)
 }
 
 // RenderPurchaseConfirmationEmail renders the plain-text purchase confirmation email template.
-func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
+func RenderPurchaseConfirmationEmail(data *NotificationData) (string, error) {
 	return renderTextTemplate("confirmation", purchaseConfirmationTemplate, data)
 }
 
 // RenderPurchaseFailedEmail renders the plain-text purchase failed email template.
-func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
+func RenderPurchaseFailedEmail(data *NotificationData) (string, error) {
 	return renderTextTemplate("failed", purchaseFailedTemplate, data)
 }
 
 // RenderRIExchangePendingApprovalEmail renders the plain-text RI exchange pending approval email template.
-func RenderRIExchangePendingApprovalEmail(data RIExchangeNotificationData) (string, error) {
+func RenderRIExchangePendingApprovalEmail(data *RIExchangeNotificationData) (string, error) {
 	return renderTextTemplate("ri-exchange-pending", riExchangePendingApprovalTemplate, data)
 }
 
 // RenderRIExchangeCompletedEmail renders the plain-text RI exchange completed email template.
-func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, error) {
+func RenderRIExchangeCompletedEmail(data *RIExchangeNotificationData) (string, error) {
 	return renderTextTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
 }
 
@@ -145,7 +145,7 @@ func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, er
 // approval request email template. Issue #287: this is the multipart
 // text/plain half -- pair with RenderPurchaseApprovalRequestEmailHTML
 // for the styled HTML half.
-func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
+func RenderPurchaseApprovalRequestEmail(data *NotificationData) (string, error) {
 	return renderTextTemplate("purchase-approval-request", purchaseApprovalRequestTemplate, data)
 }
 
@@ -155,16 +155,16 @@ func RenderPurchaseApprovalRequestEmail(data NotificationData) (string, error) {
 // The plain-text half (RenderPurchaseApprovalRequestEmail) carries the
 // same content; receiving clients pick whichever they support via the
 // multipart/alternative wrapper assembled by the sender.
-func RenderPurchaseApprovalRequestEmailHTML(data NotificationData) (string, error) {
+func RenderPurchaseApprovalRequestEmailHTML(data *NotificationData) (string, error) {
 	return renderTemplate("purchase-approval-request-html", purchaseApprovalRequestHTMLTemplate, data)
 }
 
 // RenderRegistrationReceivedEmail renders the plain-text admin notification for a new registration.
-func RenderRegistrationReceivedEmail(data RegistrationNotificationData) (string, error) {
+func RenderRegistrationReceivedEmail(data *RegistrationNotificationData) (string, error) {
 	return renderTextTemplate("registration-received", registrationReceivedTemplate, data)
 }
 
 // RenderRegistrationDecisionEmail renders the plain-text registrant notification for approval/rejection.
-func RenderRegistrationDecisionEmail(data RegistrationDecisionData) (string, error) {
+func RenderRegistrationDecisionEmail(data *RegistrationDecisionData) (string, error) {
 	return renderTextTemplate("registration-decision", registrationDecisionTemplate, data)
 }

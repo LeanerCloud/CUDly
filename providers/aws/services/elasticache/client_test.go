@@ -68,7 +68,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -266,7 +266,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockEC.AssertExpectations(t)
 }
@@ -316,7 +316,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -358,7 +358,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 			},
 		}, nil).Twice()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -459,7 +459,8 @@ func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
 		ReservedCacheNodes: []types.ReservedCacheNode{{ReservedCacheNodeId: aws.String(derivedID), State: aws.String("active")}},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -481,7 +482,8 @@ func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
 		ReservedCacheNode: &types.ReservedCacheNode{ReservedCacheNodeId: aws.String(derivedID)},
 	}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -504,7 +506,8 @@ func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T
 			ReservedCacheNodes: []types.ReservedCacheNode{{ReservedCacheNodeId: aws.String(derivedID), State: aws.String("active")}},
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, derivedID, result.CommitmentID)
@@ -519,7 +522,8 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	mockEC.On("DescribeReservedCacheNodes", mock.Anything, mock.Anything).
 		Return((*elasticache.DescribeReservedCacheNodesOutput)(nil), fmt.Errorf("access denied"))
 
-	result, err := client.PurchaseCommitment(context.Background(), idemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	idemRecVal := idemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &idemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")
@@ -553,7 +557,7 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 		ReservedCacheNode: &types.ReservedCacheNode{ReservedCacheNodeId: aws.String("ec-x")},
 	}, nil)
 
-	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(capturedID, "cache-"), "name must lead with cache- service code: %q", capturedID)
 	assert.Contains(t, capturedID, "us-east-1", "region must be embedded: %q", capturedID)

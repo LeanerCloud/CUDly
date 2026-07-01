@@ -9,11 +9,11 @@ import (
 )
 
 type fakeLambdaClient struct {
-	url string
 	err error
+	url string
 }
 
-func (f *fakeLambdaClient) GetFunctionUrlConfig(_ context.Context, _ *lambda.GetFunctionUrlConfigInput, _ ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error) {
+func (f *fakeLambdaClient) GetFunctionURLConfig(_ context.Context, _ *lambda.GetFunctionUrlConfigInput, _ ...func(*lambda.Options)) (*lambda.GetFunctionUrlConfigOutput, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

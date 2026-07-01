@@ -40,14 +40,14 @@ func (s *testablePostgresAnalyticsStore) SaveSnapshot(ctx context.Context, snaps
 	return s.PostgresAnalyticsStore.SaveSnapshot(ctx, snapshot)
 }
 
-// Verify the wrapper still satisfies AnalyticsStore.
-var _ AnalyticsStore = (*testablePostgresAnalyticsStore)(nil)
+// Verify the wrapper still satisfies Store.
+var _ Store = (*testablePostgresAnalyticsStore)(nil)
 
 // =====================
 // Tests
 // =====================
 
-// TestNewPostgresAnalyticsStore tests the constructor
+// TestNewPostgresAnalyticsStore tests the constructor.
 func TestNewPostgresAnalyticsStore(t *testing.T) {
 	t.Run("creates store with database connection", func(t *testing.T) {
 		store := NewPostgresAnalyticsStore(nil)
@@ -55,7 +55,7 @@ func TestNewPostgresAnalyticsStore(t *testing.T) {
 	})
 }
 
-// TestPostgresAnalyticsStore_Close tests the Close method
+// TestPostgresAnalyticsStore_Close tests the Close method.
 func TestPostgresAnalyticsStore_Close(t *testing.T) {
 	t.Run("returns nil on close", func(t *testing.T) {
 		store := NewPostgresAnalyticsStore(nil)
@@ -64,7 +64,7 @@ func TestPostgresAnalyticsStore_Close(t *testing.T) {
 	})
 }
 
-// TestSaveSnapshot tests the SaveSnapshot method
+// TestSaveSnapshot tests the SaveSnapshot method.
 func TestSaveSnapshot(t *testing.T) {
 	t.Run("saves snapshot successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -212,7 +212,7 @@ func TestSaveSnapshot(t *testing.T) {
 	})
 }
 
-// TestBulkInsertSnapshots tests the BulkInsertSnapshots method
+// TestBulkInsertSnapshots tests the BulkInsertSnapshots method.
 func TestBulkInsertSnapshots(t *testing.T) {
 	t.Run("returns early for empty slice", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -238,7 +238,6 @@ func TestBulkInsertSnapshots(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to acquire connection")
 	})
-
 }
 
 // TestValidateCommitmentType directly exercises the commitment_type guard that
@@ -262,7 +261,7 @@ func TestValidateCommitmentType(t *testing.T) {
 	})
 }
 
-// TestQuerySavings tests the QuerySavings method
+// TestQuerySavings tests the QuerySavings method.
 func TestQuerySavings(t *testing.T) {
 	t.Run("queries savings successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -294,7 +293,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.Len(t, snapshots, 1)
 		assert.Equal(t, "snapshot-1", snapshots[0].ID)
@@ -331,7 +330,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -363,7 +362,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -395,7 +394,7 @@ func TestQuerySavings(t *testing.T) {
 			Limit:        10,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -426,7 +425,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NotNil(t, snapshots)
 		assert.Empty(t, snapshots)
@@ -453,7 +452,7 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database error")
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -488,13 +487,13 @@ func TestQuerySavings(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
-// TestQueryMonthlyTotals tests the QueryMonthlyTotals method
+// TestQueryMonthlyTotals tests the QueryMonthlyTotals method.
 func TestQueryMonthlyTotals(t *testing.T) {
 	t.Run("queries monthly totals successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -562,7 +561,7 @@ func TestQueryMonthlyTotals(t *testing.T) {
 	})
 }
 
-// TestQueryByProvider tests the QueryByProvider method
+// TestQueryByProvider tests the QueryByProvider method.
 func TestQueryByProvider(t *testing.T) {
 	t.Run("queries by provider successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -614,7 +613,7 @@ func TestQueryByProvider(t *testing.T) {
 	})
 }
 
-// TestQueryByService tests the QueryByService method
+// TestQueryByService tests the QueryByService method.
 func TestQueryByService(t *testing.T) {
 	t.Run("queries by service successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -666,7 +665,7 @@ func TestQueryByService(t *testing.T) {
 	})
 }
 
-// TestCreatePartition tests the CreatePartition method
+// TestCreatePartition tests the CreatePartition method.
 func TestCreatePartition(t *testing.T) {
 	t.Run("creates partition successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -706,7 +705,7 @@ func TestCreatePartition(t *testing.T) {
 	})
 }
 
-// TestDropOldPartitions tests the DropOldPartitions method
+// TestDropOldPartitions tests the DropOldPartitions method.
 func TestDropOldPartitions(t *testing.T) {
 	t.Run("drops old partitions successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -742,7 +741,7 @@ func TestDropOldPartitions(t *testing.T) {
 	})
 }
 
-// TestCreatePartitionsForRange tests the CreatePartitionsForRange method
+// TestCreatePartitionsForRange tests the CreatePartitionsForRange method.
 func TestCreatePartitionsForRange(t *testing.T) {
 	t.Run("creates partitions for range successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -801,7 +800,7 @@ func TestCreatePartitionsForRange(t *testing.T) {
 	})
 }
 
-// TestRefreshMaterializedViews tests the RefreshMaterializedViews method
+// TestRefreshMaterializedViews tests the RefreshMaterializedViews method.
 func TestRefreshMaterializedViews(t *testing.T) {
 	t.Run("refreshes materialized views successfully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -835,7 +834,7 @@ func TestRefreshMaterializedViews(t *testing.T) {
 	})
 }
 
-// TestSavingsSnapshot tests the SavingsSnapshot struct
+// TestSavingsSnapshot tests the SavingsSnapshot struct.
 func TestSavingsSnapshot(t *testing.T) {
 	t.Run("creates snapshot with all fields", func(t *testing.T) {
 		now := time.Now()
@@ -902,7 +901,7 @@ func TestSavingsSnapshot(t *testing.T) {
 	})
 }
 
-// TestQueryRequest tests the QueryRequest struct
+// TestQueryRequest tests the QueryRequest struct.
 func TestQueryRequest(t *testing.T) {
 	t.Run("creates query request with all fields", func(t *testing.T) {
 		start := time.Now().Add(-24 * time.Hour)
@@ -925,19 +924,24 @@ func TestQueryRequest(t *testing.T) {
 	})
 
 	t.Run("handles optional fields", func(t *testing.T) {
+		start := time.Now().Add(-24 * time.Hour)
+		end := time.Now()
 		req := QueryRequest{
 			AccountUUIDs: []string{"account-123"},
-			StartDate:    time.Now().Add(-24 * time.Hour),
-			EndDate:      time.Now(),
+			StartDate:    start,
+			EndDate:      end,
 		}
 
+		assert.Equal(t, []string{"account-123"}, req.AccountUUIDs)
+		assert.Equal(t, start, req.StartDate)
+		assert.Equal(t, end, req.EndDate)
 		assert.Equal(t, "", req.Provider) // Optional, can be empty
 		assert.Equal(t, "", req.Service)  // Optional, can be empty
 		assert.Equal(t, 0, req.Limit)     // Optional, 0 means no limit
 	})
 }
 
-// TestMonthlySummary tests the MonthlySummary struct
+// TestMonthlySummary tests the MonthlySummary struct.
 func TestMonthlySummary(t *testing.T) {
 	t.Run("creates monthly summary with all fields", func(t *testing.T) {
 		month := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -986,7 +990,7 @@ func TestMonthlySummary(t *testing.T) {
 	})
 }
 
-// TestProviderBreakdown tests the ProviderBreakdown struct
+// TestProviderBreakdown tests the ProviderBreakdown struct.
 func TestProviderBreakdown(t *testing.T) {
 	t.Run("creates provider breakdown with all fields", func(t *testing.T) {
 		breakdown := ProviderBreakdown{
@@ -1023,7 +1027,7 @@ func TestProviderBreakdown(t *testing.T) {
 	})
 }
 
-// TestServiceBreakdown tests the ServiceBreakdown struct
+// TestServiceBreakdown tests the ServiceBreakdown struct.
 func TestServiceBreakdown(t *testing.T) {
 	t.Run("creates service breakdown with all fields", func(t *testing.T) {
 		breakdown := ServiceBreakdown{
@@ -1060,16 +1064,16 @@ func TestServiceBreakdown(t *testing.T) {
 	})
 }
 
-// TestAnalyticsStoreInterface tests that PostgresAnalyticsStore implements AnalyticsStore
+// TestAnalyticsStoreInterface tests that PostgresAnalyticsStore implements AnalyticsStore.
 func TestAnalyticsStoreInterface(t *testing.T) {
 	t.Run("PostgresAnalyticsStore implements AnalyticsStore interface", func(t *testing.T) {
 		// This is a compile-time check that's already in the code,
 		// but we can test it explicitly
-		var _ AnalyticsStore = (*PostgresAnalyticsStore)(nil)
+		var _ Store = (*PostgresAnalyticsStore)(nil)
 	})
 }
 
-// TestQuerySavingsRowScanError tests scan error handling
+// TestQuerySavingsRowScanError tests scan error handling.
 func TestQuerySavingsRowScanError(t *testing.T) {
 	t.Run("returns error on row scan failure", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1096,13 +1100,13 @@ func TestQuerySavingsRowScanError(t *testing.T) {
 			EndDate:      now,
 		}
 
-		_, err = store.QuerySavings(context.Background(), req)
+		_, err = store.QuerySavings(context.Background(), &req)
 		assert.Error(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
-// TestQueryMonthlyTotalsRowScanError tests scan error handling
+// TestQueryMonthlyTotalsRowScanError tests scan error handling.
 func TestQueryMonthlyTotalsRowScanError(t *testing.T) {
 	t.Run("returns error on row scan failure", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1125,7 +1129,7 @@ func TestQueryMonthlyTotalsRowScanError(t *testing.T) {
 	})
 }
 
-// TestQueryByProviderRowScanError tests scan error handling
+// TestQueryByProviderRowScanError tests scan error handling.
 func TestQueryByProviderRowScanError(t *testing.T) {
 	t.Run("returns error on row scan failure", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1151,7 +1155,7 @@ func TestQueryByProviderRowScanError(t *testing.T) {
 	})
 }
 
-// TestQueryByServiceRowScanError tests scan error handling
+// TestQueryByServiceRowScanError tests scan error handling.
 func TestQueryByServiceRowScanError(t *testing.T) {
 	t.Run("returns error on row scan failure", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1177,7 +1181,7 @@ func TestQueryByServiceRowScanError(t *testing.T) {
 	})
 }
 
-// TestRowsErr tests rows.Err() handling
+// TestRowsErr tests rows.Err() handling.
 func TestRowsErr(t *testing.T) {
 	t.Run("QuerySavings returns rows.Err()", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1209,14 +1213,14 @@ func TestRowsErr(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.Len(t, snapshots, 1)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
-// TestQueryMonthlyTotalsRowsErr tests rows.Err() handling for monthly totals
+// TestQueryMonthlyTotalsRowsErr tests rows.Err() handling for monthly totals.
 func TestQueryMonthlyTotalsRowsErr(t *testing.T) {
 	t.Run("QueryMonthlyTotals returns rows.Err()", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1242,7 +1246,7 @@ func TestQueryMonthlyTotalsRowsErr(t *testing.T) {
 	})
 }
 
-// TestQueryByProviderRowsErr tests rows.Err() handling for provider query
+// TestQueryByProviderRowsErr tests rows.Err() handling for provider query.
 func TestQueryByProviderRowsErr(t *testing.T) {
 	t.Run("QueryByProvider returns rows.Err()", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1269,7 +1273,7 @@ func TestQueryByProviderRowsErr(t *testing.T) {
 	})
 }
 
-// TestQueryByServiceRowsErr tests rows.Err() handling for service query
+// TestQueryByServiceRowsErr tests rows.Err() handling for service query.
 func TestQueryByServiceRowsErr(t *testing.T) {
 	t.Run("QueryByService returns rows.Err()", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1296,7 +1300,7 @@ func TestQueryByServiceRowsErr(t *testing.T) {
 	})
 }
 
-// Test ErrNoRows handling
+// Test ErrNoRows handling.
 func TestErrNoRowsHandling(t *testing.T) {
 	t.Run("QuerySavings handles empty result gracefully", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1324,7 +1328,7 @@ func TestErrNoRowsHandling(t *testing.T) {
 			EndDate:      now,
 		}
 
-		snapshots, err := store.QuerySavings(context.Background(), req)
+		snapshots, err := store.QuerySavings(context.Background(), &req)
 		require.NoError(t, err)
 		assert.NotNil(t, snapshots)
 		assert.Empty(t, snapshots)
@@ -1332,19 +1336,19 @@ func TestErrNoRowsHandling(t *testing.T) {
 	})
 }
 
-// Test interface verification for testable store
+// Test interface verification for testable store.
 func TestTestableStoreImplementsInterface(t *testing.T) {
 	t.Run("testablePostgresAnalyticsStore implements AnalyticsStore", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
 		require.NoError(t, err)
 		defer mock.Close()
 
-		var store AnalyticsStore = newTestableStore(mock)
+		var store Store = newTestableStore(mock)
 		assert.NotNil(t, store)
 	})
 }
 
-// TestClose tests the Close method for testable store
+// TestClose tests the Close method for testable store.
 func TestClose(t *testing.T) {
 	t.Run("testable store Close returns nil", func(t *testing.T) {
 		mock, err := pgxmock.NewPool()
@@ -1357,7 +1361,7 @@ func TestClose(t *testing.T) {
 	})
 }
 
-// TestNoRows handling
+// TestNoRows handling.
 func Test_NoRowsHandling(t *testing.T) {
 	// Test that pgx.ErrNoRows is handled differently
 	t.Run("pgx.ErrNoRows is a specific error", func(t *testing.T) {

@@ -36,7 +36,7 @@ type Client struct {
 // NewClient creates a new RDS client with purchase-path retry/timeout settings.
 // See purchasecfg for rationale.
 func NewClient(cfg aws.Config) *Client {
-	pcfg := purchasecfg.NewConfig(cfg)
+	pcfg := purchasecfg.NewConfig(&cfg)
 	return &Client{
 		client: rds.NewFromConfig(pcfg),
 		region: cfg.Region,
@@ -59,7 +59,7 @@ func (c *Client) GetRegion() string {
 }
 
 // GetRecommendations returns empty as RDS uses centralized Cost Explorer recommendations
-func (c *Client) GetRecommendations(ctx context.Context, params common.RecommendationParams) ([]common.Recommendation, error) {
+func (c *Client) GetRecommendations(ctx context.Context, params *common.RecommendationParams) ([]common.Recommendation, error) {
 	return []common.Recommendation{}, nil
 }
 
@@ -128,22 +128,22 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 }
 
 // PurchaseCommitment purchases an RDS Reserved Instance
-func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (c *Client) PurchaseCommitment(ctx context.Context, rec *common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	result := common.PurchaseResult{
-		Recommendation: rec,
+		Recommendation: *rec,
 		DryRun:         false,
 		Success:        false,
 		Timestamp:      time.Now(),
 	}
 
 	// Find the offering ID
-	offeringID, err := c.findOfferingID(ctx, rec, opts.ExecutionID)
+	offeringID, err := c.findOfferingID(ctx, *rec, opts.ExecutionID)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to find offering: %w", err)
 		return result, result.Error
 	}
 
-	reservationID := c.deriveReservationID(rec, opts)
+	reservationID := c.deriveReservationID(*rec, opts)
 
 	// Idempotency dedupe guard (issue #641). When a token is supplied, look for a
 	// reservation already created under the derived ID before buying: if one
@@ -163,7 +163,7 @@ func (c *Client) PurchaseCommitment(ctx context.Context, rec common.Recommendati
 		ReservedDBInstancesOfferingId: aws.String(offeringID),
 		ReservedDBInstanceId:          aws.String(reservationID),
 		DBInstanceCount:               aws.Int32(int32(rec.Count)),
-		Tags:                          c.createPurchaseTags(rec, opts.Source),
+		Tags:                          c.createPurchaseTags(*rec, opts.Source),
 	}
 
 	response, err := c.client.PurchaseReservedDBInstancesOffering(ctx, input)
@@ -206,7 +206,7 @@ func (c *Client) deriveReservationID(rec common.Recommendation, opts common.Purc
 	if opts.ReservationID != "" {
 		return common.SanitizeReservationID(opts.ReservationID, "rds-reserved-")
 	}
-	return common.BuildReservationName(common.ReservationNameFields{
+	rnf := common.ReservationNameFields{
 		Service:      "rds",
 		Region:       rec.Region,
 		ResourceType: rec.ResourceType,
@@ -214,7 +214,8 @@ func (c *Client) deriveReservationID(rec common.Recommendation, opts common.Purc
 		Term:         rec.Term,
 		Payment:      rec.PaymentOption,
 		Now:          time.Now(),
-	}, "rds-reserved-")
+	}
+	return common.BuildReservationName(&rnf, "rds-reserved-")
 }
 
 // idempotencyGuard short-circuits a re-drive (issue #641): when token is set, it
@@ -435,14 +436,14 @@ func scanRDSOfferingPage(offerings []types.ReservedDBInstancesOffering, rec comm
 }
 
 // ValidateOffering checks if an offering exists without purchasing
-func (c *Client) ValidateOffering(ctx context.Context, rec common.Recommendation) error {
-	_, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) ValidateOffering(ctx context.Context, rec *common.Recommendation) error {
+	_, err := c.findOfferingID(ctx, *rec, "")
 	return err
 }
 
 // GetOfferingDetails retrieves offering details
-func (c *Client) GetOfferingDetails(ctx context.Context, rec common.Recommendation) (*common.OfferingDetails, error) {
-	offeringID, err := c.findOfferingID(ctx, rec, "")
+func (c *Client) GetOfferingDetails(ctx context.Context, rec *common.Recommendation) (*common.OfferingDetails, error) {
+	offeringID, err := c.findOfferingID(ctx, *rec, "")
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +615,7 @@ func (c *Client) normalizeEngineName(engine string) (string, error) {
 // only per-service customizations are the Purpose string and the AWS
 // convention for the instance-type tag key.
 func (c *Client) createPurchaseTags(rec common.Recommendation, source string) []types.Tag {
-	pairs := tagging.PurchasePairs(rec, "Reserved Instance Purchase", "ResourceType", source)
+	pairs := tagging.PurchasePairs(&rec, "Reserved Instance Purchase", "ResourceType", source)
 	out := make([]types.Tag, len(pairs))
 	for i, p := range pairs {
 		out[i] = types.Tag{Key: aws.String(p.Key), Value: aws.String(p.Value)}

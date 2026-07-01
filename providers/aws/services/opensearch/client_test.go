@@ -90,7 +90,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -202,7 +202,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockOS.AssertExpectations(t)
 }
@@ -243,7 +243,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			ReservedInstanceId: aws.String("os-789"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -340,7 +340,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 			},
 		}, nil).Twice()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -388,7 +388,7 @@ func TestClient_GetOfferingDetails_NotFound(t *testing.T) {
 			ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
 		}, nil).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -430,7 +430,7 @@ func TestClient_GetOfferingDetails_APIError(t *testing.T) {
 	mockOS.On("DescribeReservedInstanceOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error")).Once()
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -483,7 +483,7 @@ func TestClient_PurchaseCommitment_AddTagsWithResolvedARN(t *testing.T) {
 		return false
 	})).Return(&opensearch.AddTagsOutput{}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceWeb})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	mockOS.AssertExpectations(t)
@@ -521,7 +521,7 @@ func TestClient_PurchaseCommitment_AddTagsFailureDoesNotFailPurchase(t *testing.
 	mockOS.On("AddTags", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("ValidationException: reserved-instance is not a valid resource type"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{Source: common.PurchaseSourceCLI})
 	assert.NoError(t, err, "tag failure must not surface as a purchase error")
 	assert.True(t, result.Success, "purchase must remain successful even when tagging fails")
 	assert.Equal(t, "ri-os-fail", result.CommitmentID)
@@ -549,7 +549,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			ReservedInstanceOfferings: []types.ReservedInstanceOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -590,7 +590,7 @@ func TestClient_PurchaseCommitment_PurchaseError(t *testing.T) {
 	mockOS.On("PurchaseReservedInstanceOffering", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -633,7 +633,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			ReservedInstanceId: nil,
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -747,7 +747,8 @@ func TestClient_PurchaseCommitment_Idempotent_GuardShortCircuits(t *testing.T) {
 			},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	osIdemRecVal := osIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &osIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "os-existing", result.CommitmentID)
@@ -767,7 +768,8 @@ func TestClient_PurchaseCommitment_Idempotent_NotFoundProceeds(t *testing.T) {
 		return aws.ToString(in.ReservationName) == derivedName
 	})).Return(&opensearch.PurchaseReservedInstanceOfferingOutput{ReservedInstanceId: aws.String("os-new")}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	osIdemRecVal := osIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &osIdemRecVal, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "os-new", result.CommitmentID)
@@ -793,7 +795,8 @@ func TestClient_PurchaseCommitment_Idempotent_AlreadyExistsRecovers(t *testing.T
 			},
 		}, nil).Once()
 
-	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	osIdemRecVal2 := osIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &osIdemRecVal2, common.PurchaseOptions{IdempotencyToken: token})
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "os-recovered", result.CommitmentID)
@@ -808,7 +811,8 @@ func TestClient_PurchaseCommitment_Idempotent_FailLoudOnLookupError(t *testing.T
 	mockOS.On("DescribeReservedInstances", mock.Anything, mock.Anything).
 		Return((*opensearch.DescribeReservedInstancesOutput)(nil), fmt.Errorf("access denied"))
 
-	result, err := client.PurchaseCommitment(context.Background(), osIdemRec(), common.PurchaseOptions{IdempotencyToken: token})
+	osIdemRecVal3 := osIdemRec()
+	result, err := client.PurchaseCommitment(context.Background(), &osIdemRecVal3, common.PurchaseOptions{IdempotencyToken: token})
 	assert.Error(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, err.Error(), "refusing to purchase")
@@ -941,7 +945,7 @@ func TestClient_PurchaseCommitment_NoToken_RichReservationName(t *testing.T) {
 		ReservedInstanceId: aws.String("os-x"),
 	}, nil)
 
-	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(capturedName, "opensearch-"), "name must lead with opensearch- service code: %q", capturedName)
 	assert.Contains(t, capturedName, "us-east-1", "region must be embedded: %q", capturedName)

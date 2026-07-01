@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSetSecurityHeaders verifies that all required security headers are set
+// TestSetSecurityHeaders verifies that all required security headers are set.
 func TestSetSecurityHeaders(t *testing.T) {
 	headers := make(map[string]string)
 	headers = setSecurityHeaders(headers)
@@ -26,7 +26,7 @@ func TestSetSecurityHeaders(t *testing.T) {
 	assert.Equal(t, "no-store, no-cache, must-revalidate", headers["Cache-Control"], "Cache-Control should prevent caching")
 }
 
-// TestSetSecurityHeaders_DoesNotOverwrite verifies headers are set correctly
+// TestSetSecurityHeaders_DoesNotOverwrite verifies headers are set correctly.
 func TestSetSecurityHeaders_DoesNotOverwrite(t *testing.T) {
 	headers := map[string]string{
 		"Content-Type": "application/json",
@@ -40,7 +40,7 @@ func TestSetSecurityHeaders_DoesNotOverwrite(t *testing.T) {
 	assert.NotEmpty(t, headers["X-Content-Type-Options"])
 }
 
-// TestHandleRequest_SecurityHeaders verifies all responses include security headers
+// TestHandleRequest_SecurityHeaders verifies all responses include security headers.
 func TestHandleRequest_SecurityHeaders(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{corsAllowedOrigin: "https://example.com"}
@@ -69,7 +69,7 @@ func TestHandleRequest_SecurityHeaders(t *testing.T) {
 	assert.Equal(t, "no-store, no-cache, must-revalidate", resp.Headers["Cache-Control"])
 }
 
-// TestHandleRequest_SecurityHeaders_OPTIONS verifies OPTIONS requests include security headers
+// TestHandleRequest_SecurityHeaders_OPTIONS verifies OPTIONS requests include security headers.
 func TestHandleRequest_SecurityHeaders_OPTIONS(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{corsAllowedOrigin: "https://example.com"}
@@ -93,7 +93,7 @@ func TestHandleRequest_SecurityHeaders_OPTIONS(t *testing.T) {
 	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
 }
 
-// TestHandleRequest_SecurityHeaders_ErrorResponse verifies error responses include security headers
+// TestHandleRequest_SecurityHeaders_ErrorResponse verifies error responses include security headers.
 func TestHandleRequest_SecurityHeaders_ErrorResponse(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{apiKey: "test-key"}
@@ -304,7 +304,7 @@ func TestNonDocsPath_KeepsStrictCSP(t *testing.T) {
 		"non-docs paths must retain the strict default CSP")
 }
 
-// TestHandleRequest_SecurityHeaders_RequestTooLarge verifies 413 responses include security headers
+// TestHandleRequest_SecurityHeaders_RequestTooLarge verifies 413 responses include security headers.
 func TestHandleRequest_SecurityHeaders_RequestTooLarge(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{}

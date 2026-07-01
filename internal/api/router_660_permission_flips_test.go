@@ -71,9 +71,9 @@ func reqWithBearer(token string) *events.LambdaFunctionURLRequest {
 	}
 }
 
-func reqWithBearerAndBody(token, body string) *events.LambdaFunctionURLRequest {
+func reqWithBearerAndBody(body string) *events.LambdaFunctionURLRequest {
 	return &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{"Authorization": "Bearer " + token},
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
 		Body:    body,
 	}
 }
@@ -172,14 +172,14 @@ func TestUpdatePlan_PermissionGate(t *testing.T) {
 		mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 
 		h := &Handler{auth: mockAuth, config: mockStore}
-		_, err := h.updatePlan(ctx, reqWithBearerAndBody("user-token", body), planID)
+		_, err := h.updatePlan(ctx, reqWithBearerAndBody(body), planID)
 		assertNotForbidden(t, err)
 	})
 
 	t.Run("user without update:plans is rejected with 403", func(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "update", "plans", false)
 		h := &Handler{auth: mockAuth, config: new(MockConfigStore)}
-		_, err := h.updatePlan(ctx, reqWithBearerAndBody("user-token", body), planID)
+		_, err := h.updatePlan(ctx, reqWithBearerAndBody(body), planID)
 		assert403(t, err)
 	})
 }
@@ -196,7 +196,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 
 	t.Run("creator with update:purchases can pause their own planned purchase", func(t *testing.T) {
 		// Issue #950: a standard user manages only the scheduled purchases
-		// they created. update-any is false; the creator match authorises.
+		// they created. update-any is false; the creator match authorizes.
 		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
@@ -284,7 +284,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 
 	t.Run("creator with delete:purchases can delete their own planned purchase", func(t *testing.T) {
 		// Issue #950: ownership gate also applies to delete; a creator with
-		// delete:purchases (no update-any) is authorised by the creator match.
+		// delete:purchases (no update-any) is authorized by the creator match.
 		mockAuth := authForUserWith(ctx, t, userID, "delete", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
@@ -292,8 +292,9 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
-		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything).
-			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil)
+		//nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "paused"}, "cancelled", mock.Anything). //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
+																	Return(&config.PurchaseExecution{ExecutionID: execID, Status: "cancelled"}, nil) //nolint:misspell // DB schema value 'cancelled' -- see migration 000001_initial_schema.up.sql
 
 		h := &Handler{auth: mockAuth, config: mockStore}
 		_, err := h.deletePlannedPurchase(ctx, reqWithBearer("user-token"), execID)
@@ -337,7 +338,7 @@ func TestExecuteExchange_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "execute", "ri-exchange", false)
 		h := &Handler{auth: mockAuth}
 		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
-		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
+		_, err := h.executeExchange(ctx, reqWithBearerAndBody(body))
 		assert403(t, err)
 	})
 
@@ -349,7 +350,7 @@ func TestExecuteExchange_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "execute", "ri-exchange", true)
 		h := &Handler{auth: mockAuth}
 		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
-		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
+		_, err := h.executeExchange(ctx, reqWithBearerAndBody(body))
 		// The error will be from the AWS SDK (not a 403), proving the gate passed.
 		assertNotForbidden(t, err)
 	})
@@ -369,7 +370,7 @@ func TestExecuteExchange_PermissionGate(t *testing.T) {
 
 		h := &Handler{auth: mockAuth}
 		body := `{"ri_ids":["ri-abc"],"targets":[{"offering_id":"of-1"}],"max_payment_due_usd":"1000"}`
-		_, err := h.executeExchange(ctx, reqWithBearerAndBody("user-token", body))
+		_, err := h.executeExchange(ctx, reqWithBearerAndBody(body))
 		assert403(t, err)
 	})
 }
@@ -384,7 +385,7 @@ func TestUpdateRIExchangeConfig_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "update", "config", false)
 		h := &Handler{auth: mockAuth}
 		body := `{"auto_exchange_enabled":false}`
-		_, err := h.updateRIExchangeConfig(ctx, reqWithBearerAndBody("user-token", body))
+		_, err := h.updateRIExchangeConfig(ctx, reqWithBearerAndBody(body))
 		assert403(t, err)
 	})
 
@@ -395,15 +396,15 @@ func TestUpdateRIExchangeConfig_PermissionGate(t *testing.T) {
 		mockStore.On("SaveGlobalConfig", ctx, &config.GlobalConfig{}).Return(nil).Maybe()
 		h := &Handler{auth: mockAuth, config: mockStore}
 		body := `{"auto_exchange_enabled":false,"mode":"recommend","utilization_threshold":80,"max_payment_per_exchange_usd":"0","max_payment_daily_usd":"0"}`
-		_, err := h.updateRIExchangeConfig(ctx, reqWithBearerAndBody("user-token", body))
+		_, err := h.updateRIExchangeConfig(ctx, reqWithBearerAndBody(body))
 		assertNotForbidden(t, err)
 	})
 }
 
-// ---- Router-level gate (defence-in-depth) ---------------------------------
+// ---- Router-level gate (defense-in-depth) ---------------------------------
 
 // TestRouter_MutatingRoutes_RequireAuth confirms that the AuthUser check at
-// the router level (defence-in-depth) still rejects completely unauthenticated
+// the router level (defense-in-depth) still rejects completely unauthenticated
 // callers before they reach the handler — even after the flip from AuthAdmin.
 func TestRouter_MutatingRoutes_RequireAuth(t *testing.T) {
 	ctx := context.Background()

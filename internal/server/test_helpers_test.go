@@ -9,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// databaseConfigStub is a type alias used in health tests to simulate pending DB config
+// databaseConfigStub is a type alias used in health tests to simulate pending DB config.
 type databaseConfigStub = database.Config
 
-// mockConfigStoreForHealth implements config.StoreInterface for health check tests
+// mockConfigStoreForHealth implements config.StoreInterface for health check tests.
 type mockConfigStoreForHealth struct{}
 
 func (m *mockConfigStoreForHealth) GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error) {
@@ -248,7 +248,7 @@ func (m *mockConfigStoreForHealth) ReplaceRecommendations(_ context.Context, _ t
 func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
-func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStoreForHealth) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
@@ -270,7 +270,7 @@ func (m *mockConfigStoreForHealth) UpsertRIUtilizationCache(_ context.Context, _
 	return nil
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForHealth) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

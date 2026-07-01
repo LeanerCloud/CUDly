@@ -9,10 +9,10 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
-// SchedulerInterface defines the methods required for the scheduler component
+// SchedulerInterface defines the methods required for the scheduler component.
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context) (*scheduler.CollectResult, error)
-	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	ListRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	// GetRecommendationByID fetches a single rec by application-level id,
 	// bypassing account-override filtering. hiddenBy is non-nil when the rec
 	// exists but would be dropped by the override filter. Returns nil, nil,
@@ -20,7 +20,7 @@ type SchedulerInterface interface {
 	GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error)
 }
 
-// PurchaseManagerInterface defines the methods required for the purchase manager component
+// PurchaseManagerInterface defines the methods required for the purchase manager component.
 type PurchaseManagerInterface interface {
 	ProcessScheduledPurchases(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotifications(ctx context.Context) (*purchase.NotificationResult, error)

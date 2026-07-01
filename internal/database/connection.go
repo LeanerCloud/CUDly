@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/tracelog"
 )
 
-// Connection wraps a PostgreSQL connection pool
+// Connection wraps a PostgreSQL connection pool.
 type Connection struct {
 	pool   *pgxpool.Pool
 	config *Config
@@ -27,14 +27,14 @@ type Connection struct {
 	lockedConns sync.Map // map[int64]*pgxpool.Conn
 }
 
-// SecretResolver interface for retrieving secrets from cloud providers
+// SecretResolver interface for retrieving secrets from cloud providers.
 type SecretResolver interface {
 	GetSecret(ctx context.Context, secretID string) (string, error)
 	Close() error
 }
 
-// NewConnection creates a new database connection pool
-// If secretResolver is provided and config.PasswordSecret is set, password will be retrieved from secret manager
+// NewConnection creates a new database connection pool.
+// If secretResolver is provided and config.PasswordSecret is set, password will be retrieved from secret manager.
 func NewConnection(ctx context.Context, config *Config, secretResolver SecretResolver) (*Connection, error) {
 	// Check if secret resolver is needed but not provided
 	if config.PasswordSecret != "" && secretResolver == nil {
@@ -190,7 +190,7 @@ func createConnectionPoolWithRetry(ctx context.Context, poolConfig *pgxpool.Conf
 	return pool, nil
 }
 
-// buildPoolConfig creates a pgxpool.Config from our Config
+// buildPoolConfig creates a pgxpool.Config from our Config.
 func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	// Parse a redacted DSN so that any pgxpool.ParseConfig error never
 	// echoes the plaintext password into the error chain (pgconn.parseConfig
@@ -205,18 +205,20 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	}
 
 	// Overwrite the placeholder with the real password. ConnConfig.Password
-	// is used by pgx at connect time and is never serialised back to a string.
+	// is used by pgx at connect time and is never serialized back to a string.
 	poolConfig.ConnConfig.Password = password
 
 	// Set pool configuration
-	if config.MaxConnections > math.MaxInt32 {
-		return nil, fmt.Errorf("MaxConnections value %d exceeds int32 max", config.MaxConnections)
+	maxConns, err := intToInt32("MaxConnections", config.MaxConnections)
+	if err != nil {
+		return nil, err
 	}
-	if config.MinConnections > math.MaxInt32 {
-		return nil, fmt.Errorf("MinConnections value %d exceeds int32 max", config.MinConnections)
+	minConns, err := intToInt32("MinConnections", config.MinConnections)
+	if err != nil {
+		return nil, err
 	}
-	poolConfig.MaxConns = int32(config.MaxConnections)
-	poolConfig.MinConns = int32(config.MinConnections)
+	poolConfig.MaxConns = maxConns
+	poolConfig.MinConns = minConns
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = config.HealthCheckPeriod
@@ -238,17 +240,17 @@ func buildPoolConfig(config *Config, password string) (*pgxpool.Config, error) {
 	return poolConfig, nil
 }
 
-// Pool returns the underlying connection pool
+// Pool returns the underlying connection pool.
 func (c *Connection) Pool() *pgxpool.Pool {
 	return c.pool
 }
 
-// Close closes the connection pool
+// Close closes the connection pool.
 func (c *Connection) Close() {
 	c.pool.Close()
 }
 
-// HealthCheck verifies the database connection is healthy
+// HealthCheck verifies the database connection is healthy.
 func (c *Connection) HealthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -267,42 +269,47 @@ func (c *Connection) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// Stats returns connection pool statistics
+// Stats returns connection pool statistics.
 func (c *Connection) Stats() *pgxpool.Stat {
 	return c.pool.Stat()
 }
 
-// Acquire gets a connection from the pool
+// Acquire gets a connection from the pool.
 func (c *Connection) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
 	return c.pool.Acquire(ctx)
 }
 
-// Begin starts a new transaction
+// Begin starts a new transaction.
 func (c *Connection) Begin(ctx context.Context) (pgx.Tx, error) {
 	return c.pool.Begin(ctx)
 }
 
-// BeginTx starts a new transaction with options
-func (c *Connection) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+// BeginTx starts a new transaction with options. The opts pointer may be nil
+// to use the default transaction options (equivalent to pgx.TxOptions{}).
+func (c *Connection) BeginTx(ctx context.Context, opts *pgx.TxOptions) (pgx.Tx, error) {
+	var txOptions pgx.TxOptions
+	if opts != nil {
+		txOptions = *opts
+	}
 	return c.pool.BeginTx(ctx, txOptions)
 }
 
-// Query executes a query
+// Query executes a query.
 func (c *Connection) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return c.pool.Query(ctx, sql, args...)
 }
 
-// QueryRow executes a query that returns at most one row
+// QueryRow executes a query that returns at most one row.
 func (c *Connection) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return c.pool.QueryRow(ctx, sql, args...)
 }
 
-// Exec executes a command
+// Exec executes a command.
 func (c *Connection) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return c.pool.Exec(ctx, sql, args...)
 }
 
-// Ping checks the database connection
+// Ping checks the database connection.
 func (c *Connection) Ping(ctx context.Context) error {
 	return c.pool.Ping(ctx)
 }
@@ -346,7 +353,11 @@ func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
 		logging.Warnf("ReleaseAdvisoryLock called for lock %d but no pinned connection found", lockID)
 		return
 	}
-	conn := val.(*pgxpool.Conn)
+	conn, ok := val.(*pgxpool.Conn)
+	if !ok {
+		logging.Warnf("ReleaseAdvisoryLock: unexpected type %T stored for lock %d", val, lockID)
+		return
+	}
 	defer conn.Release()
 
 	var released bool
@@ -357,7 +368,7 @@ func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
 	}
 }
 
-// parseLogLevel converts string log level to pgx tracelog level
+// parseLogLevel converts string log level to pgx tracelog level.
 func parseLogLevel(level string) tracelog.LogLevel {
 	switch level {
 	case "debug":
@@ -373,7 +384,7 @@ func parseLogLevel(level string) tracelog.LogLevel {
 	}
 }
 
-// stdLogger implements pgx tracelog.Logger using the logging package
+// stdLogger implements pgx tracelog.Logger using the logging package.
 type stdLogger struct{}
 
 // isSensitiveKey reports whether a pgx data-map key should always be redacted.
@@ -415,4 +426,15 @@ func (l *stdLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string
 	case tracelog.LogLevelError:
 		logging.Errorf("%s %v", msg, safeData)
 	}
+}
+
+// intToInt32 converts an int connection-pool limit to int32, returning an
+// error when the value exceeds math.MaxInt32. This allows the G115 bound
+// check to be expressed once in a function body that gosec can verify, rather
+// than repeating nolint comments at every call site.
+func intToInt32(fieldName string, v int) (int32, error) {
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s value %d out of int32 range [%d, %d]", fieldName, v, math.MinInt32, math.MaxInt32)
+	}
+	return int32(v), nil
 }

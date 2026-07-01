@@ -33,7 +33,7 @@ const (
 	defaultAnalyticsPartitionsAhead = 3
 
 	// analyticsDDLTimeout bounds each long-running partition/retention/refresh
-	// DDL step. RDS Proxy does not honour a session statement_timeout, so a
+	// DDL step. RDS Proxy does not honor a session statement_timeout, so a
 	// runaway DDL (e.g. a CONCURRENTLY refresh blocked on a lock) could hang the
 	// whole scheduled run indefinitely; a per-step deadline guarantees the
 	// pipeline makes forward progress or fails fast (06-N3).
@@ -107,7 +107,7 @@ func getEnvBool(key string, defaultVal bool) bool {
 // app.go footprint is one localized call (eases the in-flight app.go rebase).
 func newAnalyticsCollector(dbConn *database.Connection, configStore config.StoreInterface) (AnalyticsCollectorInterface, error) {
 	store := analytics.NewPostgresAnalyticsStore(dbConn)
-	return analytics.NewCollector(analytics.CollectorConfig{AnalyticsStore: store}, configStore)
+	return analytics.NewCollector(analytics.CollectorConfig{Store: store}, configStore)
 }
 
 // handleCollectAnalytics runs the scheduled analytics pipeline end to end:
@@ -148,9 +148,9 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 
 	// 2. Collect a snapshot across all tenants.
 	if err := app.AnalyticsCollector.Collect(ctx); err != nil {
-		// A cancelled context is terminal: stop the pipeline and surface it.
+		// A canceled context is terminal: stop the pipeline and surface it.
 		if ctx.Err() != nil {
-			return result, fmt.Errorf("analytics collection cancelled: %w", err)
+			return result, fmt.Errorf("analytics collection canceled: %w", err)
 		}
 		log.Printf("Warning: analytics collection failed: %v", err)
 		result["status"] = "partial"

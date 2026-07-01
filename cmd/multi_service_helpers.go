@@ -212,7 +212,7 @@ func createDryRunResult(rec common.Recommendation, region string, index int, cfg
 	}
 }
 
-// createCancelledResults creates purchase results for cancelled purchases
+// createCancelledResults creates purchase results for canceled purchases
 func createCancelledResults(recs []common.Recommendation, region string, cfg Config) []common.PurchaseResult {
 	results := make([]common.PurchaseResult, len(recs))
 	for k := range recs {
@@ -220,7 +220,7 @@ func createCancelledResults(recs []common.Recommendation, region string, cfg Con
 			Recommendation: recs[k],
 			Success:        false,
 			CommitmentID:   generatePurchaseID(recs[k], region, k+1, false, effectiveSizingPct(cfg)),
-			Error:          fmt.Errorf("purchase cancelled by user"),
+			Error:          fmt.Errorf("purchase canceled by user"),
 			Timestamp:      time.Now(),
 		}
 	}
@@ -235,7 +235,7 @@ func executePurchase(ctx context.Context, rec common.Recommendation, region stri
 	// (e.g. RDS ReservedDBInstanceId), not just in our local report.
 	commitmentID := generatePurchaseID(rec, region, index, false, effectiveSizingPct(cfg))
 	opts := common.PurchaseOptions{Source: common.PurchaseSourceCLI, ReservationID: commitmentID}
-	result, err := serviceClient.PurchaseCommitment(ctx, rec, opts)
+	result, err := serviceClient.PurchaseCommitment(ctx, &rec, opts)
 	if err != nil {
 		result.Success = false
 		result.Error = err
@@ -432,7 +432,7 @@ func fetchRecommendationsForRegion(
 		ExcludeSPTypes: cfg.ExcludeSPTypes,
 	}
 
-	recs, err := recClient.GetRecommendations(ctx, params)
+	recs, err := recClient.GetRecommendations(ctx, &params)
 	if err != nil {
 		AppLogger.Printf("  ❌ Failed to fetch recommendations: %v\n", err)
 		return nil

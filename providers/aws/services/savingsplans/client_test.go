@@ -90,7 +90,7 @@ func TestClient_GetRegion(t *testing.T) {
 
 func TestClient_GetRecommendations(t *testing.T) {
 	client := &Client{region: "us-east-1"}
-	recs, err := client.GetRecommendations(context.Background(), common.RecommendationParams{})
+	recs, err := client.GetRecommendations(context.Background(), &common.RecommendationParams{})
 	assert.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -430,7 +430,7 @@ func TestClient_ValidateOffering(t *testing.T) {
 			},
 		}, nil)
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.NoError(t, err)
 	mockSP.AssertExpectations(t)
 }
@@ -446,7 +446,7 @@ func TestClient_ValidateOffering_InvalidDetails(t *testing.T) {
 		},
 	}
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid service details")
 }
@@ -484,7 +484,7 @@ func TestClient_PurchaseCommitment(t *testing.T) {
 			SavingsPlanId: aws.String("sp-789"),
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
@@ -524,7 +524,7 @@ func TestClient_PurchaseCommitment_SetsClientTokenForIdempotency(t *testing.T) {
 		Return(&savingsplans.CreateSavingsPlanOutput{SavingsPlanId: aws.String("sp-789")}, nil)
 
 	token := common.DeriveIdempotencyToken("exec-sp-1", 0)
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{IdempotencyToken: token})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{IdempotencyToken: token})
 
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -565,7 +565,7 @@ func TestClient_PurchaseCommitment_NoClientTokenWhenUnset(t *testing.T) {
 		}).
 		Return(&savingsplans.CreateSavingsPlanOutput{SavingsPlanId: aws.String("sp-789")}, nil)
 
-	_, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	_, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Nil(t, captured.ClientToken, "no idempotency token supplied -> ClientToken stays nil")
@@ -583,7 +583,7 @@ func TestClient_PurchaseCommitment_InvalidDetails(t *testing.T) {
 		},
 	}
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -612,7 +612,7 @@ func TestClient_PurchaseCommitment_OfferingNotFound(t *testing.T) {
 			SearchResults: []types.SavingsPlanOffering{},
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -647,7 +647,7 @@ func TestClient_PurchaseCommitment_CreateFails(t *testing.T) {
 	mockSP.On("CreateSavingsPlan", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("purchase failed"))
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -684,7 +684,7 @@ func TestClient_PurchaseCommitment_EmptyResponse(t *testing.T) {
 			SavingsPlanId: nil, // Empty response
 		}, nil)
 
-	result, err := client.PurchaseCommitment(context.Background(), rec, common.PurchaseOptions{})
+	result, err := client.PurchaseCommitment(context.Background(), &rec, common.PurchaseOptions{})
 
 	assert.Error(t, err)
 	assert.False(t, result.Success)
@@ -720,7 +720,7 @@ func TestClient_GetOfferingDetails(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferingRates", mock.Anything, mock.Anything).
 		Return(&savingsplans.DescribeSavingsPlansOfferingRatesOutput{}, nil)
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -761,7 +761,7 @@ func TestClient_GetOfferingDetails_3YearTerm(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferingRates", mock.Anything, mock.Anything).
 		Return(&savingsplans.DescribeSavingsPlansOfferingRatesOutput{}, nil)
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -801,7 +801,7 @@ func TestClient_GetOfferingDetails_NoUpfront(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferingRates", mock.Anything, mock.Anything).
 		Return(&savingsplans.DescribeSavingsPlansOfferingRatesOutput{}, nil)
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, details)
@@ -825,7 +825,7 @@ func TestClient_GetOfferingDetails_InvalidDetails(t *testing.T) {
 		},
 	}
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -859,7 +859,7 @@ func TestClient_GetOfferingDetails_RatesError(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferingRates", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("rates API error"))
 
-	details, err := client.GetOfferingDetails(context.Background(), rec)
+	details, err := client.GetOfferingDetails(context.Background(), &rec)
 
 	assert.Error(t, err)
 	assert.Nil(t, details)
@@ -908,7 +908,7 @@ func TestClient_FindOfferingID_AllPlanTypes(t *testing.T) {
 					}, nil)
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -969,7 +969,7 @@ func TestClient_FindOfferingID_AllPaymentOptions(t *testing.T) {
 					}, nil).Once()
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans payment option")
@@ -1025,7 +1025,7 @@ func TestClient_FindOfferingID_TermVariations(t *testing.T) {
 					}, nil).Once()
 			}
 
-			err := client.ValidateOffering(context.Background(), rec)
+			err := client.ValidateOffering(context.Background(), &rec)
 			if tt.expectError {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "unsupported Savings Plans term")
@@ -1057,7 +1057,7 @@ func TestClient_FindOfferingID_APIError(t *testing.T) {
 	mockSP.On("DescribeSavingsPlansOfferings", mock.Anything, mock.Anything).
 		Return(nil, fmt.Errorf("API error"))
 
-	err := client.ValidateOffering(context.Background(), rec)
+	err := client.ValidateOffering(context.Background(), &rec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to describe Savings Plans offerings")
 	mockSP.AssertExpectations(t)

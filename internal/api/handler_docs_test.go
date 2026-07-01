@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,10 +11,7 @@ import (
 // docsBodyForTest renders the served /docs HTML and returns its body.
 func docsBodyForTest(t *testing.T) string {
 	t.Helper()
-	resp, err := (&Handler{}).serveDocsUI(context.Background(), nil, nil)
-	require.NoError(t, err)
-	raw, ok := resp.(*rawResponse)
-	require.True(t, ok, "serveDocsUI should return *rawResponse")
+	raw := (&Handler{}).serveDocsUI()
 	return raw.body
 }
 
