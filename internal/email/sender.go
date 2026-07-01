@@ -504,7 +504,7 @@ type RecommendationSummary struct {
 	// "$0" so a no-upfront payment option visibly shows that fact.
 	UpfrontCost float64
 	// AccountLabel is a friendly per-rec account identifier (e.g.
-	// "AWS 540659244915 (acme-prod)"). Empty omits the line.
+	// "AWS 123456789012 (acme-prod)"). Empty omits the line.
 	AccountLabel string
 }
 
