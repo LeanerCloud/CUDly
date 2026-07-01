@@ -58,6 +58,8 @@ jobs:
 
       - name: Validate inputs
         id: check
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           IS_VALID=true
           IMAGE_URI=""
@@ -71,7 +73,12 @@ jobs:
           # Construct image URI based on cloud provider
           case "${{ inputs.cloud }}" in
             aws-lambda|aws-fargate)
-              IMAGE_URI="${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION || 'us-east-1' }}.amazonaws.com/${{ vars.ECR_REPOSITORY || 'cudly' }}:${{ inputs.image_tag }}"
+              if [ -z "$ECR_REPOSITORY" ]; then
+                echo "❌ ECR_REPOSITORY repository variable is not set; refusing to guess the repo name"
+                IS_VALID=false
+              else
+                IMAGE_URI="${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION || 'us-east-1' }}.amazonaws.com/${ECR_REPOSITORY}:${{ inputs.image_tag }}"
+              fi
               ;;
             gcp)
               IMAGE_URI="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPO || 'cudly' }}/cudly:${{ inputs.image_tag }}"
@@ -127,7 +134,12 @@ jobs:
         if: startsWith(inputs.cloud, 'aws')
         run: |
           IMAGE_TAG="${{ inputs.image_tag }}"
-          REPO="${{ vars.ECR_REPOSITORY || 'cudly' }}"
+          REPO="${{ vars.ECR_REPOSITORY }}"
+
+          if [ -z "$REPO" ]; then
+            echo "❌ ECR_REPOSITORY repository variable is not set"
+            exit 1
+          fi
 
           echo "Checking if image exists: $REPO:$IMAGE_TAG"
 
