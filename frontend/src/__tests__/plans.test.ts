@@ -1109,11 +1109,14 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       expect(api.createPlan).toHaveBeenCalled();
+      // PR #861: no follow-up setPlanAccounts on the create path.
+      expect(api.setPlanAccounts).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Plan created successfully' }));
     });
 
     test('updates existing plan when plan ID present', async () => {
       (api.updatePlan as jest.Mock).mockResolvedValue({});
+      (api.setPlanAccounts as jest.Mock).mockResolvedValue(undefined);
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
       (document.getElementById('plan-id') as HTMLInputElement).value = 'plan-123';
@@ -1122,6 +1125,8 @@ describe('Plans Module', () => {
       await savePlan(event);
 
       expect(api.updatePlan).toHaveBeenCalledWith('plan-123', expect.any(Object));
+      // PR #861: update path still calls setPlanAccounts (no atomic backend write on PUT).
+      expect(api.setPlanAccounts).toHaveBeenCalledWith('plan-123', expect.any(Array));
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Plan updated successfully' }));
     });
 
@@ -1397,6 +1402,11 @@ describe('Plans Module', () => {
           '22222222-2222-2222-2222-222222222222',
         ],
       }));
+      // Regression guard for PR #861: the create path must NOT call
+      // setPlanAccounts -- the backend already persists plan_accounts
+      // atomically from target_accounts in the POST body (handler_plans.go
+      // createPlan). A follow-up PUT would be a redundant double-write.
+      expect(api.setPlanAccounts).not.toHaveBeenCalled();
     });
 
     // -------------------------------------------------------------------------
