@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func (s *testablePostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalCon
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return &GlobalConfig{
 				EnabledProviders:    []string{},
 				ApprovalRequired:    true,
@@ -129,8 +130,8 @@ func (s *testablePostgresStore) GetServiceConfig(ctx context.Context, provider, 
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, errors.New("service config not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
 		}
 		return nil, err
 	}
@@ -282,7 +283,7 @@ func (s *testablePostgresStore) GetPurchasePlan(ctx context.Context, planID stri
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("purchase plan not found")
 		}
 		return nil, err
