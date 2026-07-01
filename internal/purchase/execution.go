@@ -98,7 +98,10 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		}
 	}
 
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
+	if procErr != nil {
+		return procErr
+	}
 
 	if len(purchaseErrors) > 0 && !anyRecPurchased(exec.Recommendations) {
 		// Nothing committed — a clean total failure.
@@ -234,36 +237,17 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	}
 
 	accountID := account.ExternalID
-	totalSavings, totalUpfront, purchaseErrors := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
-
-	// #642: a per-account run can be a partial success — some recs committed
-	// to purchase_history (Purchased=true) while others failed. Marking the
-	// row "failed" in that case is wrong (it hides the real commitments and
-	// invites a re-approve that double-buys). Record "partially_completed"
-	// instead so the row reflects reality, and still send the confirmation
-	// for the recs that did purchase.
-	partial := len(purchaseErrors) > 0 && anyRecPurchased(acctExec.Recommendations)
-	switch {
-	case partial:
-		now := time.Now()
-		acctExec.Status = "partially_completed"
-		// Append so any audit-gap note already stamped by
-		// aggregatePurchaseOutcomes (issue #621) survives alongside the
-		// per-rec failure list.
-		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
-		acctExec.CompletedAt = &now
-	case len(purchaseErrors) > 0:
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
+	if procErr != nil {
 		acctExec.Status = "failed"
-		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
-	default:
-		now := time.Now()
-		acctExec.Status = "completed"
-		acctExec.CompletedAt = &now
+		acctExec.Error = procErr.Error()
+		_ = m.config.SavePurchaseExecution(ctx, &acctExec)
+		return false, procErr
 	}
 
-	// committed is the gate executeMultiAccount uses to distinguish a partial
-	// run from a flat failure (issue #1014): true when any rec purchased.
-	committed = anyRecPurchased(acctExec.Recommendations)
+	// Resolve the final status/error/completion stamp from the per-rec outcome
+	// (#642), and learn whether any rec committed (#1014).
+	partial, committed := applyAccountOutcome(&acctExec, purchaseErrors)
 
 	if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
 		return committed, fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr)
@@ -286,6 +270,41 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		return committed, fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 	return committed, nil
+}
+
+// applyAccountOutcome stamps the final Status / Error / CompletedAt on acctExec
+// from the per-rec purchase outcome and reports whether the run was a partial
+// success and whether any rec committed.
+//
+// A per-account run can be a partial success (#642): some recs committed to
+// purchase_history (Purchased=true) while others failed. Marking the row
+// "failed" in that case is wrong (it hides the real commitments and invites a
+// re-approve that double-buys), so record "partially_completed" instead and let
+// the caller still send the confirmation for the recs that did purchase.
+//
+// committed is the gate executeMultiAccount uses to distinguish a partial run
+// from a flat failure (#1014): true when any rec purchased.
+func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []string) (partial, committed bool) {
+	committed = anyRecPurchased(acctExec.Recommendations)
+	partial = len(purchaseErrors) > 0 && committed
+	switch {
+	case partial:
+		now := time.Now()
+		acctExec.Status = "partially_completed"
+		// Append so any audit-gap note already stamped by
+		// aggregatePurchaseOutcomes (issue #621) survives alongside the
+		// per-rec failure list.
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+		acctExec.CompletedAt = &now
+	case len(purchaseErrors) > 0:
+		acctExec.Status = "failed"
+		acctExec.Error = appendErrNote(acctExec.Error, strings.Join(purchaseErrors, "; "))
+	default:
+		now := time.Now()
+		acctExec.Status = "completed"
+		acctExec.CompletedAt = &now
+	}
+	return partial, committed
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
@@ -479,7 +498,7 @@ type recPurchaseOutcome struct {
 	err      error
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string) {
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (float64, float64, []string, error) {
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -490,13 +509,28 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 		ExecutionID: exec.ExecutionID,
 	}
 
+	// Load GlobalConfig to pick up the OfferingClass setting for EC2 RI
+	// purchases. A load error is fatal: proceeding with an empty OfferingClass
+	// silently defaults to "convertible" even when the operator configured
+	// "standard", which is an irreversible, more-expensive purchase. Fail the
+	// run so the operator can diagnose the DB issue and retry with correct
+	// settings (no-silent-fallbacks-on-money-paths rule).
+	globalCfg, err := m.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("purchase[%s]: failed to load GlobalConfig for offering class: %w",
+			exec.ExecutionID, err)
+	}
+	if globalCfg != nil {
+		opts.OfferingClass = globalCfg.OfferingClass
+	}
+
 	// Build the list of selected indices once so the fan-out closure only
 	// has to look up rec[i] (no second pass over the full slice).
 	selected := selectedIndices(exec.Recommendations)
 	if len(selected) == 0 {
 		logging.Infof("purchase[%s]: no selected recommendations, nothing to execute (account=%s plan=%q)",
 			exec.ExecutionID, accountID, plan.Name)
-		return 0, 0, nil
+		return 0, 0, nil, nil
 	}
 	logging.Infof("purchase[%s]: dispatching %d recommendation(s) for account=%s plan=%q",
 		exec.ExecutionID, len(selected), accountID, plan.Name)
@@ -547,7 +581,8 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 	// there are no concurrent writes to totals, exec.Recommendations, or
 	// purchaseErrors (05-N2). Do NOT move the aggregation inside the FanOut
 	// closure or run it concurrently with the fan-out.
-	return m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+	totalSavings, totalUpfront, purchaseErrors := m.aggregatePurchaseOutcomes(ctx, exec, plan, accountID, results)
+	return totalSavings, totalUpfront, purchaseErrors, nil
 }
 
 // aggregatePurchaseOutcomes walks the fan-out results serially and writes

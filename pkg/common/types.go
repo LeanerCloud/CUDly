@@ -300,6 +300,12 @@ type PurchaseOptions struct {
 	// CloudWatch / DB execution row (issue #667). The CLI purchase path has
 	// no owning execution and leaves it empty.
 	ExecutionID string
+	// OfferingClass is the EC2 Reserved Instance offering class for this
+	// purchase: "convertible" (exchangeable) or "standard" (locked, ~5%
+	// cheaper). Empty means the caller has not set one; the EC2 client
+	// defaults to "convertible" to preserve pre-694 behaviour.
+	// Only meaningful for EC2 RI purchases; ignored by other providers.
+	OfferingClass string
 }
 
 // NormalizeSource lowercases s and returns it when it matches an allowed
