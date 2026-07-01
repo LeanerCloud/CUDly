@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
 	"sync"
+	"testing"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -10,6 +12,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/stretchr/testify/mock"
 )
+
+// TestMain disables the EC2 Instance Metadata Service (IMDS) for the entire
+// cmd test package. Without this, tests that call real AWS SDK config-loading
+// without credentials trigger up to 3 IMDS retry attempts, each with a long
+// backoff. The updated aws-sdk-go-v2/feature/ec2/imds (v1.16.x+) has a
+// higher per-attempt timeout than v1.14.x, causing the full cmd test suite to
+// exceed the default 10-minute test timeout.
+//
+// Setting AWS_EC2_METADATA_DISABLED=true causes the SDK to skip IMDS
+// immediately and return a "no credentials" error, so tests that expect a
+// credentials-load failure still reach their expected error path -- just
+// without the retry delay. Tests that genuinely need credentials are already
+// guarded by t.Skip or are integration tests run under a separate tag.
+func TestMain(m *testing.M) {
+	os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	os.Exit(m.Run())
+}
 
 // ==================== Mock Implementations ====================
 
