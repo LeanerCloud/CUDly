@@ -2,7 +2,8 @@ package oidc
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -35,22 +36,23 @@ func (w gcpKMSWrapper) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKey
 	return w.real.GetPublicKey(ctx, req)
 }
 
-// GCPKMSSigner signs JWTs using a GCP Cloud KMS asymmetric key. The
+// GCPKMSSigner signs JWTs using a GCP Cloud KMS asymmetric key (EC P-256). The
 // private half never leaves the KMS.
 type GCPKMSSigner struct {
 	client      GCPKMSClient
-	keyResource string // full resource name, incl. /cryptoKeyVersions/N
-
-	once   sync.Once
-	pubKey *rsa.PublicKey
-	kid    string
-	err    error
+	err         error
+	pubKey      *ecdsa.PublicKey
+	keyResource string
+	kid         string
+	once        sync.Once
 }
 
 // NewGCPKMSSigner constructs a signer bound to a specific KMS key
 // version resource. Example resource:
 //
 //	projects/.../locations/global/keyRings/.../cryptoKeys/.../cryptoKeyVersions/1
+//
+// The key must be an EC_SIGN_P256_SHA256 key.
 func NewGCPKMSSigner(ctx context.Context, keyResource string) (*GCPKMSSigner, error) {
 	if keyResource == "" {
 		return nil, fmt.Errorf("oidc: empty GCP KMS key resource")
@@ -69,8 +71,10 @@ func NewGCPKMSSignerFromClient(client GCPKMSClient, keyResource string) *GCPKMSS
 
 // Sign calls AsymmetricSign with the SHA-256 digest. The caller must
 // have already hashed the signing input; the digest is forwarded
-// as-is with the expected algorithm
-// RSA_SIGN_PKCS1_2048_SHA256 (implicit in the key config).
+// as-is. The key must be configured as EC_SIGN_P256_SHA256 in GCP KMS.
+// GCP Cloud KMS returns a DER/ASN.1-encoded ECDSA signature, which is
+// converted to the RFC 7518 section 3.4 raw R || S form required by
+// ES256 JWS signatures (the Signer.Sign contract).
 func (s *GCPKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 	crc := int64(crc32.Checksum(digest, crc32.MakeTable(crc32.Castagnoli)))
 	req := &kmspb.AsymmetricSignRequest{
@@ -84,11 +88,11 @@ func (s *GCPKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: gcp kms AsymmetricSign: %w", err)
 	}
-	return resp.Signature, nil
+	return derToRawECDSASignature(resp.Signature)
 }
 
 // PublicKey fetches the public half of the KMS key once and caches it.
-func (s *GCPKMSSigner) PublicKey(ctx context.Context) (*rsa.PublicKey, error) {
+func (s *GCPKMSSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
 	s.resolveOnce(ctx)
 	return s.pubKey, s.err
 }
@@ -116,17 +120,17 @@ func (s *GCPKMSSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: parse gcp kms public key: %w", err)
 			return
 		}
-		rsaPub, ok := pub.(*rsa.PublicKey)
+		ecPub, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
-			s.err = fmt.Errorf("oidc: gcp kms key is not RSA (got %T)", pub)
+			s.err = fmt.Errorf("oidc: gcp kms key is not ECDSA (got %T); key must be EC_SIGN_P256_SHA256", pub)
 			return
 		}
-		kid, err := ComputeKeyID(rsaPub)
+		kid, err := ComputeKeyID(ecPub)
 		if err != nil {
 			s.err = err
 			return
 		}
-		s.pubKey = rsaPub
+		s.pubKey = ecPub
 		s.kid = kid
 	})
 }
