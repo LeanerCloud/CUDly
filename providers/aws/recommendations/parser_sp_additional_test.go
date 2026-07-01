@@ -149,7 +149,7 @@ func TestParseSavingsPlanDetail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := client.parseSavingsPlanDetail(tt.detail, tt.params, tt.planType)
+			rec := client.parseSavingsPlanDetail(tt.detail, &tt.params, tt.planType)
 			require.NotNil(t, rec)
 			if tt.validate != nil {
 				tt.validate(t, rec)
@@ -186,7 +186,7 @@ func TestParseSavingsPlansRecommendations(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs := client.parseSavingsPlansRecommendations(spRec, params, types.SupportedSavingsPlansTypeComputeSp)
+	recs := client.parseSavingsPlansRecommendations(spRec, &params, types.SupportedSavingsPlansTypeComputeSp)
 
 	assert.Len(t, recs, 2)
 
@@ -212,7 +212,7 @@ func TestParseSavingsPlansRecommendations_Empty(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs := client.parseSavingsPlansRecommendations(spRec, params, types.SupportedSavingsPlansTypeComputeSp)
+	recs := client.parseSavingsPlansRecommendations(spRec, &params, types.SupportedSavingsPlansTypeComputeSp)
 
 	assert.Empty(t, recs)
 }
@@ -284,7 +284,7 @@ func TestGetSavingsPlansRecommendations_WithFilters(t *testing.T) {
 		IncludeSPTypes: []string{"Compute", "Database"},
 	}
 
-	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
@@ -302,7 +302,7 @@ func TestGetSavingsPlansRecommendations_EmptyFilters(t *testing.T) {
 		ExcludeSPTypes: []string{"Compute", "EC2Instance", "SageMaker", "Database"},
 	}
 
-	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), &params)
 
 	require.NoError(t, err)
 	assert.Empty(t, recs)
@@ -355,7 +355,7 @@ func TestParseSavingsPlanDetail_OnDemandCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := client.parseSavingsPlanDetail(tt.detail, params, types.SupportedSavingsPlansTypeComputeSp)
+			rec := client.parseSavingsPlanDetail(tt.detail, &params, types.SupportedSavingsPlansTypeComputeSp)
 			require.NotNil(t, rec)
 			assert.InDelta(t, tt.wantOnDemand, rec.OnDemandCost, 0.001,
 				"OnDemandCost should equal CurrentAverageHourlyOnDemandSpend × 730")
@@ -485,7 +485,7 @@ func TestGetSavingsPlansRecommendations_Paginates(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), &params)
 	require.NoError(t, err)
 	// 2 + 3 + 4 = 9 detail items
 	assert.Len(t, recs, 9, "must accumulate recs across all 3 SP pages")
@@ -510,7 +510,7 @@ func TestGetSavingsPlansRecommendations_EmptyTokenTerminates(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	recs, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	recs, err := client.getSavingsPlansRecommendations(context.Background(), &params)
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
 	assert.Equal(t, 1, mock.calls, "empty-string token must terminate pagination after page 1")
@@ -528,7 +528,7 @@ func TestGetSavingsPlansRecommendations_PaginationCapError(t *testing.T) {
 		LookbackPeriod: "7d",
 	}
 
-	_, err := client.getSavingsPlansRecommendations(context.Background(), params)
+	_, err := client.getSavingsPlansRecommendations(context.Background(), &params)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pagination cap reached")
 	assert.Equal(t, maxRecommendationPages, mock.calls,

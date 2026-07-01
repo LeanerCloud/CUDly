@@ -194,7 +194,7 @@ func TestParseSavingsPlanDetail_RecommendedUtilization(t *testing.T) {
 				HourlyCommitmentToPurchase:  aws.String("1.0"),
 				EstimatedAverageUtilization: tt.utilizationStr,
 			}
-			rec := client.parseSavingsPlanDetail(detail, params, types.SupportedSavingsPlansTypeComputeSp)
+			rec := client.parseSavingsPlanDetail(detail, &params, types.SupportedSavingsPlansTypeComputeSp)
 			require.NotNil(t, rec)
 			assert.Equal(t, tt.wantUtilization, rec.RecommendedUtilization,
 				"SP utilization should be parsed into rec.RecommendedUtilization")

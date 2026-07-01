@@ -98,14 +98,14 @@ func buildUtilizations(agg map[string]*riAccumulator) []RIUtilization {
 
 // fetchUtilizationPage calls the Cost Explorer API with rate-limit retry.
 func (c *Client) fetchUtilizationPage(ctx context.Context, input *costexplorer.GetReservationUtilizationInput) (*costexplorer.GetReservationUtilizationOutput, error) {
-	c.rateLimiter.Reset()
+	rl := c.newRateLimiter()
 	for {
-		if waitErr := c.rateLimiter.Wait(ctx); waitErr != nil {
+		if waitErr := rl.Wait(ctx); waitErr != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", waitErr)
 		}
 
 		result, err := c.costExplorerClient.GetReservationUtilization(ctx, input)
-		if !c.rateLimiter.ShouldRetry(err) {
+		if !rl.ShouldRetry(err) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to get reservation utilization: %w", err)
 			}

@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
 
-// Mock CostExplorerAPI for testing
+// Mock CostExplorerAPI for testing.
 type mockCostExplorerAPI struct {
+	mu                sync.Mutex
 	riRecommendations *costexplorer.GetReservationPurchaseRecommendationOutput
 	spRecommendations *costexplorer.GetSavingsPlansPurchaseRecommendationOutput
 	riError           error
@@ -28,20 +30,28 @@ type mockCostExplorerAPI struct {
 }
 
 func (m *mockCostExplorerAPI) GetReservationPurchaseRecommendation(ctx context.Context, params *costexplorer.GetReservationPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationPurchaseRecommendationOutput, error) {
+	m.mu.Lock()
 	m.callCount++
 	m.riCalls = append(m.riCalls, params)
-	if m.riError != nil {
-		return nil, m.riError
+	riErr := m.riError
+	riRecs := m.riRecommendations
+	m.mu.Unlock()
+	if riErr != nil {
+		return nil, riErr
 	}
-	return m.riRecommendations, nil
+	return riRecs, nil
 }
 
 func (m *mockCostExplorerAPI) GetSavingsPlansPurchaseRecommendation(ctx context.Context, params *costexplorer.GetSavingsPlansPurchaseRecommendationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansPurchaseRecommendationOutput, error) {
+	m.mu.Lock()
 	m.callCount++
-	if m.spError != nil {
-		return nil, m.spError
+	spErr := m.spError
+	spRecs := m.spRecommendations
+	m.mu.Unlock()
+	if spErr != nil {
+		return nil, spErr
 	}
-	return m.spRecommendations, nil
+	return spRecs, nil
 }
 
 func (m *mockCostExplorerAPI) GetReservationUtilization(ctx context.Context, params *costexplorer.GetReservationUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetReservationUtilizationOutput, error) {
@@ -57,11 +67,11 @@ func TestNewClient(t *testing.T) {
 		Region: "us-west-2",
 	}
 
-	client := NewClient(cfg)
+	client := NewClient(&cfg)
 
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.costExplorerClient)
-	assert.NotNil(t, client.rateLimiter)
+	assert.NotNil(t, client.newRateLimiter)
 	assert.Equal(t, "us-west-2", client.region)
 }
 
@@ -74,7 +84,7 @@ func TestNewClientWithAPI(t *testing.T) {
 	assert.NotNil(t, client)
 	assert.Equal(t, mockAPI, client.costExplorerClient)
 	assert.Equal(t, region, client.region)
-	assert.NotNil(t, client.rateLimiter)
+	assert.NotNil(t, client.newRateLimiter)
 }
 
 func TestGetRecommendations_EC2_Success(t *testing.T) {
@@ -262,9 +272,11 @@ func TestGetRecommendations_Error(t *testing.T) {
 		riError: newThrottleError(),
 	}
 
-	// Use custom rate limiter to speed up test
+	// Use custom rate limiter factory to speed up test
 	client := NewClientWithAPI(mockAPI, "us-east-1")
-	client.rateLimiter = NewRateLimiterWithOptions(1*time.Millisecond, 10*time.Millisecond, 2)
+	client.newRateLimiter = func() *RateLimiter {
+		return NewRateLimiterWithOptions(1*time.Millisecond, 10*time.Millisecond, 2)
+	}
 
 	params := common.RecommendationParams{
 		Service:        common.ServiceEC2,
@@ -361,7 +373,7 @@ func TestGetRecommendationsForService(t *testing.T) {
 // `PaymentOption` on each request and returns recs for that single
 // (term, payment) cell — so to let the user choose between every
 // variant in the UI we MUST issue one request per combo. The previous
-// behaviour hardcoded ("3yr", "partial-upfront") and the user-visible
+// behavior hardcoded ("3yr", "partial-upfront") and the user-visible
 // symptoms were "AWS recs only ever show Term = 3 Years" plus "no
 // all-upfront / no-upfront variants ever appear". We assert directly
 // against the captured input slice that all 6 (term, payment) combos
@@ -506,7 +518,9 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 	}
 
 	client := NewClientWithAPI(mockAPI, "us-east-1")
-	client.rateLimiter = NewRateLimiterWithOptions(100*time.Millisecond, 1*time.Second, 5)
+	client.newRateLimiter = func() *RateLimiter {
+		return NewRateLimiterWithOptions(100*time.Millisecond, 1*time.Second, 5)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -522,7 +536,7 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 
 	// With the pagination loop added (issue #692), ctx.Err() is checked at
 	// the top of the first page iteration before the rate-limiter runs. A
-	// pre-cancelled context therefore returns context.Canceled directly, which
+	// pre-canceled context therefore returns context.Canceled directly, which
 	// is the correct behavior per feedback_ctx_cancel_terminal.md.
 	assert.Error(t, err)
 	assert.Nil(t, recs)
@@ -531,7 +545,7 @@ func TestGetRecommendations_ContextCancellation(t *testing.T) {
 
 // TestGetAllRecommendations_PropagatesContextCancellation pins the contract
 // that GetAllRecommendations propagates ctx.Err() to its caller after the
-// errgroup Wait() — the parent context being cancelled or its deadline
+// errgroup Wait() — the parent context being canceled or its deadline
 // exceeding must surface as an error rather than being swallowed by the
 // per-service error-isolation goroutines (which all return nil to the
 // errgroup so a single per-service failure does not cancel siblings).
@@ -551,8 +565,8 @@ func TestGetAllRecommendations_PropagatesContextCancellation(t *testing.T) {
 
 	// Cancel the context BEFORE the call so we don't depend on race-y
 	// timing inside the SDK clients. The Cost Explorer calls inside the
-	// goroutines observe the cancelled gctx (derived from ctx via
-	// errgroup.WithContext) and either short-circuit or return cancelled
+	// goroutines observe the canceled gctx (derived from ctx via
+	// errgroup.WithContext) and either short-circuit or return canceled
 	// errors; either way, our post-Wait ctx.Err() check returns
 	// context.Canceled.
 	ctx, cancel := context.WithCancel(context.Background())
