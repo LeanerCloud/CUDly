@@ -125,7 +125,8 @@ func (h *Handler) resolveDashboardAccountScope(ctx context.Context, params map[s
 
 // resolveAllowedAccountScope resolves a restricted session's allowed_accounts
 // into the dual-column purchase-history filter inputs so dashboard commitment
-// metrics never include accounts the session can't access (issue #956). It lists
+// metrics and the inventory endpoints (fetchCommitmentRecords) never include
+// accounts the session can't access (issue #956). It lists
 // the cloud accounts, keeps those the session matches via auth.MatchesAccount,
 // and resolves their UUIDs through resolveAccountFilterIDs (same code path as an
 // explicit filter).
@@ -594,43 +595,29 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 	return byService
 }
 
-// fetchCommitmentPurchases loads the purchase_history rows that calculateCommitmentMetrics
-// aggregates, applying the pre-resolved account scope. Extracted to keep the
-// parent under the cyclomatic limit (mirrors the appendAccountPredicate /
-// accountMatchesFilters pattern). Returns ok=false on a store error or an
-// explicit zero-account scope so the caller emits zeroed KPIs without querying.
+// fetchCommitmentPurchases loads the active purchase_history rows that
+// calculateCommitmentMetrics aggregates, applying the pre-resolved account
+// scope. Extracted to keep the parent under the cyclomatic limit (mirrors the
+// appendAccountPredicate / accountMatchesFilters pattern). Returns ok=false on
+// a store error or an explicit zero-account scope so the caller emits zeroed
+// KPIs without querying.
 //
 //   - non-nil but empty accountUUIDs (no external groups): explicit "scoped to
 //     zero accounts" sentinel (a restricted session whose allowed_accounts match
 //     nothing). Returns (nil, false) WITHOUT querying so a scoped user never sees
 //     all-accounts data (issue #956). A nil/empty filter sent to the store would
 //     match every row (no WHERE clause), so this must short-circuit.
-//   - either accountUUIDs or accountExternalIDsByProvider non-empty:
-//     GetPurchaseHistoryFiltered with the dual-column predicate.
-//   - both nil: GetAllPurchaseHistory (no account filter — unrestricted session).
-func (h *Handler) fetchCommitmentPurchases(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
-	const fetchLimit = 1000
-
+//   - otherwise: GetActivePurchaseHistory with the dual-column account predicate
+//     (empty scope means all accounts). The active filter runs in SQL with no
+//     row cap, so older-but-still-active 1y/3y commitments cannot be silently
+//     dropped the way a newest-first LIMIT 1000 page dropped them (issue #1140);
+//     the result is bounded by the number of live commitments.
+func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
 	if accountUUIDs != nil && len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
 		return nil, false
 	}
 
-	var (
-		purchases []config.PurchaseHistoryRecord
-		err       error
-	)
-	if len(accountUUIDs) > 0 || len(accountExternalIDsByProvider) > 0 {
-		// Account filter: dual-column match so NULL-cloud_account_id rows are
-		// counted via their external id.
-		purchases, err = h.config.GetPurchaseHistoryFiltered(ctx, config.PurchaseHistoryFilter{
-			AccountIDs:            accountUUIDs,
-			ExternalIDsByProvider: accountExternalIDsByProvider,
-			Limit:                 fetchLimit,
-		})
-	} else {
-		// No account filter: fetch across all accounts.
-		purchases, err = h.config.GetAllPurchaseHistory(ctx, fetchLimit)
-	}
+	purchases, err := h.config.GetActivePurchaseHistory(ctx, asOf, accountUUIDs, accountExternalIDsByProvider)
 	if err != nil {
 		// Log error but don't fail the dashboard request.
 		return nil, false
@@ -654,12 +641,12 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, accountUUIDs []s
 // this KPI path (committedMonthly) and the per-service chart use exactly the
 // same gate.
 func (h *Handler) calculateCommitmentMetrics(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
-	purchases, ok := h.fetchCommitmentPurchases(ctx, accountUUIDs, accountExternalIDsByProvider)
+	currentTime := time.Now()
+	purchases, ok := h.fetchCommitmentPurchases(ctx, currentTime, accountUUIDs, accountExternalIDsByProvider)
 	if !ok {
 		return 0, 0, 0, nil
 	}
 
-	currentTime := time.Now()
 	yearStart := time.Date(currentTime.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
 
 	// Derive the per-service breakdown from the shared primitive so the

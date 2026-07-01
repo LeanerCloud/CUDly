@@ -1614,24 +1614,41 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 }
 
 // GetActivePurchaseHistory retrieves every purchase_history row still within its
-// commitment term at asOf, across all accounts. The active filter is pushed into
-// SQL so the result is bounded by the number of live commitments (not by all
-// history ever recorded), which is what the analytics collector needs and avoids
-// silently truncating older-but-still-active 1y/3y commitments. term*8760 hours
-// matches the collector's HoursPerYear (365*24) so the SQL and Go term windows
-// agree.
-func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]PurchaseHistoryRecord, error) {
-	query := `
+// commitment term at asOf, optionally scoped to a set of accounts via the same
+// dual-column predicate as GetPurchaseHistoryFiltered (appendAccountPredicate):
+// both accountIDs (cloud_accounts UUIDs matched on cloud_account_id) and
+// externalIDsByProvider (provider-scoped external numbers matched on
+// account_id) are applied with OR semantics so rows carrying only one
+// identifier are still returned (issues #701/#498/#866). Both empty means all
+// accounts. The active filter is pushed into SQL so the result is bounded by
+// the number of live commitments (not by all history ever recorded), which is
+// what the analytics collector, dashboard KPIs, and inventory endpoints need:
+// it cannot silently truncate older-but-still-active 1y/3y commitments the way
+// a newest-first LIMIT page does (issue #1140). term*8760 hours matches the
+// collector's HoursPerYear and the API layer's commitmentExpiry (both 365*24)
+// so the SQL and Go term windows agree. The expiry comparison is inclusive
+// (expiry >= asOf): a commitment expiring exactly at asOf is still active,
+// matching the API layer's isActiveCommitment (!now.After(expiry)) so the SQL
+// result set and the Go-side active checks share one boundary definition.
+func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]PurchaseHistoryRecord, error) {
+	conds := []string{
+		"term > 0",
+		"timestamp + make_interval(hours => term * 8760) >= $1",
+	}
+	args := []any{asOf}
+	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)
+
+	query := fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
-		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id
+		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
 		FROM purchase_history
-		WHERE term > 0
-		  AND timestamp + make_interval(hours => term * 8760) > $1
+		WHERE %s
 		ORDER BY timestamp DESC
-	`
+	`, strings.Join(conds, " AND "))
 
-	return s.queryPurchaseHistory(ctx, query, asOf)
+	return s.queryPurchaseHistory(ctx, query, args...)
 }
 
 // appendAccountPredicate pulls the dual-column account-predicate arg-building

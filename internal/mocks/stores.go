@@ -287,8 +287,8 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 }
 
 // GetActivePurchaseHistory mocks the GetActivePurchaseHistory operation
-func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time) ([]config.PurchaseHistoryRecord, error) {
-	args := m.Called(ctx, asOf)
+func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
+	args := m.Called(ctx, asOf, accountIDs, externalIDsByProvider)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
