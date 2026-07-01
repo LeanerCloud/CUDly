@@ -12,8 +12,12 @@
 #   - ECR_REPOSITORY: ECR repository name
 #
 # Triggered by:
-#   - Manual workflow dispatch only (push trigger disabled — Fargate is not the primary compute platform)
+#   - Manual workflow dispatch only (push trigger disabled; Fargate is not the primary compute platform)
 #   - Workflow call from deploy-all.yml
+#
+# Lock cleanup is intentionally manual. If a prior run crashed and left a stuck
+# lock, re-run this workflow with clear_stale_lock=true (workflow_dispatch only).
+# See runbooks/terraform-stuck-lock.md for diagnosis and manual recovery steps.
 
 name: Deploy to AWS Fargate
 
@@ -33,6 +37,11 @@ on:
         required: true
         type: choice
         options: [dev, staging, prod]
+      clear_stale_lock:
+        description: 'Force-clear a stale S3 state lock from a prior crashed run (use only when you know the prior run is dead)'
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       environment:
@@ -105,18 +114,28 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Clear stale state lock (operator-triggered only)
+        if: ${{ inputs.clear_stale_lock == true }}
+        env:
+          TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          printf '%s\nkey = "github-fargate-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
+          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
+          if [ -n "$BUCKET" ]; then
+            LOCK_KEY="github-fargate-${ENVIRONMENT}/terraform.tfstate.tflock"
+            echo "Removing stale lock: s3://${BUCKET}/${LOCK_KEY}"
+            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || echo "No lock file found (already clean)"
+          else
+            echo "Could not parse bucket from backend config; skipping lock clear"
+          fi
+
       - name: Terraform Init
         env:
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           printf '%s\nkey = "github-fargate-%s/terraform.tfstate"\n' "$TF_BACKEND" "$ENVIRONMENT" > /tmp/backend.tfbackend
-          # Break any stale state lock from a previous failed run
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_KEY="github-fargate-${ENVIRONMENT}/terraform.tfstate.tflock"
-            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || true
-          fi
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
@@ -138,17 +157,14 @@ jobs:
           cd terraform/environments/aws
           terraform apply -auto-approve tfplan
 
-      - name: Release state lock on failure
-        if: failure() || cancelled()
-        env:
-          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-        run: |
-          BUCKET=$(grep -E '^\s*bucket\s*=' /tmp/backend.tfbackend 2>/dev/null | tr -d ' "' | cut -d= -f2)
-          if [ -n "$BUCKET" ]; then
-            LOCK_KEY="github-fargate-${ENVIRONMENT}/terraform.tfstate.tflock"
-            echo "Releasing S3 state lock: s3://${BUCKET}/${LOCK_KEY}"
-            aws s3 rm "s3://${BUCKET}/${LOCK_KEY}" 2>/dev/null || echo "No lock file found (already clean)"
-          fi
+      # No automatic state-lock release on failure. A blanket failure-path
+      # delete is itself a state-corruption risk: a run that fails *because*
+      # it could not acquire the lock would delete the lock held by another
+      # run that is still actively applying. Terraform already releases its
+      # own lock on a clean apply error; a lock that survives a run means the
+      # run died abnormally, which requires operator confirmation that the
+      # owning run is dead before clearing it via the clear_stale_lock input.
+      # See runbooks/terraform-stuck-lock.md.
 
       - name: Get outputs
         id: outputs
