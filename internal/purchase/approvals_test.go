@@ -380,7 +380,7 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 
 	err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "execution cannot be cancelled")
+	assert.Contains(t, err.Error(), "execution cannot be canceled")
 
 	mockStore.AssertExpectations(t)
 }
@@ -416,7 +416,7 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 
 			err := manager.CancelExecution(ctx, "exec-123", "valid-token", status)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "execution cannot be cancelled")
+			assert.Contains(t, err.Error(), "execution cannot be canceled")
 			assert.Contains(t, err.Error(), status)
 			// Status guard fires before the atomic UPDATE — a rejected
 			// cancel must never reach CancelExecutionAtomic.

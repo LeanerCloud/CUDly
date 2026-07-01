@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockDBConnection mocks database.Connection
+// MockDBConnection mocks database.Connection.
 type MockDBConnection struct {
 	mock.Mock
 }
@@ -42,10 +42,10 @@ func (m *MockDBConnection) Ping(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// MockRow mocks pgx.Row
+// MockRow mocks pgx.Row.
 type MockRow struct {
-	mock.Mock
 	scanFunc func(dest ...interface{}) error
+	mock.Mock
 }
 
 func (m *MockRow) Scan(dest ...interface{}) error {
@@ -64,7 +64,7 @@ func (m *MockRow) Scan(dest ...interface{}) error {
 // mfa_pending_secret_expires_at (NullTime), mfa_recovery_codes ([]string),
 // reset_token (NullString), reset_expiry (NullTime),
 // failed_login_attempts, locked_until (NullTime), password_history,
-// created_at, updated_at, last_login_at (NullTime)
+// created_at, updated_at, last_login_at (NullTime).
 func createMockRowWithUser(user *User) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
@@ -131,7 +131,7 @@ func createMockRowWithUser(user *User) *MockRow {
 	}
 }
 
-// Helper function to create a mock row that returns an error
+// Helper function to create a mock row that returns an error.
 func createMockRowWithError(err error) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
@@ -691,7 +691,7 @@ func TestPostgresStore_CleanupExpiredSessions(t *testing.T) {
 // GROUP TESTS
 // ==========================================
 
-// Helper function to create a mock row that returns a group
+// Helper function to create a mock row that returns a group.
 func createMockRowWithGroup(group *Group) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
@@ -910,7 +910,7 @@ func TestPostgresStore_DeleteGroup(t *testing.T) {
 // API KEY TESTS
 // ==========================================
 
-// Helper function to create a mock row that returns an API key
+// Helper function to create a mock row that returns an API key.
 func createMockRowWithAPIKey(key *UserAPIKey) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
