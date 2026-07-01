@@ -1016,8 +1016,8 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 // frontend-canonical normalisation.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 	slugs := map[string]common.ServiceType{
-		"savings-plans":             common.ServiceSavingsPlans,
-		"savingsplans":              common.ServiceSavingsPlans,
+		"savings-plans":             common.ServiceSavingsPlansAll,
+		"savingsplans":              common.ServiceSavingsPlansAll,
 		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
 		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
 		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,

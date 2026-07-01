@@ -75,7 +75,7 @@ func ServiceTypeForPlanType(pt types.SavingsPlanType) common.ServiceType {
 	case types.SavingsPlanTypeDatabase:
 		return common.ServiceSavingsPlansDatabase
 	}
-	return common.ServiceSavingsPlans
+	return common.ServiceSavingsPlansAll
 }
 
 // PlanTypeForServiceType is the inverse mapping: a common.ServiceType slug to
@@ -117,8 +117,8 @@ func (c *Client) GetExistingCommitments(ctx context.Context) ([]common.Commitmen
 	// The provider registers four SP services and calls GetExistingCommitments
 	// on each; without filtering, every SP commitment would surface four times.
 	//
-	// An empty planType signals legacy umbrella mode (the
-	// `case common.ServiceSavingsPlans` branch in provider.go's
+	// An empty planType signals umbrella sentinel mode (the
+	// `case common.ServiceSavingsPlansAll` branch in provider.go's
 	// GetServiceClient): in that mode, return every commitment unfiltered
 	// to match pre-split behaviour. Per-plan-type clients still partition.
 	commitments := make([]common.Commitment, 0)

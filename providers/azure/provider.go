@@ -432,7 +432,7 @@ func (p *AzureProvider) GetSupportedServices() []common.ServiceType {
 		common.ServiceNoSQL,
 		common.ServiceCache,
 		common.ServiceMemoryDB,
-		common.ServiceSavingsPlans,
+		common.ServiceSavingsPlansAll,
 		common.ServiceSearch,
 		common.ServiceDataWarehouse,
 	}
@@ -490,7 +490,7 @@ func (p *AzureProvider) newServiceClientForSubscription(service common.ServiceTy
 		return NewCosmosDBClient(p.cred, subscriptionID, region), nil
 	case common.ServiceMemoryDB:
 		return NewManagedRedisClient(p.cred, subscriptionID, region), nil
-	case common.ServiceSavingsPlans:
+	case common.ServiceSavingsPlansAll:
 		return NewSavingsPlansClient(p.cred, subscriptionID, region), nil
 	case common.ServiceSearch:
 		return NewSearchClient(p.cred, subscriptionID, region), nil

@@ -277,7 +277,7 @@ func TestGetSavingsPlansRecommendations_WithFilters(t *testing.T) {
 	client := NewClientWithAPI(mockAPI, "us-east-1")
 
 	params := common.RecommendationParams{
-		Service:        common.ServiceSavingsPlans,
+		Service:        common.ServiceSavingsPlansAll,
 		PaymentOption:  "partial-upfront",
 		Term:           "1yr",
 		LookbackPeriod: "7d",
@@ -294,7 +294,7 @@ func TestGetSavingsPlansRecommendations_EmptyFilters(t *testing.T) {
 	client := &Client{}
 
 	params := common.RecommendationParams{
-		Service:        common.ServiceSavingsPlans,
+		Service:        common.ServiceSavingsPlansAll,
 		PaymentOption:  "partial-upfront",
 		Term:           "1yr",
 		LookbackPeriod: "7d",

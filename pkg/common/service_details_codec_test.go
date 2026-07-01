@@ -143,7 +143,7 @@ func TestDecodeServiceDetailsFor_LegacyEmpty(t *testing.T) {
 		string(ServiceEC2),
 		string(ServiceRDS),
 		string(ServiceElastiCache),
-		string(ServiceSavingsPlans),
+		string(ServiceSavingsPlansAll),
 		string(ServiceSavingsPlansCompute),
 		string(ServiceOpenSearch),
 		string(ServiceRedshift),
