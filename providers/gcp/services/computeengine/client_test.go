@@ -900,6 +900,11 @@ func TestComputeEngineClient_ConvertGCPRecommendation(t *testing.T) {
 	assert.Equal(t, "us-central1", rec.Region)
 	assert.Equal(t, "n1-standard-4", rec.ResourceType)
 	assert.Equal(t, 50.5, rec.EstimatedSavings)
+	// GCP Compute CUDs are monthly-billed and RecurringMonthlyCost is derived
+	// from CommitmentCost. No billing service is injected here, so the pricing
+	// lookup fails and the field stays nil (unknown) rather than an incorrect
+	// explicit 0 (nil means unavailable, 0 means a known-zero recurring fee).
+	assert.Nil(t, rec.RecurringMonthlyCost)
 }
 
 // infiniteRecommenderIterator never signals iterator.Done, used to exercise

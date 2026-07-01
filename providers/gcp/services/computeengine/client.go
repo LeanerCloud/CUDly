@@ -56,6 +56,17 @@ func termPlan(term string) (string, error) {
 	}
 }
 
+// termYearsFromTerm returns the commitment length in years for a term label,
+// defaulting to 1 for any 1-year or unrecognised value and 3 for 3-year labels.
+func termYearsFromTerm(term string) int {
+	switch strings.ToLower(strings.TrimSpace(term)) {
+	case "3yr", "3", "36mo":
+		return 3
+	default:
+		return 1
+	}
+}
+
 // CommitmentsService interface for commitments operations (enables mocking)
 type CommitmentsService interface {
 	List(ctx context.Context, req *computepb.ListRegionCommitmentsRequest) CommitmentsIterator
@@ -945,6 +956,19 @@ func (c *ComputeEngineClient) convertGCPRecommendation(ctx context.Context, gcpR
 
 	c.enrichRecWithPricing(ctx, rec)
 
+	// GCP Compute CUDs are monthly-payment commitments (PaymentOption is forced
+	// to "monthly" above), so the per-month charge is CommitmentCost /
+	// termMonths. enrichRecWithPricing performs the single billing lookup and
+	// populates CommitmentCost; reuse it here rather than issuing a second call.
+	// When the billing lookup failed CommitmentCost stays 0 and we leave
+	// RecurringMonthlyCost nil (unknown) so the frontend renders "—" rather than
+	// an incorrect explicit "$0" (nil means unavailable, 0 means known-zero fee).
+	if rec.CommitmentCost > 0 {
+		termYears := termYearsFromTerm(rec.Term)
+		monthly := rec.CommitmentCost / float64(termYears*12)
+		rec.RecurringMonthlyCost = &monthly
+	}
+
 	return rec
 }
 
@@ -958,10 +982,7 @@ func (c *ComputeEngineClient) enrichRecWithPricing(ctx context.Context, rec *com
 	if rec.ResourceType == "" {
 		return
 	}
-	termYears := 1
-	if rec.Term == "3yr" || rec.Term == "3" {
-		termYears = 3
-	}
+	termYears := termYearsFromTerm(rec.Term)
 	pricing, err := c.getComputePricing(ctx, rec.ResourceType, c.region, termYears)
 	if err != nil {
 		log.Printf("computeengine: pricing unavailable for %s in %s (issue #1020): %v", rec.ResourceType, c.region, err)
