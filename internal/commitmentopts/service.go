@@ -2,6 +2,7 @@ package commitmentopts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -141,14 +142,14 @@ func (s *Service) findAWSAccount(ctx context.Context) (*config.CloudAccount, err
 // Validate reports whether (provider, service, term, payment) is a legal
 // combination according to the cached probe data.
 //
-// Fallback behaviour: if no probe data exists (the server has never
+// Fallback behavior: if no probe data exists (the server has never
 // successfully probed) Validate returns true so saves aren't blocked when
 // we can't verify. The frontend's hardcoded rules are the user-facing
 // gate; this check is belt-and-braces.
 func (s *Service) Validate(ctx context.Context, provider, service string, term int, payment string) (bool, error) {
 	opts, err := s.Get(ctx)
 	if err != nil {
-		if err == ErrNoData {
+		if errors.Is(err, ErrNoData) {
 			return true, nil
 		}
 		return false, err
@@ -162,13 +163,14 @@ func (s *Service) Validate(ctx context.Context, provider, service string, term i
 	}
 	combos, ok := byService[service]
 	if !ok {
-		// We have probe data for this provider but not for this service.
-		// This typically means the service is not commitment-capable per
-		// the probe (e.g. Savings Plans has no per-service offering list)
-		// or it is a new service not yet covered by the probe set.
-		// Log at Warn so operators can detect misconfigured service names
-		// or probe gaps without blocking the plan save (05-M4). The
-		// frontend's hardcoded rules are the primary user-facing gate.
+		// We have data for this provider but not this service key.
+		// The probe ran but returned no combos for this service
+		// (e.g. a plan type not sold in the account's region).
+		// Permissive fallback keeps parity with ErrNoData so unknown
+		// services are never silently blocked. Log at Warn so operators
+		// can detect misconfigured service names or probe gaps without
+		// blocking the plan save (05-M4). The frontend's hardcoded
+		// rules are the primary user-facing gate.
 		logging.Warnf("commitmentopts: provider %q known in probe data but service %q absent; treating as valid (term=%d payment=%q)",
 			provider, service, term, payment)
 		return true, nil
