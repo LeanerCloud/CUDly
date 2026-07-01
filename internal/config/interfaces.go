@@ -146,9 +146,11 @@ type StoreInterface interface {
 	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
 	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
-	// whose purchase_id matches. Returns (nil, nil) when no row is found.
-	// Used by the revoke endpoint to load the record before calling the
-	// provider cancel API (issue #290).
+	// whose purchase_id matches (AWS ReservedInstancesId / Azure reservation
+	// ID). Returns (nil, nil) when no row is found. Used by the revoke
+	// endpoint to load the record before calling the provider cancel API
+	// (issue #290) and by the marketplace-list handler to validate
+	// offering_class and look up the cloud account (issue #292).
 	GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error)
 	// MarkPurchaseRevoked stamps revoked_at, revoked_via, and optionally
 	// support_case_id on a purchase_history row identified by purchase_id.
@@ -182,6 +184,12 @@ type StoreInterface interface {
 	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
 	// finalize_revocations scheduled sweep calls this to retry the DB write.
 	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
+
+	// UpdatePurchaseHistoryListing stamps the AWS marketplace listing_id and
+	// listing_state onto a purchase_history row. Called after
+	// CreateReservedInstancesListing succeeds (listing_state="active") and
+	// on subsequent poll/cancel transitions (issue #292).
+	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
 
 	// RI Exchange history
 	SaveRIExchangeRecord(ctx context.Context, record *RIExchangeRecord) error

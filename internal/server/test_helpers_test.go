@@ -319,3 +319,7 @@ func (m *mockConfigStoreForHealth) GetPurchaseHistoryInFlight(_ context.Context)
 func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
+
+func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
+	return nil
+}

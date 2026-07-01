@@ -28,6 +28,9 @@ type EC2API interface {
 	GetReservedInstancesExchangeQuote(ctx context.Context, params *ec2.GetReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.GetReservedInstancesExchangeQuoteOutput, error)
 	AcceptReservedInstancesExchangeQuote(ctx context.Context, params *ec2.AcceptReservedInstancesExchangeQuoteInput, optFns ...func(*ec2.Options)) (*ec2.AcceptReservedInstancesExchangeQuoteOutput, error)
 	CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
+	CreateReservedInstancesListing(ctx context.Context, params *ec2.CreateReservedInstancesListingInput, optFns ...func(*ec2.Options)) (*ec2.CreateReservedInstancesListingOutput, error)
+	DescribeReservedInstancesListings(ctx context.Context, params *ec2.DescribeReservedInstancesListingsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeReservedInstancesListingsOutput, error)
+	CancelReservedInstancesListing(ctx context.Context, params *ec2.CancelReservedInstancesListingInput, optFns ...func(*ec2.Options)) (*ec2.CancelReservedInstancesListingOutput, error)
 }
 
 // Client handles AWS EC2 Reserved Instances
@@ -922,4 +925,140 @@ func normalizationFactorForInstanceType(instanceType string) float64 {
 		return 0
 	}
 	return exchange.NormalizationFactorForSize(parts[1])
+}
+
+// MarketplaceListingRequest carries the parameters for
+// CreateMarketplaceListing. PriceSchedule is required by the AWS API; a
+// nil/empty slice is rejected before the outbound call is made.
+type MarketplaceListingRequest struct {
+	// ReservedInstancesID is the AWS ReservedInstancesId to list.
+	ReservedInstancesID string
+	// ClientToken is a caller-supplied idempotency token (UUID). AWS dedupes
+	// CreateReservedInstancesListing calls sharing the same token for the same
+	// RI within a short window.
+	ClientToken string
+	// PriceSchedule is the per-month price schedule. At least one entry is
+	// required. Each entry specifies how many months the price applies and the
+	// list price per unit.
+	PriceSchedule []MarketplacePriceTier
+	// InstanceCount is the number of Reserved Instances to list. A purchase
+	// row of N RIs must list all N; this mirrors purchase_history.count. Values
+	// <= 0 are rejected before the outbound call so a misconfigured caller can
+	// never silently list a single RI from a multi-count row.
+	InstanceCount int32
+}
+
+// MarketplacePriceTier represents one tier of the AWS RI Marketplace price
+// schedule. Term is the number of months this price applies, counting down
+// from the remaining RI term. Price is the per-unit listing price in USD.
+type MarketplacePriceTier struct {
+	// Term is the remaining-months count this tier covers.
+	Term int64
+	// Price is the USD list price per unit for this tier.
+	Price float64
+}
+
+// MarketplaceListingResult is returned by CreateMarketplaceListing and
+// DescribeMarketplaceListing.
+type MarketplaceListingResult struct {
+	// ListingID is the AWS ReservedInstancesListingId.
+	ListingID string
+	// State is the AWS listing state: active, cancelled, closed, pending-fulfillment, etc.
+	State string
+}
+
+// CreateMarketplaceListing calls ec2:CreateReservedInstancesListing.
+// Only Standard (not Convertible) RIs can be listed; AWS rejects requests
+// for Convertible RIs with an explicit API error — the caller should gate on
+// offering_class == "standard" before calling this to surface a cleaner error.
+// AWS also requires the seller account to have a US bank account on file;
+// that precondition is checked in the API handler so the UI can show a
+// tailored message before making the API call.
+func (c *Client) CreateMarketplaceListing(ctx context.Context, req MarketplaceListingRequest) (MarketplaceListingResult, error) {
+	if len(req.PriceSchedule) == 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("price schedule must have at least one tier")
+	}
+	if req.ReservedInstancesID == "" {
+		return MarketplaceListingResult{}, fmt.Errorf("reserved instances ID is required")
+	}
+	if req.InstanceCount <= 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("instance count must be a positive integer, got %d", req.InstanceCount)
+	}
+
+	awsSchedule := make([]types.PriceScheduleSpecification, 0, len(req.PriceSchedule))
+	for _, tier := range req.PriceSchedule {
+		tier := tier // capture loop var
+		awsSchedule = append(awsSchedule, types.PriceScheduleSpecification{
+			Term:         aws.Int64(tier.Term),
+			Price:        aws.Float64(tier.Price),
+			CurrencyCode: types.CurrencyCodeValuesUsd,
+		})
+	}
+
+	input := &ec2.CreateReservedInstancesListingInput{
+		ReservedInstancesId: aws.String(req.ReservedInstancesID),
+		ClientToken:         aws.String(req.ClientToken),
+		InstanceCount:       aws.Int32(req.InstanceCount),
+		PriceSchedules:      awsSchedule,
+	}
+
+	out, err := c.client.CreateReservedInstancesListing(ctx, input)
+	if err != nil {
+		return MarketplaceListingResult{}, fmt.Errorf("CreateReservedInstancesListing failed: %w", err)
+	}
+	if len(out.ReservedInstancesListings) == 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("CreateReservedInstancesListing returned empty response")
+	}
+	listing := out.ReservedInstancesListings[0]
+	state := ""
+	if listing.Status != "" {
+		state = string(listing.Status)
+	}
+	listingID := aws.ToString(listing.ReservedInstancesListingId)
+	if listingID == "" {
+		return MarketplaceListingResult{}, fmt.Errorf("CreateReservedInstancesListing returned a listing with an empty ID")
+	}
+	return MarketplaceListingResult{ListingID: listingID, State: state}, nil
+}
+
+// DescribeMarketplaceListing polls the status of a single listing by ID.
+// Returns an error when the listing is not found.
+func (c *Client) DescribeMarketplaceListing(ctx context.Context, listingID string) (MarketplaceListingResult, error) {
+	out, err := c.client.DescribeReservedInstancesListings(ctx, &ec2.DescribeReservedInstancesListingsInput{
+		ReservedInstancesListingId: aws.String(listingID),
+	})
+	if err != nil {
+		return MarketplaceListingResult{}, fmt.Errorf("DescribeReservedInstancesListings failed: %w", err)
+	}
+	if len(out.ReservedInstancesListings) == 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("listing %s not found", listingID)
+	}
+	listing := out.ReservedInstancesListings[0]
+	state := string(listing.Status)
+	resolvedID := aws.ToString(listing.ReservedInstancesListingId)
+	if resolvedID == "" {
+		resolvedID = listingID
+	}
+	return MarketplaceListingResult{ListingID: resolvedID, State: state}, nil
+}
+
+// CancelMarketplaceListing calls ec2:CancelReservedInstancesListing to
+// withdraw an active listing. Returns the updated listing state.
+func (c *Client) CancelMarketplaceListing(ctx context.Context, listingID string) (MarketplaceListingResult, error) {
+	out, err := c.client.CancelReservedInstancesListing(ctx, &ec2.CancelReservedInstancesListingInput{
+		ReservedInstancesListingId: aws.String(listingID),
+	})
+	if err != nil {
+		return MarketplaceListingResult{}, fmt.Errorf("CancelReservedInstancesListing failed: %w", err)
+	}
+	if len(out.ReservedInstancesListings) == 0 {
+		return MarketplaceListingResult{}, fmt.Errorf("CancelReservedInstancesListing returned empty response")
+	}
+	listing := out.ReservedInstancesListings[0]
+	state := string(listing.Status)
+	resolvedID := aws.ToString(listing.ReservedInstancesListingId)
+	if resolvedID == "" {
+		resolvedID = listingID
+	}
+	return MarketplaceListingResult{ListingID: resolvedID, State: state}, nil
 }
