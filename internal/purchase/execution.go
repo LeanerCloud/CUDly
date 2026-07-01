@@ -464,7 +464,7 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 
 // getMaxAccountParallelism is a thin alias over the shared
 // execution.ConcurrencyFromEnv so the purchase manager and the scheduler
-// both honour the same CUDLY_MAX_ACCOUNT_PARALLELISM override.
+// both honor the same CUDLY_MAX_ACCOUNT_PARALLELISM override.
 func getMaxAccountParallelism() int {
 	return execution.ConcurrencyFromEnv()
 }
@@ -639,7 +639,7 @@ func recordHistoryAuditGap(exec *config.PurchaseExecution, commitmentID string, 
 // token and the provider dedupes the purchase. It falls back to ExecutionID
 // only for legacy rows persisted before migration 000066 (IdempotencyKey == "");
 // for a single un-retried execution that fallback is identical to the pre-fix
-// behaviour, and such legacy rows never gain a retry successor that could
+// behavior, and such legacy rows never gain a retry successor that could
 // diverge (the retry handler seeds the successor's key from the predecessor's
 // ExecutionID in that case, preserving the match).
 func idempotencyLineageKey(exec *config.PurchaseExecution) string {
@@ -803,7 +803,7 @@ func (m *Manager) buildPurchaseConfirmationData(exec *config.PurchaseExecution, 
 }
 
 // logRecCtxErr emits a diagnostic log line when a per-recommendation context has
-// been cancelled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
+// been canceled or timed out. It distinguishes DeadlineExceeded (the 30s per-rec
 // budget fired) from Canceled (a parent context stopped the execution) so that
 // CloudWatch filters can tell the two apart without parsing error strings.
 // It is a no-op when recCtxErr is nil.
@@ -949,8 +949,8 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 // mapServiceType maps a service string to common.ServiceType. Both the
 // canonical hyphenated slugs (compute, relational-db, cache, search,
 // data-warehouse) and the legacy AWS-only slugs (ec2, rds, elasticache,
-// opensearch, redshift, memorydb) are recognised; everything else passes
-// through verbatim. Savings Plans slugs are normalised by mapSavingsPlansSlug.
+// opensearch, redshift, memorydb) are recognized; everything else passes
+// through verbatim. Savings Plans slugs are normalized by mapSavingsPlansSlug.
 func (m *Manager) mapServiceType(service string) common.ServiceType {
 	if svc, ok := mapSavingsPlansSlug(service); ok {
 		return svc
@@ -1000,20 +1000,28 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 	return svc, ok
 }
 
-// mapSavingsPlansSlug normalises both the canonical hyphenated SP slugs and
+// mapSavingsPlansSlug normalizes both the canonical hyphenated SP slugs and
 // the dash-free spellings the frontend has historically sent into the
 // matching common.ServiceType. The map covers the legacy umbrella plus the
 // four per-plan-type slugs in both spellings — pulled out of mapServiceType
 // to keep that switch under the gocyclo budget.
 //
-// TODO(#85): once purchase_executions JSONB rows persisted before the
-// "savingsplans" rename (~6-month retention window) have aged out, the
-// "savings-plans"-spelled aliases below can be removed and only the
-// dash-free spellings ("savingsplans", "savingsplans-compute", etc.)
-// need be matched here. The umbrella rename happened in PR #94; the
-// per-plan-type slugs were always dash-form on the wire so their
-// "savingsplans-*" aliases are forward-compat for any future
-// frontend-canonical normalisation.
+// TODO(#95): PR #94 (merged 2026-04-30) renamed "savings-plans" ->
+// "savingsplans". purchase_executions rows have a ~6-month retention window,
+// so the earliest safe drop date is 2026-10-30. Until then the
+// "savings-plans"-spelled aliases below must stay so Lambda-scheduled
+// executions persisted before PR #94 still map correctly on retry/approval.
+// To drop: verify zero rows with
+//
+//	SELECT id FROM purchase_executions
+//	WHERE recommendations::text LIKE '%"service":"savings-plans"%'
+//	LIMIT 1;
+//
+// then remove every "savings-plans*" key from this map and the matching
+// case in pkg/common/service_details_codec.go: newDetailsForService, and
+// flip the coverage_extra_test.go case (line ~60) to assert
+// ServiceType("savings-plans") (default-arm pass-through). The
+// "savingsplans-*" keys are forward-compat and should stay.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
 	slugs := map[string]common.ServiceType{
 		"savings-plans":             common.ServiceSavingsPlans,
