@@ -106,6 +106,42 @@ func TestPlannedActionValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "hold with Term set",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Term:      "1yr",
+				Rationale: "at target",
+			},
+			wantErr: true,
+		},
+		{
+			name: "hold with PaymentOption set",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				PaymentOption: "no-upfront",
+				Rationale:     "at target",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reshape with Term set",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				Term:      "3yr",
+				Rationale: "low utilization",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reshape with PaymentOption set",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				PaymentOption: "all-upfront",
+				Rationale:     "low utilization",
+			},
+			wantErr: true,
+		},
+		{
 			name: "empty rationale",
 			action: PlannedAction{
 				Action: ActionHold, Layer: LayerConvertibleRI,
@@ -153,7 +189,10 @@ func TestFormatUSDPerHour(t *testing.T) {
 		{new(big.Rat).SetFrac64(25, 100), "$0.25/hr"},
 		{new(big.Rat).SetInt64(10), "$10.00/hr"},
 		{new(big.Rat), "$0.00/hr"},
-		{new(big.Rat).SetFrac64(1, 3), "$0.33/hr"}, // truncated at 2 decimals via Float64
+		{new(big.Rat).SetFrac64(1, 3), "$0.33/hr"}, // rounded to 2 decimals via FloatString
+		// Halfway case: 199/200 = 0.995 must round half away from zero to
+		// $1.00/hr (FloatString semantics), not truncate to $0.99/hr.
+		{new(big.Rat).SetFrac64(199, 200), "$1.00/hr"},
 	}
 	for _, c := range cases {
 		got := formatUSDPerHour(c.in)
@@ -224,6 +263,7 @@ func TestExplain_PurchaseAction(t *testing.T) {
 				Term:             "1yr",
 				PaymentOption:    "no-upfront",
 				Rationale:        "fill coverage gap",
+				DataSources:      []string{"cost-explorer", "cloudwatch"},
 			},
 		},
 	}
@@ -239,6 +279,7 @@ func TestExplain_PurchaseAction(t *testing.T) {
 		"1yr",
 		"no-upfront",
 		"fill coverage gap",
+		"Data sources: cost-explorer, cloudwatch",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
@@ -270,6 +311,41 @@ func TestExplain_ReshapeAction(t *testing.T) {
 	}
 	if !strings.Contains(out, "utilization below threshold") {
 		t.Errorf("Explain() missing rationale:\n%s", out)
+	}
+	if strings.Contains(out, "Data sources:") {
+		t.Errorf("Explain() rendered a Data sources line with no sources set:\n%s", out)
+	}
+}
+
+// TestExplain_DataSourcesDeduplicated verifies that the Data sources line
+// aggregates sources across actions in first-seen stored order, without
+// duplicates.
+func TestExplain_DataSourcesDeduplicated(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions: []PlannedAction{
+			{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Rationale:   "at target",
+				DataSources: []string{"cost-explorer", "cloudwatch"},
+			},
+			{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				Rationale:   "low utilization",
+				DataSources: []string{"cloudwatch", "pricing-api"},
+			},
+		},
+	}
+	out := plan.Explain()
+	want := "Data sources: cost-explorer, cloudwatch, pricing-api\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("Explain() missing deduplicated sources line %q:\n%s", want, out)
+	}
+	if strings.Count(out, "cloudwatch") != 1 {
+		t.Errorf("Explain() duplicated a data source:\n%s", out)
 	}
 }
 

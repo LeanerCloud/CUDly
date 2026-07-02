@@ -39,7 +39,8 @@ type PlannedAction struct {
 //   - rationale must be non-empty
 //   - purchase actions require a positive AmountUSDPerHour and non-empty
 //     Term and PaymentOption (money-shaping fields must be present)
-//   - hold and reshape actions require a nil AmountUSDPerHour
+//   - hold and reshape actions require a nil AmountUSDPerHour and empty
+//     Term and PaymentOption
 func (a *PlannedAction) Validate() error {
 	if err := a.Action.Validate(); err != nil {
 		return fmt.Errorf("action: %w", err)
@@ -57,6 +58,9 @@ func (a *PlannedAction) Validate() error {
 		if a.AmountUSDPerHour != nil {
 			return fmt.Errorf("%s action requires nil AmountUSDPerHour, got %s",
 				a.Action, a.AmountUSDPerHour.RatString())
+		}
+		if a.Term != "" || a.PaymentOption != "" {
+			return fmt.Errorf("%s action requires empty Term and PaymentOption", a.Action)
 		}
 	}
 	return nil
@@ -121,12 +125,15 @@ func (p *LadderPlan) Validate() error {
 // nil is rendered as "unknown" -- never as "$0.00" -- to unambiguously
 // distinguish absent data from a genuine zero commitment (project rule:
 // absent numbers are nil, not zero).
+//
+// FloatString(2) formats the exact rational with half-away-from-zero
+// rounding, avoiding the float64 conversion step (e.g. 199/200 renders as
+// $1.00/hr, not $0.99/hr).
 func formatUSDPerHour(v *big.Rat) string {
 	if v == nil {
 		return "unknown"
 	}
-	f, _ := v.Float64()
-	return fmt.Sprintf("$%.2f/hr", f)
+	return fmt.Sprintf("$%s/hr", v.FloatString(2))
 }
 
 // Explain returns a deterministic, human-readable multi-line summary of the
@@ -138,6 +145,8 @@ func formatUSDPerHour(v *big.Rat) string {
 //  2. Baseline parameters (lookback window, percentile)
 //  3. Target / existing / gap hourly rates
 //  4. Numbered action list (or "none" when all layers are at target)
+//  5. "Data sources:" line aggregating the actions' DataSources (omitted
+//     when no action carries any)
 func (p *LadderPlan) Explain() string {
 	var b strings.Builder
 
@@ -166,5 +175,26 @@ func (p *LadderPlan) Explain() string {
 				i+1, a.Action, a.Layer, a.Rationale)
 		}
 	}
+	if sources := collectDataSources(p.Actions); len(sources) > 0 {
+		fmt.Fprintf(&b, "Data sources: %s\n", strings.Join(sources, ", "))
+	}
 	return b.String()
+}
+
+// collectDataSources aggregates the DataSources of all actions,
+// deduplicated, preserving first-seen stored order so the output stays
+// deterministic for a given plan.
+func collectDataSources(actions []PlannedAction) []string {
+	var sources []string
+	seen := make(map[string]bool)
+	for _, a := range actions {
+		for _, s := range a.DataSources {
+			if seen[s] {
+				continue
+			}
+			seen[s] = true
+			sources = append(sources, s)
+		}
+	}
+	return sources
 }

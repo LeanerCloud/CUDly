@@ -31,6 +31,18 @@ func (s RunStatus) Validate() error {
 	return fmt.Errorf("unknown run status %q", s)
 }
 
+// IsTerminal reports whether s is a terminal run status: RunStatusCompleted,
+// RunStatusFailed, RunStatusCancelled, or RunStatusExpired. Terminal runs are
+// the only ones allowed to carry a CompletedAt timestamp (see
+// RunRecord.Validate).
+func (s RunStatus) IsTerminal() bool {
+	switch s {
+	case RunStatusCompleted, RunStatusFailed, RunStatusCancelled, RunStatusExpired:
+		return true
+	}
+	return false
+}
+
 // ParseRunStatus converts s into a RunStatus, returning a descriptive error
 // when s is not a recognized value.
 func ParseRunStatus(s string) (RunStatus, error) {
@@ -62,6 +74,18 @@ func (s TrancheStatus) Validate() error {
 	return fmt.Errorf("unknown tranche status %q", s)
 }
 
+// allowsFiredAt reports whether a tranche in this status may carry a
+// non-nil FiredAt timestamp: fired itself, or a post-firing outcome
+// (completed, failed). Scheduled and canceled tranches never fired, so
+// they must not carry one.
+func (s TrancheStatus) allowsFiredAt() bool {
+	switch s {
+	case TrancheStatusFired, TrancheStatusCompleted, TrancheStatusFailed:
+		return true
+	}
+	return false
+}
+
 // ParseTrancheStatus converts s into a TrancheStatus, returning a
 // descriptive error when s is not a recognized value.
 func ParseTrancheStatus(s string) (TrancheStatus, error) {
@@ -87,6 +111,22 @@ type RunRecord struct {
 	PlanJSON string
 }
 
+// Validate checks that the run record is self-consistent: non-empty ID,
+// recognized status, and a CompletedAt timestamp only when the status is
+// terminal (a run still in flight cannot have completed).
+func (r *RunRecord) Validate() error {
+	if r.ID == "" {
+		return fmt.Errorf("run ID is required")
+	}
+	if err := r.Status.Validate(); err != nil {
+		return fmt.Errorf("status: %w", err)
+	}
+	if r.CompletedAt != nil && !r.Status.IsTerminal() {
+		return fmt.Errorf("completed_at must be nil for non-terminal status %q", r.Status)
+	}
+	return nil
+}
+
 // Tranche is one ramp step that has been persisted for scheduled firing.
 type Tranche struct {
 	// FireAfter is the wall-clock time at or after which this tranche fires.
@@ -97,6 +137,29 @@ type Tranche struct {
 	RunID     string
 	Status    TrancheStatus
 	StepIndex int
+}
+
+// Validate checks that the tranche is self-consistent: non-empty ID and
+// RunID (RunID is the single source of run linkage, see
+// LadderStore.SaveTranches), non-negative step index, recognized status,
+// and a FiredAt timestamp only when the status implies the tranche fired.
+func (t *Tranche) Validate() error {
+	if t.ID == "" {
+		return fmt.Errorf("tranche ID is required")
+	}
+	if t.RunID == "" {
+		return fmt.Errorf("tranche RunID is required")
+	}
+	if t.StepIndex < 0 {
+		return fmt.Errorf("step_index %d must be >= 0", t.StepIndex)
+	}
+	if err := t.Status.Validate(); err != nil {
+		return fmt.Errorf("status: %w", err)
+	}
+	if t.FiredAt != nil && !t.Status.allowsFiredAt() {
+		return fmt.Errorf("fired_at must be nil for status %q (tranche has not fired)", t.Status)
+	}
+	return nil
 }
 
 // LadderStore is the storage contract for the ladder engine. The concrete
@@ -113,8 +176,11 @@ type LadderStore interface {
 	// run for the given scope, or nil when no run has been recorded yet.
 	LatestRunStartedAt(ctx context.Context, scope Scope) (*time.Time, error)
 
-	// SaveTranches persists a batch of tranches for the given run. Callers
-	// may call this multiple times (e.g., once per ramp step) and
-	// implementations should upsert by tranche ID.
-	SaveTranches(ctx context.Context, runID string, tranches []Tranche) error
+	// SaveTranches persists a batch of tranches. Every tranche must carry a
+	// non-empty RunID (Tranche.RunID is the single source of truth for run
+	// linkage); implementations persist tranches exactly as given and must
+	// not infer linkage from anything else. Callers may call this multiple
+	// times (e.g., once per ramp step) and implementations should upsert by
+	// tranche ID.
+	SaveTranches(ctx context.Context, tranches []Tranche) error
 }

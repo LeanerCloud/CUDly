@@ -35,8 +35,10 @@ type LadderCapability interface {
 	GetUsageBaseline(ctx context.Context, scope Scope, lookbackDays int, percentile float64) (UsageBaseline, error)
 
 	// PurchaseLayer buys commitments for the given layer using the provided
-	// recommendation. Returns ErrCommitmentPurchaseNotSupported when the
-	// provider has no programmatic purchase API for this layer.
+	// recommendation. Implementations return an error wrapping
+	// common.ErrCommitmentPurchaseNotSupported when the layer cannot be
+	// purchased programmatically; callers detect it with
+	// errors.Is(err, common.ErrCommitmentPurchaseNotSupported).
 	//
 	// Precision note: the engine plans amounts as exact *big.Rat values
 	// (PlannedAction.AmountUSDPerHour), but this boundary converts them to
