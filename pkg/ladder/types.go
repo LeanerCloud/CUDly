@@ -209,6 +209,11 @@ const (
 	// the usage baseline when none is specified.
 	DefaultLookbackDays = 30
 
+	// DefaultBufferUtilizationThresholdPct is the buffer-layer utilization
+	// percentage below which the engine emits a reshape recommendation.
+	// A value of 90 means reshape when commitments are less than 90% utilized.
+	DefaultBufferUtilizationThresholdPct = 90.0
+
 	// rampSumEpsilon is the acceptable absolute error when validating that
 	// RampStep fractions sum to 1.0. Floating-point arithmetic can introduce
 	// small rounding error, so we allow a small tolerance rather than
@@ -285,6 +290,10 @@ type LadderConfig struct {
 	// MaxActionsPerRun limits how many PlannedActions the engine may execute
 	// per run. Must be > 0.
 	MaxActionsPerRun int
+	// BufferUtilizationThresholdPct is the utilization percentage below which a
+	// buffer layer is flagged for reshape. Must be in (0, 100]. Use
+	// DefaultBufferUtilizationThresholdPct when no threshold is configured.
+	BufferUtilizationThresholdPct float64
 }
 
 // Validate checks that all configuration fields are within valid ranges and
@@ -328,13 +337,17 @@ func (c *LadderConfig) validateBaselineBounds() error {
 	return nil
 }
 
-// validateRunLimits checks the per-run spend and action caps.
+// validateRunLimits checks the per-run spend and action caps and the buffer
+// utilization threshold used for reshape decisions.
 func (c *LadderConfig) validateRunLimits() error {
 	if c.MaxHourlyCommitPerRun != nil && *c.MaxHourlyCommitPerRun <= 0 {
 		return fmt.Errorf("max_hourly_commit_per_run %g must be > 0 when set (leave nil for no cap)", *c.MaxHourlyCommitPerRun)
 	}
 	if c.MaxActionsPerRun <= 0 {
 		return fmt.Errorf("max_actions_per_run %d must be > 0", c.MaxActionsPerRun)
+	}
+	if c.BufferUtilizationThresholdPct <= 0 || c.BufferUtilizationThresholdPct > 100 {
+		return fmt.Errorf("buffer_utilization_threshold_pct %g must be in (0, 100]", c.BufferUtilizationThresholdPct)
 	}
 	return nil
 }
