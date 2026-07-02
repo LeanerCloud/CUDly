@@ -141,8 +141,9 @@ type Tranche struct {
 
 // Validate checks that the tranche is self-consistent: non-empty ID and
 // RunID (RunID is the single source of run linkage, see
-// LadderStore.SaveTranches), non-negative step index, recognized status,
-// and a FiredAt timestamp only when the status implies the tranche fired.
+// LadderStore.SaveTranches), non-negative step index, a set FireAfter
+// timestamp, recognized status, and a FiredAt timestamp only when the
+// status implies the tranche fired.
 func (t *Tranche) Validate() error {
 	if t.ID == "" {
 		return fmt.Errorf("tranche ID is required")
@@ -152,6 +153,12 @@ func (t *Tranche) Validate() error {
 	}
 	if t.StepIndex < 0 {
 		return fmt.Errorf("step_index %d must be >= 0", t.StepIndex)
+	}
+	// A zero FireAfter would make the tranche immediately eligible to fire
+	// (year-1 timestamp is always in the past), silently defeating the ramp
+	// schedule. Fail loud instead.
+	if t.FireAfter.IsZero() {
+		return fmt.Errorf("fire_after must be set (zero time would fire immediately)")
 	}
 	if err := t.Status.Validate(); err != nil {
 		return fmt.Errorf("status: %w", err)

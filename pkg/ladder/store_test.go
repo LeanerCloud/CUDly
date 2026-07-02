@@ -164,6 +164,16 @@ func TestTrancheValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "zero FireAfter is invalid (would fire immediately)",
+			mutate:  func(tr *Tranche) { tr.FireAfter = time.Time{} },
+			wantErr: true,
+		},
+		{
+			name:    "set FireAfter is valid",
+			mutate:  func(tr *Tranche) { tr.FireAfter = now.AddDate(0, 0, 7) },
+			wantErr: false,
+		},
+		{
 			name:    "unknown status",
 			mutate:  func(tr *Tranche) { tr.Status = "bogus" },
 			wantErr: true,
