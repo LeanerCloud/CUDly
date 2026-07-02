@@ -678,15 +678,16 @@ func TestLadderConfigValidate(t *testing.T) {
 	// valid is a fully-populated valid config used as the baseline for each
 	// mutation.
 	valid := LadderConfig{
-		Scope:              Scope{Provider: common.ProviderAWS, AccountID: "123456789012"},
-		TargetCoveragePct:  80,
-		BufferFraction:     0.1,
-		BaselinePercentile: 5,
-		LookbackDays:       30,
-		Mode:               ModeEmailApproval,
-		Cadence:            CadenceWeekly,
-		Ramp:               validRamp(),
-		MaxActionsPerRun:   10,
+		Scope:                         Scope{Provider: common.ProviderAWS, AccountID: "123456789012"},
+		TargetCoveragePct:             80,
+		BufferFraction:                0.1,
+		BaselinePercentile:            5,
+		LookbackDays:                  30,
+		Mode:                          ModeEmailApproval,
+		Cadence:                       CadenceWeekly,
+		Ramp:                          validRamp(),
+		MaxActionsPerRun:              10,
+		BufferUtilizationThresholdPct: DefaultBufferUtilizationThresholdPct,
 	}
 	cases := []struct {
 		mutate  func(c *LadderConfig)
@@ -848,6 +849,31 @@ func TestLadderConfigValidate(t *testing.T) {
 			name:    "max actions negative",
 			mutate:  func(c *LadderConfig) { c.MaxActionsPerRun = -1 },
 			wantErr: true,
+		},
+		{
+			name:    "buffer utilization threshold zero is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "buffer utilization threshold negative is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = -1 },
+			wantErr: true,
+		},
+		{
+			name:    "buffer utilization threshold above 100 is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = 100.01 },
+			wantErr: true,
+		},
+		{
+			name:    "buffer utilization threshold exactly 100 is valid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = 100 },
+			wantErr: false,
+		},
+		{
+			name:    "buffer utilization threshold small positive is valid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = 0.1 },
+			wantErr: false,
 		},
 	}
 	for _, c := range cases {
