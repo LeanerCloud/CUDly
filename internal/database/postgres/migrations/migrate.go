@@ -433,9 +433,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 	}
 	defer m.Close()
 
-	// Log current version before rollback
-	currentVersion, _, _ := m.Version()
-	log.Printf("Rolling back %d migration(s) from version %d...", steps, currentVersion)
+	log.Printf("Rolling back %d migration(s)...", steps)
 
 	// Rollback steps
 	if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {

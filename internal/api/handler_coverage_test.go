@@ -17,8 +17,9 @@ func TestHandler_buildResponse_WithError(t *testing.T) {
 	handler := &Handler{}
 	headers := map[string]string{"Content-Type": "application/json"}
 
-	resp, err := handler.buildResponse(200, headers, nil, errors.New("test error"))
-	require.NoError(t, err)
+	// buildResponse never returns an error; when called with a non-nil err arg
+	// it converts it to a 500 response body so callers can use single-return form.
+	resp := handler.buildResponse(200, headers, nil, errors.New("test error"))
 
 	assert.Equal(t, 500, resp.StatusCode)
 	assert.Contains(t, resp.Body, "internal server error")
@@ -34,8 +35,7 @@ func TestHandler_buildResponse_MarshalError(t *testing.T) {
 	}
 	badValue := badType{Ch: make(chan int)}
 
-	resp, err := handler.buildResponse(200, headers, badValue, nil)
-	require.NoError(t, err)
+	resp := handler.buildResponse(200, headers, badValue, nil)
 
 	assert.Equal(t, 500, resp.StatusCode)
 	assert.Contains(t, resp.Body, "internal server error")
@@ -45,8 +45,7 @@ func TestHandler_buildResponse_NilBody(t *testing.T) {
 	handler := &Handler{}
 	headers := map[string]string{"Content-Type": "application/json"}
 
-	resp, err := handler.buildResponse(200, headers, nil, nil)
-	require.NoError(t, err)
+	resp := handler.buildResponse(200, headers, nil, nil)
 
 	assert.Equal(t, 200, resp.StatusCode)
 	// Q1 (Phase-2 UX plan): nil-body success serialises as "{}" so the

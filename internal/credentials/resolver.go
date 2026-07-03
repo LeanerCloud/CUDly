@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,7 +409,11 @@ func resolveGCPWIFCredential(
 	// federated (secret-free) account.
 	var raw []byte
 	if store != nil {
-		raw, _ = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		var loadErr error
+		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		if loadErr != nil {
+			log.Printf("credentials: LoadRaw for account %s: %v (treating as absent)", account.ID, loadErr)
+		}
 	}
 
 	issuer := opts.IssuerURL

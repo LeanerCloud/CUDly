@@ -181,7 +181,9 @@ func rekeyOne(ctx context.Context, db *database.Connection, id, blob string, zer
 		return outcomeErrored
 	}
 	if _, err := tx.Exec(ctx, `UPDATE account_credentials SET encrypted_blob = $1 WHERE id = $2`, newBlob, id); err != nil {
-		_ = tx.Rollback(ctx)
+		if rErr := tx.Rollback(ctx); rErr != nil {
+			log.Printf("rekey: rollback id=%s: %v", id, rErr)
+		}
 		log.Printf("rekey: update id=%s: %v", id, err)
 		return outcomeErrored
 	}

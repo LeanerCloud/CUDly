@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,7 +21,11 @@ func (m *MockStore) GetUserByID(ctx context.Context, userID string) (*User, erro
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	u, ok := args.Get(0).(*User)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetUserByID: expected *User, got %T", args.Get(0)))
+	}
+	return u, args.Error(1)
 }
 
 func (m *MockStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
@@ -28,7 +33,11 @@ func (m *MockStore) GetUserByEmail(ctx context.Context, email string) (*User, er
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	u, ok := args.Get(0).(*User)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetUserByEmail: expected *User, got %T", args.Get(0)))
+	}
+	return u, args.Error(1)
 }
 
 func (m *MockStore) CreateUser(ctx context.Context, user *User) error {
@@ -51,7 +60,11 @@ func (m *MockStore) ListUsers(ctx context.Context) ([]User, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]User), args.Error(1)
+	u, ok := args.Get(0).([]User)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.ListUsers: expected []User, got %T", args.Get(0)))
+	}
+	return u, args.Error(1)
 }
 
 func (m *MockStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
@@ -59,7 +72,11 @@ func (m *MockStore) GetUserByResetToken(ctx context.Context, token string) (*Use
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*User), args.Error(1)
+	u, ok := args.Get(0).(*User)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetUserByResetToken: expected *User, got %T", args.Get(0)))
+	}
+	return u, args.Error(1)
 }
 
 func (m *MockStore) AdminExists(ctx context.Context) (bool, error) {
@@ -77,7 +94,11 @@ func (m *MockStore) GetGroup(ctx context.Context, groupID string) (*Group, error
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*Group), args.Error(1)
+	g, ok := args.Get(0).(*Group)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetGroup: expected *Group, got %T", args.Get(0)))
+	}
+	return g, args.Error(1)
 }
 
 func (m *MockStore) CreateGroup(ctx context.Context, group *Group) error {
@@ -100,7 +121,11 @@ func (m *MockStore) ListGroups(ctx context.Context) ([]Group, error) {
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]Group), args.Error(1)
+	g, ok := args.Get(0).([]Group)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.ListGroups: expected []Group, got %T", args.Get(0)))
+	}
+	return g, args.Error(1)
 }
 
 func (m *MockStore) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
@@ -118,7 +143,11 @@ func (m *MockStore) GetSession(ctx context.Context, token string) (*Session, err
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*Session), args.Error(1)
+	s, ok := args.Get(0).(*Session)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetSession: expected *Session, got %T", args.Get(0)))
+	}
+	return s, args.Error(1)
 }
 
 func (m *MockStore) DeleteSession(ctx context.Context, token string) error {
@@ -147,7 +176,11 @@ func (m *MockStore) GetAPIKeyByID(ctx context.Context, keyID string) (*UserAPIKe
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*UserAPIKey), args.Error(1)
+	k, ok := args.Get(0).(*UserAPIKey)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetAPIKeyByID: expected *UserAPIKey, got %T", args.Get(0)))
+	}
+	return k, args.Error(1)
 }
 
 func (m *MockStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error) {
@@ -155,7 +188,11 @@ func (m *MockStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserA
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*UserAPIKey), args.Error(1)
+	k, ok := args.Get(0).(*UserAPIKey)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.GetAPIKeyByHash: expected *UserAPIKey, got %T", args.Get(0)))
+	}
+	return k, args.Error(1)
 }
 
 func (m *MockStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error) {
@@ -163,7 +200,11 @@ func (m *MockStore) ListAPIKeysByUser(ctx context.Context, userID string) ([]*Us
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*UserAPIKey), args.Error(1)
+	k, ok := args.Get(0).([]*UserAPIKey)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.ListAPIKeysByUser: expected []*UserAPIKey, got %T", args.Get(0)))
+	}
+	return k, args.Error(1)
 }
 
 func (m *MockStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error {

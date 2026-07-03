@@ -346,7 +346,11 @@ func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
 		logging.Warnf("ReleaseAdvisoryLock called for lock %d but no pinned connection found", lockID)
 		return
 	}
-	conn := val.(*pgxpool.Conn)
+	conn, ok2 := val.(*pgxpool.Conn)
+	if !ok2 {
+		logging.Errorf("ReleaseAdvisoryLock: expected *pgxpool.Conn for lock %d, got %T", lockID, val)
+		return
+	}
 	defer conn.Release()
 
 	var released bool

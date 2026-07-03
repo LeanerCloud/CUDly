@@ -75,7 +75,9 @@ func deleteExpired(ctx context.Context, db *database.Connection, now time.Time, 
 	}
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback(ctx)
+			if rErr := tx.Rollback(ctx); rErr != nil {
+				log.Printf("rollback failed: %v", rErr)
+			}
 		}
 	}()
 

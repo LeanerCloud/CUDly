@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +19,11 @@ func (m *MockSecretsManagerClient) GetSecretValue(ctx context.Context, input *se
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.GetSecretValueOutput), args.Error(1)
+	v, ok := args.Get(0).(*secretsmanager.GetSecretValueOutput)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *secretsmanager.GetSecretValueOutput, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // CreateSecret mocks the CreateSecret operation
@@ -27,7 +32,11 @@ func (m *MockSecretsManagerClient) CreateSecret(ctx context.Context, input *secr
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.CreateSecretOutput), args.Error(1)
+	v, ok := args.Get(0).(*secretsmanager.CreateSecretOutput)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *secretsmanager.CreateSecretOutput, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // UpdateSecret mocks the UpdateSecret operation
@@ -36,7 +45,11 @@ func (m *MockSecretsManagerClient) UpdateSecret(ctx context.Context, input *secr
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*secretsmanager.UpdateSecretOutput), args.Error(1)
+	v, ok := args.Get(0).(*secretsmanager.UpdateSecretOutput)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *secretsmanager.UpdateSecretOutput, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // SecretsManagerAPI defines the interface for Secrets Manager operations used by our code
