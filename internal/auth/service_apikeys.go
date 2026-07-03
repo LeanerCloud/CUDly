@@ -281,14 +281,16 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 	// unbounded number of goroutines (DoS amplifier on a revoked key).
 	keyID := key.ID
 	go func() {
-		_, _, _ = s.lastUsedSFG.Do(keyID, func() (any, error) {
+		if _, sfErr, _ := s.lastUsedSFG.Do(keyID, func() (any, error) {
 			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.UpdateLastUsed(updateCtx, keyID); err != nil {
 				logging.Debugf("Failed to update API key last used timestamp for key %s: %v", keyID, err)
 			}
 			return nil, nil
-		})
+		}); sfErr != nil {
+			logging.Debugf("service_apikeys: lastUsedSFG returned error for key %s: %v", keyID, sfErr)
+		}
 	}()
 
 	return key, user, nil

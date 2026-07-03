@@ -78,7 +78,11 @@ func LoadKey(ctx context.Context, resolver secrets.Resolver) (key []byte, source
 // migration command (cmd/rekey) which needs to detect rows encrypted under
 // it without going through the LoadKey env-var path.
 func DevKey() []byte {
-	k, _ := decodeHexKey(devKeyHex)
+	k, err := decodeHexKey(devKeyHex)
+	if err != nil {
+		// devKeyHex is a compile-time constant; an error here is a programming bug.
+		panic(fmt.Sprintf("credentials: invalid devKeyHex constant: %v", err))
+	}
 	return k
 }
 

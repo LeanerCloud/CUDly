@@ -1445,8 +1445,8 @@ func TestHandler_buildResponse_NilBodyEmitsEmptyJSONObject(t *testing.T) {
 	h := &Handler{}
 	headers := map[string]string{"Content-Type": "application/json"}
 
-	resp, err := h.buildResponse(200, headers, nil, nil)
-	require.NoError(t, err)
+	// buildResponse never returns an error; converts all failure modes to 500 body.
+	resp := h.buildResponse(200, headers, nil, nil)
 	assert.Equal(t, 200, resp.StatusCode)
 	assert.Equal(t, "{}", resp.Body, "nil-body success must serialise as {} so the frontend's response.json() doesn't throw")
 }
@@ -1455,7 +1455,6 @@ func TestHandler_buildResponse_BodyMarshalsAsBefore(t *testing.T) {
 	h := &Handler{}
 	headers := map[string]string{"Content-Type": "application/json"}
 
-	resp, err := h.buildResponse(200, headers, map[string]string{"hello": "world"}, nil)
-	require.NoError(t, err)
+	resp := h.buildResponse(200, headers, map[string]string{"hello": "world"}, nil)
 	assert.Equal(t, `{"hello":"world"}`, resp.Body)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -346,7 +347,9 @@ func (s *Service) validatePendingMFAEnrollment(ctx context.Context, user *User, 
 	if time.Now().After(*user.MFAPendingSecretExpiresAt) {
 		user.MFAPendingSecret = ""
 		user.MFAPendingSecretExpiresAt = nil
-		_ = s.store.UpdateUser(ctx, user)
+		if updateErr := s.store.UpdateUser(ctx, user); updateErr != nil {
+			logging.Warnf("MFAVerifyPendingCode: failed to clear expired pending secret for user: %v", updateErr)
+		}
 		return fmt.Errorf("%w", ErrMFAEnrollmentExpired)
 	}
 	if !verifyTOTP(user.MFAPendingSecret, code) {

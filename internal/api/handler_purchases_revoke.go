@@ -156,12 +156,14 @@ func (h *Handler) revokePurchase(ctx context.Context, req *events.LambdaFunction
 	// row straight to revokeScheduledExecution which calls CancelScheduledExecutionAtomic
 	// (WHERE status='scheduled' CAS) and returns 410 if the scheduler already fired.
 	//
-	// A genuine DB error from GetExecutionByID surfaces as 500; (nil, nil) means
+	// A genuine DB error from GetExecutionByID surfaces as 500; ErrNotFound means
 	// the ID is not an execution (or is not yet visible) and we fall through to
 	// the purchase_history lookup below.
-	if execution, execErr := h.config.GetExecutionByID(ctx, purchaseID); execErr != nil {
+	execution, execErr := h.config.GetExecutionByID(ctx, purchaseID)
+	if execErr != nil && !errors.Is(execErr, config.ErrNotFound) {
 		return nil, fmt.Errorf("revoke: GetExecutionByID %s: %w", purchaseID, execErr)
-	} else if execution != nil {
+	}
+	if execErr == nil {
 		return h.revokeScheduledExecution(ctx, session, execution)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -107,7 +108,9 @@ func (h *Handler) runMarkedCollection(ctx context.Context) (*config.Recommendati
 	schedulerARN := os.Getenv("SCHEDULER_LAMBDA_ARN")
 	if schedulerARN != "" {
 		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
-			_ = h.config.ClearCollectionStarted(ctx)
+			if clearErr := h.config.ClearCollectionStarted(ctx); clearErr != nil {
+				logging.Warnf("runMarkedCollection: failed to clear collection started marker: %v", clearErr)
+			}
 			return nil, fmt.Errorf("failed to trigger async collection: %w", invokeErr)
 		}
 		freshness, err := h.config.GetRecommendationsFreshness(ctx)
@@ -156,10 +159,13 @@ func (h *Handler) asyncInvokeSelf(ctx context.Context, functionARN string) error
 	// internal/server/lambda.go (which checks Source == "aws.events" ||
 	// Action != "") classifies this consistently with EventBridge cron
 	// deliveries that already exercise this code path.
-	payload, _ := json.Marshal(map[string]string{
+	payload, marshalErr := json.Marshal(map[string]string{
 		"source": "aws.events",
 		"action": "collect_recommendations",
 	})
+	if marshalErr != nil {
+		return fmt.Errorf("asyncInvokeSelf: failed to marshal payload: %w", marshalErr)
+	}
 
 	_, err = invoker.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   aws.String(functionARN),
@@ -215,7 +221,9 @@ func (h *Handler) triggerColdStartCollect(ctx context.Context) (*config.Recommen
 		}
 		if invokeErr := h.asyncInvokeSelf(ctx, schedulerARN); invokeErr != nil {
 			// Roll back ONLY because we own the marker (ok==true above).
-			_ = h.config.ClearCollectionStarted(ctx)
+			if clearErr := h.config.ClearCollectionStarted(ctx); clearErr != nil {
+				logging.Warnf("coldStartCollect: failed to clear collection started marker: %v", clearErr)
+			}
 			return nil, fmt.Errorf("failed to trigger cold-start collect: %w", invokeErr)
 		}
 		// Re-read freshness to return the started_at value.

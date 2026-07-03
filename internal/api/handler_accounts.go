@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/config"
 	"github.com/LeanerCloud/CUDly/internal/credentials"
 	"github.com/LeanerCloud/CUDly/internal/oidc"
+	"github.com/LeanerCloud/CUDly/pkg/logging"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -817,7 +818,12 @@ func (h *Handler) canUseGCPFederated(ctx context.Context, acct *config.CloudAcco
 	// If a legacy stored WIF JSON is present, defer to the presence
 	// check so legacy accounts keep reporting the same shape.
 	if h.credStore != nil {
-		if has, _ := h.credStore.HasCredential(ctx, acct.ID, credentials.CredTypeGCPWIFConfig); has {
+		has, err := h.credStore.HasCredential(ctx, acct.ID, credentials.CredTypeGCPWIFConfig)
+		if err != nil {
+			logging.Warnf("canUseGCPFederated: credential store check failed, disabling federated: %v", err)
+			return false
+		}
+		if has {
 			return false
 		}
 	}

@@ -405,10 +405,17 @@ func resolveGCPWIFCredential(
 	opts GCPResolveOptions,
 ) (oauth2.TokenSource, error) {
 	// Peek at the stored WIF JSON first — absent means this is a
-	// federated (secret-free) account.
+	// federated (secret-free) account. LoadRaw returns (nil, nil) only for
+	// genuine absence; a store failure must fail loud rather than silently
+	// flipping a stored-JSON account onto the federated path (auth
+	// behavior must not change on a store outage).
 	var raw []byte
 	if store != nil {
-		raw, _ = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		var loadErr error
+		raw, loadErr = store.LoadRaw(ctx, account.ID, CredTypeGCPWIFConfig)
+		if loadErr != nil {
+			return nil, fmt.Errorf("credentials: LoadRaw WIF config for account %s: %w", account.ID, loadErr)
+		}
 	}
 
 	issuer := opts.IssuerURL

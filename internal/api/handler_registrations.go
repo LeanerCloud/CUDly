@@ -201,7 +201,10 @@ func (h *Handler) getPendingRegistration(ctx context.Context, id string) (*confi
 func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) {
 	reviewedAt := time.Now()
 	reg.ReviewedAt = &reviewedAt
-	session, _ := h.requireAdmin(ctx, httpReq)
+	session, err := h.requireAdmin(ctx, httpReq)
+	if err != nil {
+		logging.Warnf("setReviewMetadata: could not resolve admin session, reviewer ID will be unset: %v", err)
+	}
 	if session != nil {
 		reg.ReviewedBy = &session.UserID
 	}

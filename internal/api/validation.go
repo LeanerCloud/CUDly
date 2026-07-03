@@ -184,6 +184,15 @@ var gcpWIFConfigOptional = []string{
 // (top-level keys → simple values, or one nested object for credential_source).
 const maxCredentialPayloadDepth = 2
 
+// payloadTypeMatches returns true when payload["type"] is a string equal to
+// want. Returns false when the field is absent, wrong type, or wrong value.
+// Extracted to avoid a `||` operator in validateCredentialPayload that would
+// push the function over the cyclomatic complexity gate.
+func payloadTypeMatches(payload map[string]interface{}, want string) bool {
+	t, ok := payload["type"].(string)
+	return ok && t == want
+}
+
 // validateCredentialPayload enforces shape per declared credential_type. It
 // rejects payloads with missing required keys, unknown extra keys, non-string
 // required values, or excessive nesting depth. Caller has already verified the
@@ -204,7 +213,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateFlatPayload(credentialType, payload, gcpServiceAccountRequired, gcpServiceAccountOptional); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "service_account" {
+		if !payloadTypeMatches(payload, "service_account") {
 			return NewClientError(400, "gcp_service_account payload must have type=\"service_account\"")
 		}
 		return nil
@@ -212,7 +221,7 @@ func validateCredentialPayload(credentialType string, payload map[string]interfa
 		if err := validateGCPWIFPayload(payload); err != nil {
 			return err
 		}
-		if t, _ := payload["type"].(string); t != "external_account" {
+		if !payloadTypeMatches(payload, "external_account") {
 			return NewClientError(400, "gcp_workload_identity_config payload must have type=\"external_account\"")
 		}
 		return nil

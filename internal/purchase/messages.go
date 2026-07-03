@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -84,11 +85,11 @@ func (m *Manager) handleExecutePurchase(ctx context.Context, msg AsyncMessage) e
 	}
 
 	execution, err := m.config.GetExecutionByID(ctx, msg.ExecutionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return fmt.Errorf("execution not found: %s", msg.ExecutionID)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get execution %s: %w", msg.ExecutionID, err)
-	}
-	if execution == nil {
-		return fmt.Errorf("execution not found: %s", msg.ExecutionID)
 	}
 
 	logging.Infof("Executing purchase from async message: %s", msg.ExecutionID)
@@ -199,11 +200,11 @@ func (m *Manager) verifyAsyncApprovalActor(ctx context.Context, msg *AsyncMessag
 // repo's gocyclo threshold.
 func (m *Manager) loadAsyncExecutionForApproval(ctx context.Context, msg *AsyncMessage) (*config.PurchaseExecution, error) {
 	execution, err := m.config.GetExecutionByID(ctx, msg.ExecutionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, fmt.Errorf("execution not found: %s", msg.ExecutionID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", msg.ExecutionID)
 	}
 	if execution.ApprovalToken == "" || msg.Token == "" {
 		return nil, fmt.Errorf("invalid approval token")

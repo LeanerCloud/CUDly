@@ -286,15 +286,14 @@ func setSecurityHeaders(headers map[string]string) map[string]string {
 // HandleRequest processes a Lambda Function URL request
 func (h *Handler) HandleRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	if req == nil {
-		resp, _ := h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil)
-		return resp, nil
+		return h.buildResponse(400, h.buildResponseHeaders(), map[string]string{"error": "nil request"}, nil), nil
 	}
 	corsHeaders := h.buildResponseHeaders()
 
 	// Handle preflight
 	method := req.RequestContext.HTTP.Method
 	if method == "OPTIONS" {
-		return h.buildResponse(200, corsHeaders, nil, nil)
+		return h.buildResponse(200, corsHeaders, nil, nil), nil
 	}
 
 	path := req.RequestContext.HTTP.Path
@@ -332,14 +331,12 @@ func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctio
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
 		logging.Warnf("Request body size exceeded: %d bytes", len(req.Body))
-		resp, _ := h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
-		return resp
+		return h.buildResponse(413, corsHeaders, map[string]string{"error": "Request body too large"}, nil)
 	}
 
 	// Validate Content-Type
 	if err := validateContentType(req); err != nil {
-		resp, _ := h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
-		return resp
+		return h.buildResponse(415, corsHeaders, map[string]string{"error": err.Error()}, nil)
 	}
 
 	// Validate authentication and CSRF
@@ -357,15 +354,13 @@ func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	if !h.authenticate(ctx, req) {
-		resp, _ := h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
-		return resp
+		return h.buildResponse(401, corsHeaders, map[string]string{"error": "Unauthorized"}, nil)
 	}
 
 	if h.requiresCSRFValidation(method, path, req) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)
-			resp, _ := h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
-			return resp
+			return h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
 		}
 	}
 
@@ -381,7 +376,7 @@ func (h *Handler) executeRequest(ctx context.Context, method, path string, req *
 		statusCode, response = h.handleRequestError(err)
 	}
 
-	return h.buildResponse(statusCode, corsHeaders, response, nil)
+	return h.buildResponse(statusCode, corsHeaders, response, nil), nil
 }
 
 // handleRequestError converts an error to status code and response
@@ -428,14 +423,16 @@ type rawResponse struct {
 	csp         string
 }
 
-// buildResponse creates a Lambda Function URL response
-func (h *Handler) buildResponse(statusCode int, headers map[string]string, body any, err error) (*events.LambdaFunctionURLResponse, error) {
+// buildResponse creates a Lambda Function URL response. It never returns an
+// error: all failure modes (marshal failure, non-nil err arg) are converted
+// into a 500 response body so callers can use the single-return form.
+func (h *Handler) buildResponse(statusCode int, headers map[string]string, body any, err error) *events.LambdaFunctionURLResponse {
 	if err != nil {
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 500,
 			Headers:    headers,
 			Body:       `{"error": "internal server error"}`,
-		}, nil
+		}
 	}
 
 	// Handle raw (non-JSON) responses
@@ -448,7 +445,7 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 			StatusCode: statusCode,
 			Headers:    headers,
 			Body:       raw.body,
-		}, nil
+		}
 	}
 
 	var bodyBytes []byte
@@ -461,7 +458,7 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 				StatusCode: 500,
 				Headers:    headers,
 				Body:       `{"error": "internal server error"}`,
-			}, nil
+			}
 		}
 	} else {
 		// Nil-body success paths (e.g. DELETE /accounts/:id returning
@@ -476,7 +473,7 @@ func (h *Handler) buildResponse(statusCode int, headers map[string]string, body 
 		StatusCode: statusCode,
 		Headers:    headers,
 		Body:       string(bodyBytes),
-	}, nil
+	}
 }
 
 // loadAPIKey retrieves the API key from Secrets Manager.
@@ -554,12 +551,15 @@ func (h *Handler) resolveSourceIdentity(ctx context.Context) *sourceIdentity {
 			// resolveSourceIdentity is best-effort and is consumed by
 			// populateSourceAccountID, which fails loud on an empty
 			// AccountID for the AWS-source case. STS errors are already
-			// logged WARN inside resolveAWSCallerIdentity, so we drop
-			// the error here explicitly — the consumer's empty-string
-			// check is the security gate for federation rendering.
+			// logged WARN inside resolveAWSCallerIdentity; the consumer's
+			// empty-string check is the security gate for federation rendering.
 			// (Reshape uses resolveAWSAccountID directly which DOES
 			// propagate the error for fail-closed multi-tenant safety.)
-			id.AccountID, id.Partition, _ = h.resolveAWSCallerIdentity(ctx)
+			var stsErr error
+			id.AccountID, id.Partition, stsErr = h.resolveAWSCallerIdentity(ctx)
+			if stsErr != nil {
+				logging.Debugf("resolveSourceIdentity: best-effort STS failed (already logged): %v", stsErr)
+			}
 		case "azure":
 			id.ClientID = os.Getenv("AZURE_CLIENT_ID")
 			id.SubscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")

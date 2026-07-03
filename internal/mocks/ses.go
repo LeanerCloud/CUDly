@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +19,11 @@ func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInp
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sesv2.SendEmailOutput), args.Error(1)
+	v, ok := args.Get(0).(*sesv2.SendEmailOutput)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *sesv2.SendEmailOutput, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // SESAPI defines the interface for SES operations used by our code

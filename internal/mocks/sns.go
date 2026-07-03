@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +19,11 @@ func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, op
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*sns.PublishOutput), args.Error(1)
+	v, ok := args.Get(0).(*sns.PublishOutput)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *sns.PublishOutput, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // SNSAPI defines the interface for SNS operations used by our code

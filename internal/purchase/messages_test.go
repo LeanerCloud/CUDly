@@ -99,7 +99,7 @@ func TestManager_ProcessMessage(t *testing.T) {
 			email:        mockEmail,
 			dashboardURL: "https://dashboard.example.com",
 		}
-		mockStore.On("GetExecutionByID", ctx, "exec-notfound").Return(nil, nil)
+		mockStore.On("GetExecutionByID", ctx, "exec-notfound").Return(nil, fmt.Errorf("%w: execution exec-notfound", config.ErrNotFound))
 
 		err := manager.ProcessMessage(ctx, `{"type": "execute_purchase", "execution_id": "exec-notfound"}`)
 		assert.Error(t, err)
