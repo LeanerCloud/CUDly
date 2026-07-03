@@ -1,7 +1,6 @@
 package ladder
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -19,12 +18,12 @@ const DefaultHorizonDays = 30
 const DefaultLookbackDays = 30
 
 // errWriteNotWired is the sentinel returned by PurchaseLayer and ReshapeBuffer
-// until the write-side PR (PR 6) lands. It is distinct from
-// common.ErrCommitmentPurchaseNotSupported, which signals that this provider
-// can NEVER purchase a given layer type programmatically. Here the capability
-// WILL be supported once wired; the error is a clear placeholder, not a
-// permanent constraint.
-var errWriteNotWired = errors.New("write side not yet wired (PR 6): call sites must not invoke PurchaseLayer or ReshapeBuffer until the write PR is merged")
+// when the write-side dependencies have not been wired via WithWriteSide.
+// It is distinct from common.ErrCommitmentPurchaseNotSupported, which signals
+// that this provider can NEVER purchase a given layer type programmatically.
+// Here the capability exists; the instance is just missing its write wiring —
+// a configuration error at the call site, not a permanent constraint.
+var errWriteNotWired = errors.New("write side not wired: wire riPurchaser, spPurchaser, and exchangeRunner via WithWriteSide before calling PurchaseLayer or ReshapeBuffer")
 
 // Config holds construction-time parameters for AWSLadder.
 type Config struct {
@@ -57,14 +56,18 @@ func (c Config) lookbackDays() int {
 	return DefaultLookbackDays
 }
 
-// AWSLadder implements ladder.LadderCapability for AWS. It provides the READ
-// side (ListCommitments, GetLayerStates, GetUsageBaseline); the write side
-// (PurchaseLayer, ReshapeBuffer) is wired in PR 6 and returns an explicit
-// not-implemented error until then.
+// AWSLadder implements ladder.LadderCapability for AWS: the read side
+// (ListCommitments, GetLayerStates, GetUsageBaseline) and the write side
+// (PurchaseLayer, ReshapeBuffer).
 //
-// All four data-source dependencies are injected via narrow interfaces so that
-// unit tests are hermetic (no real AWS calls needed). The caller wires the
+// All five read data-source dependencies are injected via narrow interfaces so
+// that unit tests are hermetic (no real AWS calls needed). The caller wires the
 // concrete adapters (ec2svc.Client, savingsplans.Client, etc.) at startup.
+//
+// The write-side dependencies (riPurchase, spPurchase, exchange) are wired via
+// WithWriteSide; until then PurchaseLayer and ReshapeBuffer fail loud with
+// errWriteNotWired. This keeps read-only wiring (dashboards, analysis) free of
+// purchase/exchange infrastructure.
 //
 // SP coverage and utilization (spCoverageSource, spUtilizationSource) may be
 // nil; when nil, CoveragePct and UtilizationPct for SP layers are nil, which
@@ -76,20 +79,27 @@ func (c Config) lookbackDays() int {
 type AWSLadder struct {
 	ris         riLister
 	sps         spLister
-	coverage    coverageSource
+	riCoverage  riCoverageSource
+	onDemand    onDemandSeriesSource
 	utilization utilizationSource
 	spCoverage  spCoverageSource    // nil until parallel SP coverage PR (PR 4) lands
 	spUtil      spUtilizationSource // nil until parallel SP utilization PR (PR 4) lands
+	riPurchase  riPurchaser         // write side; nil until WithWriteSide is called
+	spPurchase  spPurchaser         // write side; nil until WithWriteSide is called
+	exchange    exchangeRunner      // write side; nil until WithWriteSide is called
 	cfg         Config
 }
 
-// New constructs an AWSLadder. All four required interfaces must be non-nil;
-// spCoverage and spUtil may be nil (wired later).
+// New constructs an AWSLadder. The five required read-side interfaces must be
+// non-nil; spCov and spUtil may be nil (wired later). riCov and odSeries are
+// separate single-method interfaces (interface segregation); one concrete
+// adapter may satisfy both and be passed for each.
 func New(
 	cfg Config,
 	ris riLister,
 	sps spLister,
-	cov coverageSource,
+	riCov riCoverageSource,
+	odSeries onDemandSeriesSource,
 	util utilizationSource,
 	spCov spCoverageSource,
 	spUtil spUtilizationSource,
@@ -106,8 +116,11 @@ func New(
 	if sps == nil {
 		return nil, fmt.Errorf("AWSLadder: spLister must not be nil")
 	}
-	if cov == nil {
-		return nil, fmt.Errorf("AWSLadder: coverageSource must not be nil")
+	if riCov == nil {
+		return nil, fmt.Errorf("AWSLadder: riCoverageSource must not be nil")
+	}
+	if odSeries == nil {
+		return nil, fmt.Errorf("AWSLadder: onDemandSeriesSource must not be nil")
 	}
 	if util == nil {
 		return nil, fmt.Errorf("AWSLadder: utilizationSource must not be nil")
@@ -116,7 +129,8 @@ func New(
 		cfg:         cfg,
 		ris:         ris,
 		sps:         sps,
-		coverage:    cov,
+		riCoverage:  riCov,
+		onDemand:    odSeries,
 		utilization: util,
 		spCoverage:  spCov,
 		spUtil:      spUtil,
@@ -143,18 +157,26 @@ func (a *AWSLadder) SupportedLayers() []ladder.LayerSpec {
 	}
 }
 
-// PurchaseLayer is not yet wired. It returns an explicit placeholder error
-// that is NOT common.ErrCommitmentPurchaseNotSupported (which would signal
-// permanent inability to purchase). This error signals that the write-side
-// wiring is missing; callers must not invoke this method until PR 6 is merged.
+// WithWriteSide wires the write-side dependencies and returns the same
+// instance for chaining. All three must be non-nil: a partially wired write
+// side would let one write method work while its sibling fails at call time,
+// which is harder to diagnose than failing here at construction.
 //
-//nolint:gocritic // hugeParam: Recommendation is large but the LadderCapability interface contract requires value, not pointer
-func (a *AWSLadder) PurchaseLayer(_ context.Context, _ ladder.LayerType, _ common.Recommendation, _ common.PurchaseOptions) (common.PurchaseResult, error) {
-	return common.PurchaseResult{}, fmt.Errorf("PurchaseLayer: %w", errWriteNotWired)
-}
-
-// ReshapeBuffer is not yet wired. It returns the same placeholder error as
-// PurchaseLayer; see that method's comment for the rationale.
-func (a *AWSLadder) ReshapeBuffer(_ context.Context, _ ladder.Scope, _ ladder.BufferReshapeConfig) (ladder.ReshapeSummary, error) {
-	return ladder.ReshapeSummary{}, fmt.Errorf("ReshapeBuffer: %w", errWriteNotWired)
+// riP purchases EC2 convertible RIs (LayerConvertibleRI); spP purchases
+// Savings Plans (LayerEC2InstanceSP and LayerComputeSP); ex runs the
+// automated RI exchange flow backing ReshapeBuffer.
+func (a *AWSLadder) WithWriteSide(riP riPurchaser, spP spPurchaser, ex exchangeRunner) (*AWSLadder, error) {
+	if riP == nil {
+		return nil, fmt.Errorf("AWSLadder.WithWriteSide: riPurchaser must not be nil")
+	}
+	if spP == nil {
+		return nil, fmt.Errorf("AWSLadder.WithWriteSide: spPurchaser must not be nil")
+	}
+	if ex == nil {
+		return nil, fmt.Errorf("AWSLadder.WithWriteSide: exchangeRunner must not be nil")
+	}
+	a.riPurchase = riP
+	a.spPurchase = spP
+	a.exchange = ex
+	return a, nil
 }

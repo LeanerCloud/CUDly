@@ -16,11 +16,11 @@ import (
 const minBaselineSeriesDays = 7
 
 // GetUsageBaseline computes a statistical low-water-mark from a daily
-// on-demand-equivalent USD/hour series returned by the injected coverageSource.
+// on-demand-equivalent USD/hour series returned by the injected onDemandSeriesSource.
 //
 // Series semantics: each element is the average on-demand-equivalent USD/hour
 // for one calendar day over the lookback window, ordered oldest-to-newest.
-// The series is sourced from coverageSource.GetOnDemandSeries, which is wired
+// The series is sourced from onDemandSeriesSource.GetOnDemandSeries, which is wired
 // in a later PR to call CE GetCostAndUsage (Granularity=Daily, on-demand
 // usage-type filter). Until that wiring lands, callers receive a data-source
 // error from GetOnDemandSeries.
@@ -55,16 +55,16 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 		return ladder.UsageBaseline{}, err
 	}
 
-	series, err := a.coverage.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
+	series, err := a.onDemand.GetOnDemandSeries(ctx, a.cfg.Region, lookbackDays)
 	if err != nil {
 		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series fetch failed: %w", err)
 	}
 	if len(series) == 0 {
-		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series is empty for region %s (coverage source returned no data)", a.cfg.Region)
+		return ladder.UsageBaseline{}, fmt.Errorf("GetUsageBaseline: on-demand series is empty for region %s (series source returned no data)", a.cfg.Region)
 	}
 	if len(series) < minBaselineSeriesDays {
 		return ladder.UsageBaseline{}, fmt.Errorf(
-			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the coverage source",
+			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the on-demand series source",
 			len(series), minBaselineSeriesDays,
 		)
 	}
@@ -92,7 +92,7 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 }
 
 // validateSeries rejects series containing non-finite (NaN/Inf) or negative
-// elements at the trust boundary: the series is injected via coverageSource,
+// elements at the trust boundary: the series is injected via onDemandSeriesSource,
 // and a single bad element would silently corrupt the percentile (NaN makes
 // the sort order undefined; a negative cost is impossible for on-demand spend).
 // The error names the offending index so the data-source bug is traceable.
