@@ -1,0 +1,472 @@
+package ladder
+
+import (
+	"math/big"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/LeanerCloud/CUDly/pkg/common"
+)
+
+func TestPlannedActionValidate(t *testing.T) {
+	t.Parallel()
+	amount := new(big.Rat).SetFrac64(25, 100) // $0.25/hr
+
+	cases := []struct {
+		name    string
+		action  PlannedAction
+		wantErr bool
+	}{
+		{
+			name: "valid purchase",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "1yr",
+				PaymentOption: "no-upfront", Rationale: "gap fill",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid hold",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Rationale: "layer already at target",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid reshape",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				Rationale: "low utilization below threshold",
+			},
+			wantErr: false,
+		},
+		{
+			name: "purchase without amount (nil)",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with zero amount",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: new(big.Rat), // zero
+				Rationale:        "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with negative amount",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: new(big.Rat).SetInt64(-1),
+				Rationale:        "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with empty term",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "",
+				PaymentOption: "no-upfront", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with empty payment option",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "1yr",
+				PaymentOption: "", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with unknown term",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "2yr",
+				PaymentOption: "no-upfront", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with unknown payment option",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "1yr",
+				PaymentOption: "monthly", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "hold with non-nil amount",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				AmountUSDPerHour: amount,
+				Rationale:        "at target",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reshape with non-nil amount",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				AmountUSDPerHour: amount,
+				Rationale:        "low utilization",
+			},
+			wantErr: true,
+		},
+		{
+			name: "hold with Term set",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Term:      "1yr",
+				Rationale: "at target",
+			},
+			wantErr: true,
+		},
+		{
+			name: "hold with PaymentOption set",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				PaymentOption: "no-upfront",
+				Rationale:     "at target",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reshape with Term set",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				Term:      "3yr",
+				Rationale: "low utilization",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reshape with PaymentOption set",
+			action: PlannedAction{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				PaymentOption: "all-upfront",
+				Rationale:     "low utilization",
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty rationale",
+			action: PlannedAction{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Rationale: "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown action type",
+			action: PlannedAction{
+				Action: "unknown-action", Layer: LayerConvertibleRI,
+				Rationale: "x",
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown layer type",
+			action: PlannedAction{
+				Action: ActionHold, Layer: "unknown-layer",
+				Rationale: "x",
+			},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.action.Validate()
+			if c.wantErr && err == nil {
+				t.Errorf("Validate() = nil, want error")
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestFormatUSDPerHour(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   *big.Rat
+		want string
+	}{
+		{nil, "unknown"},
+		{new(big.Rat).SetFrac64(25, 100), "$0.25/hr"},
+		{new(big.Rat).SetInt64(10), "$10.00/hr"},
+		{new(big.Rat), "$0.00/hr"},
+		{new(big.Rat).SetFrac64(1, 3), "$0.33/hr"}, // rounded to 2 decimals via FloatString
+		// Halfway case: 199/200 = 0.995 must round half away from zero to
+		// $1.00/hr (FloatString semantics), not truncate to $0.99/hr.
+		{new(big.Rat).SetFrac64(199, 200), "$1.00/hr"},
+	}
+	for _, c := range cases {
+		got := formatUSDPerHour(c.in)
+		if got != c.want {
+			t.Errorf("formatUSDPerHour(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestExplain_NilMoneyRendersUnknown verifies that nil *big.Rat fields in
+// LadderPlan are rendered as "unknown" and never as "$0.00".
+func TestExplain_NilMoneyRendersUnknown(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:              Scope{Provider: common.ProviderAWS, AccountID: "123"},
+		GeneratedAt:        time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:           UsageBaseline{LookbackDays: 30, Percentile: 5},
+		TargetUSDPerHour:   nil,
+		ExistingUSDPerHour: nil,
+		GapUSDPerHour:      nil,
+	}
+	out := plan.Explain()
+	if strings.Contains(out, "$0.00") {
+		t.Errorf("Explain() rendered nil as $0.00; want 'unknown':\n%s", out)
+	}
+	if !strings.Contains(out, "unknown") {
+		t.Errorf("Explain() does not contain 'unknown' for nil money:\n%s", out)
+	}
+}
+
+// TestExplain_AllHold verifies that an empty Actions slice is handled
+// gracefully with a "none" note rather than an empty or malformed section.
+func TestExplain_AllHold(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions:     nil,
+	}
+	out := plan.Explain()
+	if !strings.Contains(out, "none") {
+		t.Errorf("Explain() all-HOLD case missing 'none':\n%s", out)
+	}
+}
+
+// TestExplain_PurchaseAction verifies that a purchase action is rendered with
+// all expected fields present in the output.
+func TestExplain_PurchaseAction(t *testing.T) {
+	t.Parallel()
+	target := new(big.Rat).SetInt64(100)
+	existing := new(big.Rat).SetInt64(60)
+	gap := new(big.Rat).SetInt64(40)
+	amount := new(big.Rat).SetInt64(40)
+
+	plan := &LadderPlan{
+		Scope:              Scope{Provider: common.ProviderAWS, AccountID: "123456789012"},
+		GeneratedAt:        time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:           UsageBaseline{LookbackDays: 30, Percentile: 5},
+		TargetUSDPerHour:   target,
+		ExistingUSDPerHour: existing,
+		GapUSDPerHour:      gap,
+		Actions: []PlannedAction{
+			{
+				Action:           ActionPurchase,
+				Layer:            LayerComputeSP,
+				AmountUSDPerHour: amount,
+				Term:             "1yr",
+				PaymentOption:    "no-upfront",
+				Rationale:        "fill coverage gap",
+				DataSources:      []string{"cost-explorer", "cloudwatch"},
+			},
+		},
+	}
+	out := plan.Explain()
+	checks := []string{
+		"aws",
+		"123456789012",
+		"$100.00/hr",
+		"$60.00/hr",
+		"$40.00/hr",
+		string(ActionPurchase),
+		string(LayerComputeSP),
+		"1yr",
+		"no-upfront",
+		"fill coverage gap",
+		"Data sources: cost-explorer, cloudwatch",
+	}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("Explain() missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+// TestExplain_ReshapeAction verifies that a reshape action does not include
+// amount/term/payment fields in the output (they should be absent for
+// non-purchase actions).
+func TestExplain_ReshapeAction(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions: []PlannedAction{
+			{
+				Action:    ActionReshape,
+				Layer:     LayerConvertibleRI,
+				Rationale: "utilization below threshold",
+			},
+		},
+	}
+	out := plan.Explain()
+	if !strings.Contains(out, string(ActionReshape)) {
+		t.Errorf("Explain() missing action type %q:\n%s", ActionReshape, out)
+	}
+	if !strings.Contains(out, "utilization below threshold") {
+		t.Errorf("Explain() missing rationale:\n%s", out)
+	}
+	if strings.Contains(out, "Data sources:") {
+		t.Errorf("Explain() rendered a Data sources line with no sources set:\n%s", out)
+	}
+}
+
+// TestExplain_DataSourcesDeduplicated verifies that the Data sources line
+// aggregates sources across actions in first-seen stored order, without
+// duplicates.
+func TestExplain_DataSourcesDeduplicated(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions: []PlannedAction{
+			{
+				Action: ActionHold, Layer: LayerConvertibleRI,
+				Rationale:   "at target",
+				DataSources: []string{"cost-explorer", "cloudwatch"},
+			},
+			{
+				Action: ActionReshape, Layer: LayerConvertibleRI,
+				Rationale:   "low utilization",
+				DataSources: []string{"cloudwatch", "pricing-api"},
+			},
+		},
+	}
+	out := plan.Explain()
+	want := "Data sources: cost-explorer, cloudwatch, pricing-api\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("Explain() missing deduplicated sources line %q:\n%s", want, out)
+	}
+	if strings.Count(out, "cloudwatch") != 1 {
+		t.Errorf("Explain() duplicated a data source:\n%s", out)
+	}
+}
+
+// TestExplain_Deterministic verifies that calling Explain() twice on the same
+// plan produces identical output.
+func TestExplain_Deterministic(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderGCP, AccountID: "my-project"},
+		GeneratedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 14, Percentile: 10},
+		Actions:     nil,
+	}
+	first := plan.Explain()
+	second := plan.Explain()
+	if first != second {
+		t.Errorf("Explain() is not deterministic:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestLadderPlanValidate(t *testing.T) {
+	t.Parallel()
+	valid := LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123456789012"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Actions: []PlannedAction{
+			{Action: ActionHold, Layer: LayerConvertibleRI, Rationale: "at target"},
+		},
+	}
+	cases := []struct {
+		mutate  func(p *LadderPlan)
+		name    string
+		wantErr bool
+	}{
+		{name: "valid", mutate: func(*LadderPlan) {}, wantErr: false},
+		{
+			name:    "unknown scope provider",
+			mutate:  func(p *LadderPlan) { p.Scope.Provider = "oracle" },
+			wantErr: true,
+		},
+		{
+			name:    "empty scope account",
+			mutate:  func(p *LadderPlan) { p.Scope.AccountID = "" },
+			wantErr: true,
+		},
+		{
+			name:    "zero GeneratedAt is invalid",
+			mutate:  func(p *LadderPlan) { p.GeneratedAt = time.Time{} },
+			wantErr: true,
+		},
+		{
+			name: "invalid action propagates",
+			mutate: func(p *LadderPlan) {
+				p.Actions = []PlannedAction{
+					{Action: ActionHold, Layer: LayerConvertibleRI, Rationale: ""},
+				}
+			},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := valid
+			c.mutate(&plan)
+			err := plan.Validate()
+			if c.wantErr && err == nil {
+				t.Errorf("Validate() = nil, want error")
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestExplain_SanitizesControlChars verifies that control characters in
+// interpolated fields cannot spoof extra lines in the approval email: a
+// rationale containing an embedded newline plus a fake action line must
+// render on a single line with the control characters stripped.
+func TestExplain_SanitizesControlChars(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123\naccount-spoof"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions: []PlannedAction{
+			{
+				Action:    ActionHold,
+				Layer:     LayerConvertibleRI,
+				Rationale: "legit rationale\n  2. fake action\r",
+			},
+		},
+	}
+	out := plan.Explain()
+	if strings.Contains(out, "\n  2. fake action") {
+		t.Errorf("Explain() allowed a spoofed action line:\n%s", out)
+	}
+	// The embedded newline and carriage return are stripped, joining the
+	// injected text onto the legitimate rationale's single line.
+	if !strings.Contains(out, "legit rationale  2. fake action") {
+		t.Errorf("Explain() did not render sanitized rationale on one line:\n%s", out)
+	}
+	if !strings.Contains(out, "account=123account-spoof\n") {
+		t.Errorf("Explain() did not sanitize AccountID:\n%s", out)
+	}
+}
