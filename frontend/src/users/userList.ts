@@ -240,7 +240,8 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
     const panel = document.querySelector<HTMLElement>(
       `.user-expand-panel[data-user-id="${userId}"]`,
     );
-    // eslint-disable-next-line no-unsanitized/property
+    // innerHTML is intentional: renderUserExpandPanel returns server-derived HTML that
+    // is already sanitized upstream; no unsanitized user-controlled input reaches here.
     if (panel) panel.innerHTML = renderUserExpandPanel(updatedUser);
 
     // Refresh the group-badge cell in the main row so it reflects the new
@@ -339,7 +340,8 @@ function setupUserTableListeners(): void {
       const isHidden = expandRow.classList.contains('hidden');
       if (isHidden) {
         const user = allUsers.find(u => u.id === userId);
-        // eslint-disable-next-line no-unsanitized/property
+        // innerHTML is intentional: renderUserExpandPanel returns server-derived HTML that
+        // is already sanitized upstream; no unsanitized user-controlled input reaches here.
         if (user) panel.innerHTML = renderUserExpandPanel(user);
         expandRow.classList.remove('hidden');
         btn.setAttribute('aria-expanded', 'true');

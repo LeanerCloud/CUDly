@@ -158,7 +158,7 @@ const TRACKED_FIELDS = [
 ];
 
 // Snapshot of field values at last save (or initial load).
-let savedSnapshot: Record<string, string> = {};
+const savedSnapshot: Record<string, string> = {};
 
 // Cached service configs from last load — used as base when saving to preserve
 // non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
