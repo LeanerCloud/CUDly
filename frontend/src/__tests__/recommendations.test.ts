@@ -1293,7 +1293,7 @@ describe('Recommendations Module', () => {
         wireSelection();
         await loadRecommendations();
         const firstRow = document.querySelector<HTMLTableRowElement>('tr.recommendation-row');
-        const cb = firstRow?.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]')!;
+        const cb = firstRow!.querySelector<HTMLInputElement>('input[type="checkbox"][data-rec-id]')!;
         expect(cb.checked).toBe(false);
 
         // Native click on a <input type="checkbox"> toggles checked

@@ -1,0 +1,8 @@
+# Build output
+dist/
+
+# Node modules
+node_modules/
+
+# Webpack config is a CommonJS file; ESLint lints only src/**/*.ts via npm run lint
+webpack.config.js

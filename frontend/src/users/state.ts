@@ -17,7 +17,7 @@ export let mfaFilter = '';
 export let groupFilter = '';
 
 // State for bulk operations
-export let selectedUserIds = new Set<string>();
+export const selectedUserIds = new Set<string>();
 
 // Setters for state
 export function setCurrentEditingUser(user: APIUser | null): void {
