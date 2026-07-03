@@ -1,6 +1,8 @@
 package ladder
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
@@ -435,6 +437,47 @@ func validRamp() RampSchedule {
 	}}
 }
 
+// TestRampScheduleValidate_NaN is the regression test for the NaN hole:
+// NaN compares false against every bound, so the pre-fix "<= 0 || > 1"
+// range check admitted NaN fractions, and big.Rat.SetFloat64(NaN) returns
+// nil downstream, panicking on first use. The error must name the step
+// index so a multi-step schedule pinpoints the bad tranche.
+func TestRampScheduleValidate_NaN(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		wantStep string
+		ramp     RampSchedule
+	}{
+		{
+			name: "single NaN fraction",
+			ramp: RampSchedule{Steps: []RampStep{
+				{AfterDays: 0, Fraction: math.NaN()},
+			}},
+			wantStep: "ramp step 0",
+		},
+		{
+			name: "NaN in multi-step schedule",
+			ramp: RampSchedule{Steps: []RampStep{
+				{AfterDays: 0, Fraction: 0.5},
+				{AfterDays: 7, Fraction: math.NaN()},
+			}},
+			wantStep: "ramp step 1",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.ramp.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error for NaN fraction")
+			}
+			if !strings.Contains(err.Error(), c.wantStep) {
+				t.Errorf("Validate() error %q does not name %q", err, c.wantStep)
+			}
+		})
+	}
+}
+
 func TestRampScheduleValidate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -655,6 +698,37 @@ func TestLadderConfigValidate(t *testing.T) {
 			name: "hourly commit cap negative is invalid",
 			mutate: func(c *LadderConfig) {
 				hourlyCap := -1.0
+				c.MaxHourlyCommitPerRun = &hourlyCap
+			},
+			wantErr: true,
+		},
+		{
+			name:    "NaN coverage is invalid",
+			mutate:  func(c *LadderConfig) { c.TargetCoveragePct = math.NaN() },
+			wantErr: true,
+		},
+		{
+			name:    "NaN buffer fraction is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferFraction = math.NaN() },
+			wantErr: true,
+		},
+		{
+			name:    "NaN percentile is invalid",
+			mutate:  func(c *LadderConfig) { c.BaselinePercentile = math.NaN() },
+			wantErr: true,
+		},
+		{
+			name: "NaN hourly commit cap is invalid",
+			mutate: func(c *LadderConfig) {
+				hourlyCap := math.NaN()
+				c.MaxHourlyCommitPerRun = &hourlyCap
+			},
+			wantErr: true,
+		},
+		{
+			name: "infinite hourly commit cap is invalid",
+			mutate: func(c *LadderConfig) {
+				hourlyCap := math.Inf(1)
 				c.MaxHourlyCommitPerRun = &hourlyCap
 			},
 			wantErr: true,

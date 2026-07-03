@@ -6,6 +6,7 @@ package ladder
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
@@ -254,10 +255,20 @@ func (r RampSchedule) Validate() error {
 			return fmt.Errorf("ramp step %d: AfterDays %d must be strictly greater than previous %d", i, s.AfterDays, prev)
 		}
 		prev = s.AfterDays
-		if s.Fraction <= 0 || s.Fraction > 1 {
+		// NaN compares false against every bound, so the naive
+		// "<= 0 || > 1" form silently admits it (and big.Rat.SetFloat64
+		// on NaN returns nil downstream, panicking on use). Reject NaN
+		// explicitly AND use the inverted in-range form, which is also
+		// NaN-hostile on its own.
+		if math.IsNaN(s.Fraction) || !(s.Fraction > 0 && s.Fraction <= 1) {
 			return fmt.Errorf("ramp step %d: fraction %g must be in (0, 1]", i, s.Fraction)
 		}
 		sum += s.Fraction
+	}
+	// Defense in depth: a NaN sum would sail through the epsilon window
+	// below because NaN comparisons are always false.
+	if math.IsNaN(sum) {
+		return fmt.Errorf("ramp step fractions sum to NaN")
 	}
 	diff := sum - 1.0
 	if diff < -rampSumEpsilon || diff > rampSumEpsilon {
@@ -309,17 +320,27 @@ func (c *LadderConfig) Validate() error {
 	return c.validateRunLimits()
 }
 
+// withinExclIncl reports whether v is a real (non-NaN) number in the
+// half-open interval (lo, hi]. The positive in-range form rejects NaN by
+// construction (every NaN comparison is false); the explicit IsNaN check is
+// kept for readability. Exclusion-style checks like "v <= lo || v > hi" are
+// NOT NaN-safe because both comparisons are false for NaN.
+func withinExclIncl(v, lo, hi float64) bool {
+	return !math.IsNaN(v) && v > lo && v <= hi
+}
+
 // validateBaselineBounds checks the coverage target, buffer fraction, and
 // baseline measurement parameters. Split out of Validate to keep each
-// function's cyclomatic complexity within the repo limit.
+// function's cyclomatic complexity within the repo limit. All float checks
+// are NaN-hostile (see withinExclIncl).
 func (c *LadderConfig) validateBaselineBounds() error {
-	if c.TargetCoveragePct <= 0 || c.TargetCoveragePct > 100 {
+	if !withinExclIncl(c.TargetCoveragePct, 0, 100) {
 		return fmt.Errorf("target_coverage_pct %g must be in (0, 100]", c.TargetCoveragePct)
 	}
-	if c.BufferFraction < 0 || c.BufferFraction >= 1 {
+	if math.IsNaN(c.BufferFraction) || !(c.BufferFraction >= 0 && c.BufferFraction < 1) {
 		return fmt.Errorf("buffer_fraction %g must be in [0, 1)", c.BufferFraction)
 	}
-	if c.BaselinePercentile <= 0 || c.BaselinePercentile > 50 {
+	if !withinExclIncl(c.BaselinePercentile, 0, 50) {
 		return fmt.Errorf("baseline_percentile %g must be in (0, 50]", c.BaselinePercentile)
 	}
 	if c.LookbackDays <= 0 {
@@ -328,10 +349,15 @@ func (c *LadderConfig) validateBaselineBounds() error {
 	return nil
 }
 
-// validateRunLimits checks the per-run spend and action caps.
+// validateRunLimits checks the per-run spend and action caps. The hourly
+// cap must be a positive finite number when set: NaN and +/-Inf are both
+// rejected because big.Rat.SetFloat64 returns nil for non-finite values,
+// which would panic downstream.
 func (c *LadderConfig) validateRunLimits() error {
-	if c.MaxHourlyCommitPerRun != nil && *c.MaxHourlyCommitPerRun <= 0 {
-		return fmt.Errorf("max_hourly_commit_per_run %g must be > 0 when set (leave nil for no cap)", *c.MaxHourlyCommitPerRun)
+	if v := c.MaxHourlyCommitPerRun; v != nil {
+		if math.IsNaN(*v) || math.IsInf(*v, 0) || !(*v > 0) {
+			return fmt.Errorf("max_hourly_commit_per_run %g must be a positive finite number when set (leave nil for no cap)", *v)
+		}
 	}
 	if c.MaxActionsPerRun <= 0 {
 		return fmt.Errorf("max_actions_per_run %d must be > 0", c.MaxActionsPerRun)
