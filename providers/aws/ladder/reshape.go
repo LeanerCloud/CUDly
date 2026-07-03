@@ -62,10 +62,16 @@ const unlimitedCapUSD = math.MaxFloat64
 //     (the thin runner seam does not expose it); it counts the commitments the
 //     exchange analysis flagged and processed.
 //   - Reshaped = Completed only (exchanges actually executed).
-//   - Skipped  = Skipped only (below threshold, no offering, over cap, ...).
-//     Failed attempts are not "skipped"; they surface in Details AND as a
-//     non-nil error (money-path failures must never be silently absorbed
-//     into a success-looking summary).
+//   - Skipped  = Skipped only: below the utilization threshold, no matching
+//     offering, invalid quote, or over the PER-EXCHANGE cap. A DAILY-cap stop
+//     is NOT in this bucket: pkg/exchange classifies it as Failed
+//     (saveFailedRecord + result.Failed), so a routine daily-cap policy stop
+//     currently surfaces from this method as "N of M failed" plus a non-nil
+//     error. Upstream reclassification of daily-cap stops as skips is
+//     tracked in #1348.
+//     Failed attempts are never counted as "skipped"; they surface in
+//     Details AND as a non-nil error (money-path failures must never be
+//     silently absorbed into a success-looking summary).
 //
 // Partial failures: when the runner reports failed exchange attempts, the
 // populated summary is returned TOGETHER with a non-nil error so callers get

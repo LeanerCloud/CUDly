@@ -213,6 +213,18 @@ func TestPurchaseLayer_RIRecValidation(t *testing.T) {
 		{"empty instance type", func(r *common.Recommendation) {
 			r.Details = &common.ComputeDetails{Platform: "linux", Tenancy: "default", Scope: "regional"}
 		}, "InstanceType must not be empty"},
+		{"empty platform", func(r *common.Recommendation) {
+			r.Details = &common.ComputeDetails{InstanceType: "m5.large", Tenancy: "default", Scope: "regional"}
+		}, "Platform must not be empty"},
+		{"empty tenancy", func(r *common.Recommendation) {
+			// The ec2 client silently defaults empty Tenancy to "default"; a
+			// dedicated-tenancy rec would buy the wrong product (no-silent-fallback).
+			r.Details = &common.ComputeDetails{InstanceType: "m5.large", Platform: "linux", Scope: "regional"}
+		}, "Tenancy must not be empty"},
+		{"empty scope", func(r *common.Recommendation) {
+			// The ec2 client silently defaults empty Scope to "Regional".
+			r.Details = &common.ComputeDetails{InstanceType: "m5.large", Platform: "linux", Tenancy: "default"}
+		}, "Scope must not be empty"},
 		{"empty term", func(r *common.Recommendation) { r.Term = "" }, "Term must not be empty"},
 		{"empty payment option", func(r *common.Recommendation) { r.PaymentOption = "" }, "PaymentOption must not be empty"},
 	}
@@ -253,6 +265,9 @@ func TestPurchaseLayer_SPRecValidation(t *testing.T) {
 		{"NaN hourly commitment", func(r *common.Recommendation) {
 			r.Details = &common.SavingsPlanDetails{PlanType: spPlanTypeEC2Instance, HourlyCommitment: math.NaN()}
 		}, "HourlyCommitment must be a positive finite value"},
+		{"+Inf hourly commitment", func(r *common.Recommendation) {
+			r.Details = &common.SavingsPlanDetails{PlanType: spPlanTypeEC2Instance, HourlyCommitment: math.Inf(1)}
+		}, "HourlyCommitment must be a positive finite value"},
 		{"empty term", func(r *common.Recommendation) { r.Term = "" }, "Term must not be empty"},
 		{"empty payment option", func(r *common.Recommendation) { r.PaymentOption = "" }, "PaymentOption must not be empty"},
 	}
@@ -269,6 +284,19 @@ func TestPurchaseLayer_SPRecValidation(t *testing.T) {
 			assert.Equal(t, 0, spP.calls, "validation failures must prevent the client call")
 		})
 	}
+}
+
+func TestPurchaseLayer_SPPlanTypeMismatch_InverseDirection(t *testing.T) {
+	// The mismatch table above covers Compute details dispatched to the
+	// EC2Instance layer; this covers the inverse: EC2Instance details
+	// dispatched to the Compute layer must be rejected the same way.
+	spP := &fakePurchaser{}
+	a := newWiredLadder(t, &fakePurchaser{}, spP, &fakeExchangeRunner{})
+
+	_, err := a.PurchaseLayer(context.Background(), ladder.LayerComputeSP, validSPRec(spPlanTypeEC2Instance), validPurchaseOpts())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match the dispatched layer's plan type")
+	assert.Equal(t, 0, spP.calls, "a mismatched plan type must never reach the client")
 }
 
 // ---------------------------------------------------------------------------
