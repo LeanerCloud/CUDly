@@ -158,6 +158,61 @@ func ParseLadderCadence(s string) (LadderCadence, error) {
 	return c, nil
 }
 
+// Term is the commitment duration of a purchase action.
+type Term string
+
+const (
+	Term1Year Term = "1yr"
+	Term3Year Term = "3yr"
+)
+
+// Validate returns an error when t is not a recognized Term.
+func (t Term) Validate() error {
+	switch t {
+	case Term1Year, Term3Year:
+		return nil
+	}
+	return fmt.Errorf("unknown term %q", t)
+}
+
+// ParseTerm converts s into a Term, returning a descriptive error when s is
+// not a recognized value.
+func ParseTerm(s string) (Term, error) {
+	t := Term(s)
+	if err := t.Validate(); err != nil {
+		return "", err
+	}
+	return t, nil
+}
+
+// PaymentOption is the payment structure of a purchase action.
+type PaymentOption string
+
+const (
+	PaymentAllUpfront     PaymentOption = "all-upfront"
+	PaymentPartialUpfront PaymentOption = "partial-upfront"
+	PaymentNoUpfront      PaymentOption = "no-upfront"
+)
+
+// Validate returns an error when p is not a recognized PaymentOption.
+func (p PaymentOption) Validate() error {
+	switch p {
+	case PaymentAllUpfront, PaymentPartialUpfront, PaymentNoUpfront:
+		return nil
+	}
+	return fmt.Errorf("unknown payment option %q", p)
+}
+
+// ParsePaymentOption converts s into a PaymentOption, returning a
+// descriptive error when s is not a recognized value.
+func ParsePaymentOption(s string) (PaymentOption, error) {
+	p := PaymentOption(s)
+	if err := p.Validate(); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
 // LayerSpec describes a layer and the roles it fulfills within the ladder.
 // Azure reservations carry both base and buffer roles simultaneously.
 type LayerSpec struct {
@@ -167,6 +222,9 @@ type LayerSpec struct {
 
 // Scope identifies the ladder scope: a specific provider account or
 // subscription that the ladder engine operates on.
+//
+// Note: GCP scopes validate here, but no GCP LayerType exists yet, so every
+// GCP run fails loud at layer validation until GCP layers land.
 type Scope struct {
 	Provider  common.ProviderType
 	AccountID string

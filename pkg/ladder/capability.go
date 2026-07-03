@@ -2,7 +2,6 @@ package ladder
 
 import (
 	"context"
-	"math/big"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
@@ -20,14 +19,22 @@ type LadderCapability interface {
 
 	// SupportedLayers returns the commitment layers this provider can fulfill.
 	// Each LayerSpec declares both the layer type and the roles it covers.
+	//
+	// Role-cardinality contract (enforced by the engine): the returned set
+	// must contain exactly one layer carrying RoleFlex, at most one carrying
+	// RoleBase, and at most one carrying RoleBuffer. The only permitted
+	// multi-role merge is base+buffer on a single layer (e.g. an Azure
+	// reservation serving both roles).
 	SupportedLayers() []LayerSpec
 
 	// ListCommitments returns all active commitments for the given scope.
 	ListCommitments(ctx context.Context, scope Scope) ([]common.Commitment, error)
 
 	// GetLayerStates returns a point-in-time snapshot for each supported layer.
-	// Layers with no active commitments are represented with nil pointer fields
-	// (never coerced to zero).
+	// Layers with no active commitments carry explicit zeros in
+	// ExistingUSDPerHour/ExpiringUSDPerHour; nil is reserved for genuinely
+	// unmeasured metrics (e.g. UtilizationPct on an empty layer) and is
+	// treated as missing data by the engine.
 	GetLayerStates(ctx context.Context, scope Scope) (map[LayerType]LayerState, error)
 
 	// GetUsageBaseline computes a statistical baseline from historical
@@ -53,13 +60,19 @@ type LadderCapability interface {
 }
 
 // BufferReshapeConfig parameterizes a buffer reshape operation.
+//
+// The money caps are config-boundary floats, consistent with
+// LadderConfig.MaxHourlyCommitPerRun (implementations convert to
+// pkg/exchange float64 anyway). Convert via ratFromFloat where exact math
+// is needed; NaN/Inf/non-positive values are rejected wherever these caps
+// are validated.
 type BufferReshapeConfig struct {
 	// MaxPaymentPerExchangeUSD caps the payment for a single exchange. nil
 	// means no per-exchange cap is applied.
-	MaxPaymentPerExchangeUSD *big.Rat
+	MaxPaymentPerExchangeUSD *float64
 	// MaxPaymentDailyUSD caps the total exchange payments for the current day.
 	// nil means no daily cap is applied.
-	MaxPaymentDailyUSD *big.Rat
+	MaxPaymentDailyUSD *float64
 	// UtilizationThresholdPct triggers a reshape when commitment utilization
 	// drops below this percentage.
 	UtilizationThresholdPct float64

@@ -111,12 +111,21 @@ type RunRecord struct {
 	PlanJSON string
 }
 
-// Validate checks that the run record is self-consistent: non-empty ID,
-// recognized status, and a CompletedAt timestamp only when the status is
-// terminal (a run still in flight cannot have completed).
+// Validate checks that the run record is self-consistent: non-empty ID, a
+// valid scope, a set CreatedAt timestamp, recognized status, and a
+// CompletedAt timestamp only when the status is terminal (a run still in
+// flight cannot have completed).
 func (r *RunRecord) Validate() error {
 	if r.ID == "" {
 		return fmt.Errorf("run ID is required")
+	}
+	if err := r.Scope.Validate(); err != nil {
+		return fmt.Errorf("scope: %w", err)
+	}
+	// A zero CreatedAt would corrupt the cadence gate (LatestRunStartedAt
+	// comparisons); fail loud like Tranche.FireAfter.
+	if r.CreatedAt.IsZero() {
+		return fmt.Errorf("created_at must be set")
 	}
 	if err := r.Status.Validate(); err != nil {
 		return fmt.Errorf("status: %w", err)

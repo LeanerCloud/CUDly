@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // PlannedAction is a single commitment action proposed by the ladder engine.
@@ -20,12 +21,12 @@ type PlannedAction struct {
 	// ActionReshape (whose financial impact is implicit in the underlying
 	// exchange operation).
 	AmountUSDPerHour *big.Rat
-	// Term is the commitment term (e.g., "1yr", "3yr"). Populated for purchase
+	// Term is the commitment term. Must be a valid Term for purchase
 	// actions; empty for hold and reshape.
-	Term string
-	// PaymentOption is the payment structure (e.g., "all-upfront",
-	// "no-upfront"). Populated for purchase actions; empty for hold and reshape.
-	PaymentOption string
+	Term Term
+	// PaymentOption is the payment structure. Must be a valid PaymentOption
+	// for purchase actions; empty for hold and reshape.
+	PaymentOption PaymentOption
 	// Rationale is a human-readable explanation of why this action was chosen.
 	// Must be non-empty for all action types.
 	Rationale string
@@ -37,8 +38,8 @@ type PlannedAction struct {
 // Validate checks that the action is self-consistent:
 //   - action type and layer type must be recognized
 //   - rationale must be non-empty
-//   - purchase actions require a positive AmountUSDPerHour and non-empty
-//     Term and PaymentOption (money-shaping fields must be present)
+//   - purchase actions require a positive AmountUSDPerHour and valid Term
+//     and PaymentOption enum values (money-shaping fields must be present)
 //   - hold and reshape actions require a nil AmountUSDPerHour and empty
 //     Term and PaymentOption
 func (a *PlannedAction) Validate() error {
@@ -78,14 +79,13 @@ func (a *PlannedAction) validatePurchaseFields() error {
 			a.AmountUSDPerHour.RatString())
 	}
 	// Term and PaymentOption shape the money committed; a purchase with
-	// either missing would silently default at the provider boundary.
-	// pkg/common has no typed Term/PaymentOption enums yet, so non-empty
-	// is the strongest check available here.
-	if a.Term == "" {
-		return fmt.Errorf("purchase action requires a non-empty Term")
+	// either missing or unrecognized would silently default at the provider
+	// boundary. Validate against the typed enums.
+	if err := a.Term.Validate(); err != nil {
+		return fmt.Errorf("purchase action term: %w", err)
 	}
-	if a.PaymentOption == "" {
-		return fmt.Errorf("purchase action requires a non-empty PaymentOption")
+	if err := a.PaymentOption.Validate(); err != nil {
+		return fmt.Errorf("purchase action payment option: %w", err)
 	}
 	return nil
 }
@@ -111,14 +111,36 @@ type LadderPlan struct {
 	Baseline      UsageBaseline
 }
 
-// Validate checks that all PlannedActions in the plan are self-consistent.
+// Validate checks that the plan is self-consistent: a valid scope, a set
+// generation timestamp, and all PlannedActions valid.
 func (p *LadderPlan) Validate() error {
+	if err := p.Scope.Validate(); err != nil {
+		return fmt.Errorf("scope: %w", err)
+	}
+	// A zero GeneratedAt would corrupt approval-expiry and audit ordering
+	// downstream; fail loud like Tranche.FireAfter.
+	if p.GeneratedAt.IsZero() {
+		return fmt.Errorf("generated_at must be set")
+	}
 	for i, a := range p.Actions {
 		if err := a.Validate(); err != nil {
 			return fmt.Errorf("action[%d]: %w", i, err)
 		}
 	}
 	return nil
+}
+
+// sanitizeLine strips control characters (including \n and \r) from a value
+// interpolated into a single Explain line. Without this, a crafted field
+// (e.g. a Rationale containing "\n  2. fake action") could spoof extra lines
+// in the approval email body.
+func sanitizeLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // formatUSDPerHour renders a *big.Rat as a fixed 2-decimal USD/hr string.
@@ -144,22 +166,25 @@ func formatUSDPerHour(v *big.Rat) string {
 //  1. Scope header and generation timestamp
 //  2. Baseline parameters (lookback window, percentile)
 //  3. Target / existing / gap hourly rates
-//  4. Numbered action list (or "none" when all layers are at target)
+//  4. Numbered action list (or "none")
 //  5. "Data sources:" line aggregating the actions' DataSources (omitted
 //     when no action carries any)
+//
+// Every interpolated free-form field is passed through sanitizeLine so a
+// crafted value cannot spoof additional lines in the email body.
 func (p *LadderPlan) Explain() string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Scope: provider=%s account=%s\n", p.Scope.Provider, p.Scope.AccountID)
+	fmt.Fprintf(&b, "Scope: provider=%s account=%s\n", p.Scope.Provider, sanitizeLine(p.Scope.AccountID))
 	fmt.Fprintf(&b, "Generated: %s\n", p.GeneratedAt.UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "Baseline: lookback=%dd percentile=%.0f\n",
+	fmt.Fprintf(&b, "Baseline: lookback=%dd percentile=%g\n",
 		p.Baseline.LookbackDays, p.Baseline.Percentile)
 	fmt.Fprintf(&b, "Target:   %s\n", formatUSDPerHour(p.TargetUSDPerHour))
 	fmt.Fprintf(&b, "Existing: %s\n", formatUSDPerHour(p.ExistingUSDPerHour))
 	fmt.Fprintf(&b, "Gap:      %s\n", formatUSDPerHour(p.GapUSDPerHour))
 
 	if len(p.Actions) == 0 {
-		fmt.Fprintf(&b, "Actions: none (all layers at target)\n")
+		fmt.Fprintf(&b, "Actions: none\n")
 		return b.String()
 	}
 
@@ -169,10 +194,11 @@ func (p *LadderPlan) Explain() string {
 		case ActionPurchase:
 			fmt.Fprintf(&b, "  %d. %s %s %s term=%s payment=%s -- %s\n",
 				i+1, a.Action, a.Layer, formatUSDPerHour(a.AmountUSDPerHour),
-				a.Term, a.PaymentOption, a.Rationale)
+				sanitizeLine(string(a.Term)), sanitizeLine(string(a.PaymentOption)),
+				sanitizeLine(a.Rationale))
 		default:
 			fmt.Fprintf(&b, "  %d. %s %s -- %s\n",
-				i+1, a.Action, a.Layer, a.Rationale)
+				i+1, a.Action, a.Layer, sanitizeLine(a.Rationale))
 		}
 	}
 	if sources := collectDataSources(p.Actions); len(sources) > 0 {
@@ -181,14 +207,15 @@ func (p *LadderPlan) Explain() string {
 	return b.String()
 }
 
-// collectDataSources aggregates the DataSources of all actions,
-// deduplicated, preserving first-seen stored order so the output stays
+// collectDataSources aggregates the DataSources of all actions, sanitized
+// and deduplicated, preserving first-seen stored order so the output stays
 // deterministic for a given plan.
 func collectDataSources(actions []PlannedAction) []string {
 	var sources []string
 	seen := make(map[string]bool)
 	for _, a := range actions {
 		for _, s := range a.DataSources {
+			s = sanitizeLine(s)
 			if seen[s] {
 				continue
 			}

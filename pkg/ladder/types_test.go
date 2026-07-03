@@ -331,6 +331,112 @@ func TestParseLadderCadence(t *testing.T) {
 	}
 }
 
+func TestTermValidate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      Term
+		wantErr bool
+	}{
+		{Term1Year, false},
+		{Term3Year, false},
+		{"2yr", true},
+		{"", true},
+	}
+	for _, c := range cases {
+		err := c.in.Validate()
+		if c.wantErr && err == nil {
+			t.Errorf("Term(%q).Validate() = nil, want error", c.in)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("Term(%q).Validate() = %v, want nil", c.in, err)
+		}
+	}
+}
+
+func TestParseTerm(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      string
+		want    Term
+		wantErr bool
+	}{
+		{"1yr", Term1Year, false},
+		{"3yr", Term3Year, false},
+		{"2yr", "", true},
+		{"", "", true},
+	}
+	for _, c := range cases {
+		got, err := ParseTerm(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("ParseTerm(%q) = %q, nil; want error", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseTerm(%q) error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseTerm(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestPaymentOptionValidate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      PaymentOption
+		wantErr bool
+	}{
+		{PaymentAllUpfront, false},
+		{PaymentPartialUpfront, false},
+		{PaymentNoUpfront, false},
+		{"monthly", true},
+		{"", true},
+	}
+	for _, c := range cases {
+		err := c.in.Validate()
+		if c.wantErr && err == nil {
+			t.Errorf("PaymentOption(%q).Validate() = nil, want error", c.in)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("PaymentOption(%q).Validate() = %v, want nil", c.in, err)
+		}
+	}
+}
+
+func TestParsePaymentOption(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      string
+		want    PaymentOption
+		wantErr bool
+	}{
+		{"all-upfront", PaymentAllUpfront, false},
+		{"partial-upfront", PaymentPartialUpfront, false},
+		{"no-upfront", PaymentNoUpfront, false},
+		{"monthly", "", true},
+		{"", "", true},
+	}
+	for _, c := range cases {
+		got, err := ParsePaymentOption(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("ParsePaymentOption(%q) = %q, nil; want error", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParsePaymentOption(%q) error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParsePaymentOption(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestParseRunStatus(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

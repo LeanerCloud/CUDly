@@ -88,6 +88,24 @@ func TestPlannedActionValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "purchase with unknown term",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "2yr",
+				PaymentOption: "no-upfront", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
+			name: "purchase with unknown payment option",
+			action: PlannedAction{
+				Action: ActionPurchase, Layer: LayerComputeSP,
+				AmountUSDPerHour: amount, Term: "1yr",
+				PaymentOption: "monthly", Rationale: "gap fill",
+			},
+			wantErr: true,
+		},
+		{
 			name: "hold with non-nil amount",
 			action: PlannedAction{
 				Action: ActionHold, Layer: LayerConvertibleRI,
@@ -363,5 +381,92 @@ func TestExplain_Deterministic(t *testing.T) {
 	second := plan.Explain()
 	if first != second {
 		t.Errorf("Explain() is not deterministic:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestLadderPlanValidate(t *testing.T) {
+	t.Parallel()
+	valid := LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123456789012"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Actions: []PlannedAction{
+			{Action: ActionHold, Layer: LayerConvertibleRI, Rationale: "at target"},
+		},
+	}
+	cases := []struct {
+		mutate  func(p *LadderPlan)
+		name    string
+		wantErr bool
+	}{
+		{name: "valid", mutate: func(*LadderPlan) {}, wantErr: false},
+		{
+			name:    "unknown scope provider",
+			mutate:  func(p *LadderPlan) { p.Scope.Provider = "oracle" },
+			wantErr: true,
+		},
+		{
+			name:    "empty scope account",
+			mutate:  func(p *LadderPlan) { p.Scope.AccountID = "" },
+			wantErr: true,
+		},
+		{
+			name:    "zero GeneratedAt is invalid",
+			mutate:  func(p *LadderPlan) { p.GeneratedAt = time.Time{} },
+			wantErr: true,
+		},
+		{
+			name: "invalid action propagates",
+			mutate: func(p *LadderPlan) {
+				p.Actions = []PlannedAction{
+					{Action: ActionHold, Layer: LayerConvertibleRI, Rationale: ""},
+				}
+			},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := valid
+			c.mutate(&plan)
+			err := plan.Validate()
+			if c.wantErr && err == nil {
+				t.Errorf("Validate() = nil, want error")
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestExplain_SanitizesControlChars verifies that control characters in
+// interpolated fields cannot spoof extra lines in the approval email: a
+// rationale containing an embedded newline plus a fake action line must
+// render on a single line with the control characters stripped.
+func TestExplain_SanitizesControlChars(t *testing.T) {
+	t.Parallel()
+	plan := &LadderPlan{
+		Scope:       Scope{Provider: common.ProviderAWS, AccountID: "123\naccount-spoof"},
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Baseline:    UsageBaseline{LookbackDays: 30, Percentile: 5},
+		Actions: []PlannedAction{
+			{
+				Action:    ActionHold,
+				Layer:     LayerConvertibleRI,
+				Rationale: "legit rationale\n  2. fake action\r",
+			},
+		},
+	}
+	out := plan.Explain()
+	if strings.Contains(out, "\n  2. fake action") {
+		t.Errorf("Explain() allowed a spoofed action line:\n%s", out)
+	}
+	// The embedded newline and carriage return are stripped, joining the
+	// injected text onto the legitimate rationale's single line.
+	if !strings.Contains(out, "legit rationale  2. fake action") {
+		t.Errorf("Explain() did not render sanitized rationale on one line:\n%s", out)
+	}
+	if !strings.Contains(out, "account=123account-spoof\n") {
+		t.Errorf("Explain() did not sanitize AccountID:\n%s", out)
 	}
 }

@@ -55,6 +55,21 @@ func TestRunRecordValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "unknown scope provider",
+			mutate:  func(r *RunRecord) { r.Scope.Provider = "oracle" },
+			wantErr: true,
+		},
+		{
+			name:    "empty scope account",
+			mutate:  func(r *RunRecord) { r.Scope.AccountID = "" },
+			wantErr: true,
+		},
+		{
+			name:    "zero CreatedAt is invalid (cadence-gate integrity)",
+			mutate:  func(r *RunRecord) { r.CreatedAt = time.Time{} },
+			wantErr: true,
+		},
+		{
 			name: "completed with CompletedAt is valid",
 			mutate: func(r *RunRecord) {
 				r.Status = RunStatusCompleted
