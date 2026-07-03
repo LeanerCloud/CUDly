@@ -875,6 +875,19 @@ func TestLadderConfigValidate(t *testing.T) {
 			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = 0.1 },
 			wantErr: false,
 		},
+		{
+			// NaN compares false against every bound, so a plain
+			// "<= 0 || > 100" range check would admit it; withinExclIncl
+			// rejects it explicitly.
+			name:    "NaN buffer utilization threshold is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = math.NaN() },
+			wantErr: true,
+		},
+		{
+			name:    "infinite buffer utilization threshold is invalid",
+			mutate:  func(c *LadderConfig) { c.BufferUtilizationThresholdPct = math.Inf(1) },
+			wantErr: true,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
