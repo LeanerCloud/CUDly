@@ -11,9 +11,27 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
+	"github.com/LeanerCloud/CUDly/internal/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stubOIDCSigner is a minimal oidc.Signer whose methods must never be
+// reached in the tests that use it — it only exists so GCPResolveOptions
+// looks federated-capable.
+type stubOIDCSigner struct{}
+
+func (stubOIDCSigner) Sign(context.Context, []byte) ([]byte, error) {
+	return nil, assert.AnError
+}
+func (stubOIDCSigner) PublicKey(context.Context) (*rsa.PublicKey, error) {
+	return nil, assert.AnError
+}
+func (stubOIDCSigner) KeyID(context.Context) (string, error) {
+	return "", assert.AnError
+}
+
+var _ oidc.Signer = stubOIDCSigner{}
 
 // ---------------------------------------------------------------------------
 // resolveBastionProvider
@@ -259,6 +277,33 @@ func TestResolveGCPTokenSource_WIF_NoStoredCredentials(t *testing.T) {
 	_, err := ResolveGCPTokenSource(context.Background(), account, store)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no gcp credentials stored")
+}
+
+// TestResolveGCPTokenSource_WIF_StoreErrorFailsLoud pins the fail-loud
+// contract on the WIF peek: a LoadRaw failure must propagate, NOT be
+// treated as "no stored credential" — otherwise a store outage would
+// silently flip a stored-JSON WIF account onto the federated path (the
+// options here are deliberately federated-capable so the pre-fix code
+// would have taken that path and returned no error).
+func TestResolveGCPTokenSource_WIF_StoreErrorFailsLoud(t *testing.T) {
+	store := newMockStore()
+	store.err = assert.AnError
+
+	account := &config.CloudAccount{
+		ID:             "acct1",
+		GCPAuthMode:    "workload_identity_federation",
+		GCPWIFAudience: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/x",
+		GCPClientEmail: "sa@proj.iam.gserviceaccount.com",
+	}
+	opts := GCPResolveOptions{
+		Signer:    stubOIDCSigner{},
+		IssuerURL: "https://cudly.example.com/oidc",
+	}
+
+	_, err := ResolveGCPTokenSourceWithOpts(context.Background(), account, store, opts)
+	require.Error(t, err, "store failure must fail loud, not fall through to the federated path")
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "LoadRaw WIF config")
 }
 
 func TestResolveGCPTokenSource_InvalidJSON(t *testing.T) {
