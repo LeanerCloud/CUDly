@@ -112,6 +112,24 @@ func TestWithWriteSide_NilArgsRejected(t *testing.T) {
 	}
 }
 
+func TestWriteMethods_WithoutWithWriteSide_ReturnErrWriteNotWired(t *testing.T) {
+	// Direct coverage of the write methods' own nil-dependency guards: a
+	// New()-built ladder that never had WithWriteSide called must reject
+	// both write methods with the errWriteNotWired sentinel even when the
+	// inputs are otherwise fully valid. (No purchaser/runner exists on such
+	// an instance, so a zero-call assertion is implicit — there is nothing
+	// wired that could have been invoked.)
+	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
+
+	_, err := a.PurchaseLayer(context.Background(), ladder.LayerConvertibleRI, validRIRec(), validPurchaseOpts())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errWriteNotWired)
+
+	_, err = a.ReshapeBuffer(context.Background(), testScope(), validReshapeCfg())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errWriteNotWired)
+}
+
 // ---------------------------------------------------------------------------
 // PurchaseLayer dispatch
 // ---------------------------------------------------------------------------

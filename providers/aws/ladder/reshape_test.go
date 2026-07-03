@@ -199,6 +199,9 @@ func TestReshapeBuffer_SummaryMapping(t *testing.T) {
 }
 
 func TestReshapeBuffer_PartialFailure_SummaryPlusError(t *testing.T) {
+	// Includes a skipped item so the error's denominator provably counts
+	// actual ATTEMPTS (completed + failed = 2), not Analyzed (3): skipped
+	// and pending items were never attempted.
 	ex := &fakeExchangeRunner{result: &exchange.AutoExchangeResult{
 		Mode: string(exchange.ExchangeModeAuto),
 		Completed: []exchange.ExchangeOutcome{
@@ -207,20 +210,25 @@ func TestReshapeBuffer_PartialFailure_SummaryPlusError(t *testing.T) {
 		Failed: []exchange.ExchangeOutcome{
 			{SourceRIID: "ri-bad", SourceInstanceType: "c5.large", TargetInstanceType: "c5.xlarge", Error: "AWS exchange rejected"},
 		},
+		Skipped: []exchange.SkippedRecommendation{
+			{SourceRIID: "ri-skip", SourceInstanceType: "r5.large", Reason: "exceeds per-exchange cap"},
+		},
 	}}
 	a := newWiredLadder(t, &fakePurchaser{}, &fakePurchaser{}, ex)
 
 	summary, err := a.ReshapeBuffer(context.Background(), testScope(), validReshapeCfg())
 	require.Error(t, err, "partial failures on a money path must surface as an error, not be absorbed")
-	assert.Contains(t, err.Error(), "1 of 2 exchange attempt(s) failed")
+	assert.Contains(t, err.Error(), "1 of 2 exchange attempt(s) failed",
+		"denominator must be completed+failed attempts, not Analyzed")
 	assert.Contains(t, err.Error(), "ri-bad")
 
 	// The summary is still populated for audit alongside the error.
-	assert.Equal(t, 2, summary.Analyzed)
+	assert.Equal(t, 3, summary.Analyzed)
 	assert.Equal(t, 1, summary.Reshaped)
-	assert.Equal(t, 0, summary.Skipped, "failed attempts are not counted as skipped")
-	require.Len(t, summary.Details, 2)
+	assert.Equal(t, 1, summary.Skipped, "failed attempts are not counted as skipped")
+	require.Len(t, summary.Details, 3)
 	assert.Contains(t, summary.Details[1], "failed: ri-bad")
+	assert.Contains(t, summary.Details[2], "skipped: ri-skip")
 }
 
 func TestReshapeBuffer_RunnerError_Propagates(t *testing.T) {

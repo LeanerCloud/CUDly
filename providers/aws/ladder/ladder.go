@@ -60,7 +60,7 @@ func (c Config) lookbackDays() int {
 // (ListCommitments, GetLayerStates, GetUsageBaseline) and the write side
 // (PurchaseLayer, ReshapeBuffer).
 //
-// All four read data-source dependencies are injected via narrow interfaces so
+// All five read data-source dependencies are injected via narrow interfaces so
 // that unit tests are hermetic (no real AWS calls needed). The caller wires the
 // concrete adapters (ec2svc.Client, savingsplans.Client, etc.) at startup.
 //
