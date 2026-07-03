@@ -268,6 +268,8 @@ func TestGetSPCoverageSummary_NoRegionMeansNilFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mock.coverageInputs, 1, "exactly one CE call expected")
 	assert.Nil(t, mock.coverageInputs[0].Filter, "empty region must send no Filter at all")
+	assert.Equal(t, []string{spCoverageMetricSpendCovered}, mock.coverageInputs[0].Metrics,
+		"Metrics is required by the API; its sole valid value must always be sent")
 }
 
 // TestGetSPCoverageSummary_RegionOnlyFilter asserts that a non-empty region
@@ -287,6 +289,8 @@ func TestGetSPCoverageSummary_RegionOnlyFilter(t *testing.T) {
 	assert.Equal(t, types.DimensionRegion, filter.Dimensions.Key,
 		"coverage filter must be REGION-only; SAVINGS_PLANS_TYPE is unsupported by the coverage API")
 	assert.Equal(t, []string{"eu-west-2"}, filter.Dimensions.Values)
+	assert.Equal(t, []string{spCoverageMetricSpendCovered}, mock.coverageInputs[0].Metrics,
+		"Metrics is required by the API; its sole valid value must always be sent")
 }
 
 // TestGetSPCoverageSummary_InvalidLookback verifies that lookbackDays <= 0 is

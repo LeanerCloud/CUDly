@@ -64,6 +64,16 @@ type SPUtilizationSummary struct {
 	TotalCommitmentUSDPerHour *float64
 }
 
+// spCoverageMetricSpendCovered is the value for the REQUIRED Metrics
+// parameter of GetSavingsPlansCoverage. Per the Cost Explorer API reference,
+// "SpendCoveredBySavingsPlans" is the SOLE valid value; omitting Metrics
+// makes real calls fail or return incomplete data. There is no typed SDK
+// constant for it - the types.Metric enum covers only the GetCostAndUsage
+// cost metrics (BLENDED_COST etc.) - and the SDK's client-side validator
+// checks only TimePeriod, which is why mock-backed tests could not catch
+// the omission.
+const spCoverageMetricSpendCovered = "SpendCoveredBySavingsPlans"
+
 // validateSPPlanType rejects empty or unknown Savings Plans type values at
 // the API boundary (fail loud on unknown enum input rather than silently
 // sending it to CE). The valid set comes from the SDK enum itself so a new
@@ -230,6 +240,11 @@ func (c *Client) GetSPCoverageSummary(ctx context.Context, region string, lookba
 			End:   aws.String(end.Format("2006-01-02")),
 		},
 		Granularity: types.GranularityDaily,
+		// Metrics is REQUIRED by the API (not enforced by the SDK's
+		// client-side validator) and "SpendCoveredBySavingsPlans" is its
+		// sole valid value. GetSavingsPlansUtilization has no Metrics
+		// parameter, so there is no counterpart on that path.
+		Metrics: []string{spCoverageMetricSpendCovered},
 		// Region-only filter (nil when region == ""). Deliberately NOT the
 		// utilization filter shape: coverage's Filter contract rejects the
 		// SAVINGS_PLANS_TYPE dimension - do not re-symmetrize the two paths.
