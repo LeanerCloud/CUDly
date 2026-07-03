@@ -15,13 +15,15 @@ type TrancheInput struct {
 	Config *LadderConfig
 	// RunID stamps every produced Tranche row for run linkage. Required.
 	RunID string
-	// Term is the commitment term (e.g. "1yr", "3yr") passed to each buy-now
-	// purchase action. The caller selects the term; v1 uses a single term for
-	// all allocations.
-	Term string
-	// PaymentOption is the payment structure (e.g. "no-upfront") passed to
-	// each buy-now purchase action.
-	PaymentOption string
+	// Term is the commitment term (Term1Year or Term3Year) passed to each
+	// buy-now purchase action and future tranche. The caller selects the
+	// term; v1 uses a single term for all allocations. Must pass
+	// Term.Validate.
+	Term Term
+	// PaymentOption is the payment structure (e.g. PaymentNoUpfront) passed
+	// to each buy-now purchase action and future tranche. Must pass
+	// PaymentOption.Validate.
+	PaymentOption PaymentOption
 	// NewID is called once per produced Tranche to assign a unique identifier.
 	// Callers may inject a UUID function, a sequential counter, or any other
 	// scheme. Must return a non-empty string on every call.
@@ -95,11 +97,11 @@ func validateTrancheInput(in *TrancheInput) error {
 	if in.NewID == nil {
 		return fmt.Errorf("new_id must not be nil (inject an ID generator)")
 	}
-	if in.Term == "" {
-		return fmt.Errorf("term is required (e.g. \"1yr\" or \"3yr\")")
+	if err := in.Term.Validate(); err != nil {
+		return fmt.Errorf("term: %w", err)
 	}
-	if in.PaymentOption == "" {
-		return fmt.Errorf("payment_option is required (e.g. \"no-upfront\")")
+	if err := in.PaymentOption.Validate(); err != nil {
+		return fmt.Errorf("payment_option: %w", err)
 	}
 	return validateInputAllocations(in.Allocations)
 }

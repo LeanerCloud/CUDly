@@ -88,8 +88,8 @@ func baseInput(cfg *LadderConfig, allocs []Allocation, now time.Time) *TrancheIn
 		Config:        cfg,
 		Allocations:   allocs,
 		RunID:         "run-abc",
-		Term:          "1yr",
-		PaymentOption: "no-upfront",
+		Term:          Term1Year,
+		PaymentOption: PaymentNoUpfront,
 		Now:           now,
 		NewID:         seqID("tr"),
 	}
@@ -289,8 +289,8 @@ func TestBuildTranches_MultipleAllocations(t *testing.T) {
 			Config:        cfg,
 			Allocations:   allocs,
 			RunID:         "run-multi",
-			Term:          "1yr",
-			PaymentOption: "no-upfront",
+			Term:          Term1Year,
+			PaymentOption: PaymentNoUpfront,
 			Now:           now,
 			NewID:         seqID("id"),
 		}
@@ -458,8 +458,8 @@ func TestBuildTranches_IDsStamped(t *testing.T) {
 			mkAlloc(LayerConvertibleRI, 2),
 		},
 		RunID:         "run-id-stamp-test",
-		Term:          "1yr",
-		PaymentOption: "no-upfront",
+		Term:          Term1Year,
+		PaymentOption: PaymentNoUpfront,
 		Now:           now,
 		NewID:         seqID("myid"),
 	}
@@ -547,6 +547,22 @@ func TestBuildTranches_ValidationFailures(t *testing.T) {
 			build: func() *TrancheInput {
 				in := baseInput(goodConfig, []Allocation{goodAlloc}, now)
 				in.PaymentOption = ""
+				return in
+			},
+		},
+		{
+			name: "unknown Term",
+			build: func() *TrancheInput {
+				in := baseInput(goodConfig, []Allocation{goodAlloc}, now)
+				in.Term = "2yr"
+				return in
+			},
+		},
+		{
+			name: "unknown PaymentOption",
+			build: func() *TrancheInput {
+				in := baseInput(goodConfig, []Allocation{goodAlloc}, now)
+				in.PaymentOption = "monthly"
 				return in
 			},
 		},
@@ -697,8 +713,8 @@ func TestBuildTranches_RationaleContents(t *testing.T) {
 			DataSources:   []string{"cost-explorer"},
 		}},
 		RunID:         "run-rationale",
-		Term:          "1yr",
-		PaymentOption: "no-upfront",
+		Term:          Term1Year,
+		PaymentOption: PaymentNoUpfront,
 		Now:           now,
 		NewID:         seqID("r"),
 	}
