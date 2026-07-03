@@ -31,6 +31,23 @@ func validConfigAWS() LadderConfig {
 	}
 }
 
+// validConfigAzure returns a fully populated valid LadderConfig for Azure
+// tests, mirroring validConfigAWS with an Azure scope.
+func validConfigAzure() LadderConfig {
+	cfg := validConfigAWS()
+	cfg.Scope = Scope{Provider: common.ProviderAzure, AccountID: "sub-abc"}
+	return cfg
+}
+
+// azureLayers returns the merged Azure ladder: the reservation layer carries
+// both base and buffer roles; the savings plan is the flex layer.
+func azureLayers() []LayerSpec {
+	return []LayerSpec{
+		{Type: LayerAzureReservation, Roles: []LayerRole{RoleBase, RoleBuffer}},
+		{Type: LayerAzureSavingsPlan, Roles: []LayerRole{RoleFlex}},
+	}
+}
+
 // awsLayers returns the standard 3-layer AWS ladder:
 //
 //	EC2InstanceSP = base, ComputeSP = flex, ConvertibleRI = buffer.
@@ -387,11 +404,15 @@ func TestAllocate_NoBaseLayer_NoteNamesActualReason(t *testing.T) {
 	}
 }
 
-func TestAllocate_ExpiringExceedsExisting_Floor(t *testing.T) {
+// TestAllocate_ExpiringExceedsExisting_Error verifies the fail-loud contract:
+// a layer reporting more expiring than existing commitment is an inconsistent
+// provider snapshot (expiring is defined as a share of existing) and must
+// abort the run with an explicit error, never be silently clamped to zero.
+func TestAllocate_ExpiringExceedsExisting_Error(t *testing.T) {
 	t.Parallel()
 	layers := awsLayers()
 	states := zeroStates(layers)
-	// ConvertibleRI: existing=$2, expiring=$5 -> net=0 (floored), not -$3
+	// ConvertibleRI: existing=$2, expiring=$5 -> inconsistent snapshot
 	states = withExisting(states, LayerConvertibleRI, 2.0)
 	states = withExpiring(states, LayerConvertibleRI, 5.0)
 
@@ -402,18 +423,15 @@ func TestAllocate_ExpiringExceedsExisting_Floor(t *testing.T) {
 		LayerStates: states,
 		Now:         nowFixed(),
 	}
-	// net E = 0 (base=0) + 0 (flex=0) + 0 (buffer floored) = 0
-	// gap = 10, same as zero-state case
-	result, err := Allocate(in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := Allocate(in)
+	if err == nil {
+		t.Fatal("expected error for expiring > existing, got nil")
 	}
-	total := new(big.Rat)
-	for _, a := range result.Allocations {
-		total.Add(total, a.GapUSDPerHour)
+	for _, want := range []string{"exceeds ExistingUSDPerHour", "inconsistent provider snapshot", "$5.0000/hr", "$2.0000/hr"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
 	}
-	// total gap must be $10 (expiring floor means buffer layer contributes 0 to E)
-	ratEq(t, "total gap (expiring floored)", total, 10, 1)
 }
 
 // TestAllocate_UtilizationClamp verifies min(Ctgt-E, B-E) when coverage=100%.
@@ -456,22 +474,9 @@ func TestAllocate_UtilizationClamp(t *testing.T) {
 func TestAllocate_AzureMergedBaseBuffer(t *testing.T) {
 	t.Parallel()
 	// AzureReservation = base + buffer; AzureSavingsPlan = flex
-	layers := []LayerSpec{
-		{Type: LayerAzureReservation, Roles: []LayerRole{RoleBase, RoleBuffer}},
-		{Type: LayerAzureSavingsPlan, Roles: []LayerRole{RoleFlex}},
-	}
-	cfg := LadderConfig{
-		Scope:                         Scope{Provider: common.ProviderAzure, AccountID: "sub-abc"},
-		TargetCoveragePct:             100,
-		BufferFraction:                0.5, // exactly representable
-		BaselinePercentile:            5,
-		LookbackDays:                  30,
-		Mode:                          ModeEmailApproval,
-		Cadence:                       CadenceWeekly,
-		Ramp:                          RampSchedule{Steps: []RampStep{{AfterDays: 0, Fraction: 1.0}}},
-		MaxActionsPerRun:              10,
-		BufferUtilizationThresholdPct: DefaultBufferUtilizationThresholdPct,
-	}
+	layers := azureLayers()
+	cfg := validConfigAzure()
+	cfg.BufferFraction = 0.5 // exactly representable
 	in := &AllocationInput{
 		Config:      cfg,
 		Layers:      layers,
@@ -530,10 +535,23 @@ func TestAllocate_CapScaling(t *testing.T) {
 	// total must equal the cap exactly
 	ratEq(t, "scaled total == cap", total, 5, 1)
 
-	// each rationale must mention the capping
+	// Each rationale must mention the capping AND the final post-cap amount.
+	// Pre-cap: base=$4, buffer=$1, flex=$5 (gap $10, scale 1/2), so the
+	// post-cap figures are $2, $0.50, and $2.50 respectively.
+	wantScaledTo := map[LayerType]string{
+		LayerEC2InstanceSP: "scaled to $2.0000/hr",
+		LayerConvertibleRI: "scaled to $0.5000/hr",
+		LayerComputeSP:     "scaled to $2.5000/hr",
+	}
 	for _, a := range result.Allocations {
 		if !strings.Contains(a.Rationale, "capped by max_hourly_commit_per_run") {
 			t.Errorf("layer %s rationale missing cap note: %q", a.Layer, a.Rationale)
+		}
+		if want := wantScaledTo[a.Layer]; !strings.Contains(a.Rationale, want) {
+			t.Errorf("layer %s rationale missing post-cap amount %q: %q", a.Layer, want, a.Rationale)
+		}
+		if !strings.Contains(a.Rationale, "50.0% of requested") {
+			t.Errorf("layer %s rationale missing scale percentage: %q", a.Layer, a.Rationale)
 		}
 	}
 }
@@ -978,6 +996,137 @@ func TestAllocate_TwoFlexLayers(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exactly one") {
 		t.Errorf("error missing 'exactly one': %v", err)
+	}
+}
+
+// TestAllocate_LayerTopologyValidation covers the hardened topology
+// invariants: duplicate layer types, more than one buffer-role layer, and
+// any multi-role merge other than base+buffer are rejected; the Azure
+// base+buffer merge stays accepted.
+func TestAllocate_LayerTopologyValidation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		errContains string // empty means the topology must be accepted
+		layers      []LayerSpec
+	}{
+		{
+			name: "duplicate layer types rejected",
+			layers: []LayerSpec{
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex}},
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleBuffer}},
+			},
+			errContains: "duplicate layer type",
+		},
+		{
+			name: "two buffer layers rejected",
+			layers: []LayerSpec{
+				{Type: LayerEC2InstanceSP, Roles: []LayerRole{RoleBase}},
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex}},
+				{Type: LayerConvertibleRI, Roles: []LayerRole{RoleBuffer}},
+				{Type: LayerAzureReservation, Roles: []LayerRole{RoleBuffer}},
+			},
+			errContains: "at most one buffer",
+		},
+		{
+			name: "flex+buffer merge rejected",
+			layers: []LayerSpec{
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex, RoleBuffer}},
+			},
+			errContains: "must not be combined",
+		},
+		{
+			name: "flex+base merge rejected",
+			layers: []LayerSpec{
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex, RoleBase}},
+			},
+			errContains: "must not be combined",
+		},
+		{
+			name: "all three roles on one layer rejected",
+			layers: []LayerSpec{
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleBase, RoleFlex, RoleBuffer}},
+			},
+			errContains: "must not be combined",
+		},
+		{
+			name:   "azure base+buffer merge accepted",
+			layers: azureLayers(),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := &AllocationInput{
+				Config:      validConfigAzure(),
+				Layers:      c.layers,
+				Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+				LayerStates: zeroStates(c.layers),
+				Now:         nowFixed(),
+			}
+			_, err := Allocate(in)
+			if c.errContains == "" {
+				if err != nil {
+					t.Fatalf("expected topology to be accepted, got error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", c.errContains)
+			}
+			if !strings.Contains(err.Error(), c.errContains) {
+				t.Errorf("error missing %q: %v", c.errContains, err)
+			}
+		})
+	}
+}
+
+// TestAllocate_UtilizationPctValidation verifies that a non-nil UtilizationPct
+// must be finite and within [0, 100]. A NaN previously compared false against
+// the reshape threshold and silently skipped reshape detection; it must abort
+// the run instead.
+func TestAllocate_UtilizationPctValidation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		pct     float64
+		wantErr bool
+	}{
+		{"NaN rejected", math.NaN(), true},
+		{"+Inf rejected", math.Inf(1), true},
+		{"-Inf rejected", math.Inf(-1), true},
+		{"negative rejected", -1.0, true},
+		{"above 100 rejected", 101.0, true},
+		{"zero accepted", 0.0, false},
+		{"exactly 100 accepted", 100.0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			layers := awsLayers()
+			states := zeroStates(layers)
+			// non-empty buffer layer so the utilization value is evaluated
+			states = withExisting(states, LayerConvertibleRI, 2.0)
+			states = withBufferUtilization(states, c.pct)
+			in := &AllocationInput{
+				Config:      validConfigAWS(),
+				Layers:      layers,
+				Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+				LayerStates: states,
+				Now:         nowFixed(),
+			}
+			_, err := Allocate(in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for UtilizationPct %v, got nil", c.pct)
+				}
+				if !strings.Contains(err.Error(), "UtilizationPct") {
+					t.Errorf("error missing 'UtilizationPct': %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for UtilizationPct %v: %v", c.pct, err)
+			}
+		})
 	}
 }
 

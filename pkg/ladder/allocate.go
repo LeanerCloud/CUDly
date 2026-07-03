@@ -171,23 +171,71 @@ func validateAllocateInput(in *AllocationInput) error {
 }
 
 // validateLayers checks the layer list for structural consistency:
+//   - no duplicate layer types across specs
 //   - exactly one RoleFlex layer
-//   - at most one RoleBase layer (a layer may carry both RoleBase and RoleBuffer)
+//   - at most one RoleBase layer and at most one RoleBuffer layer
+//   - the only permitted multi-role layer is the base+buffer merge (Azure
+//     reservation shape); RoleFlex must not share a layer with any other role
 func validateLayers(layers []LayerSpec) error {
-	var flexCount, baseCount int
+	if err := validateLayerUniqueness(layers); err != nil {
+		return err
+	}
+	var flexCount, baseCount, bufferCount int
 	for _, ls := range layers {
+		if err := validateLayerRoleCombo(ls); err != nil {
+			return err
+		}
 		if slices.Contains(ls.Roles, RoleFlex) {
 			flexCount++
 		}
 		if slices.Contains(ls.Roles, RoleBase) {
 			baseCount++
 		}
+		if slices.Contains(ls.Roles, RoleBuffer) {
+			bufferCount++
+		}
 	}
+	return validateRoleCounts(flexCount, baseCount, bufferCount)
+}
+
+// validateLayerUniqueness rejects duplicate LayerTypes across specs: a layer
+// appearing twice would double-count its state and produce ambiguous
+// allocations.
+func validateLayerUniqueness(layers []LayerSpec) error {
+	seen := make(map[LayerType]bool, len(layers))
+	for _, ls := range layers {
+		if seen[ls.Type] {
+			return fmt.Errorf("duplicate layer type %q", ls.Type)
+		}
+		seen[ls.Type] = true
+	}
+	return nil
+}
+
+// validateLayerRoleCombo permits single-role layers and the base+buffer merge
+// only. RoleFlex combined with any other role (including all three roles on
+// one layer) is rejected: no provider topology merges flex with base or
+// buffer, so such a spec indicates a provider implementation bug.
+func validateLayerRoleCombo(ls LayerSpec) error {
+	if slices.Contains(ls.Roles, RoleFlex) &&
+		(slices.Contains(ls.Roles, RoleBase) || slices.Contains(ls.Roles, RoleBuffer)) {
+		return fmt.Errorf("layer %q: %s role must not be combined with other roles (only the %s+%s merge is allowed)",
+			ls.Type, RoleFlex, RoleBase, RoleBuffer)
+	}
+	return nil
+}
+
+// validateRoleCounts enforces the per-role cardinality rules across the
+// whole layer list.
+func validateRoleCounts(flexCount, baseCount, bufferCount int) error {
 	if flexCount != 1 {
 		return fmt.Errorf("exactly one %s layer required, got %d", RoleFlex, flexCount)
 	}
 	if baseCount > 1 {
 		return fmt.Errorf("at most one %s layer allowed, got %d", RoleBase, baseCount)
+	}
+	if bufferCount > 1 {
+		return fmt.Errorf("at most one %s layer allowed, got %d", RoleBuffer, bufferCount)
 	}
 	return nil
 }
@@ -195,6 +243,7 @@ func validateLayers(layers []LayerSpec) error {
 // validateLayerStates requires every layer in layers to have an entry in states
 // with non-nil ExistingUSDPerHour and ExpiringUSDPerHour. Nil pointers are
 // treated as missing data (fail loud: providers must supply explicit zeros).
+// A non-nil UtilizationPct must be finite and within [0, 100].
 func validateLayerStates(layers []LayerSpec, states map[LayerType]LayerState) error {
 	for _, ls := range layers {
 		st, ok := states[ls.Type]
@@ -207,6 +256,27 @@ func validateLayerStates(layers []LayerSpec, states map[LayerType]LayerState) er
 		if st.ExpiringUSDPerHour == nil {
 			return fmt.Errorf("layer %q: ExpiringUSDPerHour is nil; provider must supply explicit zero if none", ls.Type)
 		}
+		if err := validateUtilizationPct(ls.Type, st.UtilizationPct); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateUtilizationPct rejects non-finite (NaN/Inf) or out-of-range
+// utilization percentages. A NaN would otherwise compare false against the
+// reshape threshold and silently skip reshape detection; that is a data bug
+// that must abort the run, not degrade it. nil means "not measured" and is
+// valid (handled downstream with an informational hold).
+func validateUtilizationPct(layer LayerType, pct *float64) error {
+	if pct == nil {
+		return nil
+	}
+	if math.IsNaN(*pct) || math.IsInf(*pct, 0) {
+		return fmt.Errorf("layer %q: UtilizationPct must be finite, got %g", layer, *pct)
+	}
+	if *pct < 0 || *pct > 100 {
+		return fmt.Errorf("layer %q: UtilizationPct %g must be in [0, 100]", layer, *pct)
 	}
 	return nil
 }
@@ -221,9 +291,11 @@ func findLayerForRole(layers []LayerSpec, role LayerRole) (LayerType, bool) {
 	return "", false
 }
 
-// computeNetExisting converts all layer states to exact *big.Rat values,
-// floors each layer's net (existing - expiring) at zero, and returns the
-// per-layer net map and the grand total.
+// computeNetExisting converts all layer states to exact *big.Rat values and
+// returns each layer's net (existing - expiring) plus the grand total. A
+// layer whose expiring amount exceeds its existing amount is an inconsistent
+// provider snapshot (expiring is defined as a share of existing) and aborts
+// the run with an explicit error rather than being silently clamped.
 func computeNetExisting(layers []LayerSpec, states map[LayerType]LayerState) (map[LayerType]*big.Rat, *big.Rat, error) {
 	total := new(big.Rat)
 	nets := make(map[LayerType]*big.Rat, len(layers))
@@ -239,7 +311,8 @@ func computeNetExisting(layers []LayerSpec, states map[LayerType]LayerState) (ma
 		}
 		net := new(big.Rat).Sub(existing, expiring)
 		if net.Sign() < 0 {
-			net = new(big.Rat) // floor at zero
+			return nil, nil, fmt.Errorf("%s: ExpiringUSDPerHour (%s) exceeds ExistingUSDPerHour (%s); inconsistent provider snapshot",
+				ls.Type, fmtRatUSD(expiring), fmtRatUSD(existing))
 		}
 		nets[ls.Type] = net
 		total.Add(total, net)
@@ -498,11 +571,13 @@ func applyCapGuardrail(allocs []Allocation, maxPerRun *float64) ([]Allocation, e
 	scalePct, _ := new(big.Rat).Mul(new(big.Rat).Set(scale), new(big.Rat).SetInt64(100)).Float64()
 	scaled := make([]Allocation, len(allocs))
 	for i, a := range allocs {
+		scaledGap := new(big.Rat).Mul(a.GapUSDPerHour, scale)
 		scaled[i] = Allocation{
 			Layer:         a.Layer,
-			GapUSDPerHour: new(big.Rat).Mul(a.GapUSDPerHour, scale),
-			Rationale:     a.Rationale + fmt.Sprintf("; capped by max_hourly_commit_per_run (scaled %.1f%%)", scalePct),
-			DataSources:   a.DataSources,
+			GapUSDPerHour: scaledGap,
+			Rationale: a.Rationale + fmt.Sprintf("; capped by max_hourly_commit_per_run: scaled to %s (%.1f%% of requested)",
+				fmtRatUSD(scaledGap), scalePct),
+			DataSources: a.DataSources,
 		}
 	}
 	return scaled, nil
