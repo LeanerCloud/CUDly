@@ -158,8 +158,8 @@ func TestTrancheValidate(t *testing.T) {
 		Status:           TrancheStatusScheduled,
 		AmountUSDPerHour: "2/1",
 		Layer:            LayerComputeSP,
-		Term:             "1yr",
-		PaymentOption:    "no-upfront",
+		Term:             Term1Year,
+		PaymentOption:    PaymentNoUpfront,
 	}
 	cases := []struct {
 		mutate  func(tr *Tranche)
@@ -291,6 +291,16 @@ func TestTrancheValidate(t *testing.T) {
 		{
 			name:    "empty PaymentOption is invalid",
 			mutate:  func(tr *Tranche) { tr.PaymentOption = "" },
+			wantErr: true,
+		},
+		{
+			name:    "unknown Term is invalid",
+			mutate:  func(tr *Tranche) { tr.Term = "2yr" },
+			wantErr: true,
+		},
+		{
+			name:    "unknown PaymentOption is invalid",
+			mutate:  func(tr *Tranche) { tr.PaymentOption = "biannual" },
 			wantErr: true,
 		},
 	}

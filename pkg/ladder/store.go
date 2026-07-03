@@ -163,13 +163,15 @@ type Tranche struct {
 	// Required so a fired tranche is executable without consulting the parent
 	// run's plan.
 	Layer LayerType
-	// Term is the commitment term for the purchase (e.g. "1yr", "3yr").
-	// Required: an empty term would silently default at the provider boundary
-	// (money-shaping field, same rule as PlannedAction.Term).
-	Term string
+	// Term is the commitment term for the purchase (Term1Year or Term3Year).
+	// Must pass Term.Validate: an unset or unknown term would silently
+	// default at the provider boundary (money-shaping field, same rule as
+	// PlannedAction.Term).
+	Term Term
 	// PaymentOption is the payment structure for the purchase (e.g.
-	// "no-upfront"). Required for the same reason as Term.
-	PaymentOption string
+	// PaymentNoUpfront). Must pass PaymentOption.Validate, for the same
+	// reason as Term.
+	PaymentOption PaymentOption
 	StepIndex     int
 }
 
@@ -177,9 +179,9 @@ type Tranche struct {
 // RunID (RunID is the single source of run linkage, see
 // LadderStore.SaveTranches), non-negative step index, a set FireAfter
 // timestamp, complete purchase-execution fields (recognized Layer, an
-// AmountUSDPerHour parsing as a positive rational, non-empty Term and
-// PaymentOption), recognized status, and a FiredAt timestamp only when the
-// status implies the tranche fired.
+// AmountUSDPerHour parsing as a positive rational, valid Term and
+// PaymentOption enum values), recognized status, and a FiredAt timestamp
+// only when the status implies the tranche fired.
 func (t *Tranche) Validate() error {
 	if t.ID == "" {
 		return fmt.Errorf("tranche ID is required")
@@ -209,9 +211,9 @@ func (t *Tranche) Validate() error {
 }
 
 // validateExecutionFields checks the fields that make a tranche executable as
-// a standalone purchase: a recognized Layer, a positive amount, and non-empty
-// Term and PaymentOption. Split out of Validate to keep each function's
-// cyclomatic complexity within the repo limit.
+// a standalone purchase: a recognized Layer, a positive amount, and valid
+// Term and PaymentOption enum values. Split out of Validate to keep each
+// function's cyclomatic complexity within the repo limit.
 func (t *Tranche) validateExecutionFields() error {
 	if err := t.Layer.Validate(); err != nil {
 		return fmt.Errorf("layer: %w", err)
@@ -219,11 +221,11 @@ func (t *Tranche) validateExecutionFields() error {
 	if err := t.validateAmountUSDPerHour(); err != nil {
 		return err
 	}
-	if t.Term == "" {
-		return fmt.Errorf("term is required (money-shaping field; empty would silently default at the provider boundary)")
+	if err := t.Term.Validate(); err != nil {
+		return fmt.Errorf("term: %w", err)
 	}
-	if t.PaymentOption == "" {
-		return fmt.Errorf("payment_option is required (money-shaping field; empty would silently default at the provider boundary)")
+	if err := t.PaymentOption.Validate(); err != nil {
+		return fmt.Errorf("payment_option: %w", err)
 	}
 	return nil
 }
