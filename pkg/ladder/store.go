@@ -149,12 +149,12 @@ type Tranche struct {
 	FireAfter time.Time
 	// FiredAt is nil until the tranche actually fires.
 	FiredAt *time.Time
-	// AmountUSDPerHour is the hourly commitment delta for this tranche step,
-	// encoded as a big.Rat string (via big.Rat.RatString()). The string
-	// encoding is lossless and round-trips through big.Rat.SetString without
-	// floating-point precision loss, making it safe for DB persistence and
-	// rehydration. Must be a positive rational; use big.Rat.RatString() to
-	// produce the value and big.Rat.SetString to rehydrate it.
+	// AmountUSDPerHour is the hourly commitment delta for this tranche step.
+	// Validation requires any string that big.Rat.SetString parses as a
+	// positive rational (e.g. "3/2", "1.5"); producers should emit the
+	// canonical big.Rat.RatString() form, which is lossless and round-trips
+	// through big.Rat.SetString without floating-point precision loss,
+	// making it safe for DB persistence and rehydration.
 	AmountUSDPerHour string
 	ID               string
 	RunID            string
@@ -176,10 +176,10 @@ type Tranche struct {
 // Validate checks that the tranche is self-consistent: non-empty ID and
 // RunID (RunID is the single source of run linkage, see
 // LadderStore.SaveTranches), non-negative step index, a set FireAfter
-// timestamp, complete purchase-execution fields (recognized Layer, positive
-// AmountUSDPerHour encoded as a RatString, non-empty Term and PaymentOption),
-// recognized status, and a FiredAt timestamp only when the status implies the
-// tranche fired.
+// timestamp, complete purchase-execution fields (recognized Layer, an
+// AmountUSDPerHour parsing as a positive rational, non-empty Term and
+// PaymentOption), recognized status, and a FiredAt timestamp only when the
+// status implies the tranche fired.
 func (t *Tranche) Validate() error {
 	if t.ID == "" {
 		return fmt.Errorf("tranche ID is required")
@@ -229,16 +229,18 @@ func (t *Tranche) validateExecutionFields() error {
 }
 
 // validateAmountUSDPerHour checks that AmountUSDPerHour is a non-empty string
-// encoding a positive rational value. The RatString encoding (produced by
-// big.Rat.RatString and parsed by big.Rat.SetString) is lossless and safe for
-// DB round-tripping without floating-point precision loss.
+// that parses as a positive rational via big.Rat.SetString. SetString accepts
+// any rational notation ("3/2", "1.5", "2e10"), so enforcement is exactly
+// "must parse as a positive rational" -- producers should still emit the
+// canonical big.Rat.RatString() form, which is lossless and safe for DB
+// round-tripping without floating-point precision loss.
 func (t *Tranche) validateAmountUSDPerHour() error {
 	if t.AmountUSDPerHour == "" {
-		return fmt.Errorf("amount_usd_per_hour is required (positive rational encoded as big.Rat.RatString, e.g. \"3/2\")")
+		return fmt.Errorf("amount_usd_per_hour is required (must parse as a positive rational via big.Rat SetString, e.g. \"3/2\")")
 	}
 	r := new(big.Rat)
 	if _, ok := r.SetString(t.AmountUSDPerHour); !ok {
-		return fmt.Errorf("amount_usd_per_hour %q is not a valid rational string (use big.Rat.RatString() encoding)", t.AmountUSDPerHour)
+		return fmt.Errorf("amount_usd_per_hour %q must parse as a positive rational (big.Rat SetString)", t.AmountUSDPerHour)
 	}
 	if r.Sign() <= 0 {
 		return fmt.Errorf("amount_usd_per_hour must be positive, got %s", t.AmountUSDPerHour)
