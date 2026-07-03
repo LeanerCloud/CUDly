@@ -64,10 +64,13 @@ type Allocation struct {
 // AllocateResult is the output of Allocate.
 //
 // Allocations may be accompanied by informational Holds (e.g. "buffer
-// utilization unknown; reshape not evaluated") and by Reshapes for
-// under-utilized buffer layers. A run is a no-op if and only if Allocations
-// and Reshapes are both empty (see IsNoOp); in that case Holds carries the
-// explanation (baseline unavailable, or gap below the minimum threshold).
+// utilization unknown; reshape not evaluated", or a sub-minimum split amount
+// that was skipped) and by Reshapes for under-utilized buffer layers.
+// Reshapes are detected independently of the purchase gap, so they can appear
+// alongside an early-exit Hold (baseline unavailable, target met). A run is a
+// no-op if and only if Allocations and Reshapes are both empty (see IsNoOp);
+// in that case Holds carries the explanation (baseline unavailable, gap below
+// the minimum threshold, or every split amount below the minimum).
 type AllocateResult struct {
 	Allocations []Allocation
 	Reshapes    []PlannedAction
@@ -86,15 +89,21 @@ func (r *AllocateResult) IsNoOp() bool {
 // arithmetic; float64 inputs are converted at the boundary via ratFromFloat.
 //
 // Steps (see inline comments):
-//  1. Validate config, layers, and layer states.
-//  2. Nil baseline -> Hold (explainable no-op, not an error).
-//  3. Compute net existing per layer; derive gap.
-//  4. Gap <= minimum threshold -> Hold with numbers in rationale.
-//  5. Split gap across base, flex, and buffer roles.
-//  6. Apply per-run spend cap (proportional scaling).
-//  7. Enforce MaxActionsPerRun (error if exceeded).
-//  8. Detect under-utilized buffer layers (reshape, or informational hold
-//     when utilization is unknown on a non-empty buffer layer).
+//  1. Validate config, layers (enums + topology), and layer states.
+//  2. Detect under-utilized buffer layers (reshape, or informational hold
+//     when utilization is unknown on a non-empty buffer layer). This runs
+//     INDEPENDENTLY of the purchase gap: an over-committed account is exactly
+//     when reshaping matters, so the early no-purchase exits below must not
+//     mask it. Reshape detection needs only valid layer states.
+//  3. Nil baseline -> Hold (explainable no-op, not an error), plus any
+//     buffer maintenance from step 2.
+//  4. Compute net existing per layer; derive gap.
+//  5. Gap <= minimum threshold -> Hold with numbers in rationale, plus any
+//     buffer maintenance from step 2.
+//  6. Split gap across base, flex, and buffer roles.
+//  7. Apply per-run spend cap (proportional scaling), then drop sub-minimum
+//     allocations with an informational hold each (never silently lost).
+//  8. Enforce MaxActionsPerRun (error if exceeded).
 func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	if in == nil {
 		return nil, fmt.Errorf("allocation input must not be nil")
@@ -102,8 +111,9 @@ func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	if err := validateAllocateInput(in); err != nil {
 		return nil, err
 	}
+	reshapes, maintHolds := detectReshapes(in.Layers, in.LayerStates, in.Config.BufferUtilizationThresholdPct, in.DataSources)
 	if in.Baseline.LowWaterUSDPerHour == nil {
-		return baselineUnavailableHold(in), nil
+		return withMaintenance(baselineUnavailableHold(in), reshapes, maintHolds), nil
 	}
 	nets, existingTotal, err := computeNetExisting(in.Layers, in.LayerStates)
 	if err != nil {
@@ -113,11 +123,23 @@ func Allocate(in *AllocationInput) (*AllocateResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The second min arm is defensive: it guards against future target
+	// derivations exceeding the observed floor. Today target <= lowWater
+	// always holds because TargetCoveragePct is validated to be <= 100.
 	gap := minRat(new(big.Rat).Sub(target, existingTotal), new(big.Rat).Sub(lowWater, existingTotal))
 	if gap.Cmp(minAllocatableGap()) <= 0 {
-		return gapBelowMinHold(gap, lowWater, target, existingTotal, in), nil
+		return withMaintenance(gapBelowMinHold(gap, lowWater, target, existingTotal, in), reshapes, maintHolds), nil
 	}
-	return buildResult(in, lowWater, target, existingTotal, gap, nets)
+	return buildResult(in, lowWater, target, existingTotal, gap, nets, reshapes, maintHolds)
+}
+
+// withMaintenance merges independently detected buffer maintenance actions
+// (reshapes and their informational holds) into an early-exit hold result so
+// a no-purchase run never masks needed buffer reshaping.
+func withMaintenance(result *AllocateResult, reshapes, maintHolds []PlannedAction) *AllocateResult {
+	result.Reshapes = append(result.Reshapes, reshapes...)
+	result.Holds = append(result.Holds, maintHolds...)
+	return result
 }
 
 // ratFromFloat converts v to *big.Rat, rejecting NaN, Inf, and negative values.
@@ -171,6 +193,7 @@ func validateAllocateInput(in *AllocationInput) error {
 }
 
 // validateLayers checks the layer list for structural consistency:
+//   - every layer type and role is a recognized enum value
 //   - no duplicate layer types across specs
 //   - exactly one RoleFlex layer
 //   - at most one RoleBase layer and at most one RoleBuffer layer
@@ -182,6 +205,9 @@ func validateLayers(layers []LayerSpec) error {
 	}
 	var flexCount, baseCount, bufferCount int
 	for _, ls := range layers {
+		if err := validateLayerEnums(ls); err != nil {
+			return err
+		}
 		if err := validateLayerRoleCombo(ls); err != nil {
 			return err
 		}
@@ -208,6 +234,22 @@ func validateLayerUniqueness(layers []LayerSpec) error {
 			return fmt.Errorf("duplicate layer type %q", ls.Type)
 		}
 		seen[ls.Type] = true
+	}
+	return nil
+}
+
+// validateLayerEnums rejects unknown layer types and roles. A typo'd role
+// would otherwise pass silently: the layer's commitments still count toward
+// existing coverage but the layer could never receive an allocation, a
+// silent degradation of the plan.
+func validateLayerEnums(ls LayerSpec) error {
+	if err := ls.Type.Validate(); err != nil {
+		return fmt.Errorf("layer type: %w", err)
+	}
+	for _, r := range ls.Roles {
+		if err := r.Validate(); err != nil {
+			return fmt.Errorf("layer %q: role: %w", ls.Type, err)
+		}
 	}
 	return nil
 }
@@ -258,6 +300,23 @@ func validateLayerStates(layers []LayerSpec, states map[LayerType]LayerState) er
 		}
 		if err := validateUtilizationPct(ls.Type, st.UtilizationPct); err != nil {
 			return err
+		}
+	}
+	return validateNoUnknownStateKeys(layers, states)
+}
+
+// validateNoUnknownStateKeys rejects LayerStates entries whose key is not in
+// the supported layer list. Such entries would be silently excluded from
+// existing-coverage accounting, understating E and OVERSTATING the purchase
+// gap (a money-path bug, not a tolerable extra).
+func validateNoUnknownStateKeys(layers []LayerSpec, states map[LayerType]LayerState) error {
+	known := make(map[LayerType]bool, len(layers))
+	for _, ls := range layers {
+		known[ls.Type] = true
+	}
+	for key := range states {
+		if !known[key] {
+			return fmt.Errorf("layer_states contains unknown layer %q not present in the supported layers; its commitments would be excluded from coverage accounting", key)
 		}
 	}
 	return nil
@@ -359,7 +418,7 @@ func baselineUnavailableHold(in *AllocationInput) *AllocateResult {
 func gapBelowMinHold(gap, lowWater, target, existingTotal *big.Rat, in *AllocationInput) *AllocateResult {
 	flexLayer, _ := findLayerForRole(in.Layers, RoleFlex)
 	rationale := fmt.Sprintf(
-		"target already met: low_water=%s, target=%.0f%%, existing=%s, target_commitment=%s, gap=%s <= min_allocatable=%s",
+		"target already met: low_water=%s, target=%.2f%%, existing=%s, target_commitment=%s, gap=%s <= min_allocatable=%s",
 		fmtRatUSD(lowWater), in.Config.TargetCoveragePct, fmtRatUSD(existingTotal), fmtRatUSD(target),
 		fmtRatUSD(gap), fmtRatUSD(minAllocatableGap()),
 	)
@@ -376,8 +435,10 @@ func gapBelowMinHold(gap, lowWater, target, existingTotal *big.Rat, in *Allocati
 }
 
 // buildResult assembles the full AllocateResult after the gap has been
-// confirmed to exceed the minimum threshold.
-func buildResult(in *AllocationInput, lowWater, target, existingTotal, gap *big.Rat, nets map[LayerType]*big.Rat) (*AllocateResult, error) {
+// confirmed to exceed the minimum threshold. Buffer maintenance actions
+// (reshapes and their informational holds) are detected by the caller,
+// independently of the gap, and merged here.
+func buildResult(in *AllocationInput, lowWater, target, existingTotal, gap *big.Rat, nets map[LayerType]*big.Rat, reshapes, maintHolds []PlannedAction) (*AllocateResult, error) {
 	allocs, err := splitGap(in, gap, nets, lowWater, target, existingTotal)
 	if err != nil {
 		return nil, err
@@ -386,7 +447,7 @@ func buildResult(in *AllocationInput, lowWater, target, existingTotal, gap *big.
 	if err != nil {
 		return nil, err
 	}
-	reshapes, infoHolds := detectReshapes(in.Layers, in.LayerStates, in.Config.BufferUtilizationThresholdPct, in.DataSources)
+	allocs, skipHolds := dropSubMinimumAllocations(allocs, in.DataSources)
 	totalActions := len(allocs) + len(reshapes)
 	if totalActions > in.Config.MaxActionsPerRun {
 		return nil, fmt.Errorf(
@@ -397,8 +458,32 @@ func buildResult(in *AllocationInput, lowWater, target, existingTotal, gap *big.
 	return &AllocateResult{
 		Allocations: allocs,
 		Reshapes:    reshapes,
-		Holds:       infoHolds,
+		Holds:       append(maintHolds, skipHolds...),
 	}, nil
+}
+
+// dropSubMinimumAllocations removes allocations whose amount fell below the
+// minimum allocatable threshold after splitting and cap scaling, emitting an
+// informational Hold for each so the skipped amount is never silently lost.
+// Amounts exactly at the threshold are kept.
+func dropSubMinimumAllocations(allocs []Allocation, dataSources []string) ([]Allocation, []PlannedAction) {
+	minGap := minAllocatableGap()
+	var kept []Allocation
+	var holds []PlannedAction
+	for _, a := range allocs {
+		if a.GapUSDPerHour.Cmp(minGap) < 0 {
+			holds = append(holds, PlannedAction{
+				Action: ActionHold,
+				Layer:  a.Layer,
+				Rationale: fmt.Sprintf("allocation of %s on layer %s is below minimum allocatable amount; skipped (minimum %s)",
+					fmtRatUSD(a.GapUSDPerHour), a.Layer, fmtRatUSD(minGap)),
+				DataSources: dataSources,
+			})
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, holds
 }
 
 // splitGap distributes gap across the base, buffer, and flex roles. It handles
@@ -493,7 +578,11 @@ func assembleAllocations(ctx *allocationContext, baseGap, flexGap, bufferGap *bi
 	if azureMerge {
 		mergedGap := new(big.Rat).Add(baseGap, bufferGap)
 		if mergedGap.Sign() > 0 {
-			allocs = append(allocs, mkAllocation(ctx, bufferLayer, mergedGap, "base+buffer", ctx.baseNote))
+			// The base routing note (e.g. "stable usage unknown") explains why
+			// the BASE share is zero; it belongs on the flex allocation that
+			// received the rerouted core gap, never on the merged base+buffer
+			// allocation. When baseGap > 0 the note is empty anyway.
+			allocs = append(allocs, mkAllocation(ctx, bufferLayer, mergedGap, "base+buffer", ""))
 		}
 	} else {
 		if hasBase && baseGap.Sign() > 0 {
@@ -529,7 +618,7 @@ func mkAllocation(ctx *allocationContext, layer LayerType, layerGap *big.Rat, ro
 		detail = "; " + extraNote
 	}
 	rationale := fmt.Sprintf(
-		"%s layer: low_water=%s, target=%.0f%%, existing=%s, target_commitment=%s, total_gap=%s, %s_gap=%s, buffer_fraction=%.2f%s",
+		"%s layer: low_water=%s, target=%.2f%%, existing=%s, target_commitment=%s, total_gap=%s, %s_gap=%s, buffer_fraction=%.2f%s",
 		role,
 		fmtRatUSD(ctx.lowWater),
 		ctx.cfg.TargetCoveragePct,
@@ -575,7 +664,7 @@ func applyCapGuardrail(allocs []Allocation, maxPerRun *float64) ([]Allocation, e
 		scaled[i] = Allocation{
 			Layer:         a.Layer,
 			GapUSDPerHour: scaledGap,
-			Rationale: a.Rationale + fmt.Sprintf("; capped by max_hourly_commit_per_run: scaled to %s (%.1f%% of requested)",
+			Rationale: a.Rationale + fmt.Sprintf("; capped by max_hourly_commit_per_run: scaled to %s (%.2f%% of requested)",
 				fmtRatUSD(scaledGap), scalePct),
 			DataSources: a.DataSources,
 		}

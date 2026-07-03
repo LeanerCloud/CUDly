@@ -184,7 +184,7 @@ func TestAllocate_GapBelowMin(t *testing.T) {
 		t.Fatal("expected at least one hold")
 	}
 	r := result.Holds[0].Rationale
-	for _, want := range []string{"$10.0000/hr", "100%", "target already met"} {
+	for _, want := range []string{"$10.0000/hr", "100.00%", "target already met"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("hold rationale missing %q: %q", want, r)
 		}
@@ -221,7 +221,8 @@ func TestAllocate_ExistingAboveTarget_Hold(t *testing.T) {
 		t.Fatal("expected a hold when existing exceeds target")
 	}
 	r := result.Holds[0].Rationale
-	for _, want := range []string{"target already met", "$15.0000/hr", "$10.0000/hr"} {
+	// "$-5.0000/hr" pins the rendering of the negative gap value.
+	for _, want := range []string{"target already met", "$15.0000/hr", "$10.0000/hr", "$-5.0000/hr"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("hold rationale missing %q: %q", want, r)
 		}
@@ -293,7 +294,7 @@ func TestAllocate_AWS3LayerSplit(t *testing.T) {
 		if !strings.Contains(a.Rationale, "$10.0000/hr") {
 			t.Errorf("layer %s rationale missing low_water number: %q", a.Layer, a.Rationale)
 		}
-		if !strings.Contains(a.Rationale, "100%") {
+		if !strings.Contains(a.Rationale, "100.00%") {
 			t.Errorf("layer %s rationale missing target %%: %q", a.Layer, a.Rationale)
 		}
 	}
@@ -550,7 +551,7 @@ func TestAllocate_CapScaling(t *testing.T) {
 		if want := wantScaledTo[a.Layer]; !strings.Contains(a.Rationale, want) {
 			t.Errorf("layer %s rationale missing post-cap amount %q: %q", a.Layer, want, a.Rationale)
 		}
-		if !strings.Contains(a.Rationale, "50.0% of requested") {
+		if !strings.Contains(a.Rationale, "50.00% of requested") {
 			t.Errorf("layer %s rationale missing scale percentage: %q", a.Layer, a.Rationale)
 		}
 	}
@@ -1050,6 +1051,21 @@ func TestAllocate_LayerTopologyValidation(t *testing.T) {
 			errContains: "must not be combined",
 		},
 		{
+			name: "bogus layer type rejected",
+			layers: []LayerSpec{
+				{Type: "bogus", Roles: []LayerRole{RoleFlex}},
+			},
+			errContains: "unknown layer type",
+		},
+		{
+			name: "bogus role rejected",
+			layers: []LayerSpec{
+				{Type: LayerComputeSP, Roles: []LayerRole{RoleFlex}},
+				{Type: LayerConvertibleRI, Roles: []LayerRole{"bogus-role"}},
+			},
+			errContains: "unknown layer role",
+		},
+		{
 			name:   "azure base+buffer merge accepted",
 			layers: azureLayers(),
 		},
@@ -1195,6 +1211,232 @@ func TestAllocate_NoBufferLayerZeroFraction_OK(t *testing.T) {
 	}
 	ratEq(t, "base (EC2InstanceSP)", allocMap[LayerEC2InstanceSP], 4, 1)
 	ratEq(t, "flex (ComputeSP)", allocMap[LayerComputeSP], 6, 1)
+}
+
+// TestAllocate_TargetMet_ReshapeStillEmitted is a regression test: reshape
+// detection must run independently of the purchase gap. An over-committed
+// account (target met, negative or zero gap) with an under-utilized buffer is
+// exactly the case where reshaping matters, so the target-met early exit must
+// emit BOTH the hold and the reshape.
+func TestAllocate_TargetMet_ReshapeStillEmitted(t *testing.T) {
+	t.Parallel()
+	layers := awsLayers()
+	states := zeroStates(layers)
+	// E = 8 (flex) + 2 (buffer) = $10/hr = B -> target met -> hold path.
+	states = withExisting(states, LayerComputeSP, 8.0)
+	states = withExisting(states, LayerConvertibleRI, 2.0)
+	states = withBufferUtilization(states, 70.0) // below 90% threshold
+	in := &AllocationInput{
+		Config:      validConfigAWS(),
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(8.0)},
+		LayerStates: states,
+		Now:         nowFixed(),
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Holds) == 0 || !strings.Contains(result.Holds[0].Rationale, "target already met") {
+		t.Errorf("expected target-met hold, holds: %+v", result.Holds)
+	}
+	if len(result.Reshapes) != 1 {
+		t.Fatalf("expected 1 reshape alongside the target-met hold, got %d", len(result.Reshapes))
+	}
+	if !strings.Contains(result.Reshapes[0].Rationale, "70.0%") {
+		t.Errorf("reshape rationale missing utilization: %q", result.Reshapes[0].Rationale)
+	}
+	if result.IsNoOp() {
+		t.Errorf("result with a reshape must not be a no-op")
+	}
+}
+
+// TestAllocate_NilBaseline_ReshapeStillEmitted is the second independence
+// regression: even when the baseline is unavailable (no gap can be computed),
+// buffer reshape detection needs only layer states and must still run.
+func TestAllocate_NilBaseline_ReshapeStillEmitted(t *testing.T) {
+	t.Parallel()
+	layers := awsLayers()
+	states := zeroStates(layers)
+	states = withExisting(states, LayerConvertibleRI, 2.0)
+	states = withBufferUtilization(states, 70.0) // below 90% threshold
+	in := &AllocationInput{
+		Config:      validConfigAWS(),
+		Layers:      layers,
+		Baseline:    UsageBaseline{}, // LowWaterUSDPerHour nil
+		LayerStates: states,
+		Now:         nowFixed(),
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	foundBaselineHold := false
+	for _, h := range result.Holds {
+		if strings.Contains(h.Rationale, "baseline unavailable") {
+			foundBaselineHold = true
+		}
+	}
+	if !foundBaselineHold {
+		t.Errorf("expected baseline-unavailable hold, holds: %+v", result.Holds)
+	}
+	if len(result.Reshapes) != 1 {
+		t.Fatalf("expected 1 reshape alongside the baseline hold, got %d", len(result.Reshapes))
+	}
+	if result.IsNoOp() {
+		t.Errorf("result with a reshape must not be a no-op")
+	}
+}
+
+// TestAllocate_UnknownLayerStateKey_Error verifies that a LayerStates entry
+// not present in the supported layer list is rejected: it would otherwise be
+// silently excluded from existing-coverage accounting, overstating the
+// purchase gap.
+func TestAllocate_UnknownLayerStateKey_Error(t *testing.T) {
+	t.Parallel()
+	layers := awsLayers()
+	states := zeroStates(layers)
+	states[LayerAzureReservation] = LayerState{
+		Layer:              LayerAzureReservation,
+		ExistingUSDPerHour: ptr(5.0),
+		ExpiringUSDPerHour: ptr(0.0),
+	}
+	in := &AllocationInput{
+		Config:      validConfigAWS(),
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)},
+		LayerStates: states,
+		Now:         nowFixed(),
+	}
+	_, err := Allocate(in)
+	if err == nil {
+		t.Fatal("expected error for unknown layer state key, got nil")
+	}
+	for _, want := range []string{"unknown layer", string(LayerAzureReservation)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
+	}
+}
+
+// TestAllocate_SubMinimumBufferSkipped verifies that a split amount below the
+// minimum allocatable threshold is dropped WITH an informational hold naming
+// the layer and the skipped amount, while the other allocations stay intact.
+//
+//	B=$10, S=$4, E=$0, gap=$10, fraction=0.0005 -> bufferGap=$0.005 < $0.01
+//	base=$4 and flex=$5.995 both stay.
+func TestAllocate_SubMinimumBufferSkipped(t *testing.T) {
+	t.Parallel()
+	cfg := validConfigAWS()
+	cfg.BufferFraction = 0.0005
+	layers := awsLayers()
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0), StableUSDPerHour: ptr(4.0)},
+		LayerStates: zeroStates(layers),
+		Now:         nowFixed(),
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Allocations) != 2 {
+		t.Fatalf("expected 2 allocations (base + flex), got %d: %+v", len(result.Allocations), result.Allocations)
+	}
+	for _, a := range result.Allocations {
+		if a.Layer == LayerConvertibleRI {
+			t.Errorf("sub-minimum buffer allocation must be dropped, got %s", a.GapUSDPerHour.RatString())
+		}
+	}
+	foundSkip := false
+	for _, h := range result.Holds {
+		if h.Layer == LayerConvertibleRI &&
+			strings.Contains(h.Rationale, "below minimum allocatable amount; skipped") &&
+			strings.Contains(h.Rationale, "$0.0050/hr") {
+			foundSkip = true
+		}
+	}
+	if !foundSkip {
+		t.Errorf("expected informational hold for skipped sub-minimum buffer amount, holds: %+v", result.Holds)
+	}
+}
+
+// TestAllocate_AllSplitsSubMinimum verifies the boundary case from the review:
+// gap $0.011 with fraction 0.10 leaves every split amount below the $0.01
+// minimum (buffer $0.0011, flex $0.0099 with stable unknown), so every
+// allocation is dropped with its own informational hold and the run is a
+// no-op. Nothing is silently lost.
+func TestAllocate_AllSplitsSubMinimum(t *testing.T) {
+	t.Parallel()
+	layers := awsLayers()
+	in := &AllocationInput{
+		Config: validConfigAWS(), // fraction 0.10
+		Layers: layers,
+		// gap = $0.011 (just above the min-gap threshold); stable unknown so
+		// base gets nothing and flex receives the whole core gap of $0.0099.
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(0.011)},
+		LayerStates: zeroStates(layers),
+		Now:         nowFixed(),
+	}
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Allocations) != 0 {
+		t.Fatalf("expected all sub-minimum allocations dropped, got %d: %+v", len(result.Allocations), result.Allocations)
+	}
+	skips := 0
+	for _, h := range result.Holds {
+		if strings.Contains(h.Rationale, "below minimum allocatable amount; skipped") {
+			skips++
+		}
+	}
+	if skips != 2 { // buffer and flex splits were both sub-minimum
+		t.Errorf("expected 2 skip holds (buffer + flex), got %d: %+v", skips, result.Holds)
+	}
+	if !result.IsNoOp() {
+		t.Errorf("all-skipped result must be a no-op")
+	}
+}
+
+// TestAllocate_AzureMerged_StableUnknown_NoteOnFlexOnly verifies that the
+// "stable usage unknown" routing note lands ONLY on the flex allocation that
+// received the rerouted core gap, not on the merged base+buffer allocation
+// whose base share is zero.
+func TestAllocate_AzureMerged_StableUnknown_NoteOnFlexOnly(t *testing.T) {
+	t.Parallel()
+	layers := azureLayers()
+	cfg := validConfigAzure()
+	cfg.BufferFraction = 0.5
+	in := &AllocationInput{
+		Config:      cfg,
+		Layers:      layers,
+		Baseline:    UsageBaseline{LowWaterUSDPerHour: ptr(10.0)}, // stable unknown
+		LayerStates: zeroStates(layers),
+		Now:         nowFixed(),
+	}
+	// bufferGap=5, coreGap=5, baseGap=0 (stable unknown), flexGap=5, merged=5
+	result, err := Allocate(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Allocations) != 2 {
+		t.Fatalf("expected 2 allocations (merged + flex), got %d: %+v", len(result.Allocations), result.Allocations)
+	}
+	for _, a := range result.Allocations {
+		hasNote := strings.Contains(a.Rationale, "stable usage unknown")
+		switch a.Layer {
+		case LayerAzureReservation:
+			if hasNote {
+				t.Errorf("merged base+buffer rationale must NOT carry the stable-unknown note: %q", a.Rationale)
+			}
+		case LayerAzureSavingsPlan:
+			if !hasNote {
+				t.Errorf("flex rationale must carry the stable-unknown note: %q", a.Rationale)
+			}
+		}
+	}
 }
 
 // TestAllocateResult_IsNoOp verifies IsNoOp across the result shapes.
