@@ -400,7 +400,7 @@ func lambdaResponseToHTTP(w http.ResponseWriter, lambdaResp *events.LambdaFuncti
 
 	// Set status code and write body
 	w.WriteHeader(lambdaResp.StatusCode)
-	if _, err := w.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil { // #nosec G705 -- body is server-generated Lambda handler output, not user-controlled input
 		log.Printf("http: failed to write response body: %v", err)
 	}
 }
