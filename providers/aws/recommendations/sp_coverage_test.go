@@ -3,6 +3,7 @@ package recommendations
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,6 +25,19 @@ var allSPPlanTypes = []types.SupportedSavingsPlansType{
 	types.SupportedSavingsPlansTypeDatabaseSp,
 }
 
+// wantSPDimensionValues re-states the SAVINGS_PLANS_TYPE dimension
+// vocabulary independently of the production spPlanTypeDimensionValues map,
+// so a typo introduced in the production map fails these tests instead of
+// being read back and trusted. The CamelCase vocabulary (matching the CUR
+// savings_plan_type column) is deliberately NOT the parameter-enum spelling
+// ("COMPUTE_SP", ...), which CE would silently match nothing on.
+var wantSPDimensionValues = map[types.SupportedSavingsPlansType]string{
+	types.SupportedSavingsPlansTypeComputeSp:     "ComputeSavingsPlans",
+	types.SupportedSavingsPlansTypeEc2InstanceSp: "EC2InstanceSavingsPlans",
+	types.SupportedSavingsPlansTypeSagemakerSp:   "SageMakerSavingsPlans",
+	types.SupportedSavingsPlansTypeDatabaseSp:    "DatabaseSavingsPlans",
+}
+
 // mockSPCE extends mockCostExplorerAPI with configurable SP coverage and
 // utilization responses for hermetic testing without hitting AWS. Incoming
 // request inputs are captured so tests can assert Filter construction.
@@ -40,12 +54,18 @@ type mockSPCE struct {
 	// utilInputs records each GetSavingsPlansUtilization request.
 	utilInputs  []*costexplorer.GetSavingsPlansUtilizationInput
 	coverageIdx int
+	// coverageAlwaysToken makes every GetSavingsPlansCoverage response carry
+	// a non-empty NextToken, for exercising the pagination cap.
+	coverageAlwaysToken bool
 }
 
 func (m *mockSPCE) GetSavingsPlansCoverage(_ context.Context, params *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
 	m.coverageInputs = append(m.coverageInputs, params)
 	if m.coverageErr != nil {
 		return nil, m.coverageErr
+	}
+	if m.coverageAlwaysToken {
+		return &costexplorer.GetSavingsPlansCoverageOutput{NextToken: aws.String("again")}, nil
 	}
 	if m.coverageIdx >= len(m.coveragePages) {
 		return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
@@ -98,6 +118,7 @@ func TestGetSPCoverageSummary(t *testing.T) {
 		wantPct      *float64
 		wantCovered  *float64
 		wantOnDemand *float64
+		wantEligible *float64
 		name         string
 		pages        []*costexplorer.GetSavingsPlansCoverageOutput
 		wantDays     int
@@ -105,27 +126,32 @@ func TestGetSPCoverageSummary(t *testing.T) {
 	}{
 		{
 			name: "single_page_happy_path",
-			// $360 covered, $540 on-demand over 30 days.
-			// covered/hr = 360/720 = 0.5; onDemand/hr = 540/720 = 0.75.
-			// pct = 360/540 * 100 = 66.666...
-			pages:        []*costexplorer.GetSavingsPlansCoverageOutput{oneSPCovPage("360", "540", "66.67", nil)},
-			wantPct:      floatPtr(360.0 / 540.0 * 100),
+			// $360 covered, $540 billed at on-demand rates (UNCOVERED) over
+			// 30 days. Eligible total = 360+540 = 900.
+			// covered/hr = 360/720 = 0.5; onDemand/hr = 540/720 = 0.75;
+			// eligible/hr = 900/720 = 1.25.
+			// pct = 360/900 * 100 = 40.00 (matches CE's own CoveragePercentage).
+			pages:        []*costexplorer.GetSavingsPlansCoverageOutput{oneSPCovPage("360", "540", "40.00", nil)},
+			wantPct:      floatPtr(360.0 / 900.0 * 100),
 			wantCovered:  floatPtr(360.0 / windowHours),
 			wantOnDemand: floatPtr(540.0 / windowHours),
+			wantEligible: floatPtr(900.0 / windowHours),
 			wantDays:     1,
 		},
 		{
 			name: "multi_page_pagination",
-			// Page 1: $720 covered, $1440 on-demand; NextToken present.
-			// Page 2: $360 covered, $720 on-demand; no NextToken.
-			// Totals: covered=1080, onDemand=2160, pct=50%.
+			// Page 1: $720 covered, $1440 uncovered; NextToken present.
+			// Page 2: $360 covered, $720 uncovered; no NextToken.
+			// Totals: covered=1080, onDemand=2160, eligible=3240,
+			// pct = 1080/3240 = 33.33%.
 			pages: []*costexplorer.GetSavingsPlansCoverageOutput{
-				oneSPCovPage("720", "1440", "50.0", aws.String("page2")),
-				oneSPCovPage("360", "720", "50.0", nil),
+				oneSPCovPage("720", "1440", "33.33", aws.String("page2")),
+				oneSPCovPage("360", "720", "33.33", nil),
 			},
-			wantPct:      floatPtr(1080.0 / 2160.0 * 100),
+			wantPct:      floatPtr(1080.0 / 3240.0 * 100),
 			wantCovered:  floatPtr(1080.0 / windowHours),
 			wantOnDemand: floatPtr(2160.0 / windowHours),
+			wantEligible: floatPtr(3240.0 / windowHours),
 			wantDays:     2,
 		},
 		{
@@ -170,12 +196,39 @@ func TestGetSPCoverageSummary(t *testing.T) {
 			wantPct:      floatPtr(0.0),
 			wantCovered:  floatPtr(0.0 / windowHours),
 			wantOnDemand: floatPtr(720.0 / windowHours),
+			wantEligible: floatPtr(720.0 / windowHours),
 			wantDays:     1,
 		},
 		{
-			name: "zero_on_demand_leaves_pct_nil",
-			// Coverage block present but on-demand=0 (no eligible compute).
-			// CoveragePct must be nil (cannot compute pct of zero denominator).
+			name: "full_coverage_yields_pct_100",
+			// Everything covered: OnDemandCost (the UNCOVERED portion) is 0
+			// while covered spend is positive. Eligible = covered, so pct
+			// must be &100.0 - NOT nil. The old covered/onDemand arithmetic
+			// misreported exactly this case as "no eligible activity".
+			pages: []*costexplorer.GetSavingsPlansCoverageOutput{
+				{
+					SavingsPlansCoverages: []types.SavingsPlansCoverage{
+						{
+							Coverage: &types.SavingsPlansCoverageData{
+								SpendCoveredBySavingsPlans: aws.String("720"),
+								OnDemandCost:               aws.String("0"),
+								CoveragePercentage:         aws.String("100.00"),
+							},
+						},
+					},
+				},
+			},
+			wantPct:      floatPtr(100.0),
+			wantCovered:  floatPtr(720.0 / windowHours),
+			wantOnDemand: floatPtr(0.0),
+			wantEligible: floatPtr(720.0 / windowHours),
+			wantDays:     1,
+		},
+		{
+			name: "zero_eligible_leaves_pct_nil",
+			// Coverage block present but both covered and uncovered spend
+			// are zero: no SP-eligible activity at all, so there is no
+			// denominator and CoveragePct must be nil.
 			pages: []*costexplorer.GetSavingsPlansCoverageOutput{
 				{
 					SavingsPlansCoverages: []types.SavingsPlansCoverage{
@@ -191,6 +244,7 @@ func TestGetSPCoverageSummary(t *testing.T) {
 			wantPct:      nil,
 			wantCovered:  floatPtr(0.0),
 			wantOnDemand: floatPtr(0.0),
+			wantEligible: floatPtr(0.0),
 			wantDays:     1,
 		},
 		{
@@ -235,7 +289,7 @@ func TestGetSPCoverageSummary(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantDays, got.Days)
 			if tt.wantPct == nil {
-				assert.Nil(t, got.CoveragePct, "CoveragePct must be nil when on-demand is zero or Days==0")
+				assert.Nil(t, got.CoveragePct, "CoveragePct must be nil only when the eligible total is zero or Days==0")
 			} else {
 				require.NotNil(t, got.CoveragePct)
 				assert.InDelta(t, *tt.wantPct, *got.CoveragePct, 0.001)
@@ -252,6 +306,12 @@ func TestGetSPCoverageSummary(t *testing.T) {
 				require.NotNil(t, got.OnDemandUSDPerHour)
 				assert.InDelta(t, *tt.wantOnDemand, *got.OnDemandUSDPerHour, 0.0001)
 			}
+			if tt.wantEligible == nil {
+				assert.Nil(t, got.EligibleUSDPerHour)
+			} else {
+				require.NotNil(t, got.EligibleUSDPerHour)
+				assert.InDelta(t, *tt.wantEligible, *got.EligibleUSDPerHour, 0.0001)
+			}
 		})
 	}
 }
@@ -267,9 +327,53 @@ func TestGetSPCoverageSummary_NoRegionMeansNilFilter(t *testing.T) {
 	_, err := client.GetSPCoverageSummary(context.Background(), "", 30)
 	require.NoError(t, err)
 	require.Len(t, mock.coverageInputs, 1, "exactly one CE call expected")
-	assert.Nil(t, mock.coverageInputs[0].Filter, "empty region must send no Filter at all")
-	assert.Equal(t, []string{spCoverageMetricSpendCovered}, mock.coverageInputs[0].Metrics,
+	in := mock.coverageInputs[0]
+	assert.Nil(t, in.Filter, "empty region must send no Filter at all")
+	assert.Equal(t, []string{spCoverageMetricSpendCovered}, in.Metrics,
 		"Metrics is required by the API; its sole valid value must always be sent")
+	// Request-shape assertions: daily granularity and a date-only window
+	// with start strictly before end (ISO date strings compare correctly
+	// as strings).
+	assert.Equal(t, types.GranularityDaily, in.Granularity)
+	require.NotNil(t, in.TimePeriod)
+	start, end := aws.ToString(in.TimePeriod.Start), aws.ToString(in.TimePeriod.End)
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, start, "TimePeriod.Start must be date-only")
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, end, "TimePeriod.End must be date-only")
+	assert.Less(t, start, end, "TimePeriod.Start must precede End")
+}
+
+// TestGetSPCoverageSummary_PctMatchesCEReportedPct cross-checks our
+// covered/(covered+onDemand) arithmetic against the CoveragePercentage that
+// CE itself reports for the same figures. Guards the denominator choice:
+// with covered=360 and OnDemandCost=540 (the UNCOVERED spend), CE reports
+// 40%, and covered/onDemand (the old bug) would yield 66.67%.
+func TestGetSPCoverageSummary_PctMatchesCEReportedPct(t *testing.T) {
+	const ceReportedPct = "40.00"
+	mock := &mockSPCE{
+		coveragePages: []*costexplorer.GetSavingsPlansCoverageOutput{
+			oneSPCovPage("360", "540", ceReportedPct, nil),
+		},
+	}
+	client := NewClientWithAPI(mock, "us-east-1")
+	got, err := client.GetSPCoverageSummary(context.Background(), "", 30)
+	require.NoError(t, err)
+	require.NotNil(t, got.CoveragePct)
+	wantPct, parseErr := strconv.ParseFloat(ceReportedPct, 64)
+	require.NoError(t, parseErr)
+	assert.InDelta(t, wantPct, *got.CoveragePct, 0.01,
+		"computed covered/(covered+onDemand) must agree with CE's own CoveragePercentage")
+}
+
+// TestGetSPCoverageSummary_PaginationCap asserts the NextToken loop stops
+// with a diagnostic error at maxSPCoveragePages instead of spinning forever
+// on an API that keeps returning tokens (mirrors the issue #692 guard).
+func TestGetSPCoverageSummary_PaginationCap(t *testing.T) {
+	mock := &mockSPCE{coverageAlwaysToken: true}
+	client := NewClientWithAPI(mock, "us-east-1")
+	_, err := client.GetSPCoverageSummary(context.Background(), "", 30)
+	require.Error(t, err, "endless-token pagination must fail loud, not spin")
+	assert.Contains(t, err.Error(), "pagination cap")
+	assert.Len(t, mock.coverageInputs, maxSPCoveragePages, "loop must stop exactly at the cap")
 }
 
 // TestGetSPCoverageSummary_RegionOnlyFilter asserts that a non-empty region
@@ -446,8 +550,10 @@ func TestGetSPUtilization(t *testing.T) {
 }
 
 // TestGetSPUtilization_FilterPerPlanType asserts the CE Filter is a bare
-// SAVINGS_PLANS_TYPE dimension carrying exactly the typed enum value, for
-// every plan type the SDK defines.
+// SAVINGS_PLANS_TYPE dimension carrying the CamelCase DIMENSION-vocabulary
+// value (e.g. "ComputeSavingsPlans"), NOT the parameter-enum spelling
+// ("COMPUTE_SP") which CE silently matches nothing on, for every plan type
+// the SDK defines.
 func TestGetSPUtilization_FilterPerPlanType(t *testing.T) {
 	for _, planType := range allSPPlanTypes {
 		t.Run(string(planType), func(t *testing.T) {
@@ -461,7 +567,10 @@ func TestGetSPUtilization_FilterPerPlanType(t *testing.T) {
 			assert.Nil(t, filter.And, "no region => bare plan-type dimension, no And wrapper")
 			require.NotNil(t, filter.Dimensions)
 			assert.Equal(t, types.DimensionSavingsPlansType, filter.Dimensions.Key)
-			assert.Equal(t, []string{string(planType)}, filter.Dimensions.Values)
+			assert.Equal(t, []string{wantSPDimensionValues[planType]}, filter.Dimensions.Values,
+				"dimension value must be the CamelCase vocabulary, not the parameter enum")
+			assert.NotEqual(t, []string{string(planType)}, filter.Dimensions.Values,
+				"parameter-enum spelling must never reach the dimension filter")
 		})
 	}
 }
@@ -475,16 +584,26 @@ func TestGetSPUtilization_RegionFilterANDed(t *testing.T) {
 	_, err := client.GetSPUtilization(context.Background(), types.SupportedSavingsPlansTypeComputeSp, "us-west-2", 30)
 	require.NoError(t, err)
 	require.Len(t, mock.utilInputs, 1)
-	filter := mock.utilInputs[0].Filter
+	in := mock.utilInputs[0]
+	filter := in.Filter
 	require.NotNil(t, filter)
 	assert.Nil(t, filter.Dimensions, "region set => And composition, not a bare dimension")
 	require.Len(t, filter.And, 2, "And must combine plan-type and region dimensions")
 	require.NotNil(t, filter.And[0].Dimensions)
 	assert.Equal(t, types.DimensionSavingsPlansType, filter.And[0].Dimensions.Key)
-	assert.Equal(t, []string{string(types.SupportedSavingsPlansTypeComputeSp)}, filter.And[0].Dimensions.Values)
+	assert.Equal(t, []string{"ComputeSavingsPlans"}, filter.And[0].Dimensions.Values,
+		"dimension value must be the CamelCase vocabulary, not the COMPUTE_SP parameter enum")
 	require.NotNil(t, filter.And[1].Dimensions)
 	assert.Equal(t, types.DimensionRegion, filter.And[1].Dimensions.Key)
 	assert.Equal(t, []string{"us-west-2"}, filter.And[1].Dimensions.Values)
+	// Request-shape assertions: daily granularity and a date-only window
+	// with start strictly before end.
+	assert.Equal(t, types.GranularityDaily, in.Granularity)
+	require.NotNil(t, in.TimePeriod)
+	start, end := aws.ToString(in.TimePeriod.Start), aws.ToString(in.TimePeriod.End)
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, start, "TimePeriod.Start must be date-only")
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, end, "TimePeriod.End must be date-only")
+	assert.Less(t, start, end, "TimePeriod.Start must precede End")
 }
 
 // TestGetSPUtilization_InvalidPlanType verifies that empty or unknown

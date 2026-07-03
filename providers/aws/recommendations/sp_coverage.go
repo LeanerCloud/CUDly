@@ -29,16 +29,29 @@ import (
 // response; zero means CE returned no coverage data at all for the window
 // (e.g., no Savings Plans have ever been purchased in the account).
 type SPCoverageSummary struct {
-	// CoveragePct is the percentage of eligible on-demand spend covered by
-	// Savings Plans over the window (0-100). Nil when Days==0 or when
-	// OnDemandUSDPerHour==0 (no eligible compute activity in the window).
+	// CoveragePct is covered / (covered + on-demand) * 100 over the window
+	// (0-100): the share of SP-ELIGIBLE spend actually covered by Savings
+	// Plans. CE's OnDemandCost is the UNCOVERED remainder, not the eligible
+	// total, so the denominator must be the sum of both fields - dividing
+	// by OnDemandCost alone overstates coverage and exceeds 100% as soon as
+	// real coverage passes 50%. Nil ONLY when the eligible total is zero
+	// (no SP-eligible activity in the window) or Days==0; a fully covered
+	// window (OnDemandCost==0, covered>0) yields &100.0, not nil.
 	CoveragePct *float64
-	// CoveredUSDPerHour is the average spend covered by SPs per hour over
-	// the window (total covered / windowHours). Nil when Days==0.
+	// CoveredUSDPerHour is the average SP-covered spend per hour over the
+	// window (total SpendCoveredBySavingsPlans / windowHours). Nil when
+	// Days==0.
 	CoveredUSDPerHour *float64
-	// OnDemandUSDPerHour is the average total eligible on-demand spend per
-	// hour over the window (total on-demand / windowHours). Nil when Days==0.
+	// OnDemandUSDPerHour is the average spend billed at on-demand rates per
+	// hour, i.e. the SP-eligible spend NOT covered by any Savings Plan.
+	// This is the uncovered portion (CE's OnDemandCost), not the eligible
+	// total - see EligibleUSDPerHour for the total. Nil when Days==0.
 	OnDemandUSDPerHour *float64
+	// EligibleUSDPerHour is the average total SP-eligible spend per hour:
+	// CoveredUSDPerHour + OnDemandUSDPerHour. Provided so consumers (the
+	// ladder sizing math) do not have to re-derive the coverage
+	// denominator. Nil when Days==0.
+	EligibleUSDPerHour *float64
 	// Days is the count of daily CE data points that had a non-nil Coverage
 	// block in the response. Zero means CE returned no data for the window.
 	Days int
@@ -74,6 +87,47 @@ type SPUtilizationSummary struct {
 // the omission.
 const spCoverageMetricSpendCovered = "SpendCoveredBySavingsPlans"
 
+// maxSPCoveragePages caps the GetSavingsPlansCoverage NextToken loop,
+// mirroring the maxRecommendationPages guard from issue #692 (client.go).
+// Named separately because the workloads differ: 20 pages of daily coverage
+// data is far beyond anything a real 13-month-max CE window can produce, so
+// exceeding the cap indicates a token loop or API misbehavior and returns a
+// diagnostic error instead of spinning (and billing $0.01/call) forever.
+const maxSPCoveragePages = 20
+
+// spPlanTypeDimensionValues translates the SupportedSavingsPlansType
+// PARAMETER enum to the SAVINGS_PLANS_TYPE DIMENSION vocabulary.
+//
+// TWO-VOCABULARY TRAP (feedback_sdk_enum_string_literals class): the
+// parameter enum used by GetSavingsPlansPurchaseRecommendation
+// ("COMPUTE_SP", "EC2_INSTANCE_SP", ...) is NOT the vocabulary the
+// SAVINGS_PLANS_TYPE filter dimension matches on. The dimension uses the
+// CamelCase values below (the same vocabulary as the CUR savings_plan_type
+// column). Sending the parameter-enum spelling makes CE silently match
+// NOTHING - no error, just empty results - which is why no mock-backed test
+// can prove this mapping. The SDK exposes no typed constants for the
+// dimension vocabulary, hence this explicit map with fail-loud lookup.
+var spPlanTypeDimensionValues = map[types.SupportedSavingsPlansType]string{
+	types.SupportedSavingsPlansTypeComputeSp:     "ComputeSavingsPlans",
+	types.SupportedSavingsPlansTypeEc2InstanceSp: "EC2InstanceSavingsPlans",
+	types.SupportedSavingsPlansTypeSagemakerSp:   "SageMakerSavingsPlans",
+	types.SupportedSavingsPlansTypeDatabaseSp:    "DatabaseSavingsPlans",
+}
+
+// spPlanTypeDimensionValue returns the SAVINGS_PLANS_TYPE dimension value
+// for a plan-type parameter enum, failing loud on an unmapped value (e.g. a
+// plan type added to the SDK enum after this map was written) rather than
+// sending a spelling CE would silently match nothing on.
+func spPlanTypeDimensionValue(planType types.SupportedSavingsPlansType) (string, error) {
+	v, ok := spPlanTypeDimensionValues[planType]
+	if !ok {
+		return "", fmt.Errorf(
+			"sp: no SAVINGS_PLANS_TYPE dimension value mapped for plan type %q; add it to spPlanTypeDimensionValues",
+			planType)
+	}
+	return v, nil
+}
+
 // validateSPPlanType rejects empty or unknown Savings Plans type values at
 // the API boundary (fail loud on unknown enum input rather than silently
 // sending it to CE). The valid set comes from the SDK enum itself so a new
@@ -89,11 +143,14 @@ func validateSPPlanType(planType types.SupportedSavingsPlansType) error {
 }
 
 // spUtilizationFilter builds the CE Filter expression for
-// GetSavingsPlansUtilization: a SAVINGS_PLANS_TYPE dimension, optionally
-// ANDed with a REGION dimension when region is non-empty. Mirrors the And
-// composition idiom of serviceRegionFilter in coverage.go. An empty region
-// means "all regions" (no region dimension at all - relevant for Compute
-// SPs, whose commitment floats across regions).
+// GetSavingsPlansUtilization: a SAVINGS_PLANS_TYPE dimension carrying the
+// mapped dimension-vocabulary value (see spPlanTypeDimensionValues - NOT the
+// parameter-enum spelling), optionally ANDed with a REGION dimension when
+// region is non-empty. Mirrors the And composition idiom of
+// serviceRegionFilter in coverage.go. An empty region means "all regions"
+// (no region dimension at all - relevant for Compute SPs, whose commitment
+// floats across regions). Errors when the plan type has no mapped dimension
+// value.
 //
 // DO NOT reuse this for GetSavingsPlansCoverage and do not re-symmetrize the
 // two filter paths: the coverage API's Filter contract does NOT support the
@@ -102,22 +159,26 @@ func validateSPPlanType(planType types.SupportedSavingsPlansType) error {
 // SDK doc), so sending SAVINGS_PLANS_TYPE to coverage fails with a
 // ValidationException on every real call. Coverage uses
 // spCoverageRegionFilter instead; the two helpers are deliberately separate.
-func spUtilizationFilter(planType types.SupportedSavingsPlansType, region string) *types.Expression {
+func spUtilizationFilter(planType types.SupportedSavingsPlansType, region string) (*types.Expression, error) {
+	dimensionValue, err := spPlanTypeDimensionValue(planType)
+	if err != nil {
+		return nil, err
+	}
 	planTypeExpr := types.Expression{
 		Dimensions: &types.DimensionValues{
 			Key:    types.DimensionSavingsPlansType,
-			Values: []string{string(planType)},
+			Values: []string{dimensionValue},
 		},
 	}
 	if region == "" {
-		return &planTypeExpr
+		return &planTypeExpr, nil
 	}
 	return &types.Expression{
 		And: []types.Expression{
 			planTypeExpr,
 			{Dimensions: &types.DimensionValues{Key: types.DimensionRegion, Values: []string{region}}},
 		},
-	}
+	}, nil
 }
 
 // spCoverageRegionFilter builds the CE Filter expression for
@@ -184,13 +245,21 @@ func (a *spCoverageAccumulator) summarize(windowHours float64) SPCoverageSummary
 	}
 	covered := a.totalCovered / windowHours
 	onDemand := a.totalOnDemand / windowHours
+	eligible := covered + onDemand
 	summary := SPCoverageSummary{
 		CoveredUSDPerHour:  &covered,
 		OnDemandUSDPerHour: &onDemand,
+		EligibleUSDPerHour: &eligible,
 		Days:               a.days,
 	}
-	if a.totalOnDemand > 0 {
-		pct := (a.totalCovered / a.totalOnDemand) * 100
+	// CE's OnDemandCost is the UNCOVERED spend, so the eligible total is
+	// covered + onDemand and coverage = covered / eligible. Dividing by
+	// OnDemandCost alone would overstate coverage (exceeding 100% past the
+	// 50% mark) and would misreport a fully covered window (onDemand==0,
+	// covered>0) as "no eligible activity". Pct is nil ONLY when the
+	// eligible total is zero.
+	if totalEligible := a.totalCovered + a.totalOnDemand; totalEligible > 0 {
+		pct := (a.totalCovered / totalEligible) * 100
 		summary.CoveragePct = &pct
 	}
 	return summary
@@ -228,6 +297,12 @@ func (a *spCoverageAccumulator) summarize(windowHours float64) SPCoverageSummary
 // the result is Days==0 with all pointer fields nil. Callers must read
 // Days==0 as "no data for this scope", not "no SPs in the account", and
 // check Days before dereferencing the pointer fields.
+//
+// Concurrency: Client is NOT safe for concurrent SP calls - the shared
+// rateLimiter's Reset() is unsynchronized (see
+// feedback_rate_limiter_per_call), so concurrent callers race on the retry
+// counter. Call from a single goroutine per Client; the ladder consumer
+// (PR 5) is sequential by design.
 func (c *Client) GetSPCoverageSummary(ctx context.Context, region string, lookbackDays int) (SPCoverageSummary, error) {
 	if lookbackDays <= 0 {
 		return SPCoverageSummary{}, fmt.Errorf("sp coverage: lookbackDays must be positive, got %d", lookbackDays)
@@ -254,9 +329,14 @@ func (c *Client) GetSPCoverageSummary(ctx context.Context, region string, lookba
 
 	var acc spCoverageAccumulator
 	var token *string
-	for {
+	for pageIdx := 0; ; pageIdx++ {
 		if err := ctx.Err(); err != nil {
 			return SPCoverageSummary{}, fmt.Errorf("sp coverage: pagination canceled: %w", err)
+		}
+		if pageIdx >= maxSPCoveragePages {
+			return SPCoverageSummary{}, fmt.Errorf(
+				"sp coverage: pagination cap reached after %d pages (mirrors the issue #692 guard)",
+				maxSPCoveragePages)
 		}
 		input.NextToken = token
 		result, err := c.fetchSPCoveragePage(ctx, input)
@@ -321,12 +401,35 @@ func (c *Client) fetchSPCoveragePage(ctx context.Context, input *costexplorer.Ge
 // commitments) does NOT error - CE matches nothing and every pointer field
 // comes back nil. Callers must read all-nil as "no data for this scope",
 // not "no SPs in the account".
+//
+// MANUAL VERIFICATION REQUIRED (mock-unprovable): the plan-type filter
+// relies on the parameter-enum -> dimension-vocabulary mapping in
+// spPlanTypeDimensionValues ("COMPUTE_SP" -> "ComputeSavingsPlans", ...).
+// A wrong dimension value does not error - CE silently matches nothing -
+// so no unit test can prove the mapping. Before trusting this path in
+// production, verify once against the real API: call GetDimensionValues
+// with Context=SAVINGS_PLANS and Dimension=SAVINGS_PLANS_TYPE (or run one
+// real GetSavingsPlansUtilization per plan type) and confirm the returned
+// dimension values match the map.
+//
+// Concurrency: Client is NOT safe for concurrent SP calls - the shared
+// rateLimiter's Reset() is unsynchronized (see
+// feedback_rate_limiter_per_call), so concurrent callers race on the retry
+// counter. Call from a single goroutine per Client; the ladder consumer
+// (PR 5) is sequential by design.
 func (c *Client) GetSPUtilization(ctx context.Context, planType types.SupportedSavingsPlansType, region string, lookbackDays int) (SPUtilizationSummary, error) {
 	if err := validateSPPlanType(planType); err != nil {
 		return SPUtilizationSummary{}, fmt.Errorf("sp utilization: %w", err)
 	}
 	if lookbackDays <= 0 {
 		return SPUtilizationSummary{}, fmt.Errorf("sp utilization: lookbackDays must be positive, got %d", lookbackDays)
+	}
+	// Plan-type filter, optionally ANDed with region. This shape is valid
+	// ONLY for the utilization API - coverage rejects SAVINGS_PLANS_TYPE.
+	// See spUtilizationFilter / spCoverageRegionFilter.
+	filter, err := spUtilizationFilter(planType, region)
+	if err != nil {
+		return SPUtilizationSummary{}, fmt.Errorf("sp utilization: %w", err)
 	}
 	end := time.Now().UTC()
 	start := end.AddDate(0, 0, -lookbackDays)
@@ -336,10 +439,7 @@ func (c *Client) GetSPUtilization(ctx context.Context, planType types.SupportedS
 			End:   aws.String(end.Format("2006-01-02")),
 		},
 		Granularity: types.GranularityDaily,
-		// Plan-type filter, optionally ANDed with region. This shape is
-		// valid ONLY for the utilization API - coverage rejects
-		// SAVINGS_PLANS_TYPE. See spUtilizationFilter / spCoverageRegionFilter.
-		Filter: spUtilizationFilter(planType, region),
+		Filter:      filter,
 	}
 	result, err := c.fetchSPUtilizationPage(ctx, input)
 	if err != nil {
