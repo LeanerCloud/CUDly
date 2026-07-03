@@ -227,7 +227,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 		Type:        MessageTypeExecutePurchase,
 		ExecutionID: "exec-approved",
 	}
-	err := manager.handleExecutePurchase(ctx, msg)
+	err := manager.handleExecutePurchase(ctx, &msg)
 	require.NoError(t, err)
 
 	mockStore.AssertExpectations(t)
@@ -251,7 +251,7 @@ func TestHandleExecutePurchase_GetError(t *testing.T) {
 		Type:        MessageTypeExecutePurchase,
 		ExecutionID: "exec-err",
 	}
-	err := manager.handleExecutePurchase(ctx, msg)
+	err := manager.handleExecutePurchase(ctx, &msg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get execution")
 }
@@ -310,7 +310,7 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 		Type:        MessageTypeExecutePurchase,
 		ExecutionID: "exec-save-err",
 	}
-	err := manager.handleExecutePurchase(ctx, msg)
+	err := manager.handleExecutePurchase(ctx, &msg)
 	// The terminal-save failure now surfaces from executeAndFinalize as
 	// ErrAuditLoss (the row is stranded in "running"). The SQS handler returns
 	// it so the message is redelivered. A single-account provider failure with
@@ -497,7 +497,7 @@ func TestProcessMessage_ApproveRejectsNonMatchingActor(t *testing.T) {
 
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-mismatch","token":"correct-token","actor_email":"intruder@example.com"}`)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not an authorised approver")
+	assert.Contains(t, err.Error(), "not an authorized approver")
 	// SavePurchaseExecution must NOT have been called — no mutation.
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution")
 }

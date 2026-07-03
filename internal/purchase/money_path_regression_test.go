@@ -266,8 +266,8 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	}
 
 	msg := AsyncMessage{Type: MessageTypeExecutePurchase, ExecutionID: "exec-dup"}
-	require.NoError(t, manager.handleExecutePurchase(ctx, msg), "first delivery executes cleanly")
-	require.NoError(t, manager.handleExecutePurchase(ctx, msg), "redelivery is a benign no-op (acked)")
+	require.NoError(t, manager.handleExecutePurchase(ctx, &msg), "first delivery executes cleanly")
+	require.NoError(t, manager.handleExecutePurchase(ctx, &msg), "redelivery is a benign no-op (acked)")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -348,7 +348,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	}
 
 	msg := AsyncMessage{Type: MessageTypeExecutePurchase, ExecutionID: "root-partial"}
-	err := manager.handleExecutePurchase(ctx, msg)
+	err := manager.handleExecutePurchase(ctx, &msg)
 	require.NoError(t, err,
 		"a multi-account run with >=1 committed account must be ACKed (return nil), not redelivered (issue #1014)")
 
