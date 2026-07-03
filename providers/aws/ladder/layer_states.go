@@ -50,7 +50,7 @@ func (a *AWSLadder) GetLayerStates(ctx context.Context, scope ladder.Scope) (map
 		return nil, fmt.Errorf("GetLayerStates: SP listing failed: %w", err)
 	}
 
-	coverageMap, covErr := a.coverage.GetRICoverageMap(ctx, a.cfg.lookbackDays(), []string{a.cfg.Region})
+	coverageMap, covErr := a.riCoverage.GetRICoverageMap(ctx, a.cfg.lookbackDays(), []string{a.cfg.Region})
 	// covErr is checked per-layer below; a coverage failure does not fail the
 	// whole snapshot — it degrades CoveragePct to nil.
 
@@ -66,8 +66,8 @@ func (a *AWSLadder) GetLayerStates(ctx context.Context, scope ladder.Scope) (map
 
 	states := make(map[ladder.LayerType]ladder.LayerState, 3)
 	states[ladder.LayerConvertibleRI] = a.riLayerState(ris, horizon, coverageMap, covErr, utils, utilErr)
-	states[ladder.LayerEC2InstanceSP] = a.spLayerState(ctx, ladder.LayerEC2InstanceSP, "EC2Instance", sps, horizon, spCovPct)
-	states[ladder.LayerComputeSP] = a.spLayerState(ctx, ladder.LayerComputeSP, "Compute", sps, horizon, spCovPct)
+	states[ladder.LayerEC2InstanceSP] = a.spLayerState(ctx, ladder.LayerEC2InstanceSP, spPlanTypeEC2Instance, sps, horizon, spCovPct)
+	states[ladder.LayerComputeSP] = a.spLayerState(ctx, ladder.LayerComputeSP, spPlanTypeCompute, sps, horizon, spCovPct)
 	return states, nil
 }
 
@@ -177,7 +177,7 @@ func (a *AWSLadder) fetchSPUtilizationPct(ctx context.Context, planType string) 
 	}
 	// Compute SPs are global; EC2 Instance SPs are region-scoped.
 	region := a.cfg.Region
-	if planType == "Compute" {
+	if planType == spPlanTypeCompute {
 		region = "" // "" = all regions in the CE GetSavingsPlansUtilization API
 	}
 	summary, err := a.spUtil.GetSPUtilization(ctx, cePlanType, region, a.cfg.lookbackDays())
@@ -194,9 +194,9 @@ func (a *AWSLadder) fetchSPUtilizationPct(ctx context.Context, planType string) 
 // to the CE SDK enum required by GetSavingsPlansUtilization.
 func toSPUtilPlanType(planType string) (cetypes.SupportedSavingsPlansType, error) {
 	switch planType {
-	case "EC2Instance":
+	case spPlanTypeEC2Instance:
 		return cetypes.SupportedSavingsPlansTypeEc2InstanceSp, nil
-	case "Compute":
+	case spPlanTypeCompute:
 		return cetypes.SupportedSavingsPlansTypeComputeSp, nil
 	default:
 		return "", fmt.Errorf("toSPUtilPlanType: unrecognized SP plan type %q", planType)

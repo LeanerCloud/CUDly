@@ -113,7 +113,7 @@ func (a *AWSLadder) listSPCommitments(ctx context.Context) ([]common.Commitment,
 
 // isLadderSPType returns true for the two plan types that map to ladder layers.
 func isLadderSPType(planType string) bool {
-	return planType == "EC2Instance" || planType == "Compute"
+	return planType == spPlanTypeEC2Instance || planType == spPlanTypeCompute
 }
 
 // spToCommitment converts an ActiveSP to a common.Commitment.
@@ -123,7 +123,7 @@ func isLadderSPType(planType string) bool {
 // (e.g. for queued plans); callers treat the zero time as "no expiry signal".
 func spToCommitment(sp *ActiveSP, accountID string) common.Commitment {
 	service := common.ServiceSavingsPlansEC2Instance
-	if sp.PlanType == "Compute" {
+	if sp.PlanType == spPlanTypeCompute {
 		service = common.ServiceSavingsPlansCompute
 	}
 
