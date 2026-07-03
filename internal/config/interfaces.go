@@ -60,6 +60,9 @@ type StoreInterface interface {
 	// The recovery sweep in the purchase manager re-drives these into a
 	// terminal "failed" state so they can never sit permanently approved.
 	GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]PurchaseExecution, error)
+	// GetExecutionByID retrieves a purchase execution by execution ID.
+	// Returns an error wrapping ErrNotFound when no execution exists;
+	// never returns (nil, nil). A nil error guarantees a non-nil execution.
 	GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error)
 	GetExecutionByPlanAndDate(ctx context.Context, planID string, scheduledDate time.Time) (*PurchaseExecution, error)
 	// CountPendingExecutionsForAccount returns the number of purchase_executions

@@ -920,12 +920,16 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 
 	if len(records) == 0 {
 		existing, existErr := s.GetExecutionByID(ctx, executionID)
-		if existErr != nil {
+		if errors.Is(existErr, ErrNotFound) {
 			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
 			// use errors.Is to distinguish "row vanished mid-flight" — a
 			// legitimate CAS race-loss — from a hard DB error.
-			// GetExecutionByID returns ErrNotFound when the row is absent.
 			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
+		}
+		if existErr != nil {
+			// A hard DB error during the probe must NOT read as a benign
+			// race-loss: propagate it so callers see the outage.
+			return nil, fmt.Errorf("transition %s: probe after zero-row CAS failed: %w", executionID, existErr)
 		}
 		// Wrap ErrExecutionNotInExpectedStatus so callers can use
 		// errors.Is to recognise CAS rejection (status changed between

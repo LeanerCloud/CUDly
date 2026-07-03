@@ -2070,3 +2070,45 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesBackslash(t *testing.T) {
 func errNoRows() error {
 	return pgx.ErrNoRows
 }
+
+// ─── TransitionExecutionStatus CAS probe ─────────────────────────────────────
+
+// TestPGXMock_TransitionExecutionStatus_ProbeHardErrorNotMappedToNotFound pins
+// the CAS-probe contract: when the UPDATE matches zero rows and the follow-up
+// GetExecutionByID probe fails with a hard DB error (outage), the error must
+// propagate as-is and NOT be mapped to ErrNotFound, which callers like the
+// purchase reaper treat as a benign race-loss.
+func TestPGXMock_TransitionExecutionStatus_ProbeHardErrorNotMappedToNotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	execCols := []string{
+		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+		"notification_sent", "approval_token", "recommendations",
+		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
+		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+		"approval_token_expires_at",
+		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+		"idempotency_key", "scheduled_execution_at",
+	}
+
+	// CAS UPDATE matches zero rows (status already transitioned or row gone).
+	mock.ExpectQuery(`UPDATE purchase_executions`).
+		WithArgs(anyArgsCfg(4)...).
+		WillReturnRows(pgxmock.NewRows(execCols))
+
+	// Probe fails with a hard DB error, not an empty result.
+	dbErr := errors.New("connection refused")
+	mock.ExpectQuery(`SELECT plan_id, execution_id, status`).
+		WithArgs("exec-probe-err").
+		WillReturnError(dbErr)
+
+	_, err := store.TransitionExecutionStatus(ctx, "exec-probe-err", []string{"pending"}, "approved", nil)
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrNotFound), "hard probe error must not be mapped to ErrNotFound")
+	assert.False(t, errors.Is(err, ErrExecutionNotInExpectedStatus), "hard probe error must not read as CAS rejection")
+	assert.ErrorIs(t, err, dbErr)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
