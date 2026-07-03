@@ -245,6 +245,14 @@ func (m *mockCostExplorerForSP) GetReservationCoverage(ctx context.Context, para
 	return &costexplorer.GetReservationCoverageOutput{}, nil
 }
 
+func (m *mockCostExplorerForSP) GetSavingsPlansCoverage(_ context.Context, _ *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *mockCostExplorerForSP) GetSavingsPlansUtilization(_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
 func TestGetSavingsPlansRecommendations_WithFilters(t *testing.T) {
 	mockAPI := &mockCostExplorerForSP{
 		responses: map[types.SupportedSavingsPlansType]*costexplorer.GetSavingsPlansPurchaseRecommendationOutput{
@@ -434,6 +442,18 @@ func (m *multiPageSPMock) GetReservationCoverage(
 	return &costexplorer.GetReservationCoverageOutput{}, nil
 }
 
+func (m *multiPageSPMock) GetSavingsPlansCoverage(
+	_ context.Context, _ *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *multiPageSPMock) GetSavingsPlansUtilization(
+	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
 // alwaysNextPageSPMock returns pages each carrying a non-nil non-empty NextPageToken.
 type alwaysNextPageSPMock struct {
 	calls int
@@ -464,6 +484,18 @@ func (m *alwaysNextPageSPMock) GetReservationCoverage(
 	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
 ) (*costexplorer.GetReservationCoverageOutput, error) {
 	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+func (m *alwaysNextPageSPMock) GetSavingsPlansCoverage(
+	_ context.Context, _ *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *alwaysNextPageSPMock) GetSavingsPlansUtilization(
+	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
 // TestGetSavingsPlansRecommendations_Paginates asserts multi-page accumulation (issue #692).
