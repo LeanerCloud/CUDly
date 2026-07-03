@@ -64,7 +64,7 @@ func (a *AWSLadder) GetUsageBaseline(ctx context.Context, scope ladder.Scope, lo
 	}
 	if len(series) < minBaselineSeriesDays {
 		return ladder.UsageBaseline{}, fmt.Errorf(
-			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the coverage source",
+			"GetUsageBaseline: series length %d is below minimum %d days; extend the lookback window or check the on-demand series source",
 			len(series), minBaselineSeriesDays,
 		)
 	}

@@ -192,9 +192,13 @@ func summarizeExchangeResult(result *exchange.AutoExchangeResult) (ladder.Reshap
 	}
 
 	if len(result.Failed) > 0 {
+		// Denominate by actual exchange ATTEMPTS (completed + failed), not
+		// summary.Analyzed: pending and skipped items were never attempted,
+		// and an inflated denominator would misread during an incident.
+		attempts := len(result.Completed) + len(result.Failed)
 		return summary, fmt.Errorf(
 			"ReshapeBuffer: %d of %d exchange attempt(s) failed (first: %s: %s); see summary details for the full list",
-			len(result.Failed), summary.Analyzed, result.Failed[0].SourceRIID, result.Failed[0].Error)
+			len(result.Failed), attempts, result.Failed[0].SourceRIID, result.Failed[0].Error)
 	}
 	return summary, nil
 }
