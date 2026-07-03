@@ -1771,8 +1771,9 @@ func TestHandler_getPurchaseDetails_NotFound(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	// GetExecutionByID returns (nil, nil) for a missing row (issue #976).
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+	// GetExecutionByID returns an ErrNotFound-wrapping error for a missing row.
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").
+		Return(nil, fmt.Errorf("%w: execution 99999999-9999-9999-9999-999999999999", config.ErrNotFound))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1803,7 +1804,8 @@ func TestHandler_getPurchaseDetails_NilExecution(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, nil)
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").
+		Return(nil, fmt.Errorf("%w: execution 99999999-9999-9999-9999-999999999999", config.ErrNotFound))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1825,8 +1827,8 @@ func TestHandler_getPurchaseDetails_NilExecution(t *testing.T) {
 // TestHandler_getPurchaseDetails_NotFound_IsClientError is a focused
 // regression for issue #431: a missing execution must produce a 404 ClientError,
 // never a 500, so that callers cannot infer UUID existence by observing a
-// status-code difference. GetExecutionByID returns (nil, nil) for a missing row
-// (issue #976); the handler maps that sentinel to a 404.
+// status-code difference. GetExecutionByID returns an ErrNotFound-wrapping
+// error for a missing row; the handler maps that sentinel to a 404.
 func TestHandler_getPurchaseDetails_NotFound_IsClientError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1844,8 +1846,9 @@ func TestHandler_getPurchaseDetails_NotFound_IsClientError(t *testing.T) {
 	mockAuth.grantAdmin()
 
 	const missingID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
-	// GetExecutionByID returns (nil, nil) for a missing row (issue #976).
-	mockStore.On("GetExecutionByID", ctx, missingID).Return(nil, nil)
+	// GetExecutionByID returns an ErrNotFound-wrapping error for a missing row.
+	mockStore.On("GetExecutionByID", ctx, missingID).
+		Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, missingID))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{

@@ -120,8 +120,8 @@ func TestRevokePurchase_PurchaseNotFound(t *testing.T) {
 
 	adminSess := revokeAdminSession()
 	mockAuth.On("ValidateSession", ctx, "tok").Return(adminSess, nil)
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, "pid-1").Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, "pid-1").Return(nil, fmt.Errorf("%w: execution pid-1", config.ErrNotFound))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, "pid-1").Return((*config.PurchaseHistoryRecord)(nil), nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -149,8 +149,8 @@ func TestRevokePurchase_AlreadyRevoked(t *testing.T) {
 	r := armReservationRecord()
 	r.RevokedAt = &revokedAt
 	r.RevokedVia = "direct-api"
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -177,8 +177,8 @@ func TestRevokePurchase_AWSReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "aws"
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -204,8 +204,8 @@ func TestRevokePurchase_GCPReturns422(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Provider = "gcp"
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -231,8 +231,8 @@ func TestRevokePurchase_AzureOutsideWindow(t *testing.T) {
 
 	r := armReservationRecord()
 	r.Timestamp = time.Now().UTC().Add(-8 * 24 * time.Hour) // 8 days ago -- window closed
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -346,8 +346,8 @@ func TestRevokePurchase_UsesStampedWindow(t *testing.T) {
 	// ...but the stamped window already closed an hour ago.
 	closed := time.Now().UTC().Add(-1 * time.Hour)
 	r.RevocationWindowClosesAt = &closed
-	// GetExecutionByID returns (nil, nil): not an execution row, fall through to history.
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	// GetExecutionByID returns ErrNotFound: not an execution row, fall through to history.
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -1004,7 +1004,7 @@ func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T)
 	r.RevocationInFlight = true
 	r.RevokedAt = nil
 
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -1044,7 +1044,7 @@ func TestRevokePurchase_AzureWithinSafetyMarginRejected(t *testing.T) {
 	windowCloses := purchasedAt.AddDate(0, 0, AzureRevocationWindowDays)
 	r.RevocationWindowClosesAt = &windowCloses
 
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return((*config.PurchaseExecution)(nil), nil)
+	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}

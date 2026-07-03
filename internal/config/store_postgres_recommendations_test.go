@@ -26,6 +26,22 @@ func setupRecommendationsStore(ctx context.Context, t *testing.T) (*config.Postg
 	return store, func() { container.Cleanup(ctx) }
 }
 
+// seedRecommendationCloudAccount registers a cloud account so that
+// recommendations rows referencing it satisfy the FK on
+// recommendations.cloud_account_id (migration 000030). Production upserts
+// only ever carry registered account IDs, so tests must create the account
+// first.
+func seedRecommendationCloudAccount(ctx context.Context, t *testing.T, store *config.PostgresStore, id, provider, externalID string) {
+	t.Helper()
+	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{
+		ID:         id,
+		Name:       "rec-test-" + externalID,
+		Provider:   provider,
+		ExternalID: externalID,
+		Enabled:    true,
+	}), "seeding cloud account %s failed", id)
+}
+
 func awsRec(id, service, region, resourceType string, savings float64) config.RecommendationRecord {
 	return config.RecommendationRecord{
 		ID:           id,
@@ -268,9 +284,13 @@ func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T)
 	defer cleanup()
 
 	// Two registered Azure accounts; valid UUIDs because the
-	// account_key generated column is UUID-typed.
+	// account_key generated column is UUID-typed. The accounts must exist
+	// in cloud_accounts: recommendations.cloud_account_id carries an FK
+	// (migration 000030).
 	acct1 := "11111111-1111-1111-1111-111111111111"
 	acct2 := "22222222-2222-2222-2222-222222222222"
+	seedRecommendationCloudAccount(ctx, t, store, acct1, "azure", "sub-1111")
+	seedRecommendationCloudAccount(ctx, t, store, acct2, "azure", "sub-2222")
 
 	t0 := time.Now().UTC().Truncate(time.Second)
 
@@ -324,7 +344,10 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 	store, cleanup := setupRecommendationsStore(ctx, t)
 	defer cleanup()
 
+	// The registered account must exist in cloud_accounts:
+	// recommendations.cloud_account_id carries an FK (migration 000030).
 	registeredAcctID := "33333333-3333-3333-3333-333333333333"
+	seedRecommendationCloudAccount(ctx, t, store, registeredAcctID, "aws", "333333333333")
 
 	t0 := time.Now().UTC().Truncate(time.Second)
 

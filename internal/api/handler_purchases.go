@@ -239,11 +239,11 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 	}
 
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return errNotFound
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return errNotFound
 	}
 
 	// Creator match: both IDs must be non-empty and equal. An empty-string
@@ -381,11 +381,11 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be cancelled: %v", executionID, err))
 	}
 	existing, getErr := h.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(getErr, config.ErrNotFound) {
+		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
+	}
 	if getErr != nil {
 		return nil, fmt.Errorf("disable plan: failed to get execution %s after conflict: %w", executionID, getErr)
-	}
-	if existing == nil {
-		return nil, NewClientError(404, fmt.Sprintf("execution %s not found", executionID))
 	}
 	if existing.Status != "cancelled" {
 		return nil, NewClientError(409, fmt.Sprintf(
@@ -432,11 +432,11 @@ func (h *Handler) disablePlan(ctx context.Context, planID string) error {
 // threshold — same pattern as loadCancelableExecution in the purchase package.
 func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, execID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, NewClientError(404, "execution not found")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return nil, NewClientError(404, "execution not found")
 	}
 	// Preflight (issue #609): reject non-AWS orphan executions before the
 	// cloud SDK is reached. Delegates to the centralized predicate in the
@@ -830,11 +830,11 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	}
 
 	execution, err := h.config.GetExecutionByID(ctx, execID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, NewClientError(404, "execution not found")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return nil, NewClientError(404, "execution not found")
 	}
 
 	// Three-mode dispatch:
@@ -1150,11 +1150,11 @@ func (h *Handler) loadAndValidateRetryRequest(ctx context.Context, req *events.L
 	}
 
 	failedExec, err := h.config.GetExecutionByID(ctx, execID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, nil, NewClientError(404, "execution not found")
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if failedExec == nil {
-		return nil, nil, NewClientError(404, "execution not found")
 	}
 
 	session, err := h.requireSession(ctx, req)
@@ -1455,15 +1455,14 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 	}
 
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, NewClientError(404, "execution not found")
+	}
 	if err != nil {
 		// Real DB failure (connection error, timeout, etc.) - surface as 500
 		// so infrastructure issues are visible to operators and not silently
 		// masked as 404s (issue #976).
 		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		// GetExecutionByID returns (nil, nil) for a missing row (issue #976).
-		return nil, NewClientError(404, "execution not found")
 	}
 
 	// Scope: reject if the execution's plan isn't accessible to the session.

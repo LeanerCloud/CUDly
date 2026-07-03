@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LeanerCloud/CUDly/internal/auth"
@@ -134,11 +135,11 @@ func (h *Handler) requireExecutionAccess(ctx context.Context, session *Session, 
 		return nil
 	}
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return errNotFound
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return errNotFound
 	}
 	return h.requirePlanAccess(ctx, session, execution.PlanID)
 }

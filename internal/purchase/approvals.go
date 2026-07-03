@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,11 +27,11 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	logging.Infof("purchase[%s]: ApproveExecution entry (auth=token actor=%q)", executionID, maskActor(actor))
 
 	execution, err := m.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return fmt.Errorf("execution not found: %s", executionID)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return fmt.Errorf("execution not found: %s", executionID)
 	}
 
 	// Validate token using constant-time comparison to prevent timing attacks.
@@ -242,11 +243,11 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 // CancelExecution to keep both functions below the gocyclo threshold.
 func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, token string) (*config.PurchaseExecution, error) {
 	execution, err := m.config.GetExecutionByID(ctx, executionID)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, fmt.Errorf("execution not found: %s", executionID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	if execution == nil {
-		return nil, fmt.Errorf("execution not found: %s", executionID)
 	}
 	if execution.ApprovalToken == "" || token == "" {
 		return nil, fmt.Errorf("invalid approval token")

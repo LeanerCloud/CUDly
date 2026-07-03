@@ -3,6 +3,7 @@ package purchase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -181,7 +182,7 @@ func TestManager_ApproveExecution_NotFound(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newApproveManager(t)
 
-	store.On("GetExecutionByID", ctx, "exec-123").Return(nil, nil)
+	store.On("GetExecutionByID", ctx, "exec-123").Return(nil, fmt.Errorf("%w: execution exec-123", config.ErrNotFound))
 
 	err := manager.ApproveExecution(ctx, "exec-123", "token", "")
 	assert.Error(t, err)
@@ -473,7 +474,7 @@ func TestManager_CancelExecution_NotFound(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	mockStore.On("GetExecutionByID", ctx, "exec-123").Return(nil, nil)
+	mockStore.On("GetExecutionByID", ctx, "exec-123").Return(nil, fmt.Errorf("%w: execution exec-123", config.ErrNotFound))
 
 	manager := &Manager{
 		config:       mockStore,

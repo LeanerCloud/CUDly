@@ -920,10 +920,11 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 
 	if len(records) == 0 {
 		existing, existErr := s.GetExecutionByID(ctx, executionID)
-		if existErr != nil || existing == nil {
+		if existErr != nil {
 			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
 			// use errors.Is to distinguish "row vanished mid-flight" — a
 			// legitimate CAS race-loss — from a hard DB error.
+			// GetExecutionByID returns ErrNotFound when the row is absent.
 			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 		}
 		// Wrap ErrExecutionNotInExpectedStatus so callers can use
@@ -992,9 +993,6 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 	if existErr != nil {
 		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
 	}
-	if existing == nil {
-		return false, "", fmt.Errorf("execution not found: %s", executionID)
-	}
 	return false, existing.Status, nil
 }
 
@@ -1051,9 +1049,6 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 	existing, existErr := s.GetExecutionByID(ctx, executionID)
 	if existErr != nil {
 		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
-	}
-	if existing == nil {
-		return false, "", fmt.Errorf("execution not found: %s", executionID)
 	}
 	return false, existing.Status, nil
 }
@@ -1251,10 +1246,10 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 }
 
 // GetExecutionByID retrieves a purchase execution by execution ID.
-// Returns (nil, nil) when no row matches executionID so callers can cleanly
-// distinguish "not found" (nil execution, nil error) from a real DB failure
-// (nil execution, non-nil error). All callers must check the execution for
-// nil before use (closes issue #976).
+// Returns an error wrapping ErrNotFound when no row matches executionID so
+// callers can cleanly distinguish "not found" (errors.Is(err, ErrNotFound))
+// from a real DB failure (any other non-nil error). A nil error guarantees
+// a non-nil execution (fail-loud contract; issues #976, #1339).
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
@@ -1275,7 +1270,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	}
 
 	if len(executions) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 	}
 
 	return &executions[0], nil
