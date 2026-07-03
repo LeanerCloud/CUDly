@@ -52,6 +52,14 @@ func (m *mockCostExplorerAPI) GetReservationCoverage(ctx context.Context, params
 	return &costexplorer.GetReservationCoverageOutput{}, nil
 }
 
+func (m *mockCostExplorerAPI) GetSavingsPlansCoverage(ctx context.Context, params *costexplorer.GetSavingsPlansCoverageInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *mockCostExplorerAPI) GetSavingsPlansUtilization(ctx context.Context, params *costexplorer.GetSavingsPlansUtilizationInput, optFns ...func(*costexplorer.Options)) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := aws.Config{
 		Region: "us-west-2",
@@ -681,6 +689,18 @@ func (m *multiPageRIMock) GetReservationCoverage(
 	return &costexplorer.GetReservationCoverageOutput{}, nil
 }
 
+func (m *multiPageRIMock) GetSavingsPlansCoverage(
+	_ context.Context, _ *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *multiPageRIMock) GetSavingsPlansUtilization(
+	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
+}
+
 // riDetail returns a minimal ReservationPurchaseRecommendation with n EC2 details.
 func riDetail(n int) types.ReservationPurchaseRecommendation {
 	details := make([]types.ReservationPurchaseRecommendationDetail, n)
@@ -799,6 +819,18 @@ func (m *alwaysNextPageRIMock) GetReservationCoverage(
 	_ context.Context, _ *costexplorer.GetReservationCoverageInput, _ ...func(*costexplorer.Options),
 ) (*costexplorer.GetReservationCoverageOutput, error) {
 	return &costexplorer.GetReservationCoverageOutput{}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetSavingsPlansCoverage(
+	_ context.Context, _ *costexplorer.GetSavingsPlansCoverageInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansCoverageOutput, error) {
+	return &costexplorer.GetSavingsPlansCoverageOutput{}, nil
+}
+
+func (m *alwaysNextPageRIMock) GetSavingsPlansUtilization(
+	_ context.Context, _ *costexplorer.GetSavingsPlansUtilizationInput, _ ...func(*costexplorer.Options),
+) (*costexplorer.GetSavingsPlansUtilizationOutput, error) {
+	return &costexplorer.GetSavingsPlansUtilizationOutput{}, nil
 }
 
 // TestGetRecommendations_RI_PaginationCapError asserts that exceeding
