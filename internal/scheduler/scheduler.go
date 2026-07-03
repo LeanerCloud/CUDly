@@ -98,9 +98,9 @@ type Scheduler struct {
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
 	assumeRoleSTS   credentials.STSClient
-	config        config.StoreInterface
-	dashboardURL  string
-	oidcIssuerURL string
+	config          config.StoreInterface
+	dashboardURL    string
+	oidcIssuerURL   string
 	// cacheTTL is the age past which opportunistic background refresh kicks
 	// in on non-Lambda runtimes. Parsed from CUDLY_RECOMMENDATION_CACHE_TTL
 	// at NewScheduler time; defaults to 6h.
@@ -905,7 +905,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 			LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 		}
 		var recErr error
-		recs, recErr = recClient.GetRecommendations(ctx, params)
+		recs, recErr = recClient.GetRecommendations(ctx, &params)
 		if recErr != nil {
 			logging.Warnf("fetchAndConvert: %s GetRecommendations fallback failed: %v", providerName, recErr)
 		}

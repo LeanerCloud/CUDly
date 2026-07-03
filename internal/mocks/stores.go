@@ -1021,7 +1021,7 @@ func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter *config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	if !isExpected(&m.Mock, "ListStoredRecommendations") {
 		return nil, nil
 	}
