@@ -594,6 +594,17 @@ func TestBuildTranches_ValidationFailures(t *testing.T) {
 				return baseInput(goodConfig, []Allocation{bad}, now)
 			},
 		},
+		{
+			name: "allocation with empty rationale",
+			build: func() *TrancheInput {
+				bad := Allocation{
+					Layer:         LayerComputeSP,
+					GapUSDPerHour: new(big.Rat).SetInt64(1),
+					Rationale:     "",
+				}
+				return baseInput(goodConfig, []Allocation{bad}, now)
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -861,4 +872,77 @@ func TestBuildTranches_EpsilonOvershootClamped(t *testing.T) {
 		t.Errorf("Tranches count = %d, want 1 (starved last step skipped)", len(result.Tranches))
 	}
 	assertAllValid(t, result)
+}
+
+// TestBuildTranches_DuplicateIDsRejected verifies that a misbehaving injected
+// NewID producing repeated IDs is rejected with an explicit error rather than
+// silently collapsing tranches at SaveTranches upsert time, while a
+// well-behaved sequential generator succeeds.
+func TestBuildTranches_DuplicateIDsRejected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+
+	build := func(newID func() string) (*TrancheResult, error) {
+		in := baseInput(baseConfig(delayedRamp()), []Allocation{
+			mkAlloc(LayerComputeSP, 4),
+		}, now)
+		in.NewID = newID
+		return BuildTranches(in)
+	}
+
+	// Constant generator: two delayed steps get the same ID -> explicit error.
+	_, err := build(func() string { return "same-id" })
+	if err == nil {
+		t.Fatalf("BuildTranches() = nil error, want duplicate-ID error for constant NewID")
+	}
+	if !strings.Contains(err.Error(), "duplicate ID") || !strings.Contains(err.Error(), "same-id") {
+		t.Errorf("duplicate-ID error %q must name the offender and the duplication", err)
+	}
+
+	// Empty generator: rejected loudly (never persisted with a blank key).
+	_, err = build(func() string { return "" })
+	if err == nil {
+		t.Fatalf("BuildTranches() = nil error, want error for empty-string NewID")
+	}
+
+	// Sequential generator: unique IDs -> success.
+	result, err := build(seqID("ok"))
+	if err != nil {
+		t.Fatalf("BuildTranches() error = %v, want nil for sequential NewID", err)
+	}
+	if len(result.Tranches) != 2 {
+		t.Errorf("Tranches count = %d, want 2", len(result.Tranches))
+	}
+	assertAllValid(t, result)
+}
+
+// TestBuildTranches_SmallFractionRationale verifies that a small step fraction
+// renders with meaningful precision in the rationale (e.g. "0.4%") instead of
+// the misleading "(0%)" that zero-decimal rounding would produce on a
+// positive purchase.
+func TestBuildTranches_SmallFractionRationale(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	ramp := RampSchedule{Steps: []RampStep{
+		{AfterDays: 0, Fraction: 0.004},
+		{AfterDays: 30, Fraction: 0.996},
+	}}
+	in := baseInput(baseConfig(ramp), []Allocation{
+		mkAlloc(LayerComputeSP, 100),
+	}, now)
+
+	result, err := BuildTranches(in)
+	if err != nil {
+		t.Fatalf("BuildTranches() error = %v", err)
+	}
+	if len(result.BuyNow) != 1 {
+		t.Fatalf("BuyNow count = %d, want 1", len(result.BuyNow))
+	}
+	r := result.BuyNow[0].Rationale
+	if !strings.Contains(r, "(0.4%)") {
+		t.Errorf("rationale %q must render the small fraction as \"(0.4%%)\"", r)
+	}
+	if strings.Contains(r, "(0%)") {
+		t.Errorf("rationale %q renders a positive purchase as \"(0%%)\"", r)
+	}
 }

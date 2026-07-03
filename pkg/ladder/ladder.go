@@ -104,9 +104,12 @@ func validateTrancheInput(in *TrancheInput) error {
 	return validateInputAllocations(in.Allocations)
 }
 
-// validateInputAllocations checks each allocation for a recognized layer and
-// a positive gap. An empty allocation slice is valid (BuildTranches returns an
-// empty result) but each element must be well-formed.
+// validateInputAllocations checks each allocation for a recognized layer, a
+// positive gap, and a non-empty rationale. An empty allocation slice is valid
+// (BuildTranches returns an empty result) but each element must be
+// well-formed. Every Allocation produced by Allocate carries a rationale, so
+// the rationale check only catches direct API misuse; it still fails loud
+// because the rationale feeds money-path audit trails and approval emails.
 func validateInputAllocations(allocs []Allocation) error {
 	for i, a := range allocs {
 		if err := a.Layer.Validate(); err != nil {
@@ -115,12 +118,16 @@ func validateInputAllocations(allocs []Allocation) error {
 		if a.GapUSDPerHour == nil || a.GapUSDPerHour.Sign() <= 0 {
 			return fmt.Errorf("allocation[%d]: gap_usd_per_hour must be positive", i)
 		}
+		if a.Rationale == "" {
+			return fmt.Errorf("allocation[%d]: rationale is required (money-path auditability)", i)
+		}
 	}
 	return nil
 }
 
 // buildTrancheResult iterates over all allocations and splits each one across
-// the configured ramp schedule steps.
+// the configured ramp schedule steps, then verifies that the injected NewID
+// produced a unique, non-empty ID for every tranche of the run.
 func buildTrancheResult(in *TrancheInput) (*TrancheResult, error) {
 	steps := in.Config.Ramp.Steps
 	result := &TrancheResult{}
@@ -129,7 +136,34 @@ func buildTrancheResult(in *TrancheInput) (*TrancheResult, error) {
 			return nil, err
 		}
 	}
+	if err := validateTrancheIDs(result.Tranches); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+// validateTrancheIDs verifies that every produced tranche carries a unique,
+// non-empty ID. SaveTranches upserts by tranche ID, so a duplicate or empty
+// ID from a misbehaving injected NewID would silently collapse scheduled
+// purchases at persistence time -- money-path data loss. Fail loud naming
+// the offender instead. (An empty ID is already rejected earlier by
+// Tranche.Validate inside buildFutureTranche; the check here is kept so this
+// function is a self-contained guarantee over the whole batch.)
+func validateTrancheIDs(tranches []Tranche) error {
+	seen := make(map[string]struct{}, len(tranches))
+	for i := range tranches {
+		tr := &tranches[i]
+		if tr.ID == "" {
+			return fmt.Errorf("tranche[%d] (layer %s, step %d): NewID returned an empty ID", i, tr.Layer, tr.StepIndex)
+		}
+		if _, dup := seen[tr.ID]; dup {
+			return fmt.Errorf(
+				"tranche[%d] (layer %s, step %d): NewID returned duplicate ID %q; upsert-by-ID would silently drop a scheduled purchase",
+				i, tr.Layer, tr.StepIndex, tr.ID)
+		}
+		seen[tr.ID] = struct{}{}
+	}
+	return nil
 }
 
 // processAllocation splits one allocation across all ramp steps. Each step
@@ -193,8 +227,8 @@ func appendStep(in *TrancheInput, alloc Allocation, step RampStep, stepIdx, nSte
 // For all steps except the last: amount = min(gap * fraction, remaining),
 // where remaining = max(gap - priorSum, 0) and fraction is converted to a
 // rational via big.Rat.SetFloat64 at the boundary (same discipline as
-// ratFromFloat in allocate.go). RampSchedule.Validate ensures the fraction is
-// in (0, 1], so NaN/Inf/negative cannot occur here.
+// ratFromFloat in allocate.go). RampSchedule.Validate rejects NaN and bounds
+// fractions to (0, 1], so NaN/Inf/negative cannot occur here.
 //
 // For the last step: amount = remaining (the exact leftover, floored at 0).
 //
@@ -222,10 +256,13 @@ func computeStepAmount(gap *big.Rat, fraction float64, isLast bool, priorSum *bi
 
 // stepRationale returns a human-readable rationale string for a buy-now action
 // or future tranche, embedding the step position, fraction percentage, computed
-// amount, total gap, and the allocation's original rationale.
+// amount, total gap, and the allocation's original rationale. The percentage
+// uses %.4g so small fractions render meaningfully (0.4% instead of the
+// misleading "0%" that fixed zero-decimal rounding would produce on a
+// positive purchase).
 func stepRationale(alloc Allocation, stepIdx, totalSteps int, fraction float64, amount, gap *big.Rat) string {
 	return fmt.Sprintf(
-		"ramp step %d/%d (%.0f%%): %s of %s total. %s",
+		"ramp step %d/%d (%.4g%%): %s of %s total. %s",
 		stepIdx+1, totalSteps, fraction*100,
 		fmtRatUSD(amount), fmtRatUSD(gap),
 		alloc.Rationale,
