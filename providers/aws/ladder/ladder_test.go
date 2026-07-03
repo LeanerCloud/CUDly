@@ -95,17 +95,20 @@ func (f *fakeSPUtilizationSource) GetSPUtilization(_ context.Context, planType c
 // Test helpers
 // ---------------------------------------------------------------------------
 
+// newTestLadder builds a read-side ladder. cov is the fakeCoverageSource,
+// which satisfies both riCoverageSource and onDemandSeriesSource, so it is
+// passed for both split interfaces.
 func newTestLadder(
 	t *testing.T,
 	ris riLister,
 	sps spLister,
-	cov coverageSource,
+	cov *fakeCoverageSource,
 	util utilizationSource,
 ) *AWSLadder {
 	t.Helper()
 	a, err := New(
 		Config{Region: "us-east-1", AccountID: "123456789012", HorizonDays: 30, LookbackDays: 30},
-		ris, sps, cov, util,
+		ris, sps, cov, cov, util,
 		nil, nil,
 	)
 	require.NoError(t, err)
@@ -158,22 +161,24 @@ func TestNew_RequiredFieldValidation(t *testing.T) {
 		name    string
 		ri      riLister
 		sp      spLister
-		cov     coverageSource
+		riCov   riCoverageSource
+		od      onDemandSeriesSource
 		util    utilizationSource
 		wantErr string
 		cfg     Config
 	}{
-		{"empty region", ri, sp, cov, util, "Region must not be empty", Config{AccountID: "1"}},
-		{"empty account", ri, sp, cov, util, "AccountID must not be empty", Config{Region: "us-east-1"}},
-		{"nil riLister", nil, sp, cov, util, "riLister must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
-		{"nil spLister", ri, nil, cov, util, "spLister must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
-		{"nil coverageSource", ri, sp, nil, util, "coverageSource must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
-		{"nil utilizationSource", ri, sp, cov, nil, "utilizationSource must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
+		{"empty region", ri, sp, cov, cov, util, "Region must not be empty", Config{AccountID: "1"}},
+		{"empty account", ri, sp, cov, cov, util, "AccountID must not be empty", Config{Region: "us-east-1"}},
+		{"nil riLister", nil, sp, cov, cov, util, "riLister must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
+		{"nil spLister", ri, nil, cov, cov, util, "spLister must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
+		{"nil riCoverageSource", ri, sp, nil, cov, util, "riCoverageSource must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
+		{"nil onDemandSeriesSource", ri, sp, cov, nil, util, "onDemandSeriesSource must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
+		{"nil utilizationSource", ri, sp, cov, cov, nil, "utilizationSource must not be nil", Config{Region: "us-east-1", AccountID: "1"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(tt.cfg, tt.ri, tt.sp, tt.cov, tt.util, nil, nil)
+			_, err := New(tt.cfg, tt.ri, tt.sp, tt.riCov, tt.od, tt.util, nil, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -215,14 +220,14 @@ func TestSupportedLayers_RoleCardinality(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PurchaseLayer / ReshapeBuffer stub errors
+// PurchaseLayer / ReshapeBuffer without write-side wiring
 // ---------------------------------------------------------------------------
 
 func TestPurchaseLayer_ReturnsNotWiredError(t *testing.T) {
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
 	_, err := a.PurchaseLayer(context.Background(), ladder.LayerConvertibleRI, common.Recommendation{}, common.PurchaseOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "write side not yet wired")
+	assert.Contains(t, err.Error(), "write side not wired")
 	assert.False(t, errors.Is(err, common.ErrCommitmentPurchaseNotSupported),
 		"must NOT wrap ErrCommitmentPurchaseNotSupported -- that sentinel means permanent inability, not missing wiring")
 }
@@ -231,7 +236,7 @@ func TestReshapeBuffer_ReturnsNotWiredError(t *testing.T) {
 	a := newTestLadder(t, &fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{})
 	_, err := a.ReshapeBuffer(context.Background(), testScope(), ladder.BufferReshapeConfig{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "write side not yet wired")
+	assert.Contains(t, err.Error(), "write side not wired")
 }
 
 // ---------------------------------------------------------------------------
@@ -436,11 +441,12 @@ func TestGetLayerStates_ExpiryHorizonBoundary(t *testing.T) {
 	riAtHorizon := makeRI("ri-at", "m5.large", 1, 1.00, atHorizon)
 	riJustAfter := makeRI("ri-after", "m5.large", 1, 1.00, justAfter)
 
+	cov := &fakeCoverageSource{}
 	a, err := New(
 		Config{Region: "us-east-1", AccountID: "123456789012", HorizonDays: horizonDays, LookbackDays: 30},
 		&fakeRILister{ris: []ec2svc.ConvertibleRI{riAtHorizon, riJustAfter}},
 		&fakeSPLister{},
-		&fakeCoverageSource{},
+		cov, cov,
 		&fakeUtilizationSource{},
 		nil, nil,
 	)
@@ -562,9 +568,10 @@ func TestGetLayerStates_SPLayers_SharedCovPct_BothLayersGetSameValue(t *testing.
 	covPct := 75.0
 	spCov := &fakeSPCoverageSource{summary: SPCoverageSummary{CoveragePct: &covPct}}
 
+	cov := &fakeCoverageSource{}
 	a, err := New(
 		Config{Region: "us-east-1", AccountID: "123456789012", HorizonDays: 30, LookbackDays: 30},
-		&fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{},
+		&fakeRILister{}, &fakeSPLister{}, cov, cov, &fakeUtilizationSource{},
 		spCov, nil,
 	)
 	require.NoError(t, err)
@@ -586,9 +593,10 @@ func TestGetLayerStates_SPUtilization_CorrectCEEnum(t *testing.T) {
 	utilPct := 85.0
 	spUtil := &fakeSPUtilizationSource{summary: SPUtilizationSummary{UtilizationPct: &utilPct}}
 
+	cov := &fakeCoverageSource{}
 	a, err := New(
 		Config{Region: "us-east-1", AccountID: "123456789012", HorizonDays: 30, LookbackDays: 30},
-		&fakeRILister{}, &fakeSPLister{}, &fakeCoverageSource{}, &fakeUtilizationSource{},
+		&fakeRILister{}, &fakeSPLister{}, cov, cov, &fakeUtilizationSource{},
 		nil, spUtil,
 	)
 	require.NoError(t, err)
