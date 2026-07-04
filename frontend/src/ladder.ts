@@ -22,8 +22,11 @@ import { canAccess } from './permissions';
 // MODULE STATE
 // ==========================================
 
-// In-flight guard for the save action.
-let saveInFlight = false;
+// Separate in-flight guards for the two independent save paths. Sharing one
+// flag let the kill-switch toggle and the per-account modal save block/revert
+// each other even though they touch unrelated backend endpoints.
+let killSwitchSaveInFlight = false;
+let configModalSaveInFlight = false;
 
 // Cached configs from the last successful load.
 let cachedConfigs: api.LadderConfig[] = [];
@@ -313,19 +316,17 @@ function wireKillSwitchToggle(): void {
   if (!toggle || !canAccess('update', 'config')) return;
 
   toggle.addEventListener('change', async () => {
-    if (saveInFlight) {
+    if (killSwitchSaveInFlight) {
       toggle.checked = !toggle.checked; // revert optimistic
       return;
     }
-    saveInFlight = true;
+    killSwitchSaveInFlight = true;
     try {
-      const globalCfg = await fetchGlobalConfigForLaddering();
-      if (globalCfg === null) {
-        toggle.checked = !toggle.checked;
-        return;
-      }
-      globalCfg.laddering_enabled = toggle.checked;
-      await api.updateConfig(globalCfg);
+      // The backend merges a partial PUT over the stored config (json.Unmarshal
+      // only sets keys present in the body), so we send ONLY the field we are
+      // changing. Every other setting is preserved server-side; enumerating the
+      // whole config here was fragile and dropped fields it did not list.
+      await api.updateConfig({ laddering_enabled: toggle.checked });
       showToast({
         message: `Commitment Laddering ${toggle.checked ? 'enabled' : 'disabled'} globally.`,
         kind: 'success',
@@ -335,50 +336,9 @@ function wireKillSwitchToggle(): void {
       showToast({ message: 'Failed to update laddering kill-switch.', kind: 'error' });
       console.error('Failed to toggle laddering_enabled:', err);
     } finally {
-      saveInFlight = false;
+      killSwitchSaveInFlight = false;
     }
   });
-}
-
-/**
- * Fetches the global config for the kill-switch toggle so we can merge the
- * single field change without overwriting other fields. Returns null on error
- * (error is shown via toast before returning).
- */
-async function fetchGlobalConfigForLaddering(): Promise<api.Config | null> {
-  try {
-    const resp = await api.getConfig();
-    const g = resp.global;
-    if (!g) {
-      showToast({ message: 'Could not load global config.', kind: 'error' });
-      return null;
-    }
-    // Build a Config-shaped payload from GlobalConfig fields that are safe to
-    // round-trip (the union of GlobalConfig and Config). We pass only the
-    // fields the backend's updateConfig handler accepts.
-    //
-    // IMPORTANT: include every field the backend stores, not just the one we
-    // are changing. GlobalConfig.NotificationEmail is a *string in Go: omitting
-    // it from the PUT body decodes as nil and zeroes it out in the DB.
-    return {
-      enabled_providers: (g.enabled_providers ?? []) as api.Provider[],
-      notification_email: g.notification_email,
-      auto_collect: g.auto_collect ?? true,
-      collection_schedule: g.collection_schedule ?? 'daily',
-      notification_days_before: g.notification_days_before ?? 3,
-      default_term: g.default_term ?? 3,
-      default_payment: (g.default_payment ?? 'all-upfront') as api.PaymentOption,
-      default_coverage: g.default_coverage ?? 80,
-      grace_period_days: g.grace_period_days,
-      recommendations_cache_stale_hours: g.recommendations_cache_stale_hours,
-      recommendations_lookback_days: g.recommendations_lookback_days,
-      laddering_enabled: g.laddering_enabled ?? false,
-    };
-  } catch (err) {
-    showToast({ message: 'Failed to load global config.', kind: 'error' });
-    console.error('fetchGlobalConfigForLaddering:', err);
-    return null;
-  }
 }
 
 // ==========================================
@@ -440,7 +400,7 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
 
 // Exported for unit testing (see renderConfigTable note).
 export async function saveLadderConfig(): Promise<void> {
-  if (saveInFlight) return;
+  if (configModalSaveInFlight) return;
 
   const maxHourlyRaw = (document.getElementById('ladder-cfg-max-hourly') as HTMLInputElement | null)?.value?.trim() ?? '';
   const maxHourly: number | null = maxHourlyRaw === '' ? null : Number(maxHourlyRaw);
@@ -480,7 +440,7 @@ export async function saveLadderConfig(): Promise<void> {
     return;
   }
 
-  saveInFlight = true;
+  configModalSaveInFlight = true;
   const saveBtn = document.getElementById('ladder-config-save-btn') as HTMLButtonElement | null;
   if (saveBtn) saveBtn.disabled = true;
 
@@ -504,7 +464,7 @@ export async function saveLadderConfig(): Promise<void> {
     showToast({ message: 'Failed to save ladder config. Check inputs and try again.', kind: 'error' });
     console.error('saveLadderConfig:', err);
   } finally {
-    saveInFlight = false;
+    configModalSaveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
 }
