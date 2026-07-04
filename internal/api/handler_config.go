@@ -58,67 +58,34 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 	return resp, nil
 }
 
-// preserveOmittedRecommendationFields merges persisted GlobalConfig values
-// for the cycle-parameter fields when the request body omits them.
-// Without this merge, a partial PUT would silently zero out
-// RecommendationsCacheStaleHours / RecommendationsLookbackDays / PurchaseDelayHours,
-// which all have meaningful 0-vs-omitted semantics that json.Unmarshal can't
-// represent directly. Errors from GetGlobalConfig fall through: the request body's
-// zero values then flow into Validate() which rejects out-of-range values,
-// matching the pre-fix behaviour. Extracted from updateConfig to keep that
-// function under the cyclomatic-complexity gate after the merge logic was
-// added (PR #308 CodeRabbit pass-2 review).
-// allKeysPresent reports whether every key is present in m. Extracted so
-// callers can express an all-present short-circuit without an N-way boolean
-// conjunction (which trips the cyclomatic-complexity gate).
-func allKeysPresent(m map[string]json.RawMessage, keys ...string) bool {
-	for _, k := range keys {
-		if _, ok := m[k]; !ok {
-			return false
-		}
+// mergeGlobalConfigUpdate loads the stored GlobalConfig and json.Unmarshals the
+// request body over a copy of it, so any field ABSENT from the JSON retains its
+// persisted value (present -> updated, absent -> preserved) for EVERY field,
+// with no per-field enumeration. This is required for partial PUTs such as the
+// laddering kill-switch toggle, which sends only { laddering_enabled };
+// unmarshalling into a zero value would otherwise wipe RI-exchange automation,
+// approval_required, default_ramp_schedule, and every other omitted field.
+//
+// A malformed body is a 400 (rejected before any DB read). A read error fails
+// loud rather than merging over a zero base: proceeding without the stored
+// config would silently clobber it on a partial PUT (money-adjacent path; no
+// silent fallbacks).
+func (h *Handler) mergeGlobalConfigUpdate(ctx context.Context, body string) (*config.GlobalConfig, error) {
+	if !json.Valid([]byte(body)) {
+		return nil, NewClientError(400, "invalid request body")
 	}
-	return true
-}
-
-func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {
-	var present map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &present); err != nil {
-		return NewClientError(400, "invalid request body")
+	existing, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, err
 	}
-	_, hasStale := present["recommendations_cache_stale_hours"]
-	_, hasLookback := present["recommendations_lookback_days"]
-	_, hasDelay := present["purchase_delay_hours"]
-	// laddering_enabled is only present in the PUT body when the Purchasing
-	// panel is active (the General panel form omits it). Preserve the existing
-	// DB value when absent so a General-panel save cannot silently reset the
-	// kill-switch back to false.
-	_, hasLaddering := present["laddering_enabled"]
-	// Skip the DB read when every preserved key is already supplied.
-	if allKeysPresent(present,
-		"recommendations_cache_stale_hours",
-		"recommendations_lookback_days",
-		"purchase_delay_hours",
-		"laddering_enabled",
-	) {
-		return nil
+	var cfg config.GlobalConfig
+	if existing != nil {
+		cfg = *existing
 	}
-	existing, gcErr := h.config.GetGlobalConfig(ctx)
-	if gcErr != nil || existing == nil {
-		return nil
+	if err = json.Unmarshal([]byte(body), &cfg); err != nil {
+		return nil, NewClientError(400, "invalid request body")
 	}
-	if !hasStale {
-		cfg.RecommendationsCacheStaleHours = existing.RecommendationsCacheStaleHours
-	}
-	if !hasLookback {
-		cfg.RecommendationsLookbackDays = existing.RecommendationsLookbackDays
-	}
-	if !hasDelay {
-		cfg.PurchaseDelayHours = existing.PurchaseDelayHours
-	}
-	if !hasLaddering {
-		cfg.LadderingEnabled = existing.LadderingEnabled
-	}
-	return nil
+	return &cfg, nil
 }
 
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
@@ -127,13 +94,9 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	var cfg config.GlobalConfig
-	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
-		return nil, NewClientError(400, "invalid request body")
-	}
-
-	if err := h.preserveOmittedRecommendationFields(ctx, &cfg, req.Body); err != nil {
-		return nil, err
+	cfg, mergeErr := h.mergeGlobalConfigUpdate(ctx, req.Body)
+	if mergeErr != nil {
+		return nil, mergeErr
 	}
 
 	// Validate the configuration
@@ -141,7 +104,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
-	if err := h.config.SaveGlobalConfig(ctx, &cfg); err != nil {
+	if err := h.config.SaveGlobalConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
 

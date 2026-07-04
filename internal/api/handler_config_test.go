@@ -172,6 +172,88 @@ func TestHandler_updateConfig_LadderingEnabledPreservation(t *testing.T) {
 	}
 }
 
+// TestHandler_updateConfig_PartialPUTPreservesOmittedFields is the F2
+// data-loss regression test. The laddering kill-switch toggle sends a partial
+// PUT of only {"laddering_enabled": true}; before the merge fix, updateConfig
+// unmarshalled that into a zero GlobalConfig and only restored the four
+// recommendation/laddering fields, silently zeroing approval_required,
+// default_ramp_schedule, and every ri_exchange_* field (wiping the user's
+// RI-exchange automation). The merge must leave every omitted field at its
+// stored value while applying the one field the body carries. Assert against
+// the config handed to SaveGlobalConfig, not just a 200.
+func TestHandler_updateConfig_PartialPUTPreservesOmittedFields(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").
+		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
+
+	notifyEmail := "ops@example.com"
+	existing := &config.GlobalConfig{
+		EnabledProviders:               []string{"aws"},
+		NotificationEmail:              &notifyEmail,
+		AutoCollect:                    true,
+		CollectionSchedule:             "daily",
+		NotificationDaysBefore:         3,
+		ApprovalRequired:               true,
+		DefaultTerm:                    3,
+		DefaultPayment:                 "all-upfront",
+		DefaultCoverage:                80,
+		DefaultRampSchedule:            "immediate",
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "automatic",
+		RIExchangeUtilizationThreshold: 95,
+		RIExchangeMaxPerExchangeUSD:    1000,
+		RIExchangeMaxDailyUSD:          5000,
+		RIExchangeLookbackDays:         30,
+		RecommendationsCacheStaleHours: 24,
+		RecommendationsLookbackDays:    7,
+		PurchaseDelayHours:             48,
+		LadderingEnabled:               false,
+	}
+	mockStore.On("GetGlobalConfig", ctx).Return(existing, nil)
+	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
+
+	var saved config.GlobalConfig
+	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).
+		Run(func(args mock.Arguments) { saved = *args.Get(1).(*config.GlobalConfig) }).
+		Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"laddering_enabled": true}`,
+	}
+	result, err := handler.updateConfig(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", result.Status)
+
+	// The one field the body carried was applied.
+	assert.True(t, saved.LadderingEnabled, "laddering_enabled from the body must be applied")
+
+	// Every omitted field must retain its stored value (the F2 bug zeroed these).
+	assert.True(t, saved.ApprovalRequired, "approval_required must be preserved")
+	assert.Equal(t, "immediate", saved.DefaultRampSchedule, "default_ramp_schedule must be preserved")
+	assert.True(t, saved.RIExchangeEnabled, "ri_exchange_enabled must be preserved")
+	assert.Equal(t, "automatic", saved.RIExchangeMode, "ri_exchange_mode must be preserved")
+	assert.Equal(t, 95.0, saved.RIExchangeUtilizationThreshold, "ri_exchange_utilization_threshold must be preserved")
+	assert.Equal(t, 1000.0, saved.RIExchangeMaxPerExchangeUSD, "ri_exchange_max_per_exchange_usd must be preserved")
+	assert.Equal(t, 5000.0, saved.RIExchangeMaxDailyUSD, "ri_exchange_max_daily_usd must be preserved")
+	assert.Equal(t, 30, saved.RIExchangeLookbackDays, "ri_exchange_lookback_days must be preserved")
+
+	// Other scalars stay intact too.
+	assert.Equal(t, []string{"aws"}, saved.EnabledProviders)
+	assert.Equal(t, "all-upfront", saved.DefaultPayment)
+	assert.Equal(t, 80.0, saved.DefaultCoverage)
+	assert.Equal(t, 48, saved.PurchaseDelayHours)
+	require.NotNil(t, saved.NotificationEmail)
+	assert.Equal(t, "ops@example.com", *saved.NotificationEmail)
+}
+
 func TestHandler_updateConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
