@@ -39,7 +39,13 @@ CREATE TABLE IF NOT EXISTS ladder_runs (
     total_upfront_cost          NUMERIC(20,6)   NOT NULL DEFAULT 0,
     estimated_savings           NUMERIC(20,6)   NOT NULL DEFAULT 0,
 
-    approval_token              TEXT,
+    -- Stores the SHA-256 hex digest of the run approval token, never the raw
+    -- token. The raw token is sent only in the approval email link; the
+    -- email-approval PR (phase-3 PR-3) must hash-on-write and use a
+    -- constant-time compare against this column. (The pre-existing
+    -- purchase_executions / ri_exchange_history approval_token columns still
+    -- store raw tokens; hashing those is tracked as a separate follow-up.)
+    approval_token_hash         TEXT,
     approval_token_expires_at   TIMESTAMPTZ,
     approved_by                 TEXT,
     cancelled_by                TEXT,
