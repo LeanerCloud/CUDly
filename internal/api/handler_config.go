@@ -68,6 +68,18 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 // matching the pre-fix behaviour. Extracted from updateConfig to keep that
 // function under the cyclomatic-complexity gate after the merge logic was
 // added (PR #308 CodeRabbit pass-2 review).
+// allKeysPresent reports whether every key is present in m. Extracted so
+// callers can express an all-present short-circuit without an N-way boolean
+// conjunction (which trips the cyclomatic-complexity gate).
+func allKeysPresent(m map[string]json.RawMessage, keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := m[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {
 	var present map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &present); err != nil {
@@ -76,7 +88,18 @@ func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *
 	_, hasStale := present["recommendations_cache_stale_hours"]
 	_, hasLookback := present["recommendations_lookback_days"]
 	_, hasDelay := present["purchase_delay_hours"]
-	if hasStale && hasLookback && hasDelay {
+	// laddering_enabled is only present in the PUT body when the Purchasing
+	// panel is active (the General panel form omits it). Preserve the existing
+	// DB value when absent so a General-panel save cannot silently reset the
+	// kill-switch back to false.
+	_, hasLaddering := present["laddering_enabled"]
+	// Skip the DB read when every preserved key is already supplied.
+	if allKeysPresent(present,
+		"recommendations_cache_stale_hours",
+		"recommendations_lookback_days",
+		"purchase_delay_hours",
+		"laddering_enabled",
+	) {
 		return nil
 	}
 	existing, gcErr := h.config.GetGlobalConfig(ctx)
@@ -91,6 +114,9 @@ func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *
 	}
 	if !hasDelay {
 		cfg.PurchaseDelayHours = existing.PurchaseDelayHours
+	}
+	if !hasLaddering {
+		cfg.LadderingEnabled = existing.LadderingEnabled
 	}
 	return nil
 }

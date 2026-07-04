@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/LeanerCloud/CUDly/pkg/ladder"
 )
 
 // GlobalConfig represents the global CUDly configuration
@@ -61,6 +63,12 @@ type GlobalConfig struct {
 	// 0 means immediate-execute (backward compat). Valid range: [0, 168].
 	// Default: 48.
 	PurchaseDelayHours int `json:"purchase_delay_hours" db:"purchase_delay_hours"`
+
+	// LadderingEnabled is the global kill-switch for the commitment-laddering
+	// feature (issue #1333 phase 3). When false (the default), no laddering
+	// engine runs fire regardless of per-account LadderConfig.Enabled settings.
+	// Set to true to allow per-account configs to activate individually.
+	LadderingEnabled bool `json:"laddering_enabled" db:"laddering_enabled"`
 }
 
 // DefaultGracePeriodDays is the fallback window used when a provider
@@ -929,4 +937,80 @@ type AccountRegistrationFilter struct {
 	Status   *string
 	Provider *string
 	Search   string
+}
+
+// ==========================================
+// COMMITMENT LADDERING
+// ==========================================
+
+// Ladder default constants. These alias the canonical values in pkg/ladder so
+// that internal/config callers can reference them by name without importing
+// pkg/ladder directly. The string-typed mode/cadence values are also sourced
+// from pkg/ladder to guarantee the DB and the engine always use the same tokens.
+
+// DefaultLadderTargetCoverage is the default commitment coverage target (%).
+// Aliases ladder.DefaultTargetCoveragePct so only one source of truth exists.
+const DefaultLadderTargetCoverage = ladder.DefaultTargetCoveragePct
+
+// DefaultLadderBufferFraction is the default fraction of the base allocation
+// reserved in short-term / convertible buffer commitments.
+const DefaultLadderBufferFraction = ladder.DefaultBufferFraction
+
+// DefaultLadderBaselinePercentile is the default usage percentile used to
+// anchor the base commitment layer.
+const DefaultLadderBaselinePercentile = ladder.DefaultBaselinePercentile
+
+// DefaultLadderLookbackDays is the default historical window (days) used to
+// compute the usage baseline.
+const DefaultLadderLookbackDays = ladder.DefaultLookbackDays
+
+// DefaultLadderBufferUtilThreshold is the default buffer-layer utilization %
+// below which the engine emits a reshape recommendation.
+const DefaultLadderBufferUtilThreshold = ladder.DefaultBufferUtilizationThresholdPct
+
+// DefaultLadderMaxActionsPerRun is the default cap on the number of
+// PlannedActions the engine may execute per run.
+const DefaultLadderMaxActionsPerRun = 10
+
+// MaxLadderActionsPerRun is the ceiling enforced at validation time. A value
+// above this is almost certainly a misconfiguration and should fail loud rather
+// than fan out unbounded actions.
+const MaxLadderActionsPerRun = 50
+
+// LadderConfigDB is the DB-persistence mirror of pkg/ladder.LadderConfig.
+// It stores one per-account, per-provider ladder configuration row and is
+// used by the store layer (GetLadderConfig / UpsertLadderConfig) and the API
+// handler. Mode and Cadence are plain strings whose valid values are defined
+// by pkg/ladder (ModeEmailApproval, ModeAutoApprove, CadenceDaily,
+// CadenceWeekly). Validation calls pkg/ladder's Parse* functions so the
+// internal/config package never redefines those constants.
+//
+// MaxHourlyCommitPerRun is a pointer because nil means "no cap" (distinct from
+// 0, which would cap all spending). All numeric money fields follow the project
+// rule: absent = nil/pointer, never 0.
+// Field order is optimized for govet fieldalignment (pointer-containing fields
+// grouped first to shrink the GC pointer-scan range, then scalars, bool last).
+// It intentionally does not follow the logical/SQL column order; see the
+// scanLadderConfig / Upsert SQL for the wire order.
+type LadderConfigDB struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	// MaxHourlyCommitPerRun caps the total hourly commitment delta a single run
+	// may purchase. nil means no cap.
+	MaxHourlyCommitPerRun      *float64        `json:"max_hourly_commit_per_run,omitempty"`
+	CloudAccountID             string          `json:"cloud_account_id"`
+	Provider                   string          `json:"provider"`
+	Mode                       string          `json:"mode"`    // ladder.ModeEmailApproval | ladder.ModeAutoApprove
+	Cadence                    string          `json:"cadence"` // ladder.CadenceDaily | ladder.CadenceWeekly
+	ID                         string          `json:"id"`
+	RampSchedule               json.RawMessage `json:"ramp_schedule"`
+	BufferUtilizationThreshold float64         `json:"buffer_utilization_threshold"`
+	LookbackDays               int             `json:"lookback_days"`
+	MaxActionsPerRun           int             `json:"max_actions_per_run"`
+	// BaselinePercentile is the statistical percentile used to anchor the base
+	// commitment layer. Must be in (0, 50].
+	BaselinePercentile float64 `json:"baseline_percentile"`
+	BufferFraction     float64 `json:"buffer_fraction"`
+	TargetCoverage     float64 `json:"target_coverage"`
+	Enabled            bool    `json:"enabled"`
 }

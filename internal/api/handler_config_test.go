@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -85,6 +86,90 @@ func TestHandler_updateConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "updated", result.Status)
+}
+
+// TestHandler_updateConfig_LadderingEnabledPreservation asserts the
+// kill-switch preservation contract added in the ladder-schema PR:
+//   - a PUT that OMITS laddering_enabled must NOT reset the persisted value
+//     (the General-settings panel never sends the field, so a plain save must
+//     leave a previously-enabled kill-switch on).
+//   - a PUT that sends laddering_enabled:false must flip it off.
+//
+// Both cases capture the *config.GlobalConfig handed to SaveGlobalConfig and
+// assert on the final LadderingEnabled value the store would persist.
+func TestHandler_updateConfig_LadderingEnabledPreservation(t *testing.T) {
+	// newHandler builds a handler whose GetGlobalConfig returns a config seeded
+	// with existingLaddering, and captures the config handed to SaveGlobalConfig
+	// into the returned pointer so callers can assert the persisted value.
+	newHandler := func(t *testing.T, existingLaddering bool) (*Handler, *config.GlobalConfig) {
+		t.Helper()
+		ctx := context.Background()
+		mockStore := new(MockConfigStore)
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+
+		adminSession := &Session{
+			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			Email:  "admin@example.com",
+		}
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+		mockAuth.grantAdmin()
+
+		// The body always omits the recommendations fields, so updateConfig
+		// fetches the existing config to preserve them; seed LadderingEnabled
+		// there so the preservation branch has a concrete value to keep.
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+			RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
+			RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
+			LadderingEnabled:               existingLaddering,
+		}, nil)
+		mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
+
+		var saved config.GlobalConfig
+		mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).
+			Run(func(args mock.Arguments) {
+				saved = *args.Get(1).(*config.GlobalConfig)
+			}).Return(nil)
+
+		return &Handler{config: mockStore, auth: mockAuth}, &saved
+	}
+
+	makeReq := func(body string) *events.LambdaFunctionURLRequest {
+		return &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"Authorization": "Bearer admin-token"},
+			Body:    body,
+		}
+	}
+
+	const bodyOmitted = `{"enabled_providers": ["aws"], "default_term": 3}`
+	bodyWith := func(v bool) string {
+		return fmt.Sprintf(`{"enabled_providers": ["aws"], "default_term": 3, "laddering_enabled": %t}`, v)
+	}
+
+	cases := []struct {
+		name          string
+		body          string
+		existing      bool
+		wantPersisted bool
+	}{
+		{"omitted preserves existing true", bodyOmitted, true, true},
+		{"omitted preserves existing false", bodyOmitted, false, false},
+		{"explicit false flips existing true off", bodyWith(false), true, false},
+		{"explicit true flips existing false on", bodyWith(true), false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler, saved := newHandler(t, tc.existing)
+
+			result, err := handler.updateConfig(ctx, makeReq(tc.body))
+			require.NoError(t, err)
+			assert.Equal(t, "updated", result.Status)
+			assert.Equal(t, tc.wantPersisted, saved.LadderingEnabled,
+				"persisted laddering_enabled mismatch for case %q", tc.name)
+		})
+	}
 }
 
 func TestHandler_updateConfig_InvalidBody(t *testing.T) {

@@ -737,3 +737,13 @@ func (m *mockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) 
 	return m.GetPendingExecutions(ctx)
 }
 func (m *mockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }
+
+func (m *mockConfigStore) GetLadderConfigs(_ context.Context) ([]config.LadderConfigDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetLadderConfig(_ context.Context, _, _ string) (*config.LadderConfigDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
+	return cfg, nil
+}

@@ -319,3 +319,13 @@ func (m *mockConfigStoreForHealth) GetPurchaseHistoryInFlight(_ context.Context)
 func (m *mockConfigStoreForHealth) GetScheduledExecutionsDue(_ context.Context) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
+
+func (m *mockConfigStoreForHealth) GetLadderConfigs(_ context.Context) ([]config.LadderConfigDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetLadderConfig(_ context.Context, _, _ string) (*config.LadderConfigDB, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
+	return cfg, nil
+}

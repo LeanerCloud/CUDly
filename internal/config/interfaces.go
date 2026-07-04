@@ -314,4 +314,14 @@ type StoreInterface interface {
 	// participate in the transaction. Nested transactions are not
 	// supported — fn must not call WithTx recursively.
 	WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error
+
+	// Ladder configuration (per-account, per-provider).
+	// GetLadderConfigs returns all rows, newest first.
+	// GetLadderConfig returns the single row for (cloudAccountID, provider),
+	// or (nil, nil) when no row exists.
+	// UpsertLadderConfig inserts or updates via the UNIQUE(cloud_account_id, provider)
+	// constraint and returns the persisted row with all DB-stamped fields populated.
+	GetLadderConfigs(ctx context.Context) ([]LadderConfigDB, error)
+	GetLadderConfig(ctx context.Context, cloudAccountID, provider string) (*LadderConfigDB, error)
+	UpsertLadderConfig(ctx context.Context, cfg *LadderConfigDB) (*LadderConfigDB, error)
 }
