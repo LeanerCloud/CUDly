@@ -77,6 +77,39 @@ func (m *MockConfigStore) SaveGlobalConfig(ctx context.Context, cfg *config.Glob
 	return args.Error(0)
 }
 
+// UpdateGlobalConfigAtomic mocks the atomic read-modify-write. When an
+// expectation is registered it dispatches through m.Called (tests can drive the
+// apply closure via a Run callback). Otherwise it emulates the real locked
+// read-modify-write by routing through the mocked GetGlobalConfig + apply +
+// SaveGlobalConfig, so existing tests that seed those two continue to work.
+func (m *MockConfigStore) UpdateGlobalConfigAtomic(ctx context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
+	if isExpected(&m.Mock, "UpdateGlobalConfigAtomic") {
+		args := m.Called(ctx, apply)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		v, ok := args.Get(0).(*config.GlobalConfig)
+		if !ok {
+			panic(fmt.Sprintf("mock: expected *config.GlobalConfig, got %T", args.Get(0)))
+		}
+		return v, args.Error(1)
+	}
+	existing, err := m.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		existing = &config.GlobalConfig{}
+	}
+	if err := apply(existing); err != nil {
+		return nil, err
+	}
+	if err := m.SaveGlobalConfig(ctx, existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 // GetServiceConfig mocks the GetServiceConfig operation
 func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, service string) (*config.ServiceConfig, error) {
 	args := m.Called(ctx, provider, service)

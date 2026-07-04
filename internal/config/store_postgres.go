@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -42,8 +43,33 @@ var _ StoreInterface = (*PostgresStore)(nil)
 // GLOBAL CONFIGURATION
 // ==========================================
 
-// GetGlobalConfig retrieves the global configuration
+// globalConfigExecutor is the subset of query methods needed to read and write
+// the global_config singleton. It is satisfied by both the pool (dbConn) and a
+// pgx.Tx, so the read/write helpers can run either on the pool directly or
+// inside the locked transaction opened by UpdateGlobalConfigAtomic.
+type globalConfigExecutor interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// globalConfigLockKey is the advisory-lock key that serializes concurrent
+// read-modify-write updates to the global_config singleton (updateConfig
+// partial PUTs). Derived like the scheduled-task locks (FNV-64a of a
+// namespaced string) so it cannot collide with those or the migration lock.
+var globalConfigLockKey = func() int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("cudly:global_config:singleton"))
+	return int64(h.Sum64())
+}()
+
+// GetGlobalConfig retrieves the global configuration.
 func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, error) {
+	return getGlobalConfigFrom(ctx, s.db)
+}
+
+// getGlobalConfigFrom reads the global_config singleton via q (the pool or a
+// transaction), returning defaults when no row exists yet.
+func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalConfig, error) {
 	query := `
 		SELECT enabled_providers, notification_email, approval_required,
 		       default_term, default_payment, default_coverage, default_ramp_schedule,
@@ -62,7 +88,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	var enabledProviders []string
 	var gracePeriodJSON string
 
-	err := s.db.QueryRow(ctx, query).Scan(
+	err := q.QueryRow(ctx, query).Scan(
 		&enabledProviders,
 		&config.NotificationEmail,
 		&config.ApprovalRequired,
@@ -87,7 +113,7 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Return default config if none exists.
 			// Values must align with DefaultSettings in defaults.go and DB DEFAULT clauses.
 			return &GlobalConfig{
@@ -122,8 +148,52 @@ func (s *PostgresStore) GetGlobalConfig(ctx context.Context) (*GlobalConfig, err
 	return &config, nil
 }
 
-// SaveGlobalConfig saves the global configuration
+// SaveGlobalConfig saves the global configuration.
 func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConfig) error {
+	return saveGlobalConfigWith(ctx, s.db, config)
+}
+
+// UpdateGlobalConfigAtomic performs a serialized read-modify-write of the
+// global_config singleton. It opens a transaction, takes a transaction-scoped
+// advisory lock (which serializes even the first insert, since a row-level
+// FOR UPDATE cannot lock a not-yet-existing singleton row), reads the current
+// config, applies the caller's in-place mutation, and upserts the result in
+// the SAME transaction. This eliminates the lost-update race where two
+// concurrent partial PUTs each read the same stale base and the later save
+// silently drops the earlier change.
+//
+// apply mutates the loaded config in place (e.g. json.Unmarshal the request
+// body over it and validate); an error it returns aborts the transaction and
+// is propagated unchanged (so callers can surface a 400 from validation while
+// transport/DB errors surface as 500).
+func (s *PostgresStore) UpdateGlobalConfigAtomic(ctx context.Context, apply func(*GlobalConfig) error) (*GlobalConfig, error) {
+	var merged *GlobalConfig
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, lockErr := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", globalConfigLockKey); lockErr != nil {
+			return fmt.Errorf("failed to acquire global_config advisory lock: %w", lockErr)
+		}
+		cfg, readErr := getGlobalConfigFrom(ctx, tx)
+		if readErr != nil {
+			return readErr
+		}
+		if applyErr := apply(cfg); applyErr != nil {
+			return applyErr
+		}
+		if saveErr := saveGlobalConfigWith(ctx, tx, cfg); saveErr != nil {
+			return saveErr
+		}
+		merged = cfg
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+// saveGlobalConfigWith upserts the global_config singleton via q (the pool or a
+// transaction).
+func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *GlobalConfig) error {
 	// Ensure EnabledProviders is never nil (empty slice is ok, nil is not)
 	if config.EnabledProviders == nil {
 		config.EnabledProviders = []string{}
@@ -197,7 +267,7 @@ func (s *PostgresStore) SaveGlobalConfig(ctx context.Context, config *GlobalConf
 		gracePeriodJSON = string(gpBytes)
 	}
 
-	_, err := s.db.Exec(ctx, query,
+	_, err := q.Exec(ctx, query,
 		config.EnabledProviders,
 		config.NotificationEmail,
 		config.ApprovalRequired,

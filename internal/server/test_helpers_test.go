@@ -329,3 +329,10 @@ func (m *mockConfigStoreForHealth) GetLadderConfig(_ context.Context, _, _ strin
 func (m *mockConfigStoreForHealth) UpsertLadderConfig(_ context.Context, cfg *config.LadderConfigDB) (*config.LadderConfigDB, error) {
 	return cfg, nil
 }
+func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
+	cfg := &config.GlobalConfig{}
+	if err := apply(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/internal/config"
@@ -252,6 +253,159 @@ func TestHandler_updateConfig_PartialPUTPreservesOmittedFields(t *testing.T) {
 	assert.Equal(t, 48, saved.PurchaseDelayHours)
 	require.NotNil(t, saved.NotificationEmail)
 	assert.Equal(t, "ops@example.com", *saved.NotificationEmail)
+}
+
+// TestHandler_updateConfig_UsesAtomicPath asserts updateConfig performs its
+// read-modify-write through UpdateGlobalConfigAtomic (the serialized,
+// advisory-locked store path) rather than a separate Get + Save, which is what
+// prevents the concurrent-partial-PUT lost update. The explicit expectation
+// means the mock dispatches through Called (it does NOT fall back to the
+// Get+Save emulation), so a passing run proves the handler invoked the atomic
+// method; the Run callback exercises the exact apply closure the handler builds.
+func TestHandler_updateConfig_UsesAtomicPath(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").
+		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
+
+	// The config the atomic apply runs against (as if freshly read under lock).
+	stored := &config.GlobalConfig{
+		EnabledProviders:               []string{"aws"},
+		ApprovalRequired:               true,
+		DefaultTerm:                    3,
+		DefaultPayment:                 "all-upfront",
+		DefaultCoverage:                80,
+		CollectionSchedule:             "daily",
+		NotificationDaysBefore:         3,
+		RIExchangeEnabled:              true,
+		RIExchangeMode:                 "manual",
+		RIExchangeLookbackDays:         30,
+		RecommendationsCacheStaleHours: 24,
+		RecommendationsLookbackDays:    7,
+		LadderingEnabled:               false,
+	}
+
+	var merged config.GlobalConfig
+	mockStore.On("UpdateGlobalConfigAtomic", ctx, mock.AnythingOfType("func(*config.GlobalConfig) error")).
+		Run(func(args mock.Arguments) {
+			apply := args.Get(1).(func(*config.GlobalConfig) error)
+			cfg := *stored
+			require.NoError(t, apply(&cfg))
+			merged = cfg
+		}).
+		Return(&merged, nil)
+	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"laddering_enabled": true}`,
+	}
+	result, err := handler.updateConfig(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", result.Status)
+
+	// The apply closure merged the body over the stored config: the sent field
+	// is applied and omitted fields are preserved.
+	assert.True(t, merged.LadderingEnabled, "sent field applied")
+	assert.True(t, merged.ApprovalRequired, "omitted approval_required preserved")
+	assert.True(t, merged.RIExchangeEnabled, "omitted ri_exchange_enabled preserved")
+}
+
+// serializedConfigStore is a concurrency-test store double. Its
+// UpdateGlobalConfigAtomic guards the read-modify-write with a real mutex,
+// modeling the transaction-scoped advisory lock that
+// PostgresStore.UpdateGlobalConfigAtomic takes. It embeds *MockConfigStore only
+// to satisfy the rest of StoreInterface; updateConfig calls just the two
+// methods overridden here.
+type serializedConfigStore struct {
+	*MockConfigStore
+	stored *config.GlobalConfig
+	mu     sync.Mutex
+}
+
+func (s *serializedConfigStore) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := *s.stored // read the current committed state under the lock
+	if err := apply(&cfg); err != nil {
+		return nil, err
+	}
+	s.stored = &cfg // commit before releasing the lock
+	return &cfg, nil
+}
+
+func (s *serializedConfigStore) ListServiceConfigs(_ context.Context) ([]config.ServiceConfig, error) {
+	return []config.ServiceConfig{}, nil
+}
+
+// TestHandler_updateConfig_ConcurrentPartialPUTsNoLostUpdate is the F2
+// concurrency regression test (run under -race). Two overlapping partial PUTs
+// touch DIFFERENT fields; with the serialized read-modify-write (the store's
+// mutex models the advisory lock PostgresStore.UpdateGlobalConfigAtomic takes)
+// BOTH updates must survive. A non-atomic Get + merge + Save (the pre-fix path)
+// could read the same stale base in both goroutines and let the later save drop
+// the earlier change. Coordination uses a WaitGroup + channel (no sleeps); only
+// the test goroutine calls require.
+func TestHandler_updateConfig_ConcurrentPartialPUTsNoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").
+		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
+
+	store := &serializedConfigStore{
+		MockConfigStore: new(MockConfigStore),
+		stored: &config.GlobalConfig{
+			EnabledProviders:               []string{"aws"},
+			ApprovalRequired:               true,
+			DefaultTerm:                    3,
+			DefaultPayment:                 "all-upfront",
+			DefaultCoverage:                80,
+			CollectionSchedule:             "daily",
+			NotificationDaysBefore:         3,
+			RIExchangeEnabled:              true,
+			RIExchangeMode:                 "manual",
+			RIExchangeLookbackDays:         30,
+			RecommendationsCacheStaleHours: 24,
+			RecommendationsLookbackDays:    7,
+		},
+	}
+	handler := &Handler{config: store, auth: mockAuth}
+
+	makeReq := func(body string) *events.LambdaFunctionURLRequest {
+		return &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"Authorization": "Bearer admin-token"},
+			Body:    body,
+		}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for _, body := range []string{
+		`{"approval_required": false}`,
+		`{"ri_exchange_max_daily_usd": 12345}`,
+	} {
+		wg.Add(1)
+		go func(b string) {
+			defer wg.Done()
+			_, err := handler.updateConfig(ctx, makeReq(b))
+			errCh <- err
+		}(body)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	// Both concurrent partial updates survived (no lost update).
+	assert.False(t, store.stored.ApprovalRequired, "approval_required update survived")
+	assert.Equal(t, 12345.0, store.stored.RIExchangeMaxDailyUSD, "ri_exchange update survived")
 }
 
 func TestHandler_updateConfig_InvalidBody(t *testing.T) {

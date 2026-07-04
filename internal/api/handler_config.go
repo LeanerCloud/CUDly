@@ -58,53 +58,38 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 	return resp, nil
 }
 
-// mergeGlobalConfigUpdate loads the stored GlobalConfig and json.Unmarshals the
-// request body over a copy of it, so any field ABSENT from the JSON retains its
-// persisted value (present -> updated, absent -> preserved) for EVERY field,
-// with no per-field enumeration. This is required for partial PUTs such as the
-// laddering kill-switch toggle, which sends only { laddering_enabled };
-// unmarshalling into a zero value would otherwise wipe RI-exchange automation,
-// approval_required, default_ramp_schedule, and every other omitted field.
-//
-// A malformed body is a 400 (rejected before any DB read). A read error fails
-// loud rather than merging over a zero base: proceeding without the stored
-// config would silently clobber it on a partial PUT (money-adjacent path; no
-// silent fallbacks).
-func (h *Handler) mergeGlobalConfigUpdate(ctx context.Context, body string) (*config.GlobalConfig, error) {
-	if !json.Valid([]byte(body)) {
-		return nil, NewClientError(400, "invalid request body")
-	}
-	existing, err := h.config.GetGlobalConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var cfg config.GlobalConfig
-	if existing != nil {
-		cfg = *existing
-	}
-	if err = json.Unmarshal([]byte(body), &cfg); err != nil {
-		return nil, NewClientError(400, "invalid request body")
-	}
-	return &cfg, nil
-}
-
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
 	// Require update:config permission
 	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
 		return nil, err
 	}
 
-	cfg, mergeErr := h.mergeGlobalConfigUpdate(ctx, req.Body)
-	if mergeErr != nil {
-		return nil, mergeErr
+	// Reject a malformed body before any DB work so a bad request fails fast
+	// (and never opens a transaction). Keeps the nil-store fast-fail contract.
+	if !json.Valid([]byte(req.Body)) {
+		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Validate the configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
-	}
-
-	if err := h.config.SaveGlobalConfig(ctx, cfg); err != nil {
+	// Serialized read-modify-write: the store loads the stored config and
+	// applies this closure under an advisory-locked transaction, then upserts
+	// the result in the same tx. json.Unmarshal only assigns keys present in the
+	// body, so any field ABSENT is preserved (present -> updated, absent ->
+	// preserved) for EVERY field, with no per-field enumeration. Doing the read
+	// and write in one locked tx prevents two concurrent partial PUTs (e.g. the
+	// laddering kill-switch toggle and a Settings save) from reading the same
+	// stale base and losing each other's update. The closure returns a
+	// ClientError(400) on a bad body or validation failure, which the store
+	// propagates unchanged; DB/transport errors surface as 500.
+	cfg, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
+		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
+			return NewClientError(400, "invalid request body")
+		}
+		if vErr := existing.Validate(); vErr != nil {
+			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 

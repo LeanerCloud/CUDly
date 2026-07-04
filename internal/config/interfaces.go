@@ -12,6 +12,11 @@ type StoreInterface interface {
 	// Global configuration
 	GetGlobalConfig(ctx context.Context) (*GlobalConfig, error)
 	SaveGlobalConfig(ctx context.Context, config *GlobalConfig) error
+	// UpdateGlobalConfigAtomic serializes a read-modify-write of the
+	// global_config singleton under an advisory-locked transaction so
+	// concurrent partial PUTs cannot lose each other's updates. apply mutates
+	// the loaded config in place; its error aborts the write and is propagated.
+	UpdateGlobalConfigAtomic(ctx context.Context, apply func(*GlobalConfig) error) (*GlobalConfig, error)
 
 	// Service configuration
 	GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error)
