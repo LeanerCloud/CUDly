@@ -1858,7 +1858,7 @@ describe('users/handlers', () => {
       userHandlers.setupUserHandlers();
 
       const form = document.getElementById('user-form');
-      expect(form?.onsubmit || form?.getAttribute('data-handler')).toBeDefined;
+      expect(form?.onsubmit || form?.getAttribute('data-handler')).toBeDefined();
     });
 
     it('should set up search input handler', () => {
