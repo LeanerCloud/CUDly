@@ -94,3 +94,76 @@ func TestUpsertLadderConfig_ExplicitZeroTargetCoverageRejected(t *testing.T) {
 	assert.Equal(t, 400, ce.code)
 	mockStore.AssertNotCalled(t, "UpsertLadderConfig", mock.Anything, mock.Anything)
 }
+
+// TestUpsertLadderConfig_MultiStepRampAccepted is the F1 end-to-end regression:
+// a multi-step ramp (after_days 0 -> 30 -> 60) must be ACCEPTED and round-trip
+// to the store unchanged. Against the pre-tag pkg/ladder code every AfterDays
+// decoded to 0, so Validate rejected the ramp (not strictly ascending) and this
+// PUT returned 400.
+func TestUpsertLadderConfig_MultiStepRampAccepted(t *testing.T) {
+	ctx := context.Background()
+	handler, _, captured := newLadderHandler(t)
+
+	const ramp = `"ramp_schedule":{"steps":[{"after_days":0,"fraction":0.5},{"after_days":30,"fraction":0.3},{"after_days":60,"fraction":0.2}]}`
+	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily",` + ramp + `}`
+	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, *captured, "store should have been reached")
+	// The multi-step ramp round-trips to the store unchanged (raw JSONB).
+	assert.JSONEq(t,
+		`{"steps":[{"after_days":0,"fraction":0.5},{"after_days":30,"fraction":0.3},{"after_days":60,"fraction":0.2}]}`,
+		string((*captured).RampSchedule))
+}
+
+// TestUpsertLadderConfig_UnknownFieldRejected is F5: a typo'd key must be
+// rejected with 400 (DisallowUnknownFields), not silently dropped -- a mistyped
+// max_hourly_commit_per_run would otherwise decode to nil = no spend cap.
+func TestUpsertLadderConfig_UnknownFieldRejected(t *testing.T) {
+	ctx := context.Background()
+	handler, mockStore, _ := newLadderHandler(t)
+
+	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily","max_hourly_commit_per_runn":5,` + ladderValidRamp + `}`
+	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertNotCalled(t, "UpsertLadderConfig", mock.Anything, mock.Anything)
+}
+
+// TestUpsertLadderConfig_ProviderMismatchRejected is F5: the request provider
+// must match the cloud account's actual provider. The default GetCloudAccount
+// mock returns provider "aws"; a body claiming "azure" must 400.
+func TestUpsertLadderConfig_ProviderMismatchRejected(t *testing.T) {
+	ctx := context.Background()
+	handler, mockStore, _ := newLadderHandler(t)
+
+	body := `{"cloud_account_id":"acct-1","provider":"azure","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertNotCalled(t, "UpsertLadderConfig", mock.Anything, mock.Anything)
+}
+
+// TestUpsertLadderConfig_NonexistentAccountRejected is F5: a cloud_account_id
+// that does not resolve must 400 (clean rejection) rather than reaching the
+// store and surfacing a raw 500 from the FK constraint.
+func TestUpsertLadderConfig_NonexistentAccountRejected(t *testing.T) {
+	ctx := context.Background()
+	handler, mockStore, _ := newLadderHandler(t)
+	mockStore.On("GetCloudAccount", ctx, "ghost").Return(nil, nil)
+
+	body := `{"cloud_account_id":"ghost","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertNotCalled(t, "UpsertLadderConfig", mock.Anything, mock.Anything)
+}

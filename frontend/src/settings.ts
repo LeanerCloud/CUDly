@@ -3443,8 +3443,9 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
   // Include laddering_enabled in the payload when the Purchasing panel's
   // toggle is present in the DOM (i.e. initLadderingSettings has run).
-  // When absent (General panel), the backend preserves the existing DB value
-  // via preserveOmittedRecommendationFields.
+  // When absent (General panel), the backend's updateConfig merges this PUT
+  // over the stored config, so an omitted laddering_enabled keeps its
+  // persisted value rather than being reset.
   const ladderingToggle = byId<HTMLInputElement>('setting-laddering-enabled');
   if (ladderingToggle !== null) {
     settings.laddering_enabled = ladderingToggle.checked;

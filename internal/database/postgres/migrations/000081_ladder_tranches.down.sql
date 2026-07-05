@@ -1,14 +1,7 @@
 -- Rollback migration 000081: drop the ladder_tranches table.
---
--- The run_id column and its partial index are dropped explicitly first, in
--- FK-safe order (index, then the FK-holding column), before the table itself.
--- DROP TABLE would remove both implicitly, but listing them keeps the down
--- migration an exact inverse of the up. Remaining indexes are dropped
--- automatically with the table.
-
-DROP INDEX IF EXISTS idx_ladder_tranches_run_id;
-
-ALTER TABLE ladder_tranches
-    DROP COLUMN IF EXISTS run_id;
+-- run_id and every index on the table (including idx_ladder_tranches_run_id)
+-- live ON this table, so DROP TABLE removes them all; no separate DROP COLUMN
+-- is needed. The run_id -> ladder_runs foreign key is on the table being
+-- dropped, so there is no drop-ordering constraint here.
 
 DROP TABLE IF EXISTS ladder_tranches;

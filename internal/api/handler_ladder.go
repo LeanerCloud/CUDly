@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,9 +43,14 @@ func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
+	// DisallowUnknownFields so a typo'd key is rejected loudly instead of
+	// silently dropped -- e.g. a mistyped "max_hourly_commit_per_run" would
+	// decode to nil, which the engine reads as "no spend cap" (unbounded).
 	var cfg config.LadderConfigDB
-	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
-		return nil, NewClientError(400, "invalid request body")
+	dec := json.NewDecoder(bytes.NewReader([]byte(req.Body)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("invalid request body: %s", err))
 	}
 
 	if cfg.CloudAccountID == "" {
@@ -67,12 +73,35 @@ func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
+	if err := h.validateLadderAccountProvider(ctx, &cfg); err != nil {
+		return nil, err
+	}
+
 	result, err := h.config.UpsertLadderConfig(ctx, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert ladder config: %w", err)
 	}
 
 	return result, nil
+}
+
+// validateLadderAccountProvider confirms the (cloud_account_id, provider) pair
+// refers to a real cloud account whose provider matches. This turns a
+// nonexistent-account FK violation into a clean 400 (rather than a raw 500 from
+// the store's FK constraint) and rejects a provider mismatch -- e.g. an inert
+// gcp config attached to an AWS account, which would confuse PR-2 scoping.
+func (h *Handler) validateLadderAccountProvider(ctx context.Context, cfg *config.LadderConfigDB) error {
+	account, err := h.config.GetCloudAccount(ctx, cfg.CloudAccountID)
+	if err != nil {
+		return fmt.Errorf("failed to look up cloud account: %w", err)
+	}
+	if account == nil {
+		return NewClientError(400, fmt.Sprintf("cloud account %q does not exist", cfg.CloudAccountID))
+	}
+	if account.Provider != cfg.Provider {
+		return NewClientError(400, fmt.Sprintf("provider %q does not match cloud account provider %q", cfg.Provider, account.Provider))
+	}
+	return nil
 }
 
 // applyLadderConfigNumericDefaults fills a numeric field with its default ONLY
