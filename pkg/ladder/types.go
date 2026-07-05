@@ -281,14 +281,21 @@ const (
 )
 
 // RampStep is a single tranche within a ramp schedule.
+//
+// The json tags are load-bearing: the frontend sends and the DB stores this
+// shape as snake_case (`{"after_days":N,"fraction":F}`). Without the tags Go's
+// case-insensitive matching bridges `fraction`->Fraction but NOT
+// `after_days`->AfterDays (the underscore breaks the match), so AfterDays would
+// silently decode to 0 and multi-step ramps would fail RampSchedule.Validate
+// (ascending-AfterDays) or collapse to fire at day 0.
 type RampStep struct {
 	// AfterDays is the number of days after the run starts at which this
 	// tranche fires. Must be strictly greater than the previous step's
 	// AfterDays (ascending order required by RampSchedule.Validate).
-	AfterDays int
+	AfterDays int `json:"after_days"`
 	// Fraction is the share of the total target allocation committed by this
 	// tranche. Must be in (0, 1]; fractions across all steps must sum to 1.0.
-	Fraction float64
+	Fraction float64 `json:"fraction"`
 }
 
 // RampSchedule spreads commitment purchases across time-indexed tranches.
@@ -299,7 +306,7 @@ type RampStep struct {
 // and pkg/ cannot import internal/. See internal/config/types.go for the
 // internal variant.
 type RampSchedule struct {
-	Steps []RampStep
+	Steps []RampStep `json:"steps"`
 }
 
 // Validate checks that the ramp schedule is well-formed:
