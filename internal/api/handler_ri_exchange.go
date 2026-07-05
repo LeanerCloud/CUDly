@@ -927,19 +927,23 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 		return nil, err
 	}
 
-	globalCfg, err := h.config.GetGlobalConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	globalCfg.RIExchangeEnabled = body.AutoExchangeEnabled
-	globalCfg.RIExchangeMode = body.Mode
-	globalCfg.RIExchangeUtilizationThreshold = body.UtilizationThreshold
-	globalCfg.RIExchangeMaxPerExchangeUSD = body.MaxPaymentPerExchangeUSD
-	globalCfg.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
-	globalCfg.RIExchangeLookbackDays = body.LookbackDays
-
-	if err := h.config.SaveGlobalConfig(ctx, globalCfg); err != nil {
+	// Route through the serialized read-modify-write so this partial update
+	// (only the ri_exchange_* columns) shares the advisory lock with other
+	// global_config writers. An unlocked GetGlobalConfig -> mutate ->
+	// SaveGlobalConfig here would write all 21 columns and could silently
+	// revert a concurrent kill-switch toggle done via UpdateGlobalConfigAtomic.
+	// The closure mutates ONLY the ri_exchange_* fields; body.validate above
+	// already validated the inputs, so (matching the prior behavior) we do not
+	// re-run the whole-config Validate here.
+	if _, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
+		existing.RIExchangeEnabled = body.AutoExchangeEnabled
+		existing.RIExchangeMode = body.Mode
+		existing.RIExchangeUtilizationThreshold = body.UtilizationThreshold
+		existing.RIExchangeMaxPerExchangeUSD = body.MaxPaymentPerExchangeUSD
+		existing.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
+		existing.RIExchangeLookbackDays = body.LookbackDays
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
 

@@ -216,7 +216,6 @@ func TestHandler_updateConfig_PartialPUTPreservesOmittedFields(t *testing.T) {
 		LadderingEnabled:               false,
 	}
 	mockStore.On("GetGlobalConfig", ctx).Return(existing, nil)
-	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
 
 	var saved config.GlobalConfig
 	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).
@@ -232,6 +231,12 @@ func TestHandler_updateConfig_PartialPUTPreservesOmittedFields(t *testing.T) {
 	result, err := handler.updateConfig(ctx, req)
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Status)
+
+	// F3: a PUT that carries none of the global defaults must NOT trigger the
+	// service-config propagation loop (which would overwrite per-service
+	// term/payment/coverage/ramp customizations).
+	mockStore.AssertNotCalled(t, "ListServiceConfigs", mock.Anything)
+	mockStore.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
 
 	// The one field the body carried was applied.
 	assert.True(t, saved.LadderingEnabled, "laddering_enabled from the body must be applied")
@@ -298,7 +303,6 @@ func TestHandler_updateConfig_UsesAtomicPath(t *testing.T) {
 			merged = cfg
 		}).
 		Return(&merged, nil)
-	mockStore.On("ListServiceConfigs", ctx).Return([]config.ServiceConfig{}, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -309,11 +313,61 @@ func TestHandler_updateConfig_UsesAtomicPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Status)
 
+	// laddering-only PUT carries no global defaults, so propagation is skipped.
+	mockStore.AssertNotCalled(t, "ListServiceConfigs", mock.Anything)
+
 	// The apply closure merged the body over the stored config: the sent field
 	// is applied and omitted fields are preserved.
 	assert.True(t, merged.LadderingEnabled, "sent field applied")
 	assert.True(t, merged.ApprovalRequired, "omitted approval_required preserved")
 	assert.True(t, merged.RIExchangeEnabled, "omitted ri_exchange_enabled preserved")
+}
+
+// TestHandler_updateConfig_GracePeriodDaysReplaceNotMerge is the F4 regression.
+// json.Unmarshal into a pre-populated (non-nil) map MERGES keys, so a PUT that
+// carries grace_period_days could never delete a previously-set provider key.
+// When the caller sends the key, updateConfig nils the stored map first so the
+// body's map REPLACES it wholesale. Sending only { "aws": 10 } must drop the
+// prior azure/gcp entries.
+func TestHandler_updateConfig_GracePeriodDaysReplaceNotMerge(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateSession", ctx, "admin-token").
+		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
+	mockAuth.grantAdmin()
+
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+		EnabledProviders:               []string{"aws"},
+		DefaultTerm:                    3,
+		DefaultPayment:                 "all-upfront",
+		DefaultCoverage:                80,
+		CollectionSchedule:             "daily",
+		NotificationDaysBefore:         3,
+		RecommendationsCacheStaleHours: 24,
+		RecommendationsLookbackDays:    7,
+		GracePeriodDays:                map[string]int{"aws": 7, "azure": 14, "gcp": 3},
+	}, nil)
+
+	var saved config.GlobalConfig
+	mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).
+		Run(func(args mock.Arguments) { saved = *args.Get(1).(*config.GlobalConfig) }).
+		Return(nil)
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"grace_period_days": {"aws": 10}}`,
+	}
+	_, err := handler.updateConfig(ctx, req)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]int{"aws": 10}, saved.GracePeriodDays,
+		"grace_period_days must be replaced wholesale, not merged (azure/gcp dropped)")
+	// grace_period_days is not a propagation default, so propagation is skipped.
+	mockStore.AssertNotCalled(t, "ListServiceConfigs", mock.Anything)
 }
 
 // serializedConfigStore is a concurrency-test store double. Its
