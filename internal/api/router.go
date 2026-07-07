@@ -308,6 +308,13 @@ func (r *Router) registerRoutes() {
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
 
+		// Commitment Laddering endpoints (flag-gated default-off, issue #1336).
+		// GET returns all per-account ladder configs; PUT inserts or updates one.
+		// Both routes require update:config / view:config (checked inside the
+		// handler), consistent with the RI Exchange config precedent.
+		{ExactPath: "/api/ladder/configs", Method: "GET", Handler: r.getLadderConfigsHandler, Auth: AuthUser},
+		{ExactPath: "/api/ladder/configs", Method: "PUT", Handler: r.upsertLadderConfigHandler, Auth: AuthUser},
+
 		// Account self-registration (public, called by Terraform during federation IaC apply)
 		{ExactPath: "/api/register", Method: "POST", Handler: r.submitRegistrationHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/register/", Method: "GET", Handler: r.getRegistrationStatusHandler, Auth: AuthPublic},
@@ -905,4 +912,14 @@ func (r *Router) listPlanAccountsHandler(ctx context.Context, req *events.Lambda
 
 func (r *Router) setPlanAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.setPlanAccounts(ctx, req, params["id"])
+}
+
+// Commitment Laddering route wrappers (issue #1336).
+
+func (r *Router) getLadderConfigsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.getLadderConfigs(ctx, req)
+}
+
+func (r *Router) upsertLadderConfigHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.upsertLadderConfig(ctx, req)
 }

@@ -57,6 +57,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
 		"purchase_delay_hours",
+		"laddering_enabled",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -67,6 +68,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"{}",
 		24, 7,
 		0,
+		false,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -107,6 +109,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"grace_period_days",
 		"recommendations_cache_stale_hours", "recommendations_lookback_days",
 		"purchase_delay_hours",
+		"laddering_enabled",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -118,6 +121,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			graceJSON,
 			24, 7,
 			0,
+			false,
 		}
 	}
 
@@ -161,6 +165,118 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "grace_period_days")
 	})
+}
+
+// globalConfigCols is the column list returned by the GetGlobalConfig SELECT,
+// in scan order.
+var globalConfigCols = []string{
+	"enabled_providers", "notification_email", "approval_required",
+	"default_term", "default_payment", "default_coverage", "default_ramp_schedule",
+	"ri_exchange_enabled", "ri_exchange_mode", "ri_exchange_utilization_threshold",
+	"ri_exchange_max_per_exchange_usd", "ri_exchange_max_daily_usd", "ri_exchange_lookback_days",
+	"auto_collect", "collection_schedule", "notification_days_before",
+	"grace_period_days",
+	"recommendations_cache_stale_hours", "recommendations_lookback_days",
+	"purchase_delay_hours",
+	"laddering_enabled",
+}
+
+// TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
+// lost-update fix: UpdateGlobalConfigAtomic performs the read and the write in
+// ONE transaction, guarded by a transaction-scoped advisory lock, in strict
+// order: BEGIN -> pg_advisory_xact_lock -> SELECT global_config -> UPSERT ->
+// COMMIT. Because pgxmock enforces expectation ORDER, a passing run guarantees
+// the read-modify-write is serialized under the lock rather than split across
+// two unsynchronized statements (the original TOCTOU). The apply closure
+// mutates only one field; the round-tripped result must keep every field the
+// closure did not touch, i.e. a concurrent partial update cannot lose another's
+// change once the lock serializes them.
+func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	// Existing row carries automation settings a partial PUT must not clobber.
+	seeded := pgxmock.NewRows(globalConfigCols).AddRow(
+		[]string{"aws"}, strPtr("ops@example.com"), true, // approval_required = true
+		3, "all-upfront", 80.0, RampImmediate,
+		true, "automatic", 95.0, // ri_exchange_enabled = true, mode = automatic
+		1000.0, 5000.0, 30,
+		true, "daily", 3,
+		"{}",
+		24, 7,
+		48,
+		false, // laddering_enabled = false
+	)
+
+	// Strict order: the SELECT and the UPSERT must sit between the same
+	// BEGIN/COMMIT, after the advisory lock.
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(21)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	// apply flips only laddering_enabled, exactly as the kill-switch partial
+	// PUT does; everything else must be preserved from the seeded row.
+	applied := false
+	merged, err := store.UpdateGlobalConfigAtomic(ctx, func(existing *GlobalConfig) error {
+		applied = true
+		existing.LadderingEnabled = true
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, applied, "apply closure must run against the locked-read config")
+	require.NotNil(t, merged)
+
+	// Applied change survives.
+	assert.True(t, merged.LadderingEnabled)
+	// Fields the closure did NOT touch are preserved (no lost update).
+	assert.True(t, merged.ApprovalRequired, "approval_required must survive")
+	assert.True(t, merged.RIExchangeEnabled, "ri_exchange_enabled must survive")
+	assert.Equal(t, "automatic", merged.RIExchangeMode)
+	assert.Equal(t, 1000.0, merged.RIExchangeMaxPerExchangeUSD)
+	assert.Equal(t, 48, merged.PurchaseDelayHours)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack asserts that when the
+// apply closure fails (e.g. validation), the transaction rolls back and no
+// UPSERT is issued, and the closure's error propagates unchanged.
+func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	seeded := pgxmock.NewRows(globalConfigCols).AddRow(
+		[]string{"aws"}, (*string)(nil), true,
+		3, "all-upfront", 80.0, RampImmediate,
+		false, "manual", 95.0,
+		0.0, 0.0, 30,
+		true, "daily", 3,
+		"{}",
+		24, 7,
+		0,
+		false,
+	)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
+	// No ExpectExec("INSERT...") — the UPSERT must not run.
+	mock.ExpectRollback()
+
+	sentinel := errors.New("validation failed")
+	_, err := store.UpdateGlobalConfigAtomic(ctx, func(_ *GlobalConfig) error {
+		return sentinel
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── GetServiceConfig ─────────────────────────────────────────────────────────

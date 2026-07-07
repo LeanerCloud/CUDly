@@ -255,7 +255,9 @@ func TestHandler_sendPurchaseApprovalEmail_ConfigError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// updateRIExchangeConfig — GetGlobalConfig error after validation passes
+// updateRIExchangeConfig — store error after validation passes. The read now
+// happens inside the serialized UpdateGlobalConfigAtomic call, so a store-read
+// failure surfaces through that unified path (still a 500-class error).
 // ---------------------------------------------------------------------------
 
 func TestHandler_updateRIExchangeConfig_GetGlobalConfigError(t *testing.T) {
@@ -274,7 +276,7 @@ func TestHandler_updateRIExchangeConfig_GetGlobalConfigError(t *testing.T) {
 	}
 	_, err := h.updateRIExchangeConfig(ctx, req)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to load config")
+	assert.Contains(t, err.Error(), "failed to save config")
 }
 
 func TestHandler_updateRIExchangeConfig_SaveError(t *testing.T) {

@@ -200,6 +200,10 @@ export {
   approveRIExchange
 } from './riexchange';
 
+// Re-export commitment-laddering functions and types (issue #1336)
+export type { LadderConfig, LadderRampStep } from './ladder';
+export { getLadderConfigs, upsertLadderConfig } from './ladder';
+
 // Re-export registrations functions and types
 export type { AccountRegistration } from './registrations';
 export {

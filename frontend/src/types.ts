@@ -367,6 +367,11 @@ export interface GlobalConfig {
   recommendations_cache_stale_hours?: number;
   // AWS Cost Explorer lookback window (days). One of 7, 30, or 60. Default: 7.
   recommendations_lookback_days?: number;
+  // Global kill-switch for the commitment-laddering feature (issue #1333 phase 3).
+  // When false (the default) no laddering engine runs fire, regardless of
+  // per-account LadderConfig settings. Set to true to allow per-account
+  // configs to activate individually.
+  laddering_enabled?: boolean;
 }
 
 // API Keys types

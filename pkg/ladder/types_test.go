@@ -1,12 +1,52 @@
 package ladder
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/CUDly/pkg/common"
 )
+
+// TestRampSchedule_JSONSnakeCaseMultiStep is the F1 regression test. The
+// frontend sends and the DB stores this shape as snake_case; without json tags
+// on RampStep/RampSchedule, Go's case-insensitive field matching binds
+// "fraction"->Fraction but NOT "after_days"->AfterDays (the underscore breaks
+// the match), so every AfterDays would decode to 0 and a multi-step ramp would
+// fail Validate's strictly-ascending check (or, for a single nonzero step, fire
+// at day 0). This fails against the pre-tag code.
+func TestRampSchedule_JSONSnakeCaseMultiStep(t *testing.T) {
+	const wantJSON = `{"steps":[{"after_days":0,"fraction":0.5},{"after_days":30,"fraction":0.3},{"after_days":60,"fraction":0.2}]}`
+
+	var rs RampSchedule
+	if err := json.Unmarshal([]byte(wantJSON), &rs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(rs.Steps) != 3 {
+		t.Fatalf("got %d steps, want 3", len(rs.Steps))
+	}
+	for i, want := range []int{0, 30, 60} {
+		if rs.Steps[i].AfterDays != want {
+			t.Errorf("step %d AfterDays = %d, want %d (after_days json tag not applied?)", i, rs.Steps[i].AfterDays, want)
+		}
+	}
+	if rs.Steps[0].Fraction != 0.5 {
+		t.Errorf("step 0 Fraction = %g, want 0.5", rs.Steps[0].Fraction)
+	}
+	if err := rs.Validate(); err != nil {
+		t.Errorf("Validate() on the multi-step ramp = %v, want nil", err)
+	}
+
+	// Round-trip: marshal back to the exact snake_case DB/frontend contract.
+	out, err := json.Marshal(rs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(out) != wantJSON {
+		t.Errorf("marshal round-trip = %s, want %s", out, wantJSON)
+	}
+}
 
 func TestLayerTypeValidate(t *testing.T) {
 	t.Parallel()

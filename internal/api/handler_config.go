@@ -58,85 +58,101 @@ func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRe
 	return resp, nil
 }
 
-// preserveOmittedRecommendationFields merges persisted GlobalConfig values
-// for the cycle-parameter fields when the request body omits them.
-// Without this merge, a partial PUT would silently zero out
-// RecommendationsCacheStaleHours / RecommendationsLookbackDays / PurchaseDelayHours,
-// which all have meaningful 0-vs-omitted semantics that json.Unmarshal can't
-// represent directly. Errors from GetGlobalConfig fall through: the request body's
-// zero values then flow into Validate() which rejects out-of-range values,
-// matching the pre-fix behaviour. Extracted from updateConfig to keep that
-// function under the cyclomatic-complexity gate after the merge logic was
-// added (PR #308 CodeRabbit pass-2 review).
-func (h *Handler) preserveOmittedRecommendationFields(ctx context.Context, cfg *config.GlobalConfig, body string) error {
-	var present map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &present); err != nil {
-		return NewClientError(400, "invalid request body")
-	}
-	_, hasStale := present["recommendations_cache_stale_hours"]
-	_, hasLookback := present["recommendations_lookback_days"]
-	_, hasDelay := present["purchase_delay_hours"]
-	if hasStale && hasLookback && hasDelay {
-		return nil
-	}
-	existing, gcErr := h.config.GetGlobalConfig(ctx)
-	if gcErr != nil || existing == nil {
-		return nil
-	}
-	if !hasStale {
-		cfg.RecommendationsCacheStaleHours = existing.RecommendationsCacheStaleHours
-	}
-	if !hasLookback {
-		cfg.RecommendationsLookbackDays = existing.RecommendationsLookbackDays
-	}
-	if !hasDelay {
-		cfg.PurchaseDelayHours = existing.PurchaseDelayHours
-	}
-	return nil
-}
-
 func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*StatusResponse, error) {
 	// Require update:config permission
 	if _, err := h.requirePermission(ctx, req, "update", "config"); err != nil {
 		return nil, err
 	}
 
-	var cfg config.GlobalConfig
-	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
+	// Reject a malformed body before any DB work so a bad request fails fast
+	// (and never opens a transaction). Keeps the nil-store fast-fail contract.
+	if !json.Valid([]byte(req.Body)) {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	if err := h.preserveOmittedRecommendationFields(ctx, &cfg, req.Body); err != nil {
-		return nil, err
+	// Presence map of the top-level keys the caller actually sent. Used to
+	// (a) replace (not merge) grace_period_days when present, and (b) gate the
+	// service-config propagation on the global defaults actually being sent, so
+	// a deliberately-partial PUT (e.g. the kill-switch toggle) does not rewrite
+	// per-service customizations.
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(req.Body), &present); err != nil {
+		return nil, NewClientError(400, "invalid request body")
 	}
+	_, gracePresent := present["grace_period_days"]
 
-	// Validate the configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
-	}
-
-	if err := h.config.SaveGlobalConfig(ctx, &cfg); err != nil {
-		return nil, err
-	}
-
-	// Propagate global defaults to all service configurations
-	services, err := h.config.ListServiceConfigs(ctx)
-	if err != nil {
-		// Log but don't fail - global config was saved
-		logging.Warnf("Failed to list service configs for propagation: %v", err)
-	} else {
-		for _, svc := range services {
-			svc.Term = cfg.DefaultTerm
-			svc.Payment = cfg.DefaultPayment
-			svc.Coverage = cfg.DefaultCoverage
-			svc.RampSchedule = cfg.DefaultRampSchedule
-			if err := h.config.SaveServiceConfig(ctx, &svc); err != nil {
-				logging.Warnf("Failed to update service config %s/%s: %v", svc.Provider, svc.Service, err)
-			}
+	// Serialized read-modify-write: the store loads the stored config and
+	// applies this closure under an advisory-locked transaction, then upserts
+	// the result in the same tx. json.Unmarshal only assigns keys present in the
+	// body, so any field ABSENT is preserved (present -> updated, absent ->
+	// preserved) for EVERY field, with no per-field enumeration. Doing the read
+	// and write in one locked tx prevents two concurrent partial PUTs (e.g. the
+	// laddering kill-switch toggle and a Settings save) from reading the same
+	// stale base and losing each other's update. The closure returns a
+	// ClientError(400) on a bad body or validation failure, which the store
+	// propagates unchanged; DB/transport errors surface as 500.
+	cfg, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
+		// grace_period_days is a map: json.Unmarshal into a non-nil map MERGES
+		// keys (an omitted key can never be deleted). When the caller sends the
+		// key, nil the stored map first so the body's map REPLACES it wholesale
+		// (present -> replace); when absent, leave it to preserve.
+		if gracePresent {
+			existing.GracePeriodDays = nil
 		}
+		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
+			return NewClientError(400, "invalid request body")
+		}
+		if vErr := existing.Validate(); vErr != nil {
+			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Propagate global defaults to every service config ONLY when the caller
+	// actually sent at least one of those defaults. A partial PUT that omits
+	// them (the kill-switch toggle sends only { laddering_enabled }) must not
+	// overwrite money-affecting per-service term/payment/coverage/ramp overrides.
+	if anyKeyPresent(present, "default_term", "default_payment", "default_coverage", "default_ramp_schedule") {
+		h.propagateGlobalDefaults(ctx, cfg)
 	}
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// anyKeyPresent reports whether any of keys is present in m.
+func anyKeyPresent(m map[string]json.RawMessage, keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// propagateGlobalDefaults overlays the global term/payment/coverage/ramp
+// defaults onto every service config. Best-effort: failures are logged, not
+// returned, because the global config was already saved.
+func (h *Handler) propagateGlobalDefaults(ctx context.Context, cfg *config.GlobalConfig) {
+	services, err := h.config.ListServiceConfigs(ctx)
+	if err != nil {
+		logging.Warnf("Failed to list service configs for propagation: %v", err)
+		return
+	}
+	// Index-based iteration mutates each element in place and avoids copying the
+	// (large) ServiceConfig struct per iteration (gocritic rangeValCopy).
+	for i := range services {
+		svc := &services[i]
+		svc.Term = cfg.DefaultTerm
+		svc.Payment = cfg.DefaultPayment
+		svc.Coverage = cfg.DefaultCoverage
+		svc.RampSchedule = cfg.DefaultRampSchedule
+		if saveErr := h.config.SaveServiceConfig(ctx, svc); saveErr != nil {
+			logging.Warnf("Failed to update service config %s/%s: %v", svc.Provider, svc.Service, saveErr)
+		}
+	}
 }
 
 // checkCommitmentOptionCombo rejects saves that carry a (term, payment)

@@ -304,6 +304,10 @@ export interface Config {
   // Must be 7, 30, or 60 (AWS LookbackPeriodInDays enum). Default: 7.
   // GCP CUD Recommender has no equivalent parameter; applies to AWS only.
   recommendations_lookback_days?: number;
+  // Global kill-switch for the commitment-laddering feature (issue #1336).
+  // Default false. When true, per-account LadderConfig.enabled settings
+  // determine whether the engine runs for that account.
+  laddering_enabled?: boolean;
 }
 
 export interface ServiceConfig {

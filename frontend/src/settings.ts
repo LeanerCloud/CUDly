@@ -19,6 +19,7 @@ import {
   readServiceFilterControls,
   isServiceFilterError,
 } from './serviceFilters';
+import { initLadderingSettings } from './ladder';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -3165,6 +3166,11 @@ export async function loadGlobalSettings(): Promise<void> {
       // Update visibility based on loaded settings
       updateProviderSettingsVisibility();
       updateCollectionScheduleVisibility();
+
+      // Render the Commitment Laddering section (flag-gated default-off,
+      // issue #1333 phase 3). Runs asynchronously; failures are surfaced
+      // inside the section without blocking the rest of Settings.
+      void initLadderingSettings(data.global.laddering_enabled ?? false);
     }
 
     const services = data.services ?? [];
@@ -3434,6 +3440,16 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     recommendations_cache_stale_hours: rawStaleHours,
     recommendations_lookback_days: parseInt(byId<HTMLSelectElement>('setting-recs-lookback-days')?.value || '7', 10),
   };
+
+  // Include laddering_enabled in the payload when the Purchasing panel's
+  // toggle is present in the DOM (i.e. initLadderingSettings has run).
+  // When absent (General panel), the backend's updateConfig merges this PUT
+  // over the stored config, so an omitted laddering_enabled keeps its
+  // persisted value rather than being reset.
+  const ladderingToggle = byId<HTMLInputElement>('setting-laddering-enabled');
+  if (ladderingToggle !== null) {
+    settings.laddering_enabled = ladderingToggle.checked;
+  }
 
   try {
     await api.updateConfig(settings);
