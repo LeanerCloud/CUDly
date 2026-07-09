@@ -538,15 +538,16 @@ func TestPostgresStore_GetAllPurchaseHistory_NilDB(t *testing.T) {
 	assert.True(t, panicked, "expected panic with nil db connection")
 }
 
-// TestSaveGlobalConfig_OfferingClassBindsAt21 is the HOLE 2 regression guard
+// TestSaveGlobalConfig_OfferingClassBindsAt22 is the HOLE 2 regression guard
 // (issue #694): the real PostgresStore.SaveGlobalConfig must bind offering_class
-// as the 21st positional argument ($21). The testablePostgresStore in
-// store_postgres_mock_test.go is a hand-maintained copy that omits the field
-// entirely, so no fast test guarded the placeholder count until now.
+// as the 22nd positional argument ($22), with laddering_enabled at $21.
+// The testablePostgresStore in store_postgres_mock_test.go is a hand-maintained
+// copy that omits the field entirely, so no fast test guarded the placeholder
+// count until now.
 //
 // Using pgxmock directly against the real PostgresStore (not the hand-maintained
 // testablePostgresStore wrapper) ensures the live query is tested, not a stale copy.
-func TestSaveGlobalConfig_OfferingClassBindsAt21(t *testing.T) {
+func TestSaveGlobalConfig_OfferingClassBindsAt22(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -568,8 +569,8 @@ func TestSaveGlobalConfig_OfferingClassBindsAt21(t *testing.T) {
 		OfferingClass:       "standard",
 	}
 
-	// Expect exactly 21 args; pgxmock validates arg count and types.
-	// The 21st arg must be the string "standard" (offering_class).
+	// Expect exactly 22 args; pgxmock validates arg count and types.
+	// The 21st arg is laddering_enabled; the 22nd arg must be "standard" (offering_class).
 	// If the real query regresses to a different arg count, pgxmock
 	// will return an unexpected-call error and the test will fail.
 	mock.ExpectExec(`INSERT INTO global_config`).
@@ -594,13 +595,14 @@ func TestSaveGlobalConfig_OfferingClassBindsAt21(t *testing.T) {
 			pgxmock.AnyArg(), // $18 recommendations_cache_stale_hours
 			pgxmock.AnyArg(), // $19 recommendations_lookback_days
 			pgxmock.AnyArg(), // $20 purchase_delay_hours
-			"standard",       // $21 offering_class -- the field this test guards
+			pgxmock.AnyArg(), // $21 laddering_enabled
+			"standard",       // $22 offering_class -- the field this test guards
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = store.SaveGlobalConfig(ctx, cfg)
-	require.NoError(t, err, "SaveGlobalConfig must succeed when the DB accepts all 21 args")
+	require.NoError(t, err, "SaveGlobalConfig must succeed when the DB accepts all 22 args")
 
 	require.NoError(t, mock.ExpectationsWereMet(),
-		"offering_class must be bound as the 21st argument to SaveGlobalConfig")
+		"offering_class must be bound as the 22nd argument to SaveGlobalConfig")
 }

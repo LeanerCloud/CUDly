@@ -191,6 +191,7 @@ var globalConfigCols = []string{
 	"purchase_delay_hours",
 	"laddering_enabled",
 	"ladder_execution_enabled",
+	"offering_class",
 }
 
 // TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
@@ -218,8 +219,9 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 		"{}",
 		24, 7,
 		48,
-		false, // laddering_enabled = false
-		false, // ladder_execution_enabled = false
+		false,         // laddering_enabled = false
+		false,         // ladder_execution_enabled = false
+		"convertible", // offering_class
 	)
 
 	// Strict order: the SELECT and the UPSERT must sit between the same
@@ -228,7 +230,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
-	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(22)...).
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(23)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -275,6 +277,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
 		0,
 		false,
 		false,
+		"convertible",
 	)
 
 	mock.ExpectBegin()
