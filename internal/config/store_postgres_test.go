@@ -307,11 +307,10 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	})
 
 	t.Run("Get execution by ID - not found", func(t *testing.T) {
-		// GetExecutionByID returns (nil, nil) when no row matches; the
-		// caller is responsible for distinguishing not-found from error.
-		exec, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
-		require.NoError(t, err)
-		assert.Nil(t, exec)
+		// GetExecutionByID returns ErrNotFound when no row matches.
+		_, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
 	})
 
 	t.Run("Get execution by plan and date - not found", func(t *testing.T) {
