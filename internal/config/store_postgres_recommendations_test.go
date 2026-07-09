@@ -58,6 +58,19 @@ func awsRec(id, service, region, resourceType string, savings float64) config.Re
 	}
 }
 
+// seedRecommendationCloudAccount creates the cloud_accounts row that
+// recommendations.cloud_account_id FK (migration 000030) requires.
+func seedRecommendationCloudAccount(ctx context.Context, t *testing.T, store *config.PostgresStore, id, provider, externalID string) {
+	t.Helper()
+	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{
+		ID:         id,
+		Name:       "rec-test-" + externalID,
+		Provider:   provider,
+		ExternalID: externalID,
+		Enabled:    true,
+	}), "seeding cloud account %s failed", id)
+}
+
 func TestPostgresStore_ReplaceRecommendations(t *testing.T) {
 	ctx := context.Background()
 	store, cleanup := setupRecommendationsStore(ctx, t)
