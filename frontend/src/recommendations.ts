@@ -62,7 +62,11 @@ export function getAccountName(accountId: string): string {
 
 // issues #225 + #226: expand/collapse state for cell grouping.
 // Contains the cellKey strings of cells the user has explicitly expanded.
-// Cleared on page load / full refresh; survives per-column filter/sort re-renders.
+// Cleared on every loadRecommendations() entry (page load, tab switch back
+// to Opportunities, provider/account Global filter change, manual refresh,
+// lookback change, stale auto-refresh — see resetExpandedCells() call at
+// the top of loadRecommendations). Survives per-column filter/sort/period
+// re-renders, which go through rerenderRecommendations() instead.
 const expandedCells = new Set<string>();
 // Last computed group keys for the visible filtered set — used by the
 // Expand-All button handler to populate expandedCells without re-computing.
@@ -70,7 +74,8 @@ let lastVisibleGroupKeys: string[] = [];
 
 // issue #135: expand/collapse state for SP plan-type group rows.
 // Contains the spGroupKey strings the user has explicitly expanded.
-// Cleared together with expandedCells on page load / full refresh.
+// Cleared together with expandedCells on every loadRecommendations() entry
+// (see resetExpandedCells); survives column-filter/sort/period re-renders.
 const expandedSpGroups = new Set<string>();
 
 // #272 (CR follow-up): cache of the most-recent API-derived summary so
@@ -461,6 +466,13 @@ export async function loadRecommendations(): Promise<void> {
   // refreshed / bookmarked page renders with the user's chosen sort, not
   // the module default ("savings desc"). Idempotent on subsequent reloads.
   readSortFromUrl();
+
+  // QA 4.13 (expand/collapse desync): clear expand state whenever the data
+  // source is reloaded due to a provider/account Global filter change.
+  // Column-filter and sort re-renders go through rerenderRecommendations()
+  // instead, so they intentionally do NOT reach this path -- preserving the
+  // "expand survives column-filter/sort" behavior documented near line 63.
+  resetExpandedCells();
 
   // Issue #344 T3: skeleton rows for the recommendations table so the
   // panel reads as "loading" instead of staying blank while the
@@ -1187,14 +1199,25 @@ function cellScoreFor(
   }
   if (column === 'monthly_cost') {
     const period = state.getCostPeriod();
-    const finite: number[] = [];
+    // #494 best-case framing: prefer the smallest NON-ZERO recurring cost so
+    // that all-upfront variants (monthly_cost=0, which is a real value not a
+    // null sentinel) do not tie every cell at 0 and make direction-toggling a
+    // no-op. Tiers:
+    //   1. any non-zero finite value exists  -> Math.min of those
+    //   2. all finite values are 0 (pure all-upfront cell) -> 0
+    //   3. no finite value at all (all null)  -> POSITIVE_INFINITY (sink to bottom)
+    const nonZero: number[] = [];
+    const anyFinite: number[] = [];
     for (const v of variants) {
-      const scaled = scaleCost(v.monthly_cost, period);
-      if (scaled != null) finite.push(scaled);
+      const s = scaleCost(v.monthly_cost, period);
+      if (s != null) {
+        anyFinite.push(s);
+        if (s > 0) nonZero.push(s);
+      }
     }
-    // Best-case framing: lowest recurring cost wins. All-null cells sink to
-    // the bottom via the existing POSITIVE_INFINITY sentinel logic.
-    return finite.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...finite);
+    if (nonZero.length) return Math.min(...nonZero);
+    if (anyFinite.length) return 0;
+    return Number.POSITIVE_INFINITY;
   }
   if (column === 'effective_savings_pct') {
     const finite: number[] = [];
