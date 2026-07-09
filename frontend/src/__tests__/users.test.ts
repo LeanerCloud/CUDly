@@ -1855,10 +1855,18 @@ describe('users/handlers', () => {
     });
 
     it('should set up form submit handler', () => {
+      // saveUser is wired via addEventListener('submit', ...), so form.onsubmit
+      // stays null. Prove the listener is actually attached by spying on saveUser
+      // and dispatching a real submit event, then asserting the observable call.
+      const saveUserSpy = jest.spyOn(userModals, 'saveUser').mockResolvedValue(undefined);
+
       userHandlers.setupUserHandlers();
 
-      const form = document.getElementById('user-form');
-      expect(form?.onsubmit || form?.getAttribute('data-handler')).toBeDefined;
+      const form = document.getElementById('user-form') as HTMLFormElement;
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+      expect(saveUserSpy).toHaveBeenCalledTimes(1);
+      saveUserSpy.mockRestore();
     });
 
     it('should set up search input handler', () => {
