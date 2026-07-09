@@ -307,14 +307,12 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	})
 
 	t.Run("Get execution by ID - not found", func(t *testing.T) {
-		// Use a valid UUID format that doesn't exist.
-		// Contract: GetExecutionByID returns (nil, nil) on not-found; every
-		// caller maps the nil execution to its own not-found error. The
-		// sibling assertion in store_postgres_db_test.go was aligned to this
-		// contract in 1017f66a8; this twin test panicked with a nil-pointer
-		// deref on err.Error() until brought in line here.
+		// Use a valid UUID format that does not exist.
+		// Contract: GetExecutionByID wraps ErrNotFound when no row matches.
+		// Align with the sibling assertion in store_postgres_db_test.go.
 		exec, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
 		assert.Nil(t, exec)
 	})
 
