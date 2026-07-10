@@ -243,25 +243,6 @@ func (h *Handler) resolveUserEmails(ctx context.Context, executions []config.Pur
 	return out
 }
 
-// expireIfStale transitions a pending/notified execution to "expired" when
-// its ScheduledDate is older than approvalExpiryWindow. Returns the possibly-
-// updated execution. Transition failures are non-fatal — the row still
-// renders, just with its original status.
-func (h *Handler) expireIfStale(ctx context.Context, exec config.PurchaseExecution) config.PurchaseExecution {
-	if exec.Status != "pending" && exec.Status != "notified" {
-		return exec
-	}
-	if time.Since(exec.ScheduledDate) < approvalExpiryWindow {
-		return exec
-	}
-	updated, err := h.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "expired", nil)
-	if err != nil {
-		logging.Warnf("history: failed to expire execution %s: %v", exec.ExecutionID, err)
-		return exec
-	}
-	return *updated
-}
-
 // resolvePendingApproverEmail returns the notification email the approval
 // link was sent to (or would have been, if SES failed). Single-tenant
 // deployments share one value across every pending row, so this is looked up

@@ -87,7 +87,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath strin
 // masked by the later dirty check.
 func newMigratorWithRecovery(pool *pgxpool.Pool, migrationsPath string) (*migrate.Migrate, error) {
 	// Get database connection string from pool config (without admin email parameter - RDS Proxy doesn't support options)
-	dsn := buildMigrateDSN(pool.Config(), "")
+	dsn := buildMigrateDSN(pool.Config())
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -423,7 +423,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 		return fmt.Errorf("refusing to rollback more than %d migrations at once (requested %d); use multiple calls for safety", maxRollbackSteps, steps)
 	}
 
-	dsn := buildMigrateDSN(pool.Config(), "")
+	dsn := buildMigrateDSN(pool.Config())
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -461,7 +461,7 @@ func RollbackMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath 
 // the version just below the migration under test; fixed step counts from
 // head silently drift every time a newer migration lands.
 func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string, version uint) error {
-	dsn := buildMigrateDSN(pool.Config(), "")
+	dsn := buildMigrateDSN(pool.Config())
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -493,7 +493,7 @@ func MigrateToVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath st
 
 // GetMigrationVersion returns the current migration version.
 func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath string) (uint, bool, error) {
-	dsn := buildMigrateDSN(pool.Config(), "")
+	dsn := buildMigrateDSN(pool.Config())
 
 	m, err := migrate.New(
 		fmt.Sprintf("file://%s", migrationsPath),
@@ -513,8 +513,9 @@ func GetMigrationVersion(ctx context.Context, pool *pgxpool.Pool, migrationsPath
 }
 
 // buildMigrateDSN builds a connection string for golang-migrate from pgx config.
-// sslModeOverride, if non-empty, is used instead of inferring from TLSConfig.
-func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string {
+// sslmode is inferred from the pgx TLSConfig ("require" when TLS is configured,
+// "disable" otherwise).
+func buildMigrateDSN(config *pgxpool.Config) string {
 	// Extract connection details from pgx config
 	host := config.ConnConfig.Host
 	port := config.ConnConfig.Port
@@ -526,13 +527,10 @@ func buildMigrateDSN(config *pgxpool.Config, sslModeOverride string) string {
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 
-	// Use explicit sslmode if provided, otherwise infer from TLS config
-	sslMode := sslModeOverride
-	if sslMode == "" {
-		sslMode = "require"
-		if config.ConnConfig.TLSConfig == nil {
-			sslMode = "disable"
-		}
+	// Infer sslmode from the TLS config.
+	sslMode := "require"
+	if config.ConnConfig.TLSConfig == nil {
+		sslMode = "disable"
 	}
 
 	// Build DSN (golang-migrate uses postgres:// format)

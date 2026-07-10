@@ -177,6 +177,11 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 }
 
 // handleCleanupExpiredRecords cleans up expired sessions and execution records.
+//
+// contract for the handler family registered in the task dispatch map; error is
+// reserved for the failure modes the sibling handlers already surface.
+//
+//nolint:unparam // scheduled-task handler: (result, error) shape is the shared
 func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
 	log.Println("Cleaning up expired records...")
 
@@ -267,6 +272,11 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 }
 
 // handleRefreshAnalytics refreshes materialized views and analytics data.
+//
+// contract for the handler family registered in the task dispatch map; error is
+// reserved for the failure modes the sibling handlers already surface.
+//
+//nolint:unparam // scheduled-task handler: (result, error) shape is the shared
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 

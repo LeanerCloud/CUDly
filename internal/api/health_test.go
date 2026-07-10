@@ -187,22 +187,20 @@ func TestHandler_checkConfigStore_AccessError(t *testing.T) {
 }
 
 func TestHandler_checkAuthService_Healthy(t *testing.T) {
-	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
 	handler := &Handler{auth: mockAuth}
 
-	check := handler.checkAuthService(ctx)
+	check := handler.checkAuthService()
 
 	assert.Equal(t, "healthy", check.Status)
 	assert.Empty(t, check.Message)
 }
 
 func TestHandler_checkAuthService_NotInitialized(t *testing.T) {
-	ctx := context.Background()
 	handler := &Handler{auth: nil}
 
-	check := handler.checkAuthService(ctx)
+	check := handler.checkAuthService()
 
 	assert.Equal(t, "unhealthy", check.Status)
 	assert.Equal(t, "Auth service not initialized", check.Message)

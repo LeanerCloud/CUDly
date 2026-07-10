@@ -62,30 +62,6 @@ func (m *MockSESClient) CreateEmailIdentity(ctx context.Context, input *sesv2.Cr
 	return args.Get(0).(*sesv2.CreateEmailIdentityOutput), args.Error(1)
 }
 
-// testSender creates a sender with mock clients for testing.
-type testSender struct {
-	*Sender
-	mockSNS *MockSNSClient
-	mockSES *MockSESClient
-}
-
-func newTestSender(topicARN, fromEmail string) *testSender {
-	mockSNS := new(MockSNSClient)
-	mockSES := new(MockSESClient)
-
-	return &testSender{
-		Sender: &Sender{
-			snsClient:    nil, // Will be replaced in tests
-			sesClient:    nil, // Will be replaced in tests
-			topicARN:     topicARN,
-			fromEmail:    fromEmail,
-			emailAddress: "",
-		},
-		mockSNS: mockSNS,
-		mockSES: mockSES,
-	}
-}
-
 func TestSenderConfig(t *testing.T) {
 	cfg := SenderConfig{
 		TopicARN:     "arn:aws:sns:us-east-1:123456789012:topic",

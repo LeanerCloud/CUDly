@@ -114,6 +114,7 @@ func (s *additionalMockStore) GetExecutionByPlanAndDate(ctx context.Context, pla
 	return &executions[0], nil
 }
 
+//nolint:unparam // mock mirrors the production store signature; query fixed by the single test path
 func (s *additionalMockStore) queryPurchaseHistory(ctx context.Context, query string, args ...interface{}) ([]PurchaseHistoryRecord, error) {
 	rows, err := s.mock.Query(ctx, query, args...)
 	if err != nil {

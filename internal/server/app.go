@@ -536,8 +536,9 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	log.Printf("CUDly Server initializing, version: %s", cfg.Version)
 
-	// Initialize configuration store (PostgreSQL)
-	configStore, dbConfig, secretResolver, err := initConfigStore(ctx)
+	// Initialize configuration store (PostgreSQL). The store connects lazily on
+	// first request, so ConfigStore is wired as nil here (see initConfigStore).
+	dbConfig, secretResolver, err := initConfigStore(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize config store: %w", err)
 	}
@@ -557,7 +558,7 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	deps := ExternalDeps{
 		EmailSender:    emailSender,
-		ConfigStore:    configStore,
+		ConfigStore:    nil, // created lazily on first request (see initConfigStore)
 		DBConfig:       dbConfig,
 		SecretResolver: secretResolver,
 		STSClient:      stsClient,
@@ -904,10 +905,10 @@ func (app *Application) Close() error {
 
 // initConfigStore initializes the configuration store using PostgreSQL
 // Connection is deferred (lazy init) until first request to avoid Lambda ENI issues.
-func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Config, secrets.Resolver, error) {
+func initConfigStore(ctx context.Context) (*database.Config, secrets.Resolver, error) {
 	// Require PostgreSQL configuration
 	if os.Getenv("DB_HOST") == "" {
-		return nil, nil, nil, fmt.Errorf("database configuration required: DB_HOST must be set")
+		return nil, nil, fmt.Errorf("database configuration required: DB_HOST must be set")
 	}
 
 	log.Println("Preparing PostgreSQL configuration store (lazy initialization)...")
@@ -915,20 +916,21 @@ func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Conf
 	// Initialize secret resolver
 	secretResolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create secret resolver: %w", err)
+		return nil, nil, fmt.Errorf("failed to create secret resolver: %w", err)
 	}
 
 	// Load database config from environment
 	dbConfig, err := database.LoadFromEnv()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load database config: %w", err)
+		return nil, nil, fmt.Errorf("failed to load database config: %w", err)
 	}
 
 	log.Printf("PostgreSQL config loaded (will connect on first request): %s:%d", dbConfig.Host, dbConfig.Port)
 
-	// Return nil for config store - will be created lazily
-	// This avoids connecting during Lambda init when ENI isn't ready
-	return nil, dbConfig, secretResolver, nil
+	// The config store itself is created lazily on first request (not here), so
+	// callers wire a nil ConfigStore into ExternalDeps. Deferring the connection
+	// avoids connecting during Lambda init when the ENI isn't ready.
+	return dbConfig, secretResolver, nil
 }
 
 // Helper functions for environment variable parsing
@@ -945,6 +947,11 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// getEnvFloat mirrors getEnvInt for float-valued env vars. defaultVal is kept
+// parameterized (rather than inlined) to stay symmetric with getEnvInt even
+// though every current caller passes the same coverage default.
+//
+//nolint:unparam // general-purpose env parser; default kept parameterized for symmetry with getEnvInt
 func getEnvFloat(key string, defaultVal float64) float64 {
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.ParseFloat(val, 64)

@@ -307,9 +307,7 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, userID string, re
 	priorGroups := append([]string(nil), user.GroupIDs...)
 	priorActive := user.Active
 
-	if err := applyUpdateUserRequest(user, req); err != nil {
-		return nil, err
-	}
+	applyUpdateUserRequest(user, req)
 
 	if req.GroupIDs != nil {
 		if err := s.guardGroupChange(ctx, actorUserID, userID, priorGroups, req.GroupIDs); err != nil {
@@ -434,15 +432,16 @@ func addsNewGroup(prior, next []string) bool {
 	return false
 }
 
-// applyUpdateUserRequest applies the non-nil fields of req to user, validating as needed.
-func applyUpdateUserRequest(user *User, req UpdateUserRequest) error {
+// applyUpdateUserRequest applies the non-nil fields of req to user. GroupID
+// membership changes are validated separately by the caller via
+// guardGroupChange; Active is a bool with no per-field validation.
+func applyUpdateUserRequest(user *User, req UpdateUserRequest) {
 	if req.GroupIDs != nil {
 		user.GroupIDs = req.GroupIDs
 	}
 	if req.Active != nil {
 		user.Active = *req.Active
 	}
-	return nil
 }
 
 // DeleteUser removes a user (requires manage-users permission). Refuses to

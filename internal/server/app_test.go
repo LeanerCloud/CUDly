@@ -596,7 +596,7 @@ func TestInitConfigStore(t *testing.T) {
 	t.Run("missing DB_HOST returns error", func(t *testing.T) {
 		testutil.SetEnv(t, "DB_HOST", "")
 
-		_, _, _, err := initConfigStore(context.Background())
+		_, _, err := initConfigStore(context.Background())
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "DB_HOST must be set")
 	})
@@ -608,9 +608,8 @@ func TestInitConfigStore(t *testing.T) {
 		testutil.SetEnv(t, "SECRET_PROVIDER", "env")
 		testutil.SetEnv(t, "AWS_REGION_CONFIG", "us-east-1")
 
-		configStore, dbConfig, resolver, err := initConfigStore(context.Background())
+		dbConfig, resolver, err := initConfigStore(context.Background())
 		testutil.AssertNoError(t, err)
-		testutil.AssertTrue(t, configStore == nil, "Config store should be nil (lazy init)")
 		testutil.AssertTrue(t, dbConfig != nil, "DB config should not be nil")
 		testutil.AssertTrue(t, resolver != nil, "Secret resolver should not be nil")
 		testutil.AssertEqual(t, "localhost", dbConfig.Host)

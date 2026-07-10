@@ -45,21 +45,6 @@ func (h *Handler) requireAccountAccess(ctx context.Context, session *Session, ac
 	return account, nil
 }
 
-// canAccessAccountID is the lightweight, no-DB variant of requireAccountAccess
-// for callers that already have the account's ID AND name (e.g. when iterating
-// a list that was already fetched). Returns true when the session is
-// unrestricted or the allowed_accounts list matches.
-func (h *Handler) canAccessAccountID(ctx context.Context, session *Session, accountID, accountName string) (bool, error) {
-	allowed, err := h.getAllowedAccounts(ctx, session)
-	if err != nil {
-		return false, fmt.Errorf("failed to get allowed accounts: %w", err)
-	}
-	if auth.IsUnrestrictedAccess(allowed) {
-		return true, nil
-	}
-	return auth.MatchesAccount(allowed, accountID, accountName), nil
-}
-
 // requirePlanAccess fetches the plan's associated accounts and rejects with
 // errNotFound when the session's allowed_accounts list doesn't intersect
 // with any of them. Admin / unrestricted sessions pass through unchanged.

@@ -43,7 +43,7 @@ func newMockSMTPServer(t *testing.T, authFail bool) *mockSMTPServer {
 }
 
 // start begins accepting connections.
-func (s *mockSMTPServer) start(t *testing.T) {
+func (s *mockSMTPServer) start(_ *testing.T) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

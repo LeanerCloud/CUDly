@@ -27,9 +27,11 @@ import (
 // PurchaseExecution record tagged with cloud_account_id.
 // If no accounts are configured or no credential store is available, it falls back
 // to single-account execution using ambient credentials.
-// executePurchase runs the purchase for a single execution. Returns wasMultiAccount=true when
-// fan-out was used (per-account records are already saved; caller should skip root record save).
-func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) (wasMultiAccount bool, err error) {
+// executePurchase runs the purchase for a single execution. When the plan has
+// associated cloud accounts it fans out via executeMultiAccount (which saves its
+// own per-account records); otherwise it runs the single-account path. The root
+// row is always finalized+saved by the caller regardless of which path ran.
+func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExecution) (err error) {
 	logging.Infof("Executing purchase for plan %q, step %d", exec.PlanID, exec.StepNumber)
 
 	// Direct-execute purchases (Opportunities "Purchase" button) arrive
@@ -45,26 +47,26 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 	} else {
 		plan, err = m.config.GetPurchasePlan(ctx, exec.PlanID)
 		if err != nil {
-			return false, fmt.Errorf("failed to get plan: %w", err)
+			return fmt.Errorf("failed to get plan: %w", err)
 		}
 		if plan == nil {
-			return false, fmt.Errorf("plan not found: %s", exec.PlanID)
+			return fmt.Errorf("plan not found: %s", exec.PlanID)
 		}
 
 		// Fan out across plan accounts when accounts are configured.
 		if exec.CloudAccountID == nil {
 			accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 			if err != nil {
-				return false, fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
+				return fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 			}
 			if len(accounts) > 0 {
-				return true, m.executeMultiAccount(ctx, exec, plan, accounts)
+				return m.executeMultiAccount(ctx, exec, plan, accounts)
 			}
 		}
 	}
 
 	// Single-account (legacy) path.
-	return false, m.executeSingleAccount(ctx, exec, plan)
+	return m.executeSingleAccount(ctx, exec, plan)
 }
 
 // executeSingleAccount runs the legacy single-account purchase path: resolve

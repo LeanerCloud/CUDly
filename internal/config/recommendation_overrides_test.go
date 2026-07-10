@@ -34,6 +34,7 @@ func (f *fakeAccountConfigReader) GetAccountServiceOverride(_ context.Context, a
 	return f.overrides[accountID+"|"+provider+"|"+service], nil
 }
 
+//nolint:unparam // test helper: provider fixed by design across current callers
 func acctRec(account, provider, service string) RecommendationRecord {
 	return RecommendationRecord{
 		Provider:       provider,

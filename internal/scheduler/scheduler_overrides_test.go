@@ -76,6 +76,8 @@ func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalCo
 func boolPtr(b bool) *bool { return &b }
 
 // rdsRec returns a rec for the given account/region/engine with sensible defaults.
+//
+//nolint:unparam // test helper: region fixed by design across current callers
 func rdsRec(account, region, engine string) config.RecommendationRecord {
 	a := account
 	return config.RecommendationRecord{

@@ -735,7 +735,7 @@ func (r *Router) getPublicInfoHandler(ctx context.Context, req *events.LambdaFun
 }
 
 func (r *Router) getVersionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
-	return r.h.getVersion(ctx, req)
+	return r.h.getVersion(ctx, req), nil
 }
 
 func (r *Router) getDeploymentInfoHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

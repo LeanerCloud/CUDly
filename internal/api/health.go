@@ -37,7 +37,7 @@ func (h *Handler) GetHealth(ctx context.Context) (*HealthResponse, error) {
 	}
 
 	// Check auth service (includes database connection)
-	authCheck := h.checkAuthService(ctx)
+	authCheck := h.checkAuthService()
 	response.Checks["auth_service"] = authCheck
 	if authCheck.Status != "healthy" {
 		response.Status = "degraded"
@@ -108,7 +108,7 @@ func (h *Handler) checkCredentialStore() HealthCheck {
 }
 
 // checkAuthService checks if the auth service is accessible.
-func (h *Handler) checkAuthService(ctx context.Context) HealthCheck {
+func (h *Handler) checkAuthService() HealthCheck {
 	if h.auth == nil {
 		return HealthCheck{
 			Status:  "unhealthy",

@@ -478,23 +478,6 @@ func upcomingFromExecution(plan *config.PurchasePlan, exec *config.PurchaseExecu
 	}
 }
 
-// planIntersectsAllowed returns true when any of the plan's associated cloud
-// accounts is in the allowed list (matched by ID or display name). Returns
-// false when the plan has no account rows — scoped users don't get to see
-// unattributed plans.
-func (h *Handler) planIntersectsAllowed(ctx context.Context, planID string, allowed []string) (bool, error) {
-	accounts, err := h.config.GetPlanAccounts(ctx, planID)
-	if err != nil {
-		return false, fmt.Errorf("failed to get plan accounts: %w", err)
-	}
-	for _, acct := range accounts {
-		if auth.MatchesAccount(allowed, acct.ID, acct.Name) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // getPublicInfo returns public information about the CUDly instance (no auth required).
 // No rate limiting — this is hit by Terraform deployment checks and the frontend on every page load.
 // Sensitive identifiers (API key secret URL, deployment AWS account ID) are intentionally
