@@ -1390,7 +1390,6 @@ func (m *MockConfigStore) UpsertLadderConfig(ctx context.Context, cfg *config.La
 	return v, args.Error(1)
 }
 
-<<<<<<< HEAD
 // SaveLadderRun mocks the SaveLadderRun operation.
 // Returns (nil, nil) when no expectation is registered.
 func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {

@@ -548,13 +548,6 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize email sender: %w", err)
 	}
-	// Wire per-recipient mute suppression + List-Unsubscribe into the production
-	// sender. Without this the mute-aware send logic in the email package is dead
-	// code (the bare sender has a nil mute checker and no unsubscribe base URL).
-	// The dashboard base URL is sourced from the same DASHBOARD_URL the email
-	// templates already use, trimmed of a trailing slash to match resolveOIDCIssuerURL.
-	emailSender = decorateSenderWithMute(emailSender, configStore, strings.TrimRight(cfg.DashboardURL, "/"))
-
 	// Initialize AWS config for STS client
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -723,6 +716,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return fmt.Errorf("failed to create PostgreSQL config store")
 	}
 	app.Config = pgStore
+	// Wire per-recipient mute suppression + List-Unsubscribe now that the config
+	// store (which implements email.MuteChecker via IsNotificationMuted) is live.
+	// Moving this here from NewApplication is correct: mute lookups require DB,
+	// so decorating before the store is available would panic on the first call.
+	app.Email = decorateSenderWithMute(app.Email, pgStore, strings.TrimRight(app.appConfig.DashboardURL, "/"))
 
 	// Initialize auth store with the connection
 	authStore := auth.NewPostgresStore(dbConn)
