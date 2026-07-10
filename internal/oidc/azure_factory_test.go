@@ -35,12 +35,23 @@ func (f *fakeAzureKeyVaultClient) GetKey(_ context.Context, _, _ string, _ *azke
 		}, nil
 	}
 	xBytes := f.xBytes
-	if xBytes == nil {
-		xBytes = f.key.X.Bytes()
-	}
 	yBytes := f.yBytes
-	if yBytes == nil {
-		yBytes = f.key.Y.Bytes()
+	if xBytes == nil || yBytes == nil {
+		// Derive the fixed-width coordinates from the uncompressed SEC 1
+		// point (0x04 || X || Y) via crypto/ecdh, matching ComputeKeyID
+		// and avoiding the deprecated ecdsa.PublicKey.X/Y fields.
+		ecdhKey, err := f.key.ECDH()
+		if err != nil {
+			return azkeys.GetKeyResponse{}, err
+		}
+		uncompressed := ecdhKey.Bytes()
+		byteLen := (f.key.Curve.Params().BitSize + 7) / 8
+		if xBytes == nil {
+			xBytes = uncompressed[1 : 1+byteLen]
+		}
+		if yBytes == nil {
+			yBytes = uncompressed[1+byteLen:]
+		}
 	}
 	// Use sentinel value to represent "caller explicitly passed nil" vs
 	// "caller didn't override" -- an empty slice signals nil field.
