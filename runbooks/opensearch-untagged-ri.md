@@ -4,7 +4,7 @@
 
 Log pattern (grep / CloudWatch Logs Insights):
 
-```
+```text
 OPENSEARCH_TAG_FAILED commitment_id=<id> error=<msg>
 ```
 
@@ -18,7 +18,7 @@ AWS's `PurchaseReservedInstanceOffering` API has no inline `Tags` field.
 CUDly attempts a best-effort `AddTags` call after purchase using a
 constructed ARN of the form:
 
-```
+```text
 arn:aws:es:<region>:<account>:reserved-instance/<uuid>
 ```
 
@@ -38,7 +38,7 @@ this reservation unless it is manually tagged.
 
 1. Identify the untagged RI from the log line:
 
-   ```
+   ```text
    OPENSEARCH_TAG_FAILED commitment_id=<ri-uuid> error=...
    ```
 
