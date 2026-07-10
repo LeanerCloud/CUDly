@@ -872,7 +872,11 @@ describe('Dashboard Module', () => {
       expect(Math.round(span / 86400_000)).toBe(30);
     });
 
-    test('All range sends epoch sentinel as start (not a client-side 3650d ceiling)', async () => {
+    // QA 3.1: 'all' range must NOT send the epoch sentinel (1970-01-01) as
+    // the start param. The backend caps the date range at 366 days and returns
+    // HTTP 400 for a 1970 start, which the catch block rendered as an empty-
+    // state error. The fix uses a rolling ~365-day window that fits the cap.
+    test('All range sends a start within ~365 days of now, not the epoch sentinel (QA 3.1)', async () => {
       // Add an 'all' button and make it active.
       const bAll = document.createElement('button');
       bAll.className = 'trend-range';
@@ -880,15 +884,28 @@ describe('Dashboard Module', () => {
       bAll.textContent = 'All';
       document.body.appendChild(bAll);
       setupSavingsTrendHandlers();
+      // Override the beforeEach default of empty data_points so the chart
+      // actually renders -- the test asserts the empty-state stays hidden.
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 }],
+      });
       (api.getSavingsAnalytics as jest.Mock).mockClear();
 
       bAll.click();
       await new Promise(r => setTimeout(r, 0));
 
       const call = (api.getSavingsAnalytics as jest.Mock).mock.calls[0]?.[0];
-      // Must send the epoch sentinel so the backend returns unbounded history.
-      // A computed 'now - 3650d' would silently cap accounts with older data.
-      expect(call.start).toBe('1970-01-01T00:00:00Z');
+      // Must NOT be the epoch sentinel -- that causes HTTP 400 from the backend.
+      expect(call.start).not.toBe('1970-01-01T00:00:00Z');
+      // Start must be within ~365 days of now (within 366 days to fit the cap).
+      const startMs = new Date(call.start as string).getTime();
+      const nowMs = Date.now();
+      const ageMs = nowMs - startMs;
+      expect(ageMs).toBeGreaterThan(0);
+      expect(ageMs).toBeLessThanOrEqual(366 * 86400_000 + 5_000); // 5s clock tolerance
+      // The chart must render (not show empty-state) when the API returns data.
+      const empty = document.getElementById('savings-trend-empty');
+      expect(empty?.classList.contains('hidden')).toBe(true);
     });
 
     // QA row 405, step 3.1 — x-axis windowing behaviour.
@@ -966,6 +983,34 @@ describe('Dashboard Module', () => {
       const empty = document.getElementById('savings-trend-empty');
       expect(canvas?.classList.contains('hidden')).toBe(true);
       expect(empty?.classList.contains('hidden')).toBe(false);
+    });
+
+    // QA 3.2: tooltip title callback must return a formatted date string, not
+    // the raw 13-digit millisecond timestamp that Chart.js renders by default
+    // when no title callback is configured.
+    test('tooltip title callback returns a formatted date string, not a raw ms timestamp (QA 3.2)', async () => {
+      const purchaseTs = '2024-06-15T12:00:00Z';
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+      });
+
+      await loadSavingsTrendChart();
+
+      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
+      const titleCb = chartCall[1].options.plugins.tooltip.callbacks.title as
+        (items: Array<{ raw: { x: number; y: number } }>) => string;
+
+      const xMs = new Date(purchaseTs).getTime();
+      const result = titleCb([{ raw: { x: xMs, y: 250 } }]);
+
+      // Must be a non-empty string.
+      expect(typeof result).toBe('string');
+      expect(result.length).toBeGreaterThan(0);
+      // Must NOT be the raw numeric millisecond value.
+      expect(result).not.toBe(String(xMs));
+      expect(result).not.toMatch(/^\d{13}$/);
+      // Must contain recognizable date text (month abbreviation).
+      expect(result).toMatch(/Jun\s+\d+/);
     });
   });
 
