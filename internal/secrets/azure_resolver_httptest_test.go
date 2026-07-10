@@ -300,7 +300,10 @@ func TestAzureResolver_IMDSBlocked(t *testing.T) {
 		"http://169.254.169.254/metadata/instance", nil)
 	require.NoError(t, err)
 
-	_, err = client.Do(req)
+	resp, err := client.Do(req)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	require.Error(t, err, "expected IMDS connection to be blocked")
 	assert.Contains(t, err.Error(), "blocked",
 		"error message should indicate the connection was blocked")
