@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// RateLimitConfig defines the rate limiting parameters for a specific endpoint/operation
+// RateLimitConfig defines the rate limiting parameters for a specific endpoint/operation.
 type RateLimitConfig struct {
 	MaxAttempts int           // Maximum number of attempts allowed
 	WindowSecs  int           // Time window in seconds
 	Window      time.Duration // Computed time window (for convenience)
 }
 
-// NewRateLimitConfig creates a new RateLimitConfig
+// NewRateLimitConfig creates a new RateLimitConfig.
 func NewRateLimitConfig(maxAttempts int, windowSecs int) RateLimitConfig {
 	return RateLimitConfig{
 		MaxAttempts: maxAttempts,
@@ -21,7 +21,7 @@ func NewRateLimitConfig(maxAttempts int, windowSecs int) RateLimitConfig {
 	}
 }
 
-// getDefaultRateLimits returns default rate limit configurations
+// getDefaultRateLimits returns default rate limit configurations.
 func getDefaultRateLimits() map[string]RateLimitConfig {
 	return map[string]RateLimitConfig{
 		"login":                 NewRateLimitConfig(5, 15*60),  // 5 attempts / 15 minutes / IP

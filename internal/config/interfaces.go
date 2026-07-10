@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// StoreInterface defines the methods required for configuration storage
+// StoreInterface defines the methods required for configuration storage.
 type StoreInterface interface {
 	// Global configuration
 	GetGlobalConfig(ctx context.Context) (*GlobalConfig, error)
@@ -56,7 +56,7 @@ type StoreInterface interface {
 	// Distinct from GetExecutionsByStatuses (which is DESC for History's
 	// "newest first" semantics): when the result set exceeds `limit`, an
 	// ORDER-BY-DESC + LIMIT in SQL truncates away the soonest rows, exactly
-	// the rows this list must surface. Secondary sort by id ASC stabilises
+	// the rows this list must surface. Secondary sort by id ASC stabilizes
 	// ordering when multiple rows share a scheduled_date.
 	GetPlannedExecutions(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
 	// GetStaleApprovedExecutions returns executions stuck in the "approved"
@@ -97,7 +97,7 @@ type StoreInterface interface {
 	// nil) when zero rows were affected (the execution had already been
 	// approved or otherwise transitioned). Must be called inside a WithTx
 	// block so the suppression cleanup and the status flip commit atomically.
-	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'cancelled', setting cancelled_by. Used by the Gmail-style pre-fire delay
 	// revoke path (issue #291 wave-2) to cancel a scheduled execution at $0 before
@@ -108,7 +108,7 @@ type StoreInterface interface {
 	// a 410 ("window closed") rather than a 409 ("not pending"). Returns
 	// (true, "cancelled", nil) on success and (false, currentStatus, nil) when
 	// zero rows were affected. Must be called inside a WithTx block.
-	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (cancelled bool, currentStatus string, err error)
+	CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
 	// ListStuckExecutions returns executions in any of the given statuses
 	// whose updated_at is older than the given duration. Used by the
 	// reaper sweep (issue #678) to find rows stuck in approved/running

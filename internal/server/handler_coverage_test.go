@@ -114,33 +114,8 @@ func TestConfigExchangeStoreAdapter_CompleteRIExchange(t *testing.T) {
 	ctx := testutil.TestContext(t)
 
 	var completedID, completedExchangeID string
-	store := &mockConfigStoreForExchange{
-		mockConfigStoreForHealth: mockConfigStoreForHealth{},
-	}
-	// Override CompleteRIExchange via embedding: use the base mock which returns nil
-	// Then verify the call reached the underlying store via a custom wrapper.
-	type customStore struct {
-		mockConfigStoreForHealth
-		completeFunc func(ctx context.Context, id, exchangeID string) error
-	}
-	cs := &struct {
-		mockConfigStoreForExchange
-		completeOverride func(ctx context.Context, id, exchangeID string) error
-	}{
-		mockConfigStoreForExchange: *store,
-		completeOverride: func(ctx context.Context, id, exID string) error {
-			completedID = id
-			completedExchangeID = exID
-			return nil
-		},
-	}
-	_ = cs
-
-	// Use a simpler approach: directly test the adapter with the mock store.
+	// Test the adapter directly with a mock store that records the CompleteRIExchange call.
 	called := false
-	type storeWithComplete struct {
-		mockConfigStoreForExchange
-	}
 	var completeStore config.StoreInterface = &mockConfigStoreForExchangeComplete{
 		mockConfigStoreForExchange: mockConfigStoreForExchange{},
 		completeFunc: func(ctx context.Context, id, exID string) error {
@@ -315,7 +290,7 @@ func (m *mockConfigStoreForExchangeStale) GetStaleProcessingExchanges(ctx contex
 	return nil, nil
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeComplete) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }
@@ -338,7 +313,7 @@ func (m *mockConfigStoreForExchangeComplete) WithTx(_ context.Context, fn func(t
 	return fn(nil)
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeFail) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }
@@ -361,7 +336,7 @@ func (m *mockConfigStoreForExchangeFail) WithTx(_ context.Context, fn func(tx pg
 	return fn(nil)
 }
 
-// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace)
+// ── Purchase suppressions (Commit 2 of bulk-purchase-with-grace).
 func (m *mockConfigStoreForExchangeStale) CreateSuppression(_ context.Context, _ *config.PurchaseSuppression) error {
 	return nil
 }

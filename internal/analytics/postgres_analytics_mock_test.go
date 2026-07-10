@@ -15,7 +15,7 @@ import (
 // For full coverage of PostgresAnalyticsStore, see postgres_analytics_integration_test.go
 // which requires the 'integration' build tag and a running PostgreSQL instance.
 
-// TestSaveSnapshotMarshalError verifies metadata marshaling error handling
+// TestSaveSnapshotMarshalError verifies metadata marshaling error handling.
 func TestSaveSnapshotMarshalError(t *testing.T) {
 	t.Run("invalid metadata causes marshal error", func(t *testing.T) {
 		// Create snapshot with unmarshallable metadata
@@ -68,7 +68,7 @@ func TestAccountFilterClause(t *testing.T) {
 	})
 }
 
-// TestPartitionDateCalculation verifies partition date calculation logic
+// TestPartitionDateCalculation verifies partition date calculation logic.
 func TestPartitionDateCalculation(t *testing.T) {
 	t.Run("truncates to first of month", func(t *testing.T) {
 		startDate := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
@@ -113,7 +113,7 @@ func TestPartitionDateCalculation(t *testing.T) {
 	})
 }
 
-// TestMetadataHandling verifies metadata JSON handling
+// TestMetadataHandling verifies metadata JSON handling.
 func TestMetadataHandling(t *testing.T) {
 	t.Run("nil metadata produces nil bytes", func(t *testing.T) {
 		var metadata map[string]interface{} = nil
@@ -165,7 +165,7 @@ func TestMetadataHandling(t *testing.T) {
 	})
 }
 
-// TestUUIDGeneration verifies UUID generation for snapshots
+// TestUUIDGeneration verifies UUID generation for snapshots.
 func TestUUIDGeneration(t *testing.T) {
 	t.Run("empty ID should trigger generation", func(t *testing.T) {
 		snapshot := &SavingsSnapshot{ID: ""}
@@ -178,7 +178,7 @@ func TestUUIDGeneration(t *testing.T) {
 	})
 }
 
-// TestCommitmentTypeLogic verifies commitment type determination
+// TestCommitmentTypeLogic verifies commitment type determination.
 func TestCommitmentTypeLogic(t *testing.T) {
 	t.Run("SavingsPlans service gets SavingsPlan type", func(t *testing.T) {
 		service := "SavingsPlans"
@@ -201,7 +201,7 @@ func TestCommitmentTypeLogic(t *testing.T) {
 	})
 }
 
-// TestBulkInsertEmptySlice verifies empty slice handling
+// TestBulkInsertEmptySlice verifies empty slice handling.
 func TestBulkInsertEmptySlice(t *testing.T) {
 	t.Run("empty slice returns early", func(t *testing.T) {
 		snapshots := []SavingsSnapshot{}
@@ -220,7 +220,7 @@ func TestBulkInsertEmptySlice(t *testing.T) {
 	})
 }
 
-// TestCloseReturnsNil verifies Close behavior
+// TestCloseReturnsNil verifies Close behavior.
 func TestCloseReturnsNil(t *testing.T) {
 	store := NewPostgresAnalyticsStore(nil)
 	err := store.Close()

@@ -11,13 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
-// AWSResolver implements Resolver for AWS Secrets Manager
+// AWSResolver implements Resolver for AWS Secrets Manager.
 type AWSResolver struct {
 	client *secretsmanager.Client
 	region string
 }
 
-// NewAWSResolver creates a new AWS Secrets Manager resolver
+// NewAWSResolver creates a new AWS Secrets Manager resolver.
 func NewAWSResolver(ctx context.Context, region string) (*AWSResolver, error) {
 	// Load AWS config
 	cfg, err := config.LoadDefaultConfig(ctx,
@@ -36,7 +36,7 @@ func NewAWSResolver(ctx context.Context, region string) (*AWSResolver, error) {
 	}, nil
 }
 
-// GetSecret retrieves a secret from AWS Secrets Manager
+// GetSecret retrieves a secret from AWS Secrets Manager.
 func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, error) {
 	input := &secretsmanager.GetSecretValueInput{
 		SecretId: aws.String(secretID),
@@ -55,7 +55,7 @@ func (r *AWSResolver) GetSecret(ctx context.Context, secretID string) (string, e
 	return "", fmt.Errorf("secret %s has no string value (binary secrets not supported by this resolver)", secretID)
 }
 
-// PutSecret creates or updates a secret value in AWS Secrets Manager
+// PutSecret creates or updates a secret value in AWS Secrets Manager.
 func (r *AWSResolver) PutSecret(ctx context.Context, secretID string, value string) error {
 	input := &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(secretID),
@@ -70,7 +70,7 @@ func (r *AWSResolver) PutSecret(ctx context.Context, secretID string, value stri
 	return nil
 }
 
-// GetSecretJSON retrieves and parses a JSON secret
+// GetSecretJSON retrieves and parses a JSON secret.
 func (r *AWSResolver) GetSecretJSON(ctx context.Context, secretID string) (map[string]any, error) {
 	secretString, err := r.GetSecret(ctx, secretID)
 	if err != nil {
@@ -85,7 +85,7 @@ func (r *AWSResolver) GetSecretJSON(ctx context.Context, secretID string) (map[s
 	return result, nil
 }
 
-// ListSecrets lists secrets in AWS Secrets Manager
+// ListSecrets lists secrets in AWS Secrets Manager.
 func (r *AWSResolver) ListSecrets(ctx context.Context, filter string) ([]string, error) {
 	input := &secretsmanager.ListSecretsInput{}
 
@@ -118,7 +118,7 @@ func (r *AWSResolver) ListSecrets(ctx context.Context, filter string) ([]string,
 	return secrets, nil
 }
 
-// Close cleans up resources (no-op for AWS)
+// Close cleans up resources (no-op for AWS).
 func (r *AWSResolver) Close() error {
 	return nil
 }

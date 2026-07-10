@@ -2,14 +2,17 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // TestGCPResolver_DirectMethods tests the actual GCPResolver methods
-// These tests exercise the real code paths but may skip if GCP credentials are unavailable
+// These tests exercise the real code paths but may skip if GCP credentials are unavailable.
 func TestGCPResolver_DirectMethods(t *testing.T) {
 	ctx := context.Background()
 
@@ -25,7 +28,7 @@ func TestGCPResolver_DirectMethods(t *testing.T) {
 	assert.NotNil(t, resolver.client)
 }
 
-// TestGCPResolver_GetSecret_NonExistent tests getting a non-existent secret
+// TestGCPResolver_GetSecret_NonExistent tests getting a non-existent secret.
 func TestGCPResolver_GetSecret_NonExistent(t *testing.T) {
 	ctx := context.Background()
 
@@ -43,7 +46,7 @@ func TestGCPResolver_GetSecret_NonExistent(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to access secret")
 }
 
-// TestGCPResolver_GetSecretJSON_NonExistent tests getting a non-existent JSON secret
+// TestGCPResolver_GetSecretJSON_NonExistent tests getting a non-existent JSON secret.
 func TestGCPResolver_GetSecretJSON_NonExistent(t *testing.T) {
 	ctx := context.Background()
 
@@ -61,7 +64,7 @@ func TestGCPResolver_GetSecretJSON_NonExistent(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// TestGCPResolver_ListSecrets tests listing secrets
+// TestGCPResolver_ListSecrets tests listing secrets.
 func TestGCPResolver_ListSecrets(t *testing.T) {
 	ctx := context.Background()
 
@@ -82,7 +85,7 @@ func TestGCPResolver_ListSecrets(t *testing.T) {
 	}
 }
 
-// TestGCPResolver_ListSecrets_WithFilter_Coverage_Direct tests listing secrets with a filter using direct resolver
+// TestGCPResolver_ListSecrets_WithFilter_Coverage_Direct tests listing secrets with a filter using direct resolver.
 func TestGCPResolver_ListSecrets_WithFilter_Coverage_Direct(t *testing.T) {
 	ctx := context.Background()
 
@@ -101,7 +104,7 @@ func TestGCPResolver_ListSecrets_WithFilter_Coverage_Direct(t *testing.T) {
 	}
 }
 
-// TestGCPResolver_Close_Idempotent tests that Close can be called multiple times
+// TestGCPResolver_Close_Idempotent tests that Close can be called multiple times.
 func TestGCPResolver_Close_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
@@ -120,7 +123,7 @@ func TestGCPResolver_Close_Idempotent(t *testing.T) {
 	_ = resolver.Close()
 }
 
-// TestGCPResolver_DifferentProjectIDs tests creating resolvers for different projects
+// TestGCPResolver_DifferentProjectIDs tests creating resolvers for different projects.
 func TestGCPResolver_DifferentProjectIDs(t *testing.T) {
 	ctx := context.Background()
 
@@ -140,7 +143,7 @@ func TestGCPResolver_DifferentProjectIDs(t *testing.T) {
 	}
 }
 
-// TestGCPResolver_ContextHandling tests context handling in GCP resolver
+// TestGCPResolver_ContextHandling tests context handling in GCP resolver.
 func TestGCPResolver_ContextHandling(t *testing.T) {
 	ctx := context.Background()
 
@@ -150,17 +153,23 @@ func TestGCPResolver_ContextHandling(t *testing.T) {
 	}
 	defer resolver.Close()
 
-	// Test with cancelled context
+	// Test with canceled context
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// GetSecret with cancelled context
+	// GetSecret with canceled context
 	_, err = resolver.GetSecret(cancelledCtx, "test-secret")
-	// Should fail due to cancelled context
-	assert.Error(t, err)
+	require.Error(t, err)
+	// The GCP SDK wraps context cancellation in a gRPC Canceled status error via %w;
+	// errors.Is does not traverse grpc status errors so we unwrap one level and
+	// check the gRPC code to confirm this is a genuine cancellation, not an
+	// auth or missing-secret failure.
+	st, ok := grpcstatus.FromError(errors.Unwrap(err))
+	require.True(t, ok, "expected gRPC status error in chain, got: %v", err)
+	assert.Equal(t, codes.Canceled, st.Code(), "expected gRPC Canceled code, got: %v", err)
 }
 
-// TestGCPResolver_EmptySecretID tests getting a secret with empty ID
+// TestGCPResolver_EmptySecretID tests getting a secret with empty ID.
 func TestGCPResolver_EmptySecretID(t *testing.T) {
 	ctx := context.Background()
 
@@ -175,7 +184,7 @@ func TestGCPResolver_EmptySecretID(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestGCPResolver_SpecialCharactersInSecretID tests secret IDs with special characters
+// TestGCPResolver_SpecialCharactersInSecretID tests secret IDs with special characters.
 func TestGCPResolver_SpecialCharactersInSecretID(t *testing.T) {
 	ctx := context.Background()
 
@@ -201,7 +210,7 @@ func TestGCPResolver_SpecialCharactersInSecretID(t *testing.T) {
 	}
 }
 
-// TestGCPResolver_GetSecretJSON_RealMethod tests the GetSecretJSON error propagation
+// TestGCPResolver_GetSecretJSON_RealMethod tests the GetSecretJSON error propagation.
 func TestGCPResolver_GetSecretJSON_RealMethod(t *testing.T) {
 	ctx := context.Background()
 
@@ -218,7 +227,7 @@ func TestGCPResolver_GetSecretJSON_RealMethod(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// TestGCPResolver_ResourceNameFormat verifies the resource name format
+// TestGCPResolver_ResourceNameFormat verifies the resource name format.
 func TestGCPResolver_ResourceNameFormat(t *testing.T) {
 	// The GCP resolver constructs resource names in the format:
 	// projects/{project}/secrets/{secret}/versions/latest

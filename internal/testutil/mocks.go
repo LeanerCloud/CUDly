@@ -9,7 +9,7 @@ import (
 	"github.com/LeanerCloud/CUDly/internal/scheduler"
 )
 
-// MockScheduler is a mock implementation of server.SchedulerInterface
+// MockScheduler is a mock implementation of server.SchedulerInterface.
 type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context) (*scheduler.CollectResult, error)
 	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
@@ -37,7 +37,7 @@ func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*
 	return nil, nil, nil
 }
 
-// MockPurchaseManager is a mock implementation of server.PurchaseManagerInterface
+// MockPurchaseManager is a mock implementation of server.PurchaseManagerInterface.
 type MockPurchaseManager struct {
 	ProcessScheduledPurchasesFunc         func(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotificationsFunc func(ctx context.Context) (*purchase.NotificationResult, error)

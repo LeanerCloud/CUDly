@@ -266,7 +266,7 @@ func TestHandleCollectRecommendations_WithResults(t *testing.T) {
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
 }
 
-// noopEmailSender is a minimal email.SenderInterface for unit tests
+// noopEmailSender is a minimal email.SenderInterface for unit tests.
 var _ email.SenderInterface = (*noopEmailSender)(nil)
 
 type noopEmailSender struct{}
@@ -596,7 +596,7 @@ func TestInitConfigStore(t *testing.T) {
 	t.Run("missing DB_HOST returns error", func(t *testing.T) {
 		testutil.SetEnv(t, "DB_HOST", "")
 
-		_, _, _, err := initConfigStore(context.Background())
+		_, _, err := initConfigStore(context.Background())
 		testutil.AssertError(t, err)
 		testutil.AssertContains(t, err.Error(), "DB_HOST must be set")
 	})
@@ -608,9 +608,8 @@ func TestInitConfigStore(t *testing.T) {
 		testutil.SetEnv(t, "SECRET_PROVIDER", "env")
 		testutil.SetEnv(t, "AWS_REGION_CONFIG", "us-east-1")
 
-		configStore, dbConfig, resolver, err := initConfigStore(context.Background())
+		dbConfig, resolver, err := initConfigStore(context.Background())
 		testutil.AssertNoError(t, err)
-		testutil.AssertTrue(t, configStore == nil, "Config store should be nil (lazy init)")
 		testutil.AssertTrue(t, dbConfig != nil, "DB config should not be nil")
 		testutil.AssertTrue(t, resolver != nil, "Secret resolver should not be nil")
 		testutil.AssertEqual(t, "localhost", dbConfig.Host)
@@ -806,7 +805,7 @@ func TestResolveScheduledTaskSecret_PreferSecretName(t *testing.T) {
 
 // TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver verifies the
 // dev-only path: when no resolver is available, the plaintext value is
-// used (expected behaviour for local development).
+// used (expected behavior for local development).
 func TestResolveScheduledTaskSecret_PlaintextOnlyNoResolver(t *testing.T) {
 	ctx := context.Background()
 

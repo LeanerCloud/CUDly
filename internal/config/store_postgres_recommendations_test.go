@@ -226,7 +226,7 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 }
 
 // TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins
-// the broadened-natural-key behaviour from migration 000032: when
+// the broadened-natural-key behavior from migration 000032: when
 // Azure returns multiple `(term, payment)` variants for the same
 // (account, provider, service, region, resource_type) SKU, all of
 // them must round-trip through the cache as distinct rows. Pre-fix
@@ -289,6 +289,8 @@ func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T)
 	// (migration 000030).
 	acct1 := "11111111-1111-1111-1111-111111111111"
 	acct2 := "22222222-2222-2222-2222-222222222222"
+	// seedRecommendationCloudAccount already creates the cloud_accounts rows
+	// that recommendations.cloud_account_id FK (migration 000030) requires.
 	seedRecommendationCloudAccount(ctx, t, store, acct1, "azure", "sub-1111")
 	seedRecommendationCloudAccount(ctx, t, store, acct2, "azure", "sub-2222")
 
@@ -346,6 +348,8 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 
 	// The registered account must exist in cloud_accounts:
 	// recommendations.cloud_account_id carries an FK (migration 000030).
+	// seedRecommendationCloudAccount already creates the cloud_accounts row
+	// that recommendations.cloud_account_id FK (migration 000030) requires.
 	registeredAcctID := "33333333-3333-3333-3333-333333333333"
 	seedRecommendationCloudAccount(ctx, t, store, registeredAcctID, "aws", "333333333333")
 

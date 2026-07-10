@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockSMTPServer is a simple mock SMTP server for testing
+// mockSMTPServer is a simple mock SMTP server for testing.
 type mockSMTPServer struct {
 	listener    net.Listener
 	port        int
@@ -26,7 +26,7 @@ type mockSMTPServer struct {
 	inData      bool
 }
 
-// newMockSMTPServer creates a new mock SMTP server
+// newMockSMTPServer creates a new mock SMTP server.
 func newMockSMTPServer(t *testing.T, authFail bool) *mockSMTPServer {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -42,8 +42,8 @@ func newMockSMTPServer(t *testing.T, authFail bool) *mockSMTPServer {
 	return server
 }
 
-// start begins accepting connections
-func (s *mockSMTPServer) start(t *testing.T) {
+// start begins accepting connections.
+func (s *mockSMTPServer) start(_ *testing.T) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -130,13 +130,13 @@ func (s *mockSMTPServer) start(t *testing.T) {
 	}()
 }
 
-// stop closes the server
+// stop closes the server.
 func (s *mockSMTPServer) stop() {
 	s.listener.Close()
 	s.wg.Wait()
 }
 
-// TestSMTPSender_SendToEmail_WithMockServer tests with a simple mock SMTP server (no TLS)
+// TestSMTPSender_SendToEmail_WithMockServer tests with a simple mock SMTP server (no TLS).
 func TestSMTPSender_SendToEmail_WithMockServer_NoTLS(t *testing.T) {
 	// Create mock server
 	server := newMockSMTPServer(t, false)
@@ -250,7 +250,7 @@ func TestSMTPSender_SendToEmail_WithMockServer_AuthFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send email via SMTP")
 }
 
-// TestSMTPSender_SendPasswordResetEmail_WithMockServer tests the full flow
+// TestSMTPSender_SendPasswordResetEmail_WithMockServer tests the full flow.
 func TestSMTPSender_SendPasswordResetEmail_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -272,7 +272,7 @@ func TestSMTPSender_SendPasswordResetEmail_WithMockServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendWelcomeEmail_WithMockServer tests welcome email
+// TestSMTPSender_SendWelcomeEmail_WithMockServer tests welcome email.
 func TestSMTPSender_SendWelcomeEmail_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -294,7 +294,7 @@ func TestSMTPSender_SendWelcomeEmail_WithMockServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendNewRecommendationsNotification_WithMockServer tests recommendations email
+// TestSMTPSender_SendNewRecommendationsNotification_WithMockServer tests recommendations email.
 func TestSMTPSender_SendNewRecommendationsNotification_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -325,7 +325,7 @@ func TestSMTPSender_SendNewRecommendationsNotification_WithMockServer(t *testing
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer tests scheduled purchase email
+// TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer tests scheduled purchase email.
 func TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -360,7 +360,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer(t *testing.
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendPurchaseConfirmation_WithMockServer tests purchase confirmation email
+// TestSMTPSender_SendPurchaseConfirmation_WithMockServer tests purchase confirmation email.
 func TestSMTPSender_SendPurchaseConfirmation_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -391,7 +391,7 @@ func TestSMTPSender_SendPurchaseConfirmation_WithMockServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendPurchaseFailedNotification_WithMockServer tests purchase failed email
+// TestSMTPSender_SendPurchaseFailedNotification_WithMockServer tests purchase failed email.
 func TestSMTPSender_SendPurchaseFailedNotification_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -420,7 +420,7 @@ func TestSMTPSender_SendPurchaseFailedNotification_WithMockServer(t *testing.T) 
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendToEmail_WithMockServer_MultipleRecipients tests multiple recipients
+// TestSMTPSender_SendToEmail_WithMockServer_MultipleRecipients tests multiple recipients.
 func TestSMTPSender_SendToEmail_WithMockServer_MessageContent(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -442,7 +442,7 @@ func TestSMTPSender_SendToEmail_WithMockServer_MessageContent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendToEmail_WithMockServer_LongContent tests long content
+// TestSMTPSender_SendToEmail_WithMockServer_LongContent tests long content.
 func TestSMTPSender_SendToEmail_WithMockServer_LongContent(t *testing.T) {
 	server := newMockSMTPServer(t, false)
 	server.start(t)
@@ -526,11 +526,12 @@ func handleFlexSMTPConn(conn net.Conn, behavior string) {
 			return // plaintext conn -> client TLS handshake fails
 
 		case strings.HasPrefix(cmd, "AUTH"):
-			if behavior == "auth_fail_535" {
+			switch behavior {
+			case "auth_fail_535":
 				fmt.Fprintf(conn, "535 5.7.8 Authentication credentials invalid\r\n")
-			} else if behavior == "auth_fail_other" {
+			case "auth_fail_other":
 				fmt.Fprintf(conn, "454 4.7.0 Temporary authentication failure\r\n")
-			} else {
+			default:
 				fmt.Fprintf(conn, "235 2.7.0 Authentication successful\r\n")
 			}
 

@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getMigrationsPath returns the absolute path to migrations directory
+// getMigrationsPath returns the absolute path to migrations directory.
 func getMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
@@ -307,7 +307,7 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	})
 
 	t.Run("Get execution by ID - not found", func(t *testing.T) {
-		// Use a valid UUID format that doesn't exist
+		// GetExecutionByID returns ErrNotFound when no row matches.
 		_, err := store.GetExecutionByID(ctx, "00000000-0000-0000-0000-000000000000")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")

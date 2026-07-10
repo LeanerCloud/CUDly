@@ -20,8 +20,7 @@ func TestGetVersion_Defaults(t *testing.T) {
 	t.Setenv("BUILD_TIME", "")
 
 	h := &Handler{}
-	resp, err := h.getVersion(context.Background(), &events.LambdaFunctionURLRequest{})
-	require.NoError(t, err)
+	resp := h.getVersion(context.Background(), &events.LambdaFunctionURLRequest{})
 	require.NotNil(t, resp)
 
 	assert.Equal(t, "dev", resp.Version)
@@ -37,8 +36,7 @@ func TestGetVersion_FromEnv(t *testing.T) {
 	t.Setenv("BUILD_TIME", "2026-06-01T12:00:00Z")
 
 	h := &Handler{}
-	resp, err := h.getVersion(context.Background(), &events.LambdaFunctionURLRequest{})
-	require.NoError(t, err)
+	resp := h.getVersion(context.Background(), &events.LambdaFunctionURLRequest{})
 
 	assert.Equal(t, "abc1234", resp.Version)
 	assert.Equal(t, "abc1234", resp.GitSHA)

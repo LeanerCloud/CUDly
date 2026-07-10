@@ -19,16 +19,17 @@ import (
 const bcryptCost = 12
 
 // dummyPasswordHash is a pre-computed bcrypt hash of a random constant string.
-// It is used by Login to run a timing-equalising bcrypt.CompareHashAndPassword
+// It is used by Login to run a timing-equalizing bcrypt.CompareHashAndPassword
 // when the requested email does not exist, so an attacker cannot distinguish a
 // missing account from a wrong-password attempt via response time (issue #416).
 // The plain-text "dummy" value is intentionally unguessable and never stored.
 //
 // Generated once at compile time with cost bcryptCost (12).
-// nolint:gosec -- this is a public sentinel hash, not a credential
+//
+//nolint:gosec // this is a public sentinel hash, not a credential
 var dummyPasswordHash = "$2a$12$iAMeexq41AwZ2Dj9oAvGfeVHQxK5ffLPPTNxwPB8bsf7olA730dxO"
 
-// Password validation constants following NIST guidelines
+// Password validation constants following NIST guidelines.
 const (
 	minPasswordLength     = 12  // Minimum password length
 	maxPasswordLength     = 128 // Maximum password length to prevent bcrypt DoS
@@ -44,7 +45,7 @@ const (
 )
 
 // commonPasswords is a list of commonly used weak passwords to reject
-// Based on NIST guidelines and common password lists
+// Based on NIST guidelines and common password lists.
 var commonPasswords = []string{
 	"password", "123456", "qwerty", "admin", "welcome", "letmein",
 	"monkey", "dragon", "master", "login", "abc123", "starwars",
@@ -122,7 +123,7 @@ func (s *Service) checkPasswordHistory(newPassword string, currentHash string, p
 	return nil
 }
 
-// addToPasswordHistory adds a new password hash to the history and maintains the limit
+// addToPasswordHistory adds a new password hash to the history and maintains the limit.
 func addToPasswordHistory(currentHash string, existingHistory []string) []string {
 	// Create new history array with current password at the beginning
 	newHistory := []string{currentHash}
@@ -135,7 +136,7 @@ func addToPasswordHistory(currentHash string, existingHistory []string) []string
 	return newHistory
 }
 
-// validatePassword validates password requirements following NIST guidelines
+// validatePassword validates password requirements following NIST guidelines.
 func (s *Service) validatePassword(password string) error {
 	// Check minimum length
 	if len(password) < minPasswordLength {
@@ -166,7 +167,7 @@ func (s *Service) validatePassword(password string) error {
 	return nil
 }
 
-// validatePasswordComplexity checks that password meets complexity requirements
+// validatePasswordComplexity checks that password meets complexity requirements.
 func (s *Service) validatePasswordComplexity(password string) error {
 	hasUpper, hasLower, hasNumber, hasSpecial := checkCharacterTypes(password)
 	return validateCharacterRequirements(hasUpper, hasLower, hasNumber, hasSpecial)
@@ -195,7 +196,7 @@ func validateCharacterRequirements(hasUpper, hasLower, hasNumber, hasSpecial boo
 	return nil
 }
 
-// checkCommonPasswords verifies password is not in common password list
+// checkCommonPasswords verifies password is not in common password list.
 func (s *Service) checkCommonPasswords(password string) error {
 	lowerPass := strings.ToLower(password)
 	for _, common := range commonPasswords {
@@ -206,7 +207,7 @@ func (s *Service) checkCommonPasswords(password string) error {
 	return nil
 }
 
-// ChangePassword allows a user to change their password
+// ChangePassword allows a user to change their password.
 func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangePasswordRequest) error {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
@@ -259,7 +260,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 	return nil
 }
 
-// RequestPasswordReset initiates a password reset
+// RequestPasswordReset initiates a password reset.
 func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
 	user, err := s.store.GetUserByEmail(ctx, email)
 	if err != nil {
@@ -328,7 +329,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 	return nil
 }
 
-// ConfirmPasswordReset completes a password reset
+// ConfirmPasswordReset completes a password reset.
 func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetConfirm) error {
 	user, err := s.validateResetToken(ctx, req.Token)
 	if err != nil {
@@ -478,7 +479,7 @@ func (s *Service) processPasswordReset(user *User, newPassword string) error {
 // redactEmail returns a redacted version of an email address safe for debug logs.
 // Both the local part and the domain are partially masked to reduce PII exposure
 // for low-entropy addresses (03-L1, see also feedback_pii_in_logs).
-// Example: "user@example.com" -> "us***@ex***.com"
+// Example: "user@example.com" -> "us***@ex***.com".
 func redactEmail(email string) string {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {

@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Plans handlers
+// Plans handlers.
 func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*PlansResponse, error) {
 	// Require view:plans permission
 	if _, err := h.requirePermission(ctx, req, "view", "plans"); err != nil {
@@ -48,7 +48,7 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 	return &PlansResponse{Plans: plans}, nil
 }
 
-// calculateNextExecutionDate calculates the next execution date for a plan
+// calculateNextExecutionDate calculates the next execution date for a plan.
 func calculateNextExecutionDate(plan *config.PurchasePlan, now time.Time) *time.Time {
 	var nextDate time.Time
 	if plan.RampSchedule.Type == "immediate" {
@@ -89,7 +89,7 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	// target_accounts is required: a plan must be tied to at least one
 	// cloud_account row. The historical "leave blank to mean all accounts of
-	// this provider" behaviour created "universal plans" (rows in
+	// this provider" behavior created "universal plans" (rows in
 	// purchase_plans with no matching plan_accounts row) that were hard to
 	// scope, hard to filter, and hard to govern. Reject early with a clear
 	// 400 so the frontend can surface the error before any DB write.
@@ -297,7 +297,7 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	//
 	// Issue #950: stamp the session user onto each new execution's
 	// created_by_user_id so the per-row creator-scope ownership gate
-	// (authorizeExecutionManagement) recognises the actor who scheduled
+	// (authorizeExecutionManagement) recognizes the actor who scheduled
 	// the purchases as their owner. Without this the rows ship NULL and
 	// are unreachable for pause / resume / run / delete by anyone except
 	// admins / update-any holders, including the user who just clicked
@@ -323,7 +323,7 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	return &CreatePlannedPurchasesResponse{Created: created}, nil
 }
 
-// parseCreatePurchasesRequest parses and validates the create purchases request
+// parseCreatePurchasesRequest parses and validates the create purchases request.
 func (h *Handler) parseCreatePurchasesRequest(body string) (*CreatePlannedPurchasesRequest, time.Time, error) {
 	var req CreatePlannedPurchasesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
@@ -373,7 +373,7 @@ func (h *Handler) getPlanForPurchaseCreation(ctx context.Context, planID string)
 // creator carries the session user's UUID (or nil for the admin-API-key /
 // non-UUID-session paths) and is stamped onto every inserted row's
 // created_by_user_id so the issue-#950 ownership gate downstream can
-// recognise the actor as the rightful manager. A nil value mirrors the
+// recognize the actor as the rightful manager. A nil value mirrors the
 // migration-000041 fail-closed semantics: legacy / unattributed rows are
 // reachable only by admin / update-any holders.
 func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int, startDate time.Time, creator *string) (int, error) {
@@ -423,7 +423,7 @@ func (h *Handler) updatePlanNextExecutionDateTx(ctx context.Context, tx pgx.Tx, 
 	return nil
 }
 
-// PatchPlanRequest represents a partial update request for plans
+// PatchPlanRequest represents a partial update request for plans.
 type PatchPlanRequest struct {
 	Name                   *string `json:"name,omitempty"`
 	Enabled                *bool   `json:"enabled,omitempty"`
@@ -457,7 +457,7 @@ func applyPatchFields(plan *config.PurchasePlan, req PatchPlanRequest) error {
 	return nil
 }
 
-// patchPlan handles partial updates to a plan (PATCH method)
+// patchPlan handles partial updates to a plan (PATCH method).
 func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (any, error) {
 	if err := validateUUID(planID); err != nil {
 		return nil, err

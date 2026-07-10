@@ -100,7 +100,7 @@ func getTaskTimeout() time.Duration {
 	return defaultTimeout
 }
 
-// determineRuntimeMode determines the runtime mode based on flags and environment
+// determineRuntimeMode determines the runtime mode based on flags and environment.
 func determineRuntimeMode(modeFlag string) string {
 	// If mode is explicitly set, use it
 	if modeFlag != "auto" {

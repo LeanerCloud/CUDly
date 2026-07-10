@@ -16,7 +16,7 @@ import (
 // fakeRIUtilCacheStore is a minimal in-test implementation of
 // riUtilizationCacheStore. Keyed by (region, lookbackDays); stores the
 // raw JSON payload + fetched_at so the cache layer exercises the same
-// marshalling path as the real Postgres store.
+// marshaling path as the real Postgres store.
 type fakeRIUtilCacheStore struct {
 	mu      sync.Mutex
 	entries map[string]config.RIUtilizationCacheEntry
@@ -59,6 +59,8 @@ func (f *fakeRIUtilCacheStore) UpsertRIUtilizationCache(ctx context.Context, reg
 // seedStale writes a cache row with fetchedAt set in the past so the
 // caller can control exactly how "stale" the row is relative to soft
 // / hard TTLs.
+//
+//nolint:unparam // test helper: region fixed by design across current callers
 func (f *fakeRIUtilCacheStore) seedStale(t *testing.T, region string, lookbackDays int, data []recommendations.RIUtilization, age time.Duration) {
 	t.Helper()
 	payload, err := json.Marshal(data)
@@ -184,7 +186,7 @@ func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Lambda must return the FRESH data synchronously (today's behaviour).
+	// Lambda must return the FRESH data synchronously (today's behavior).
 	if len(got) != 1 || got[0].ReservedInstanceID != "ri-fresh" {
 		t.Fatalf("Lambda mode should synchronously refetch; got %+v", got)
 	}
@@ -225,7 +227,8 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// Gate the fetcher so concurrent calls all race to enter the
 	// refresh — singleflight should collapse them.
 	release := make(chan struct{})
-	fetch := func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	//nolint:unparam // fetcher signature is fixed by newRIUtilizationCache; this refresh path never errors
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
 		calls.Add(1)
 		<-release
 		return freshData, nil

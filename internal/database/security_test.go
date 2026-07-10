@@ -124,7 +124,7 @@ func TestBuildPoolConfig_ParseConfigDoesNotExposePassword(t *testing.T) {
 
 // TestBuildPoolConfig_ParseError_NoPasswordLeak verifies that when the DSN
 // contains a structurally invalid piece (beyond what pgx can parse) any error
-// returned does not expose the real password. This tests the defence-in-depth
+// returned does not expose the real password. This tests the defense-in-depth
 // goal of issue #444: by passing "REDACTED" to ParseConfig, even an error from
 // pgx's URI parser only shows "REDACTED", not the real credential.
 func TestBuildPoolConfig_ParseError_NoPasswordLeak(t *testing.T) {

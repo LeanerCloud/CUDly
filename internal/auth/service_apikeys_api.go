@@ -9,14 +9,14 @@ import (
 // API wrapper methods for API key operations
 // These methods return API-friendly types and handle type conversions
 
-// APICreateAPIKeyRequest represents the API request to create an API key
+// APICreateAPIKeyRequest represents the API request to create an API key.
 type APICreateAPIKeyRequest struct {
 	Name        string       `json:"name"`
 	Permissions []Permission `json:"permissions,omitempty"`
 	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
 }
 
-// APIKeyInfo represents public API key information (without sensitive data)
+// APIKeyInfo represents public API key information (without sensitive data).
 type APIKeyInfo struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
@@ -28,19 +28,19 @@ type APIKeyInfo struct {
 	IsActive    bool         `json:"is_active"`
 }
 
-// APICreateAPIKeyResponse represents the API response for creating an API key
+// APICreateAPIKeyResponse represents the API response for creating an API key.
 type APICreateAPIKeyResponse struct {
 	APIKey string      `json:"api_key"` // Full key - only returned once
 	KeyID  string      `json:"key_id"`
 	Info   *APIKeyInfo `json:"info"`
 }
 
-// APIListAPIKeysResponse represents the API response for listing API keys
+// APIListAPIKeysResponse represents the API response for listing API keys.
 type APIListAPIKeysResponse struct {
 	APIKeys []*APIKeyInfo `json:"api_keys"`
 }
 
-// CreateAPIKeyAPI creates a new API key and returns API-friendly response
+// CreateAPIKeyAPI creates a new API key and returns API-friendly response.
 func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	// Type assert the request
 	createReq, ok := req.(APICreateAPIKeyRequest)
@@ -71,7 +71,7 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 	}, nil
 }
 
-// ListUserAPIKeysAPI lists all API keys for a user and returns API-friendly response
+// ListUserAPIKeysAPI lists all API keys for a user and returns API-friendly response.
 func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error) {
 	keys, err := s.ListUserAPIKeys(ctx, userID)
 	if err != nil {
@@ -98,18 +98,18 @@ func (s *Service) ListUserAPIKeysAPI(ctx context.Context, userID string) (any, e
 	}, nil
 }
 
-// DeleteAPIKeyAPI deletes an API key
+// DeleteAPIKeyAPI deletes an API key.
 func (s *Service) DeleteAPIKeyAPI(ctx context.Context, userID, keyID string) error {
 	return s.DeleteAPIKey(ctx, userID, keyID)
 }
 
-// RevokeAPIKeyAPI revokes an API key
+// RevokeAPIKeyAPI revokes an API key.
 func (s *Service) RevokeAPIKeyAPI(ctx context.Context, userID, keyID string) error {
 	return s.RevokeAPIKey(ctx, userID, keyID)
 }
 
 // ValidateUserAPIKeyAPI validates a user API key and returns the key info and user
-// This is the API-facing wrapper for ValidateUserAPIKey
+// This is the API-facing wrapper for ValidateUserAPIKey.
 func (s *Service) ValidateUserAPIKeyAPI(ctx context.Context, apiKey string) (*UserAPIKey, *User, error) {
 	return s.ValidateUserAPIKey(ctx, apiKey)
 }

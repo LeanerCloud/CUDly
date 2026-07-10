@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockSecretID implements azsecrets.ID interface for testing
+// MockSecretID implements azsecrets.ID interface for testing.
 type MockSecretID string
 
 func (m MockSecretID) Name() string {
@@ -30,7 +30,7 @@ func (m MockSecretID) Version() string {
 	return ""
 }
 
-// MockAzureSecretsPager simulates the Azure secrets pager
+// MockAzureSecretsPager simulates the Azure secrets pager.
 type MockAzureSecretsPager struct {
 	pages       [][]*azsecrets.SecretItem
 	currentPage int
@@ -62,7 +62,7 @@ func (m *MockAzureSecretsPager) NextPage(ctx context.Context) (azsecrets.ListSec
 	}, nil
 }
 
-// MockAzureSecretsClient is a mock implementation of the Azure Key Vault secrets client
+// MockAzureSecretsClient is a mock implementation of the Azure Key Vault secrets client.
 type MockAzureSecretsClient struct {
 	mock.Mock
 }
@@ -77,7 +77,7 @@ func (m *MockAzureSecretsClient) NewListSecretsPager(options *azsecrets.ListSecr
 	return args.Get(0).(*MockAzureSecretsPager)
 }
 
-// testableAzureResolver wraps AzureResolver to allow injecting a mock client
+// testableAzureResolver wraps AzureResolver to allow injecting a mock client.
 type testableAzureResolver struct {
 	mockClient *MockAzureSecretsClient
 	vaultURL   string

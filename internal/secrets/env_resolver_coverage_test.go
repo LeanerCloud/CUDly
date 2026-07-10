@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEnvResolver_ListSecrets_MalformedEnvVar tests handling of malformed env vars
+// TestEnvResolver_ListSecrets_MalformedEnvVar tests handling of malformed env vars.
 func TestEnvResolver_ListSecrets_MalformedEnvVar(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -26,7 +26,7 @@ func TestEnvResolver_ListSecrets_MalformedEnvVar(t *testing.T) {
 	assert.Contains(t, result, testPrefix+"VALID")
 }
 
-// TestEnvResolver_ListSecrets_EmptyFilter tests listing all env vars
+// TestEnvResolver_ListSecrets_EmptyFilter tests listing all env vars.
 func TestEnvResolver_ListSecrets_EmptyFilter(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -45,7 +45,7 @@ func TestEnvResolver_ListSecrets_EmptyFilter(t *testing.T) {
 	assert.Greater(t, len(result), 1)
 }
 
-// TestEnvResolver_ListSecrets_ExactMatch tests filter matching behavior
+// TestEnvResolver_ListSecrets_ExactMatch tests filter matching behavior.
 func TestEnvResolver_ListSecrets_ExactMatch(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -72,7 +72,7 @@ func TestEnvResolver_ListSecrets_ExactMatch(t *testing.T) {
 	assert.NotContains(t, result, testPrefix+"TWO")
 }
 
-// TestEnvResolver_GetSecret_SpecialValues tests getting secrets with special values
+// TestEnvResolver_GetSecret_SpecialValues tests getting secrets with special values.
 func TestEnvResolver_GetSecret_SpecialValues(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -146,7 +146,7 @@ func TestEnvResolver_GetSecret_SpecialValues(t *testing.T) {
 	}
 }
 
-// TestEnvResolver_GetSecretJSON_VariousJSONTypes tests parsing various JSON types
+// TestEnvResolver_GetSecretJSON_VariousJSONTypes tests parsing various JSON types.
 func TestEnvResolver_GetSecretJSON_VariousJSONTypes(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -277,7 +277,7 @@ func TestEnvResolver_GetSecretJSON_VariousJSONTypes(t *testing.T) {
 	}
 }
 
-// TestEnvResolver_Close_Multiple tests calling Close multiple times
+// TestEnvResolver_Close_Multiple tests calling Close multiple times.
 func TestEnvResolver_Close_Multiple(t *testing.T) {
 	resolver := NewEnvResolver()
 
@@ -292,7 +292,7 @@ func TestEnvResolver_Close_Multiple(t *testing.T) {
 	assert.NoError(t, err3)
 }
 
-// TestEnvResolver_ConcurrentAccess tests concurrent access to resolver
+// TestEnvResolver_ConcurrentAccess tests concurrent access to resolver.
 func TestEnvResolver_ConcurrentAccess(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -319,7 +319,7 @@ func TestEnvResolver_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-// TestEnvResolver_ListSecrets_LargeNumberOfVars tests with many env vars
+// TestEnvResolver_ListSecrets_LargeNumberOfVars tests with many env vars.
 func TestEnvResolver_ListSecrets_LargeNumberOfVars(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -347,7 +347,7 @@ func TestEnvResolver_ListSecrets_LargeNumberOfVars(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
-// TestEnvResolver_GetSecret_CaseSensitivity tests case sensitivity
+// TestEnvResolver_GetSecret_CaseSensitivity tests case sensitivity.
 func TestEnvResolver_GetSecret_CaseSensitivity(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -373,7 +373,7 @@ func TestEnvResolver_GetSecret_CaseSensitivity(t *testing.T) {
 	require.Error(t, err3)
 }
 
-// TestEnvResolver_ListSecrets_FilterCaseSensitivity tests filter case sensitivity
+// TestEnvResolver_ListSecrets_FilterCaseSensitivity tests filter case sensitivity.
 func TestEnvResolver_ListSecrets_FilterCaseSensitivity(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()
@@ -394,7 +394,7 @@ func TestEnvResolver_ListSecrets_FilterCaseSensitivity(t *testing.T) {
 	assert.Contains(t, lowerResult, "cudly_filter_lower")
 }
 
-// TestEnvResolver_GetSecretJSON_LargeJSON tests parsing large JSON
+// TestEnvResolver_GetSecretJSON_LargeJSON tests parsing large JSON.
 func TestEnvResolver_GetSecretJSON_LargeJSON(t *testing.T) {
 	resolver := NewEnvResolver()
 	ctx := context.Background()

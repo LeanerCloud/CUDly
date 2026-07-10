@@ -65,7 +65,7 @@ func (m *mockOverrideStore) GetAccountServiceOverride(_ context.Context, account
 // the effective stale TTL without panicking on the embedded MockConfigStore.
 // The returned RecommendationsCacheStaleHours of 24 means ListRecommendations
 // will use the DB-configured value (24h); the tests in this file exercise
-// override/suppression logic, not TTL behaviour.
+// override/suppression logic, not TTL behavior.
 func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalConfig, error) {
 	return &config.GlobalConfig{
 		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
@@ -76,6 +76,8 @@ func (m *mockOverrideStore) GetGlobalConfig(_ context.Context) (*config.GlobalCo
 func boolPtr(b bool) *bool { return &b }
 
 // rdsRec returns a rec for the given account/region/engine with sensible defaults.
+//
+//nolint:unparam // test helper: region fixed by design across current callers
 func rdsRec(account, region, engine string) config.RecommendationRecord {
 	a := account
 	return config.RecommendationRecord{

@@ -86,7 +86,7 @@ func verifyTOTP(secret, code string) bool {
 	return valid == 1
 }
 
-// generateTOTP generates a TOTP code for the given counter
+// generateTOTP generates a TOTP code for the given counter.
 func generateTOTP(secret string, counter int64) string {
 	// Decode base32 secret
 	secretBytes, err := base32Decode(secret)
@@ -271,7 +271,7 @@ type MFASetupResult struct {
 }
 
 // MFASetup begins an MFA enrollment for a user. The caller must
-// re-verify the user's password (defence-in-depth against a session
+// re-verify the user's password (defense-in-depth against a session
 // token being lifted from another tab). Returns the freshly-generated
 // secret + provisioning URI; persists the secret in the user's
 // pending fields with a short expiry. Does NOT flip MFAEnabled —
@@ -425,7 +425,7 @@ func (s *Service) disableMFAAlreadyOff(ctx context.Context, user *User) error {
 
 // MFADisable turns off MFA for a user. Requires both the current
 // password AND a fresh proof-of-possession (either a TOTP code or
-// an unused recovery code). Defence-in-depth: a stolen session
+// an unused recovery code). Defense-in-depth: a stolen session
 // alone shouldn't disable MFA, and a stolen authenticator alone
 // shouldn't either.
 //

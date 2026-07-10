@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createTestApp creates a minimal Application for testing with no DB dependency
+// createTestApp creates a minimal Application for testing with no DB dependency.
 func createTestApp() *server.Application {
 	apiHandler := api.NewHandler(api.HandlerConfig{})
 	return &server.Application{

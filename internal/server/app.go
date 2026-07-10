@@ -36,7 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Application holds all components of the CUDly server
+// Application holds all components of the CUDly server.
 type Application struct {
 	Config      config.StoreInterface
 	API         *api.Handler
@@ -97,13 +97,13 @@ type Application struct {
 
 	// migrationsTimeout and runMigrationsFunc are per-instance instead of
 	// package-level variables so that tests can set them on a specific
-	// Application instance without serialising parallel tests (04-M3).
+	// Application instance without serializing parallel tests (04-M3).
 	// NewApplicationFromDeps sets them to the package defaults.
 	migrationsTimeout time.Duration
 	runMigrationsFunc func(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error
 }
 
-// ApplicationConfig holds all env-based configuration for the application
+// ApplicationConfig holds all env-based configuration for the application.
 type ApplicationConfig struct {
 	Version                string
 	NotificationDaysBefore int
@@ -138,7 +138,7 @@ type ApplicationConfig struct {
 	Analytics AnalyticsConfig
 }
 
-// ExternalDeps holds pre-built external dependencies that require infrastructure
+// ExternalDeps holds pre-built external dependencies that require infrastructure.
 type ExternalDeps struct {
 	EmailSender    email.SenderInterface
 	ConfigStore    config.StoreInterface
@@ -158,10 +158,10 @@ type ExternalDeps struct {
 const defaultMigrationsTimeout = 120 * time.Second
 
 // resolveMigrationsTimeout reads CUDLY_MIGRATION_TIMEOUT from the environment.
-// It is called once in NewApplicationFromDeps to initialise
+// It is called once in NewApplicationFromDeps to initialize
 // Application.migrationsTimeout. Because the timeout lives on the struct
 // (not a package-level var), tests can set it on a specific Application
-// instance without serialising parallel tests (04-M3).
+// instance without serializing parallel tests (04-M3).
 func resolveMigrationsTimeout() time.Duration {
 	v := os.Getenv("CUDLY_MIGRATION_TIMEOUT")
 	if v == "" {
@@ -199,7 +199,7 @@ func (app *Application) snapshotMigrationState() (err error, finishedAt time.Tim
 // a panic wrapped as an error, or a timeout error -- never a
 // nil-with-goroutine-still-alive. The goroutine is guaranteed to have exited
 // before this function returns (the timeout branch waits on <-done after
-// cancelling the ctx), so no orphan goroutine survives past this call --
+// canceling the ctx), so no orphan goroutine survives past this call --
 // critical on Lambda where goroutines freeze between invocations.
 //
 // Using instance fields (not package globals) makes it safe to call
@@ -250,7 +250,7 @@ func resolveOIDCIssuerURL(cfg ApplicationConfig) string {
 	return strings.TrimRight(cfg.DashboardURL, "/")
 }
 
-// LoadApplicationConfig reads all configuration from environment variables
+// LoadApplicationConfig reads all configuration from environment variables.
 func LoadApplicationConfig() ApplicationConfig {
 	version := os.Getenv("VERSION")
 	if version == "" {
@@ -405,7 +405,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 	// Construct the OIDC issuer signer once per deployment. Nil means
 	// the deployment has not opted into the federated flow yet — all
 	// OIDC-dependent paths (handler_oidc.go, purchase manager Azure
-	// federated credential) fall back to their legacy behaviours.
+	// federated credential) fall back to their legacy behaviors.
 	signer, signerErr := oidc.NewSignerFromEnv(ctx)
 	if signerErr != nil {
 		log.Printf("oidc signer init failed (federated flow disabled): %v", signerErr)
@@ -536,8 +536,9 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	log.Printf("CUDly Server initializing, version: %s", cfg.Version)
 
-	// Initialize configuration store (PostgreSQL)
-	configStore, dbConfig, secretResolver, err := initConfigStore(ctx)
+	// Initialize configuration store (PostgreSQL). The store connects lazily on
+	// first request, so ConfigStore is wired as nil here (see initConfigStore).
+	dbConfig, secretResolver, err := initConfigStore(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize config store: %w", err)
 	}
@@ -557,7 +558,7 @@ func NewApplication(ctx context.Context, version string) (*Application, error) {
 
 	deps := ExternalDeps{
 		EmailSender:    emailSender,
-		ConfigStore:    configStore,
+		ConfigStore:    nil, // created lazily on first request (see initConfigStore)
 		DBConfig:       dbConfig,
 		SecretResolver: secretResolver,
 		STSClient:      stsClient,
@@ -888,7 +889,7 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 	}
 }
 
-// Close gracefully shuts down the application
+// Close gracefully shuts down the application.
 func (app *Application) Close() error {
 	log.Println("Shutting down CUDly Server...")
 
@@ -903,11 +904,11 @@ func (app *Application) Close() error {
 }
 
 // initConfigStore initializes the configuration store using PostgreSQL
-// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues
-func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Config, secrets.Resolver, error) {
+// Connection is deferred (lazy init) until first request to avoid Lambda ENI issues.
+func initConfigStore(ctx context.Context) (*database.Config, secrets.Resolver, error) {
 	// Require PostgreSQL configuration
 	if os.Getenv("DB_HOST") == "" {
-		return nil, nil, nil, fmt.Errorf("database configuration required: DB_HOST must be set")
+		return nil, nil, fmt.Errorf("database configuration required: DB_HOST must be set")
 	}
 
 	log.Println("Preparing PostgreSQL configuration store (lazy initialization)...")
@@ -915,20 +916,21 @@ func initConfigStore(ctx context.Context) (config.StoreInterface, *database.Conf
 	// Initialize secret resolver
 	secretResolver, err := secrets.NewResolver(ctx, secrets.LoadConfigFromEnv())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create secret resolver: %w", err)
+		return nil, nil, fmt.Errorf("failed to create secret resolver: %w", err)
 	}
 
 	// Load database config from environment
 	dbConfig, err := database.LoadFromEnv()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load database config: %w", err)
+		return nil, nil, fmt.Errorf("failed to load database config: %w", err)
 	}
 
 	log.Printf("PostgreSQL config loaded (will connect on first request): %s:%d", dbConfig.Host, dbConfig.Port)
 
-	// Return nil for config store - will be created lazily
-	// This avoids connecting during Lambda init when ENI isn't ready
-	return nil, dbConfig, secretResolver, nil
+	// The config store itself is created lazily on first request (not here), so
+	// callers wire a nil ConfigStore into ExternalDeps. Deferring the connection
+	// avoids connecting during Lambda init when the ENI isn't ready.
+	return dbConfig, secretResolver, nil
 }
 
 // Helper functions for environment variable parsing
@@ -945,6 +947,11 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// getEnvFloat mirrors getEnvInt for float-valued env vars. defaultVal is kept
+// parameterized (rather than inlined) to stay symmetric with getEnvInt even
+// though every current caller passes the same coverage default.
+//
+//nolint:unparam // general-purpose env parser; default kept parameterized for symmetry with getEnvInt
 func getEnvFloat(key string, defaultVal float64) float64 {
 	if val := os.Getenv(key); val != "" {
 		result, err := strconv.ParseFloat(val, 64)
@@ -957,7 +964,7 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 	return defaultVal
 }
 
-// authServiceAdapter adapts auth.Service to api.AuthServiceInterface
+// authServiceAdapter adapts auth.Service to api.AuthServiceInterface.
 type authServiceAdapter struct {
 	service *auth.Service
 }
@@ -1067,7 +1074,7 @@ func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID strin
 	return a.service.UpdateUserProfile(ctx, userID, email, currentPassword, newPassword)
 }
 
-// User management methods - delegate to auth service API methods
+// User management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateUserAPI(ctx, req)
 }
@@ -1105,7 +1112,7 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 	return a.service.MFARegenerateRecoveryCodesAPI(ctx, userID, code)
 }
 
-// Group management methods - delegate to auth service API methods
+// Group management methods - delegate to auth service API methods.
 func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, req any) (any, error) {
 	return a.service.CreateGroupAPI(ctx, req)
 }
@@ -1126,7 +1133,7 @@ func (a *authServiceAdapter) ListGroupsAPI(ctx context.Context) (any, error) {
 	return a.service.ListGroupsAPI(ctx)
 }
 
-// Permission checking
+// Permission checking.
 func (a *authServiceAdapter) HasPermissionAPI(ctx context.Context, userID, action, resource string) (bool, error) {
 	return a.service.HasPermissionAPI(ctx, userID, action, resource)
 }
@@ -1135,7 +1142,7 @@ func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID s
 	return a.service.GetUserPermissionsAPI(ctx, userID)
 }
 
-// Account access
+// Account access.
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
 	authCtx, err := a.service.BuildAuthContext(ctx, userID)
 	if err != nil {
@@ -1144,12 +1151,12 @@ func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID s
 	return authCtx.AllowedAccounts, nil
 }
 
-// CSRF validation
+// CSRF validation.
 func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken, csrfToken string) error {
 	return a.service.ValidateCSRFToken(ctx, sessionToken, csrfToken)
 }
 
-// API Key management
+// API Key management.
 func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }

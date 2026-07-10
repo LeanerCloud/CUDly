@@ -22,7 +22,7 @@ func sourceCloud() string {
 	return "aws"
 }
 
-// Configuration handlers
+// Configuration handlers.
 func (h *Handler) getConfig(ctx context.Context, req *events.LambdaFunctionURLRequest) (*ConfigResponse, error) {
 	// Require view:config permission. Every other read handler in the package
 	// pairs the route-level AuthUser gate with this explicit permission check;

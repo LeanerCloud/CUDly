@@ -1785,30 +1785,6 @@ func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, 
 	return nil, nil
 }
 
-// duplicatePurchaseResponse returns a ready-to-send response body when this
-// submit collapses onto an existing pending execution (#644), or nil when it
-// is a genuinely new submit that should proceed to create a fresh execution.
-// A lookup failure is logged and treated as "not a duplicate" so a transient
-// store error never blocks a legitimate purchase. Extracted from executePurchase
-// to keep that function under the gocyclo threshold.
-func (h *Handler) duplicatePurchaseResponse(ctx context.Context, creator *string, recs []config.RecommendationRecord, capacityPercent int) map[string]any {
-	creatorID := ""
-	if creator != nil {
-		creatorID = *creator
-	}
-	key := purchaseIdempotencyKey(creatorID, recs, capacityPercent)
-	dup, err := h.findDuplicatePendingExecution(ctx, creatorID, key, time.Now())
-	if err != nil {
-		logging.Errorf("idempotency lookup failed, proceeding with new execution: %v", err)
-		return nil
-	}
-	if dup == nil {
-		return nil
-	}
-	logging.Infof("duplicate purchase submit collapsed to existing execution %s", dup.ExecutionID)
-	return buildDuplicatePurchaseResponse(dup)
-}
-
 // buildDuplicatePurchaseResponse returns the executePurchase response body for
 // a submit that collapsed onto an existing pending execution (#644). It points
 // at the original row so the client lands on the same approvable execution

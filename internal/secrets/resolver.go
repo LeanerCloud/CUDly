@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// Resolver defines the interface for retrieving secrets from various secret managers
+// Resolver defines the interface for retrieving secrets from various secret managers.
 type Resolver interface {
 	// GetSecret retrieves a secret value by ID/ARN/name
 	GetSecret(ctx context.Context, secretID string) (string, error)
@@ -30,7 +30,7 @@ type Resolver interface {
 	Close() error
 }
 
-// Config holds secrets resolver configuration
+// Config holds secrets resolver configuration.
 type Config struct {
 	// Provider specifies which secret manager to use
 	// Valid values: "aws", "gcp", "azure", "env"
@@ -59,7 +59,7 @@ func LoadConfigFromEnv() *Config {
 	}
 }
 
-// NewResolver creates a new secret resolver based on the provider
+// NewResolver creates a new secret resolver based on the provider.
 func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
 	if config == nil {
 		return nil, fmt.Errorf("secrets config must not be nil")
@@ -86,7 +86,7 @@ func NewResolver(ctx context.Context, config *Config) (Resolver, error) {
 	}
 }
 
-// Helper function
+// Helper function.
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

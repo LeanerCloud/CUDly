@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 )
 
-// isPublicEndpoint returns true for endpoints that don't require authentication
+// isPublicEndpoint returns true for endpoints that don't require authentication.
 func (h *Handler) isPublicEndpoint(path string) bool {
 	publicEndpoints := []string{
 		"/health",     // Root health endpoint (no /api prefix)
@@ -43,7 +43,7 @@ func (h *Handler) isPublicEndpoint(path string) bool {
 	return false
 }
 
-// authenticate checks authentication via admin API key, user API key, or Bearer token
+// authenticate checks authentication via admin API key, user API key, or Bearer token.
 func (h *Handler) authenticate(ctx context.Context, req *events.LambdaFunctionURLRequest) bool {
 	apiKey := extractAPIKey(req)
 
@@ -172,7 +172,7 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	return true
 }
 
-// validateCSRF validates the CSRF token from the request header
+// validateCSRF validates the CSRF token from the request header.
 func (h *Handler) validateCSRF(ctx context.Context, req *events.LambdaFunctionURLRequest) error {
 	if h.auth == nil {
 		return fmt.Errorf("authentication service not configured")
@@ -238,7 +238,7 @@ func logMissingCSRFToken(req *events.LambdaFunctionURLRequest, csrfToken string)
 // requireAuth verifies the request carries a valid authentication credential
 // of any kind (admin API key, user API key, or session bearer token).
 //
-// Used as a defence-in-depth check by Router.Route for AuthUser routes:
+// Used as a defense-in-depth check by Router.Route for AuthUser routes:
 // validateSecurity → authenticate already runs before dispatch, but if a
 // future refactor reorders middleware or a new route bypasses
 // validateSecurity, this check still rejects unauthenticated requests at

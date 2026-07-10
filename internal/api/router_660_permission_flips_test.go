@@ -71,6 +71,7 @@ func reqWithBearer(token string) *events.LambdaFunctionURLRequest {
 	}
 }
 
+//nolint:unparam // test helper: token fixed by design across current callers
 func reqWithBearerAndBody(token, body string) *events.LambdaFunctionURLRequest {
 	return &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer " + token},

@@ -419,7 +419,7 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	// Use a WaitGroup and a ready channel to maximise concurrency: both
+	// Use a WaitGroup and a ready channel to maximize concurrency: both
 	// goroutines block at the barrier before calling DeleteUser.
 	ready := make(chan struct{})
 	errCh := make(chan error, 2)
@@ -428,7 +428,7 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 
 	start := func(userID string) {
 		defer wg.Done()
-		<-ready // synchronise start
+		<-ready // synchronize start
 		errCh <- service.DeleteUser(ctx, userID)
 	}
 
@@ -456,7 +456,7 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 }
 
 // TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins is the deactivation
-// analogue of the delete race in issue #919 / CR #921. Two goroutines
+// analog of the delete race in issue #919 / CR #921. Two goroutines
 // simultaneously deactivate the last two active admins. Both read count == 2
 // and pass the soft check. The 000065 deferred trigger now counts only *active*
 // members and serializes via an advisory xact lock, so exactly one commit is
@@ -1069,7 +1069,7 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 	})
 }
 
-// Test TOTP functions
+// Test TOTP functions.
 func TestService_UpdateUserProfile(t *testing.T) {
 	ctx := context.Background()
 
