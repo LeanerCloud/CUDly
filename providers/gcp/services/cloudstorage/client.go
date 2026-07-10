@@ -502,7 +502,7 @@ func (c *CloudStorageClient) fillStoragePricing(ctx context.Context, rec *common
 }
 
 // termYearsFromLabel converts a term string such as "1yr" or "3yr" to an
-// integer number of years (defaults to 1 for any unrecognised value).
+// integer number of years (defaults to 1 for any unrecognized value).
 func termYearsFromLabel(term string) int {
 	if term == "3yr" || term == "3" {
 		return 3

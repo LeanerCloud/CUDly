@@ -57,7 +57,7 @@ func termPlan(term string) (string, error) {
 }
 
 // termYearsFromTerm returns the commitment length in years for a term label,
-// defaulting to 1 for any 1-year or unrecognised value and 3 for 3-year labels.
+// defaulting to 1 for any 1-year or unrecognized value and 3 for 3-year labels.
 func termYearsFromTerm(term string) int {
 	switch strings.ToLower(strings.TrimSpace(term)) {
 	case "3yr", "3", "36mo":
