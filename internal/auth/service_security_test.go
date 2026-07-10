@@ -244,6 +244,7 @@ func TestValidateUserAPIKey_LastUsedSingleflight(t *testing.T) {
 		ID:        keyID,
 		UserID:    user.ID,
 		IsActive:  true,
+		KeyHash:   keyHash,
 		KeyPrefix: rawKey[:8],
 	}
 
