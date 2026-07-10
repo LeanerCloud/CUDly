@@ -361,7 +361,8 @@ const awsMarketplaceFeePercent = 12
 
 // awsMarketplaceNetFactor is the fraction of list price the seller keeps
 // after the AWS Marketplace fee: 1 - awsMarketplaceFeePercent/100.
-const awsMarketplaceNetFactor = 0.88
+// Derived from awsMarketplaceFeePercent so the two stay in sync automatically.
+const awsMarketplaceNetFactor = 1 - awsMarketplaceFeePercent/100.0
 
 // awsMarketplaceBuyerDiscountFactor is the discount applied to the computed
 // residual RI value when building the default listing price. A 5% discount
